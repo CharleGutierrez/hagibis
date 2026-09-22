@@ -1,0 +1,22 @@
+[package]
+name = "hgb-daemon"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "hgbd"
+path = "src/bin/hgbd.rs"
+
+[dependencies]
+hgb-core = { path = "../hgb-core" }
+hgb-storage = { path = "../hgb-storage" }
+hgb-nextgen = { path = "../hgb-nextgen" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+bincode = { workspace = true }
+chrono = { workspace = true }
+colored = { workspace = true }
+thiserror = { workspace = true }

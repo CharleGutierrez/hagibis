@@ -1,0 +1,7 @@
+/target
+**/*.rs.bk
+*.log
+.env
+.DS_Store
+/run/
+*.sock

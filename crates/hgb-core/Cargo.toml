@@ -1,0 +1,17 @@
+[package]
+name = "hgb-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+tokio = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+bincode = { workspace = true }
+blake3 = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+colored = { workspace = true }

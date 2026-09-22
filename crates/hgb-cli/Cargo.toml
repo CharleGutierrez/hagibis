@@ -1,0 +1,25 @@
+[package]
+name = "hgb-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "hgb"
+path = "src/main.rs"
+
+[dependencies]
+hgb-core = { path = "../hgb-core" }
+hgb-daemon = { path = "../hgb-daemon" }
+hgb-nextgen = { path = "../hgb-nextgen" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+bincode = { workspace = true }
+clap = { workspace = true }
+colored = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+hgb-storage = { path = "../hgb-storage" }

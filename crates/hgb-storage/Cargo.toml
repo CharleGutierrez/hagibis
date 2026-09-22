@@ -1,0 +1,16 @@
+[package]
+name = "hgb-storage"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+hgb-core = { path = "../hgb-core" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rusqlite = { workspace = true }
+thiserror = { workspace = true }
+blake3 = { workspace = true }
+memmap2 = { workspace = true }
