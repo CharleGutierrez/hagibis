@@ -186,24 +186,43 @@ impl HagibisDaemon {
                     Err(e) => HgbResponse::Error(e.to_string()),
                 }
             }
-            HgbRequest::CrudWrite { path, content, overwrite } => {
-                match hgb_core::AgyCrud::write_to_file(&path, &content, overwrite) {
-                    Ok(bytes) => HgbResponse::Complete {
-                        output: format!("✔ Wrote {} bytes to '{}'", bytes, path),
+            HgbRequest::CrudWrite { path, content, overwrite, artifact_summary } => {
+                match hgb_core::AgyCrud::write_to_file(&path, &content, overwrite, artifact_summary.as_deref()) {
+                    Ok(msg) => HgbResponse::Complete {
+                        output: msg,
                         tokens_used: 0,
                         duration_ms: 1,
                     },
                     Err(e) => HgbResponse::Error(e.to_string()),
                 }
             }
-            HgbRequest::CrudEdit { path, target, replacement, start_line, end_line, allow_multiple } => {
-                match hgb_core::AgyCrud::replace_file_content(&path, &target, &replacement, hgb_core::ReplaceOptions {
-                    start_line,
-                    end_line,
-                    allow_multiple,
-                }) {
-                    Ok(count) => HgbResponse::Complete {
-                        output: format!("✔ Successfully replaced {} occurrence(s) in '{}'", count, path),
+            HgbRequest::CrudEdit {
+                path,
+                target,
+                replacement,
+                start_line,
+                end_line,
+                allow_multiple,
+                instruction,
+                description,
+                target_lint_error_ids,
+            } => {
+                match hgb_core::AgyCrud::replace_file_content(
+                    &path,
+                    &target,
+                    &replacement,
+                    hgb_core::ReplaceOptions {
+                        start_line,
+                        end_line,
+                        allow_multiple,
+                        instruction,
+                        description,
+                        target_lint_error_ids,
+                        create_backup: false,
+                    },
+                ) {
+                    Ok(report) => HgbResponse::Complete {
+                        output: report,
                         tokens_used: 0,
                         duration_ms: 1,
                     },
@@ -230,13 +249,48 @@ impl HagibisDaemon {
                     Err(e) => HgbResponse::Error(e.to_string()),
                 }
             }
-            HgbRequest::CrudGrep { pattern, path, case_insensitive } => {
+            HgbRequest::CrudGrep { pattern, path, is_regex, case_insensitive, match_per_line, includes } => {
                 let target_path = path.unwrap_or_else(|| ".".to_string());
-                match hgb_core::AgyCrud::grep_search(&target_path, &pattern, case_insensitive, 50) {
-                    Ok(matches) => {
-                        let mut out = format!("🔍 Grep results for '{}' in '{}' ({} matches):\n", pattern, target_path, matches.len());
-                        for m in matches {
-                            out.push_str(&format!("  {}:{} | {}\n", m.file_path, m.line_number, m.line_content));
+                match hgb_core::AgyCrud::grep_search(&target_path, &pattern, is_regex, case_insensitive, match_per_line, &includes) {
+                    Ok(val) => {
+                        let formatted = if match_per_line {
+                            if let Ok(matches) = serde_json::from_value::<Vec<hgb_core::GrepMatch>>(val.clone()) {
+                                let mut out = format!("🔍 Grep results for '{}' in '{}' ({} matches):\n", pattern, target_path, matches.len());
+                                for m in matches {
+                                    let line_no = m.line_number.map(|n| n.to_string()).unwrap_or_default();
+                                    let content = m.line_content.unwrap_or_default();
+                                    out.push_str(&format!("  {}:{} | {}\n", m.filename, line_no, content));
+                                }
+                                out
+                            } else {
+                                serde_json::to_string_pretty(&val).unwrap_or_default()
+                            }
+                        } else {
+                            serde_json::to_string_pretty(&val).unwrap_or_default()
+                        };
+                        HgbResponse::Complete {
+                            output: formatted,
+                            tokens_used: 0,
+                            duration_ms: 2,
+                        }
+                    }
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            HgbRequest::CrudFind { search_directory, pattern, extensions, excludes, max_depth, target_type } => {
+                match hgb_core::AgyCrud::find_by_name(
+                    &search_directory,
+                    pattern.as_deref(),
+                    &extensions,
+                    &excludes,
+                    max_depth,
+                    target_type.as_deref(),
+                ) {
+                    Ok(entries) => {
+                        let mut out = format!("🔎 Found {} entry(ies) in '{}':\n", entries.len(), search_directory);
+                        for e in entries {
+                            let icon = if e.r#type == "directory" { "📁" } else { "📄" };
+                            out.push_str(&format!("  {} {:<50} [{} bytes]\n", icon, e.path, e.size_bytes));
                         }
                         HgbResponse::Complete {
                             output: out,

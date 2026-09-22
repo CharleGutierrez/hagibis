@@ -128,7 +128,12 @@ impl HagibisRepl {
                 } else {
                     let path = parts[1].to_string();
                     let content = parts[2..].join(" ");
-                    let resp = self.dispatch(HgbRequest::CrudWrite { path, content, overwrite: true }).await;
+                    let resp = self.dispatch(HgbRequest::CrudWrite {
+                        path,
+                        content,
+                        overwrite: true,
+                        artifact_summary: None,
+                    }).await;
                     self.render_response(resp);
                 }
             }
@@ -146,6 +151,9 @@ impl HagibisRepl {
                         start_line: None,
                         end_line: None,
                         allow_multiple: false,
+                        instruction: None,
+                        description: None,
+                        target_lint_error_ids: Vec::new(),
                     }).await;
                     self.render_response(resp);
                 }
@@ -161,7 +169,36 @@ impl HagibisRepl {
                 } else {
                     let pattern = parts[1].to_string();
                     let path = parts.get(2).map(|p| p.to_string());
-                    let resp = self.dispatch(HgbRequest::CrudGrep { pattern, path, case_insensitive: true }).await;
+                    let resp = self.dispatch(HgbRequest::CrudGrep {
+                        pattern,
+                        path,
+                        is_regex: false,
+                        case_insensitive: true,
+                        match_per_line: true,
+                        includes: Vec::new(),
+                    }).await;
+                    self.render_response(resp);
+                }
+            }
+            "/find" | "/search" => {
+                if parts.len() < 2 {
+                    println!("{} Usage: /find <pattern> [search_dir] [ext]", "ℹ".yellow());
+                } else {
+                    let pattern = Some(parts[1].to_string());
+                    let search_directory = parts.get(2).map(|p| p.to_string()).unwrap_or_else(|| ".".to_string());
+                    let extensions = if parts.len() > 3 {
+                        parts[3].split(',').map(|s| s.trim().to_string()).collect()
+                    } else {
+                        Vec::new()
+                    };
+                    let resp = self.dispatch(HgbRequest::CrudFind {
+                        search_directory,
+                        pattern,
+                        extensions,
+                        excludes: Vec::new(),
+                        max_depth: None,
+                        target_type: None,
+                    }).await;
                     self.render_response(resp);
                 }
             }
@@ -246,6 +283,7 @@ impl HagibisRepl {
         println!("  {:<25} {}", "/edit <path> <tgt> <rep>".yellow(), "Surgically search and replace text block");
         println!("  {:<25} {}", "/ls [path]".yellow(), "List directory contents with child counts");
         println!("  {:<25} {}", "/grep <pattern> [path]".yellow(), "Search files recursively for pattern");
+        println!("  {:<25} {}", "/find <pat> [dir]".yellow(), "Find files by name/wildcard in directory");
         println!();
         println!("  {}", "--- Next-Era Engines ---".dimmed());
         println!("  {:<25} {}", "/doctor, /doc".cyan(), "Run full health audit across all pillars");

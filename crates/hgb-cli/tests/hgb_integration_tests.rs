@@ -164,7 +164,7 @@ fn test_agy_crud_view_and_binary_safety() {
 
     let bin_res = AgyCrud::view_file(&bin_path, ViewFileOptions::default()).unwrap();
     assert!(bin_res.is_binary);
-    assert!(bin_res.content.contains("[Binary file:"));
+    assert!(bin_res.content.contains("Binary file detected"));
 
     let _ = std::fs::remove_file(&temp);
     let _ = std::fs::remove_file(&bin_path);
@@ -177,15 +177,16 @@ fn test_agy_crud_write_and_overwrite_protection() {
     let _ = std::fs::remove_file(&temp);
 
     // Initial write creates parent directory
-    let bytes = AgyCrud::write_to_file(&temp, "initial content", false).unwrap();
-    assert_eq!(bytes, "initial content".len());
+    let res = AgyCrud::write_to_file(&temp, "initial content", false, None).unwrap();
+    assert!(res.contains("Successfully wrote 15 bytes"));
 
     // Overwrite=false should error
-    let err = AgyCrud::write_to_file(&temp, "new content", false);
+    let err = AgyCrud::write_to_file(&temp, "new content", false, None);
     assert!(err.is_err());
+    assert!(err.unwrap_err().to_string().contains("Target file already exists"));
 
     // Overwrite=true should succeed
-    let overwrite_res = AgyCrud::write_to_file(&temp, "overwritten content", true);
+    let overwrite_res = AgyCrud::write_to_file(&temp, "overwritten content", true, None);
     assert!(overwrite_res.is_ok());
     assert_eq!(std::fs::read_to_string(&temp).unwrap(), "overwritten content");
 
@@ -208,6 +209,7 @@ fn test_agy_crud_replace_surgical_and_ambiguity() {
         start_line: Some(1),
         end_line: Some(3),
         allow_multiple: false,
+        ..Default::default()
     });
     assert!(bounded.is_ok());
 
@@ -233,7 +235,8 @@ fn test_agy_crud_list_and_grep() {
     assert_eq!(entries.len(), 2);
 
     // Test grep_search
-    let matches = AgyCrud::grep_search(&temp_dir, "query", true, 10).unwrap();
+    let matches_val = AgyCrud::grep_search(&temp_dir, "query", false, true, true, &[]).unwrap();
+    let matches = matches_val.as_array().unwrap();
     assert_eq!(matches.len(), 2);
 
     let _ = std::fs::remove_dir_all(&temp_dir);

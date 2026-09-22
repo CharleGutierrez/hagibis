@@ -31,31 +31,70 @@ pub enum HgbRequest {
     // --- AGY Surgical CRUD Requests ---
     CrudView {
         path: String,
+        #[serde(default)]
         start_line: Option<usize>,
+        #[serde(default)]
         end_line: Option<usize>,
+        #[serde(default)]
         offset: Option<usize>,
     },
     CrudWrite {
         path: String,
         content: String,
         overwrite: bool,
+        #[serde(default)]
+        artifact_summary: Option<String>,
     },
     CrudEdit {
         path: String,
         target: String,
         replacement: String,
+        #[serde(default)]
         start_line: Option<usize>,
+        #[serde(default)]
         end_line: Option<usize>,
+        #[serde(default)]
         allow_multiple: bool,
+        #[serde(default)]
+        instruction: Option<String>,
+        #[serde(default)]
+        description: Option<String>,
+        #[serde(default)]
+        target_lint_error_ids: Vec<String>,
     },
     CrudList {
         path: String,
     },
     CrudGrep {
         pattern: String,
+        #[serde(default)]
         path: Option<String>,
+        #[serde(default)]
+        is_regex: bool,
+        #[serde(default)]
         case_insensitive: bool,
+        #[serde(default = "default_true")]
+        match_per_line: bool,
+        #[serde(default)]
+        includes: Vec<String>,
     },
+    CrudFind {
+        search_directory: String,
+        #[serde(default)]
+        pattern: Option<String>,
+        #[serde(default)]
+        extensions: Vec<String>,
+        #[serde(default)]
+        excludes: Vec<String>,
+        #[serde(default)]
+        max_depth: Option<usize>,
+        #[serde(default)]
+        target_type: Option<String>,
+    },
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Response returned from hgbd Daemon to hgb CLI

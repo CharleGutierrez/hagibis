@@ -117,6 +117,9 @@ enum Commands {
         /// Overwrite if file exists
         #[arg(short, long)]
         overwrite: bool,
+        /// Optional artifact summary
+        #[arg(short = 's', long)]
+        summary: Option<String>,
     },
 
     /// Surgically search and replace contiguous text blocks
@@ -139,6 +142,15 @@ enum Commands {
         /// Allow replacing multiple occurrences
         #[arg(short, long)]
         multiple: bool,
+        /// Optional user-facing instruction
+        #[arg(long)]
+        instruction: Option<String>,
+        /// Optional change description
+        #[arg(long)]
+        description: Option<String>,
+        /// Associated lint error IDs resolved by edit
+        #[arg(long = "lint")]
+        lints: Vec<String>,
     },
 
     /// List directory contents with file sizes and recursive counts
@@ -156,9 +168,40 @@ enum Commands {
         /// Root directory or file (defaults to current directory)
         #[arg(default_value = ".")]
         path: String,
+        /// Treat pattern as regular expression
+        #[arg(short, long)]
+        regex: bool,
         /// Case-insensitive search
         #[arg(short, long)]
         ignore_case: bool,
+        /// Only return file names matching the pattern
+        #[arg(short = 'l', long)]
+        files_only: bool,
+        /// Glob patterns to include or exclude (e.g. *.rs or !**/target/*)
+        #[arg(short = 'i', long = "include")]
+        includes: Vec<String>,
+    },
+
+    /// Find files and subdirectories by name, extension, exclusion, or depth
+    #[command(alias = "search", alias = "fd")]
+    Find {
+        /// Pattern to search for (wildcards supported)
+        pattern: Option<String>,
+        /// Directory to search within (defaults to current directory)
+        #[arg(short = 'd', long = "dir", default_value = ".")]
+        dir: String,
+        /// File extensions to include (without leading dot)
+        #[arg(short = 'e', long = "ext")]
+        extensions: Vec<String>,
+        /// Exclude patterns
+        #[arg(short = 'x', long = "exclude")]
+        excludes: Vec<String>,
+        /// Maximum directory depth to search
+        #[arg(short = 'm', long = "max-depth")]
+        max_depth: Option<usize>,
+        /// Filter by type: file, directory, or any
+        #[arg(short = 't', long = "type")]
+        target_type: Option<String>,
     },
 }
 
@@ -200,24 +243,71 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             end_line: end,
             offset,
         },
-        Commands::Write { path, content, overwrite } => HgbRequest::CrudWrite {
+        Commands::Write { path, content, overwrite, summary } => HgbRequest::CrudWrite {
             path,
             content,
             overwrite,
+            artifact_summary: summary,
         },
-        Commands::Edit { path, target, replacement, start, end, multiple } => HgbRequest::CrudEdit {
+        Commands::Edit {
+            path,
+            target,
+            replacement,
+            start,
+            end,
+            multiple,
+            instruction,
+            description,
+            lints,
+        } => HgbRequest::CrudEdit {
             path,
             target,
             replacement,
             start_line: start,
             end_line: end,
             allow_multiple: multiple,
+            instruction,
+            description,
+            target_lint_error_ids: lints,
         },
         Commands::Ls { path } => HgbRequest::CrudList { path },
-        Commands::Grep { pattern, path, ignore_case } => HgbRequest::CrudGrep {
+        Commands::Grep {
+            pattern,
+            path,
+            regex,
+            ignore_case,
+            files_only,
+            includes,
+        } => HgbRequest::CrudGrep {
             pattern,
             path: Some(path),
+            is_regex: regex,
             case_insensitive: ignore_case,
+            match_per_line: !files_only,
+            includes,
+        },
+        Commands::Find {
+            pattern,
+            dir,
+            extensions,
+            excludes,
+            max_depth,
+            target_type,
+        } => {
+            let (final_dir, final_pat) = match pattern {
+                Some(ref p) if std::path::Path::new(p).is_dir() && dir == "." => {
+                    (p.clone(), None)
+                }
+                other => (dir, other),
+            };
+            HgbRequest::CrudFind {
+                search_directory: final_dir,
+                pattern: final_pat,
+                extensions,
+                excludes,
+                max_depth,
+                target_type,
+            }
         },
     };
 
