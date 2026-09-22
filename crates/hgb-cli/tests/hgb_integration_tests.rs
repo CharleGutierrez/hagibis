@@ -134,3 +134,107 @@ fn test_agent_shield_light() {
     assert!(AgentShieldLight::audit_command("ls -la").is_ok());
     assert!(AgentShieldLight::audit_command("rm -rf /").is_err());
 }
+
+#[test]
+fn test_agy_crud_view_and_binary_safety() {
+    use hgb_core::{AgyCrud, ViewFileOptions};
+    let temp = std::env::temp_dir().join(format!("hgb_test_view_{}.txt", std::process::id()));
+    let text = "Line 1: Alpha\nLine 2: Beta\nLine 3: Gamma\nLine 4: Delta\nLine 5: Epsilon\n";
+    std::fs::write(&temp, text).unwrap();
+
+    // Slicing lines 2 to 4
+    let res = AgyCrud::view_file(&temp, ViewFileOptions {
+        start_line: Some(2),
+        end_line: Some(4),
+        content_offset: None,
+        max_lines: Some(10),
+        line_numbers: true,
+    }).unwrap();
+
+    assert_eq!(res.total_lines, 5);
+    assert!(res.content.contains("2 | Line 2: Beta"));
+    assert!(res.content.contains("4 | Line 4: Delta"));
+    assert!(!res.content.contains("1 | Line 1: Alpha"));
+    assert!(!res.content.contains("5 | Line 5: Epsilon"));
+
+    // Binary safety check
+    let bin_path = std::env::temp_dir().join(format!("hgb_test_bin_{}.png", std::process::id()));
+    let bin_bytes = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x01];
+    std::fs::write(&bin_path, bin_bytes).unwrap();
+
+    let bin_res = AgyCrud::view_file(&bin_path, ViewFileOptions::default()).unwrap();
+    assert!(bin_res.is_binary);
+    assert!(bin_res.content.contains("[Binary file:"));
+
+    let _ = std::fs::remove_file(&temp);
+    let _ = std::fs::remove_file(&bin_path);
+}
+
+#[test]
+fn test_agy_crud_write_and_overwrite_protection() {
+    use hgb_core::AgyCrud;
+    let temp = std::env::temp_dir().join(format!("hgb_nested_sub/test_write_{}.txt", std::process::id()));
+    let _ = std::fs::remove_file(&temp);
+
+    // Initial write creates parent directory
+    let bytes = AgyCrud::write_to_file(&temp, "initial content", false).unwrap();
+    assert_eq!(bytes, "initial content".len());
+
+    // Overwrite=false should error
+    let err = AgyCrud::write_to_file(&temp, "new content", false);
+    assert!(err.is_err());
+
+    // Overwrite=true should succeed
+    let overwrite_res = AgyCrud::write_to_file(&temp, "overwritten content", true);
+    assert!(overwrite_res.is_ok());
+    assert_eq!(std::fs::read_to_string(&temp).unwrap(), "overwritten content");
+
+    let _ = std::fs::remove_file(&temp);
+}
+
+#[test]
+fn test_agy_crud_replace_surgical_and_ambiguity() {
+    use hgb_core::{AgyCrud, ReplaceOptions};
+    let temp = std::env::temp_dir().join(format!("hgb_test_replace_{}.txt", std::process::id()));
+    let text = "first line\nrepeat token\nmiddle line\nrepeat token\nlast line\n";
+    std::fs::write(&temp, text).unwrap();
+
+    // Ambiguity error: 'repeat token' exists twice without allow_multiple
+    let ambig_err = AgyCrud::replace_file_content(&temp, "repeat token", "new token", ReplaceOptions::default());
+    assert!(ambig_err.is_err());
+
+    // Line bounded replacement: lines 1 to 3 contains exactly ONE 'repeat token'
+    let bounded = AgyCrud::replace_file_content(&temp, "repeat token", "first replaced", ReplaceOptions {
+        start_line: Some(1),
+        end_line: Some(3),
+        allow_multiple: false,
+    });
+    assert!(bounded.is_ok());
+
+    let updated = std::fs::read_to_string(&temp).unwrap();
+    assert!(updated.contains("first replaced"));
+    assert!(updated.contains("repeat token")); // second one remains intact!
+
+    let _ = std::fs::remove_file(&temp);
+}
+
+#[test]
+fn test_agy_crud_list_and_grep() {
+    use hgb_core::AgyCrud;
+    let temp_dir = std::env::temp_dir().join(format!("hgb_crud_dir_{}", std::process::id()));
+    std::fs::create_dir_all(&temp_dir).unwrap();
+    let file1 = temp_dir.join("alpha.txt");
+    let file2 = temp_dir.join("beta.rs");
+    std::fs::write(&file1, "fn main() {\n    let query = 42;\n}\n").unwrap();
+    std::fs::write(&file2, "pub struct QueryParser;\n").unwrap();
+
+    // Test list_dir
+    let entries = AgyCrud::list_dir(&temp_dir).unwrap();
+    assert_eq!(entries.len(), 2);
+
+    // Test grep_search
+    let matches = AgyCrud::grep_search(&temp_dir, "query", true, 10).unwrap();
+    assert_eq!(matches.len(), 2);
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}

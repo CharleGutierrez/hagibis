@@ -170,6 +170,83 @@ impl HagibisDaemon {
                     duration_ms: 1,
                 }
             }
+            HgbRequest::CrudView { path, start_line, end_line, offset } => {
+                match hgb_core::AgyCrud::view_file(&path, hgb_core::ViewFileOptions {
+                    start_line,
+                    end_line,
+                    content_offset: offset,
+                    max_lines: Some(800),
+                    line_numbers: true,
+                }) {
+                    Ok(res) => HgbResponse::Complete {
+                        output: res.content,
+                        tokens_used: res.total_lines,
+                        duration_ms: 1,
+                    },
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            HgbRequest::CrudWrite { path, content, overwrite } => {
+                match hgb_core::AgyCrud::write_to_file(&path, &content, overwrite) {
+                    Ok(bytes) => HgbResponse::Complete {
+                        output: format!("✔ Wrote {} bytes to '{}'", bytes, path),
+                        tokens_used: 0,
+                        duration_ms: 1,
+                    },
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            HgbRequest::CrudEdit { path, target, replacement, start_line, end_line, allow_multiple } => {
+                match hgb_core::AgyCrud::replace_file_content(&path, &target, &replacement, hgb_core::ReplaceOptions {
+                    start_line,
+                    end_line,
+                    allow_multiple,
+                }) {
+                    Ok(count) => HgbResponse::Complete {
+                        output: format!("✔ Successfully replaced {} occurrence(s) in '{}'", count, path),
+                        tokens_used: 0,
+                        duration_ms: 1,
+                    },
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            HgbRequest::CrudList { path } => {
+                match hgb_core::AgyCrud::list_dir(&path) {
+                    Ok(entries) => {
+                        let mut out = format!("📂 Directory listing for '{}':\n", path);
+                        for e in entries {
+                            if e.is_dir {
+                                out.push_str(&format!("  📁 {:<30} [DIR, {} children]\n", e.name, e.child_count.unwrap_or(0)));
+                            } else {
+                                out.push_str(&format!("  📄 {:<30} [{} bytes]\n", e.name, e.size_bytes));
+                            }
+                        }
+                        HgbResponse::Complete {
+                            output: out,
+                            tokens_used: 0,
+                            duration_ms: 1,
+                        }
+                    }
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            HgbRequest::CrudGrep { pattern, path, case_insensitive } => {
+                let target_path = path.unwrap_or_else(|| ".".to_string());
+                match hgb_core::AgyCrud::grep_search(&target_path, &pattern, case_insensitive, 50) {
+                    Ok(matches) => {
+                        let mut out = format!("🔍 Grep results for '{}' in '{}' ({} matches):\n", pattern, target_path, matches.len());
+                        for m in matches {
+                            out.push_str(&format!("  {}:{} | {}\n", m.file_path, m.line_number, m.line_content));
+                        }
+                        HgbResponse::Complete {
+                            output: out,
+                            tokens_used: 0,
+                            duration_ms: 2,
+                        }
+                    }
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
         }
     }
 }

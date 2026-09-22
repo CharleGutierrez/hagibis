@@ -28,6 +28,34 @@ pub enum HgbRequest {
         iterations: usize,
     },
     MeshStatus,
+    // --- AGY Surgical CRUD Requests ---
+    CrudView {
+        path: String,
+        start_line: Option<usize>,
+        end_line: Option<usize>,
+        offset: Option<usize>,
+    },
+    CrudWrite {
+        path: String,
+        content: String,
+        overwrite: bool,
+    },
+    CrudEdit {
+        path: String,
+        target: String,
+        replacement: String,
+        start_line: Option<usize>,
+        end_line: Option<usize>,
+        allow_multiple: bool,
+    },
+    CrudList {
+        path: String,
+    },
+    CrudGrep {
+        pattern: String,
+        path: Option<String>,
+        case_insensitive: bool,
+    },
 }
 
 /// Response returned from hgbd Daemon to hgb CLI

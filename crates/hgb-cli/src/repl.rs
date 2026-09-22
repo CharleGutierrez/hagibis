@@ -110,6 +110,61 @@ impl HagibisRepl {
                 let resp = self.dispatch(HgbRequest::MeshStatus).await;
                 self.render_response(resp);
             }
+            // --- AGY Surgical CRUD Slash Commands ---
+            "/view" | "/cat" => {
+                if parts.len() < 2 {
+                    println!("{} Usage: /view <path> [start_line] [end_line]", "ℹ".yellow());
+                } else {
+                    let path = parts[1].to_string();
+                    let start_line = parts.get(2).and_then(|s| s.parse::<usize>().ok());
+                    let end_line = parts.get(3).and_then(|s| s.parse::<usize>().ok());
+                    let resp = self.dispatch(HgbRequest::CrudView { path, start_line, end_line, offset: None }).await;
+                    self.render_response(resp);
+                }
+            }
+            "/write" => {
+                if parts.len() < 3 {
+                    println!("{} Usage: /write <path> <content>", "ℹ".yellow());
+                } else {
+                    let path = parts[1].to_string();
+                    let content = parts[2..].join(" ");
+                    let resp = self.dispatch(HgbRequest::CrudWrite { path, content, overwrite: true }).await;
+                    self.render_response(resp);
+                }
+            }
+            "/edit" => {
+                if parts.len() < 4 {
+                    println!("{} Usage: /edit <path> <target> <replacement>", "ℹ".yellow());
+                } else {
+                    let path = parts[1].to_string();
+                    let target = parts[2].to_string();
+                    let replacement = parts[3..].join(" ");
+                    let resp = self.dispatch(HgbRequest::CrudEdit {
+                        path,
+                        target,
+                        replacement,
+                        start_line: None,
+                        end_line: None,
+                        allow_multiple: false,
+                    }).await;
+                    self.render_response(resp);
+                }
+            }
+            "/ls" | "/dir" => {
+                let path = if parts.len() > 1 { parts[1].to_string() } else { ".".to_string() };
+                let resp = self.dispatch(HgbRequest::CrudList { path }).await;
+                self.render_response(resp);
+            }
+            "/grep" => {
+                if parts.len() < 2 {
+                    println!("{} Usage: /grep <pattern> [path]", "ℹ".yellow());
+                } else {
+                    let pattern = parts[1].to_string();
+                    let path = parts.get(2).map(|p| p.to_string());
+                    let resp = self.dispatch(HgbRequest::CrudGrep { pattern, path, case_insensitive: true }).await;
+                    self.render_response(resp);
+                }
+            }
             _ => {
                 println!("{} Unknown slash command '{}'. Type '/help' for available commands.", "⚠".yellow(), cmd);
             }
@@ -167,7 +222,7 @@ impl HagibisRepl {
             HgbResponse::Complete { output, tokens_used, duration_ms } => {
                 println!("{}", output);
                 if tokens_used > 0 {
-                    println!("  {} {} tokens in {} ms", "⏱️".cyan(), tokens_used, duration_ms);
+                    println!("  {} {} lines/tokens in {} ms", "⏱️".cyan(), tokens_used, duration_ms);
                 }
             }
             HgbResponse::TextChunk(chunk) => print!("{}", chunk),
@@ -178,20 +233,27 @@ impl HagibisRepl {
     fn print_help(&self) {
         println!("{}", "⚡ Hagibis Interactive REPL Commands ⚡".bold().cyan());
         println!("  {}", "--- Core Commands ---".dimmed());
-        println!("  {:<20} {}", "/help, /?".green(), "Show this help table");
-        println!("  {:<20} {}", "/clear, /cls".green(), "Clear terminal screen");
-        println!("  {:<20} {}", "/exit, /quit".green(), "Exit interactive REPL");
-        println!("  {:<20} {}", "/ping".green(), "Measure UDS IPC latency (in microseconds)");
-        println!("  {:<20} {}", "/status".green(), "Display daemon status and memory RSS");
-        println!("  {:<20} {}", "/model [name]".green(), "View or set active model");
+        println!("  {:<25} {}", "/help, /?".green(), "Show this help table");
+        println!("  {:<25} {}", "/clear, /cls".green(), "Clear terminal screen");
+        println!("  {:<25} {}", "/exit, /quit".green(), "Exit interactive REPL");
+        println!("  {:<25} {}", "/ping".green(), "Measure UDS IPC latency (in microseconds)");
+        println!("  {:<25} {}", "/status".green(), "Display daemon status and memory RSS");
+        println!("  {:<25} {}", "/model [name]".green(), "View or set active model");
+        println!();
+        println!("  {}", "--- AGY Surgical CRUD ---".dimmed());
+        println!("  {:<25} {}", "/view <path> [s] [e]".yellow(), "View file with paged line slicing");
+        println!("  {:<25} {}", "/write <path> <text>".yellow(), "Atomically write content to file");
+        println!("  {:<25} {}", "/edit <path> <tgt> <rep>".yellow(), "Surgically search and replace text block");
+        println!("  {:<25} {}", "/ls [path]".yellow(), "List directory contents with child counts");
+        println!("  {:<25} {}", "/grep <pattern> [path]".yellow(), "Search files recursively for pattern");
         println!();
         println!("  {}", "--- Next-Era Engines ---".dimmed());
-        println!("  {:<20} {}", "/doctor, /doc".cyan(), "Run full health audit across all pillars");
-        println!("  {:<20} {}", "/provenance [act]".cyan(), "Append or audit Blake3 Merkle ledger");
-        println!("  {:<20} {}", "/checkpoint [lbl]".cyan(), "Create or view time-travel state snapshot");
-        println!("  {:<20} {}", "/fuzz <target>".cyan(), "Run property-based differential fuzzer");
-        println!("  {:<20} {}", "/verify <target>".cyan(), "Formally verify invariants with SMT-LIB2");
-        println!("  {:<20} {}", "/mesh".cyan(), "Display P2P swarm mesh status");
+        println!("  {:<25} {}", "/doctor, /doc".cyan(), "Run full health audit across all pillars");
+        println!("  {:<25} {}", "/provenance [act]".cyan(), "Append or audit Blake3 Merkle ledger");
+        println!("  {:<25} {}", "/checkpoint [lbl]".cyan(), "Create or view time-travel state snapshot");
+        println!("  {:<25} {}", "/fuzz <target>".cyan(), "Run property-based differential fuzzer");
+        println!("  {:<25} {}", "/verify <target>".cyan(), "Formally verify invariants with SMT-LIB2");
+        println!("  {:<25} {}", "/mesh".cyan(), "Display P2P swarm mesh status");
         println!();
         println!("  {}", "Pro-tip: Any plain text without a '/' prefix executes as an AI swarm prompt.".italic().dimmed());
     }

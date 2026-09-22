@@ -15,3 +15,4 @@ blake3 = { workspace = true }
 chrono = { workspace = true }
 thiserror = { workspace = true }
 colored = { workspace = true }
+regex = { workspace = true }
