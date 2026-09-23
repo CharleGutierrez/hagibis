@@ -839,4 +839,141 @@ fn test_brutal_code_banner_auto_width_and_border_alignment() {
     assert!(rendered.contains("    let y = x * 2;"), "Indentation in code banner must be preserved!");
 }
 
+#[tokio::test]
+async fn test_brutal_prompt_processing_animation_and_cancel() {
+    let mut state = CockpitState::new();
+
+    // 1. Initial state checks
+    assert!(!state.is_processing);
+    assert_eq!(state.processing_tick, 0);
+    assert!(state.processing_start.is_none());
+
+    // 2. Set processing state and simulate tick 3
+    state.is_processing = true;
+    state.processing_tick = 3;
+    state.processing_start = Some(chrono::Utc::now());
+    state.processing_prompt_preview = "optimize neural search algorithm".to_string();
+
+    let backend = ratatui::backend::TestBackend::new(120, 25);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    terminal.draw(|f| state.render_ui(f)).unwrap();
+    let buf = terminal.backend().buffer().clone();
+
+    // Inspect rendered buffer
+    let mut rendered_lines = Vec::new();
+    for y in 0..25 {
+        let mut row_str = String::new();
+        for x in 0..120 {
+            let symbol = buf.cell((x, y)).map(|c| c.symbol()).unwrap_or(" ");
+            row_str.push_str(symbol);
+        }
+        rendered_lines.push(row_str);
+    }
+
+    let full_rendered = rendered_lines.join("\n");
+    println!("\n--- RENDERED PROCESSING CARD ANIMATION ---");
+    for line in full_rendered.lines() {
+        if line.contains('╭') || line.contains('│') || line.contains('╰') || line.contains("Thinking") || line.contains("PROCESSING") {
+            println!("{}", line);
+        }
+    }
+
+    // Verify Braille spinner frame 3: '⠸'
+    assert!(full_rendered.contains('⠸'), "Braille spinner frame '⠸' must be present for tick 3");
+    assert!(full_rendered.contains("Thinking..."), "Card must display 'Thinking...'");
+    assert!(full_rendered.contains("[Esc to cancel]"), "Esc to cancel pill must be rendered");
+    assert!(full_rendered.contains("optimize neural search algorithm"), "Prompt preview must be rendered");
+    assert!(full_rendered.contains("PROCESSING ⠸"), "Input box title must show animated spinner");
+
+    // Verify Border alignment: find corners of the processing card
+    let mut card_top_x = None;
+    let mut card_pipe_x = None;
+    let mut card_bot_x = None;
+
+    for y in 0..25 {
+        let row_str = &rendered_lines[y as usize];
+        if row_str.contains("Processing Prompt") {
+            for xi in 0..120 {
+                if let Some(ci) = buf.cell((xi, y)) {
+                    if ci.symbol() == "╮" {
+                        card_top_x = Some(xi);
+                    }
+                }
+            }
+        }
+        if row_str.contains("Thinking...") {
+            let mut rightmost = 0;
+            for xi in 0..120 {
+                if let Some(ci) = buf.cell((xi, y)) {
+                    if ci.symbol() == "│" {
+                        rightmost = xi;
+                    }
+                }
+            }
+            card_pipe_x = Some(rightmost);
+        }
+        if card_top_x.is_some() && card_bot_x.is_none() && row_str.contains('╰') && row_str.contains('╯') {
+            for xi in 0..120 {
+                if let Some(ci) = buf.cell((xi, y)) {
+                    if ci.symbol() == "╯" {
+                        card_bot_x = Some(xi);
+                    }
+                }
+            }
+        }
+    }
+
+    assert!(card_top_x.is_some(), "Top right corner ╮ of processing card must be found");
+    assert!(card_bot_x.is_some(), "Bottom right corner ╯ of processing card must be found");
+    assert!(card_pipe_x.is_some(), "Content right border │ of processing card must be found");
+
+    assert_eq!(card_top_x, card_bot_x, "Top right and bottom right corner must align!");
+    assert_eq!(card_pipe_x, card_bot_x, "Content right border and bottom corner must align!");
+
+    // 3. Advance tick to 5 and verify frame update
+    state.processing_tick = 5;
+    terminal.draw(|f| state.render_ui(f)).unwrap();
+    let buf5 = terminal.backend().buffer().clone();
+    let mut rendered_lines5 = Vec::new();
+    for y in 0..25 {
+        let mut row_str = String::new();
+        for x in 0..120 {
+            let symbol = buf5.cell((x, y)).map(|c| c.symbol()).unwrap_or(" ");
+            row_str.push_str(symbol);
+        }
+        rendered_lines5.push(row_str);
+    }
+    let full_rendered5 = rendered_lines5.join("\n");
+    // Tick 5 spinner frame: '⠴'
+    assert!(full_rendered5.contains('⠴'), "Braille spinner frame '⠴' must be present for tick 5");
+
+    // 4. Test dynamic_badge on Running node
+    let running_node = CockpitDagNode::new("task-1", "Test Node", "gemini-2.5-flash")
+        .with_status(CockpitNodeStatus::Running { progress_pct: 25 });
+    let (badge_str, _) = running_node.status.dynamic_badge(5);
+    assert_eq!(badge_str, "[⠴ RUNNING]");
+
+    // 5. Test cancellation
+    state.cancel_processing();
+    assert!(!state.is_processing);
+    assert!(state.processing_start.is_none());
+    assert!(state.processing_prompt_preview.is_empty());
+    assert!(state.conversation.iter().any(|c| c.content.contains("cancelled by user")));
+
+    // 6. Test submit_current_prompt
+    state.model_pill = "mock-standalone-model".to_string();
+    state.prompt_input = "calculate fibonacci(40)".to_string();
+    let rx = state.submit_current_prompt();
+    assert!(rx.is_some(), "submit_current_prompt should return background receiver");
+    assert!(state.is_processing, "state.is_processing must be true after submission");
+    assert_eq!(state.nodes.len(), 1);
+    assert_eq!(state.conversation.len(), 2); // 1 cancelled assistant + 1 user prompt
+
+    // Wait for the background result and apply it
+    let result = rx.unwrap().await.unwrap();
+    state.apply_prompt_result(result);
+    assert!(!state.is_processing, "state.is_processing must be false after applying result");
+    assert_eq!(state.conversation.len(), 3); // cancelled + user + new assistant
+}
+
 

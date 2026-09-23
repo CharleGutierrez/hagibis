@@ -159,6 +159,20 @@ impl CockpitNodeStatus {
             Self::Steered { .. } => ("[STEERED]", Color::Magenta),
         }
     }
+
+    pub fn dynamic_badge(&self, tick: usize) -> (String, Color) {
+        match self {
+            Self::Running { .. } => {
+                const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+                let s = SPINNER_FRAMES[tick % SPINNER_FRAMES.len()];
+                (format!("[{} RUNNING]", s), Color::Cyan)
+            }
+            _ => {
+                let (b, c) = self.badge();
+                (b.to_string(), c)
+            }
+        }
+    }
 }
 
 /// A recorded tool invocation on a DAG node
@@ -489,6 +503,10 @@ pub struct CockpitState {
     pub conversation: Vec<CockpitChatItem>,
     pub chat_scroll: usize,
     pub execution_mode: String,
+    pub is_processing: bool,
+    pub processing_tick: usize,
+    pub processing_start: Option<chrono::DateTime<chrono::Utc>>,
+    pub processing_prompt_preview: String,
 }
 
 impl Default for CockpitState {
@@ -537,6 +555,10 @@ impl CockpitState {
             conversation: Vec::new(),
             chat_scroll: 0,
             execution_mode: "default".to_string(),
+            is_processing: false,
+            processing_tick: 0,
+            processing_start: None,
+            processing_prompt_preview: String::new(),
         }
     }
 
@@ -995,11 +1017,11 @@ impl CockpitState {
         self.nodes.get_mut(self.selected_index)
     }
 
-    /// Submit current prompt in prompt buffer to execution pipeline
-    pub async fn submit_current_prompt(&mut self) {
+    /// Submit current prompt in prompt buffer to execution pipeline and return background receiver
+    pub fn submit_current_prompt(&mut self) -> Option<tokio::sync::oneshot::Receiver<PromptExecutionResult>> {
         let prompt = self.prompt_input.trim().to_string();
-        if prompt.is_empty() {
-            return;
+        if prompt.is_empty() || self.is_processing {
+            return None;
         }
 
         self.prompt_history.push(prompt.clone());
@@ -1026,187 +1048,312 @@ impl CockpitState {
         self.selected_index = self.nodes.len() - 1;
         self.add_log(format!("[EXEC] Dispatched prompt '{}'", prompt_preview));
 
-        self.execute_prompt_on_node(&node_id, &prompt).await;
+        self.is_processing = true;
+        self.processing_tick = 0;
+        self.processing_start = Some(Utc::now());
+        self.processing_prompt_preview = prompt_preview;
 
-        // 2. Record Assistant response in Chat Canvas
-        let (output, tokens, duration_ms) = if let Some(node) = self.nodes.iter().find(|n| n.id == node_id) {
-            match &node.status {
-                CockpitNodeStatus::Succeeded { duration_ms } => (node.scratchpad.clone(), node.tokens_used as usize, *duration_ms),
-                CockpitNodeStatus::Failed { error } => (format!("Error: {}", error), 0, 0),
-                _ => (node.scratchpad.clone(), node.tokens_used as usize, 0),
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let nid = node_id;
+        let model = self.model_pill.clone();
+        let p = prompt;
+
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                let res = execute_prompt_core(nid, model, p).await;
+                let _ = tx.send(res);
+            });
+        }
+
+        Some(rx)
+    }
+
+    /// Apply finished prompt execution result to Cockpit state
+    pub fn apply_prompt_result(&mut self, result: PromptExecutionResult) {
+        self.is_processing = false;
+        self.processing_prompt_preview.clear();
+        self.processing_start = None;
+
+        self.telemetry.total_tokens += result.tokens_used;
+
+        if let Some(node) = self.nodes.iter_mut().find(|n| n.id == result.node_id) {
+            if result.is_error {
+                node.status = CockpitNodeStatus::Failed {
+                    error: result.error_msg.clone().unwrap_or_else(|| "Unknown execution error".to_string()),
+                };
+                node.scratchpad = format!("Error: {}", result.output);
+            } else {
+                node.status = CockpitNodeStatus::Succeeded {
+                    duration_ms: result.duration_ms,
+                };
+                node.tokens_used = result.tokens_used;
+                node.scratchpad = result.output.clone();
+                if let Some(tool) = result.tool_call {
+                    node.add_tool_call(tool);
+                }
             }
-        } else {
-            ("No response from microkernel".to_string(), 0, 0)
-        };
+        }
 
-        let tools = self.nodes.iter().find(|n| n.id == node_id).map(|n| n.tool_calls.clone()).unwrap_or_default();
-        self.add_assistant_message(output, self.model_pill.clone(), tokens, duration_ms, None, tools);
+        self.add_log(result.log_msg);
+
+        let tools = self
+            .nodes
+            .iter()
+            .find(|n| n.id == result.node_id)
+            .map(|n| n.tool_calls.clone())
+            .unwrap_or_default();
+
+        self.add_assistant_message(
+            result.output,
+            result.model,
+            result.tokens_used as usize,
+            result.duration_ms,
+            None,
+            tools,
+        );
         self.chat_scroll = 0;
     }
 
-    /// Execute prompt on a specific DAG node via UDS IPC, GeminiProvider, or Standalone engine
-    pub async fn execute_prompt_on_node(&mut self, node_id: &str, prompt: &str) {
-        let start_time = Utc::now().timestamp_millis();
+    /// Cancel active in-flight prompt processing (triggered by Esc or Ctrl+C)
+    pub fn cancel_processing(&mut self) {
+        if !self.is_processing {
+            return;
+        }
+        self.is_processing = false;
+        let preview = self.processing_prompt_preview.clone();
+        self.processing_prompt_preview.clear();
+        self.processing_start = None;
 
-        // 1. Try Unix Domain Socket IPC to resident hgbd daemon
-        let socket_path = std::env::var("HGB_SOCKET")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|_| {
-                let runtime_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
-                std::path::PathBuf::from(runtime_dir).join("hgb.sock")
-            });
-
-        let mut ipc_succeeded = false;
-        if let Ok(mut stream) = tokio::net::UnixStream::connect(&socket_path).await {
-            let req = hgb_core::HgbRequest::Prompt {
-                prompt: prompt.to_string(),
-                model: Some(self.model_pill.clone()),
-                provider: None,
-                stream: false,
+        let node_id = format!("task-{}", self.nodes.len());
+        if let Some(node) = self.nodes.iter_mut().find(|n| n.id == node_id) {
+            node.status = CockpitNodeStatus::Failed {
+                error: "Execution cancelled by user".to_string(),
             };
-            if let Ok(encoded) = bincode::serialize(&req) {
-                use tokio::io::{AsyncReadExt, AsyncWriteExt};
-                if stream.write_all(&encoded).await.is_ok() {
-                    let mut buf = vec![0u8; 65536];
-                    if let Ok(n) = stream.read(&mut buf).await {
-                        if n > 0 {
-                            if let Ok(resp) = bincode::deserialize::<hgb_core::HgbResponse>(&buf[..n]) {
-                                match resp {
-                                    hgb_core::HgbResponse::Complete { output, tokens_used, duration_ms } => {
-                                        ipc_succeeded = true;
-                                        self.telemetry.total_tokens += tokens_used as u64;
-                                        let tool_name = if hgb_core::OllamaProvider::is_ollama_model(&self.model_pill) {
-                                            "hgbd_ollama_local"
-                                        } else {
-                                            "hgbd_gemini_inference"
-                                        };
-                                        let tool = CockpitToolCall::new(
-                                            tool_name,
-                                            format!("model={}", self.model_pill),
-                                            "SUCCESS",
-                                            duration_ms,
-                                            Some(output.clone()),
-                                        );
-                                        if let Some(node) = self.nodes.iter_mut().find(|n| n.id == node_id) {
-                                            node.status = CockpitNodeStatus::Succeeded { duration_ms };
-                                            node.tokens_used = tokens_used as u64;
-                                            node.scratchpad = output;
-                                            node.add_tool_call(tool);
-                                        }
-                                        self.add_log(format!("[DAEMON] Prompt finished in {}ms ({} tok)", duration_ms, tokens_used));
-                                    }
-                                    hgb_core::HgbResponse::Error(err) => {
-                                        ipc_succeeded = true;
-                                        if let Some(node) = self.nodes.iter_mut().find(|n| n.id == node_id) {
-                                            node.status = CockpitNodeStatus::Failed { error: err.clone() };
-                                        }
-                                        self.add_log(format!("[DAEMON_ERR] {}", err));
-                                    }
-                                    _ => {}
+            node.scratchpad = "Execution was cancelled by supervisor (Esc / Ctrl+C).".to_string();
+        }
+
+        self.add_assistant_message(
+            "Execution cancelled by user.".to_string(),
+            self.model_pill.clone(),
+            0,
+            0,
+            None,
+            vec![],
+        );
+        self.add_log(format!("[CANCEL] Prompt execution cancelled: '{}'", preview));
+        self.chat_scroll = 0;
+    }
+
+    /// Execute prompt synchronously on a specific DAG node (for programmatic or test calls)
+    pub async fn execute_prompt_on_node(&mut self, node_id: &str, prompt: &str) {
+        let res = execute_prompt_core(node_id.to_string(), self.model_pill.clone(), prompt.to_string()).await;
+        self.apply_prompt_result(res);
+    }
+}
+
+/// Result of an asynchronous prompt execution dispatched from the Cockpit
+#[derive(Debug, Clone)]
+pub struct PromptExecutionResult {
+    pub node_id: String,
+    pub model: String,
+    pub prompt: String,
+    pub output: String,
+    pub tokens_used: u64,
+    pub duration_ms: u64,
+    pub tool_call: Option<CockpitToolCall>,
+    pub is_error: bool,
+    pub error_msg: Option<String>,
+    pub log_msg: String,
+}
+
+/// Core prompt execution logic isolated for asynchronous background execution
+pub async fn execute_prompt_core(
+    node_id: String,
+    model_pill: String,
+    prompt: String,
+) -> PromptExecutionResult {
+    let start_time = Utc::now().timestamp_millis();
+
+    // 1. Try Unix Domain Socket IPC to resident hgbd daemon
+    let socket_path = std::env::var("HGB_SOCKET")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| {
+            let runtime_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
+            std::path::PathBuf::from(runtime_dir).join("hgb.sock")
+        });
+
+    if let Ok(mut stream) = tokio::net::UnixStream::connect(&socket_path).await {
+        let req = hgb_core::HgbRequest::Prompt {
+            prompt: prompt.clone(),
+            model: Some(model_pill.clone()),
+            provider: None,
+            stream: false,
+        };
+        if let Ok(encoded) = bincode::serialize(&req) {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            if stream.write_all(&encoded).await.is_ok() {
+                let mut buf = vec![0u8; 65536];
+                if let Ok(n) = stream.read(&mut buf).await {
+                    if n > 0 {
+                        if let Ok(resp) = bincode::deserialize::<hgb_core::HgbResponse>(&buf[..n]) {
+                            match resp {
+                                hgb_core::HgbResponse::Complete { output, tokens_used, duration_ms } => {
+                                    let tool_name = if hgb_core::OllamaProvider::is_ollama_model(&model_pill) {
+                                        "hgbd_ollama_local"
+                                    } else {
+                                        "hgbd_gemini_inference"
+                                    };
+                                    let tool = CockpitToolCall::new(
+                                        tool_name,
+                                        format!("model={}", model_pill),
+                                        "SUCCESS",
+                                        duration_ms,
+                                        Some(output.clone()),
+                                    );
+                                    let log_msg = format!("[DAEMON] Prompt finished in {}ms ({} tok)", duration_ms, tokens_used);
+                                    return PromptExecutionResult {
+                                        node_id,
+                                        model: model_pill,
+                                        prompt,
+                                        output,
+                                        tokens_used: tokens_used as u64,
+                                        duration_ms,
+                                        tool_call: Some(tool),
+                                        is_error: false,
+                                        error_msg: None,
+                                        log_msg,
+                                    };
                                 }
+                                hgb_core::HgbResponse::Error(err) => {
+                                    let log_msg = format!("[DAEMON_ERR] {}", err);
+                                    return PromptExecutionResult {
+                                        node_id,
+                                        model: model_pill,
+                                        prompt,
+                                        output: format!("Error: {}", err),
+                                        tokens_used: 0,
+                                        duration_ms: 0,
+                                        tool_call: None,
+                                        is_error: true,
+                                        error_msg: Some(err),
+                                        log_msg,
+                                    };
+                                }
+                                _ => {}
                             }
                         }
                     }
                 }
             }
         }
+    }
 
-        if ipc_succeeded {
-            return;
-        }
+    // 1.5. Try Local Ollama Provider if requested model is local or if Gemini is unconfigured
+    let is_ollama = hgb_core::OllamaProvider::is_ollama_model(&model_pill)
+        || (!hgb_core::GeminiProvider::is_available() && hgb_core::OllamaProvider::is_available());
 
-        // 1.5. Try Local Ollama Provider if requested model is local or if Gemini is unconfigured
-        let is_ollama = hgb_core::OllamaProvider::is_ollama_model(&self.model_pill)
-            || (!hgb_core::GeminiProvider::is_available() && hgb_core::OllamaProvider::is_available());
-
-        if is_ollama && hgb_core::OllamaProvider::is_available() {
-            if let Some(ollama_prov) = hgb_core::OllamaProvider::auto_discover() {
-                use hgb_core::traits::HgbProvider;
-                self.add_log(format!("[OLLAMA] Querying local Ollama engine ({}) directly...", self.model_pill));
-                let res = ollama_prov.complete(prompt, Some(&self.model_pill)).await;
-                let elapsed = (Utc::now().timestamp_millis() - start_time).max(1) as u64;
-                match res {
-                    Ok(output) => {
-                        let approx_tokens = (output.len() / 4 + prompt.len() / 4).max(1) as u64;
-                        self.telemetry.total_tokens += approx_tokens;
-                        let tool = CockpitToolCall::new(
-                            "ollama_local_inference",
-                            format!("model={}", self.model_pill),
-                            "SUCCESS",
-                            elapsed,
-                            Some(output.clone()),
-                        );
-                        if let Some(node) = self.nodes.iter_mut().find(|n| n.id == node_id) {
-                            node.status = CockpitNodeStatus::Succeeded { duration_ms: elapsed };
-                            node.tokens_used = approx_tokens;
-                            node.scratchpad = output;
-                            node.add_tool_call(tool);
-                        }
-                        self.add_log(format!("[OLLAMA] Completed in {}ms (~{} tok)", elapsed, approx_tokens));
-                        return;
-                    }
-                    Err(err) => {
-                        self.add_log(format!("[OLLAMA_ERR] Local Ollama error: {}", err));
-                    }
-                }
-            }
-        }
-
-        // 2. Try In-Process GeminiProvider if credentials exist
-        if let Some(provider) = hgb_core::GeminiProvider::auto_discover() {
+    if is_ollama && hgb_core::OllamaProvider::is_available() {
+        if let Some(ollama_prov) = hgb_core::OllamaProvider::auto_discover() {
             use hgb_core::traits::HgbProvider;
-            self.add_log("[PROVIDER] Querying Google Gemini provider directly...".to_string());
-            let res = provider.complete(prompt, Some(&self.model_pill)).await;
+            let res = ollama_prov.complete(&prompt, Some(&model_pill)).await;
             let elapsed = (Utc::now().timestamp_millis() - start_time).max(1) as u64;
             match res {
                 Ok(output) => {
                     let approx_tokens = (output.len() / 4 + prompt.len() / 4).max(1) as u64;
-                    self.telemetry.total_tokens += approx_tokens;
                     let tool = CockpitToolCall::new(
-                        "gemini_api_direct",
-                        format!("model={}", self.model_pill),
+                        "ollama_local_inference",
+                        format!("model={}", model_pill),
                         "SUCCESS",
                         elapsed,
                         Some(output.clone()),
                     );
-                    if let Some(node) = self.nodes.iter_mut().find(|n| n.id == node_id) {
-                        node.status = CockpitNodeStatus::Succeeded { duration_ms: elapsed };
-                        node.tokens_used = approx_tokens;
-                        node.scratchpad = output;
-                        node.add_tool_call(tool);
-                    }
-                    self.add_log(format!("[GEMINI] Completed in {}ms (~{} tok)", elapsed, approx_tokens));
-                    return;
+                    let log_msg = format!("[OLLAMA] Completed in {}ms (~{} tok)", elapsed, approx_tokens);
+                    return PromptExecutionResult {
+                        node_id,
+                        model: model_pill,
+                        prompt,
+                        output,
+                        tokens_used: approx_tokens,
+                        duration_ms: elapsed,
+                        tool_call: Some(tool),
+                        is_error: false,
+                        error_msg: None,
+                        log_msg,
+                    };
                 }
                 Err(err) => {
-                    self.add_log(format!("[GEMINI_ERR] Provider error: {}", err));
+                    // Ollama error, log and fall through to Gemini or standalone fallback
+                    let _ = err;
                 }
             }
         }
-
-        // 3. Fallback: Standalone local execution simulation
-        let elapsed = (Utc::now().timestamp_millis() - start_time).max(1) as u64;
-        let approx_tokens = (prompt.len() / 4).max(1) as u64;
-        self.telemetry.total_tokens += approx_tokens;
-        let fallback_output = format!(
-            "Prompt recorded in Cockpit Dag:\n\"{}\"\n\n[INFO] hgbd daemon is offline and Gemini credentials unconfigured.\nStart daemon with `hgbd` or authenticate with `hgb login` to query models.",
-            prompt
-        );
-        let tool = CockpitToolCall::new(
-            "cockpit_local_eval",
-            "mode=standalone",
-            "SUCCESS",
-            elapsed,
-            Some(prompt.chars().take(80).collect()),
-        );
-        if let Some(node) = self.nodes.iter_mut().find(|n| n.id == node_id) {
-            node.status = CockpitNodeStatus::Succeeded { duration_ms: elapsed };
-            node.tokens_used = approx_tokens;
-            node.scratchpad = fallback_output;
-            node.add_tool_call(tool);
-        }
-        self.add_log(format!("[STANDALONE] Executed prompt node '{}' ({} tok)", node_id, approx_tokens));
     }
+
+    // 2. Try In-Process GeminiProvider if credentials exist
+    if let Some(provider) = hgb_core::GeminiProvider::auto_discover() {
+        use hgb_core::traits::HgbProvider;
+        let res = provider.complete(&prompt, Some(&model_pill)).await;
+        let elapsed = (Utc::now().timestamp_millis() - start_time).max(1) as u64;
+        match res {
+            Ok(output) => {
+                let approx_tokens = (output.len() / 4 + prompt.len() / 4).max(1) as u64;
+                let tool = CockpitToolCall::new(
+                    "gemini_api_direct",
+                    format!("model={}", model_pill),
+                    "SUCCESS",
+                    elapsed,
+                    Some(output.clone()),
+                );
+                let log_msg = format!("[GEMINI] Completed in {}ms (~{} tok)", elapsed, approx_tokens);
+                return PromptExecutionResult {
+                    node_id,
+                    model: model_pill,
+                    prompt,
+                    output,
+                    tokens_used: approx_tokens,
+                    duration_ms: elapsed,
+                    tool_call: Some(tool),
+                    is_error: false,
+                    error_msg: None,
+                    log_msg,
+                };
+            }
+            Err(err) => {
+                let _ = err;
+            }
+        }
+    }
+
+    // 3. Fallback: Standalone local execution simulation
+    let elapsed = (Utc::now().timestamp_millis() - start_time).max(1) as u64;
+    let approx_tokens = (prompt.len() / 4).max(1) as u64;
+    let fallback_output = format!(
+        "Prompt recorded in Cockpit Dag:\n\"{}\"\n\n[INFO] hgbd daemon is offline and Gemini credentials unconfigured.\nStart daemon with `hgbd` or authenticate with `hgb login` to query models.",
+        prompt
+    );
+    let tool = CockpitToolCall::new(
+        "cockpit_local_eval",
+        "mode=standalone",
+        "SUCCESS",
+        elapsed,
+        Some(prompt.chars().take(80).collect()),
+    );
+    let log_msg = format!("[STANDALONE] Executed prompt node '{}' ({} tok)", node_id, approx_tokens);
+    PromptExecutionResult {
+        node_id,
+        model: model_pill,
+        prompt,
+        output: fallback_output,
+        tokens_used: approx_tokens,
+        duration_ms: elapsed,
+        tool_call: Some(tool),
+        is_error: false,
+        error_msg: None,
+        log_msg,
+    }
+}
+
+impl CockpitState {
 
     /// Render Cockpit UI layout into Ratatui Frame
     pub fn render_ui(&self, frame: &mut Frame) {
@@ -1254,16 +1401,27 @@ impl CockpitState {
             .title(" ⚡ HAGIBIS AGY COCKPIT ⚡ ");
 
         let temp_color = if self.telemetry.peak_temperature_celsius > 75.0 { Color::Red } else { Color::Green };
+        let mut hud_row1 = vec![
+            Span::styled(format!(" [{}] ", self.model_pill), Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::raw(" "),
+            Span::styled(format!(" [Reasoning: {}] ", self.reasoning_effort), Style::default().fg(Color::Black).bg(Color::Magenta).add_modifier(Modifier::BOLD)),
+            Span::raw(" "),
+            Span::styled(format!(" [👤 {}] ", self.auth_account), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::raw(" "),
+            Span::styled(format!(" [📁 {}] ", self.workspace_path), Style::default().fg(Color::LightBlue)),
+        ];
+        if self.is_processing {
+            const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+            let spinner = SPINNER_FRAMES[self.processing_tick % SPINNER_FRAMES.len()];
+            hud_row1.push(Span::raw(" "));
+            hud_row1.push(Span::styled(
+                format!(" [⚡ THINKING {}] ", spinner),
+                Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD),
+            ));
+        }
+
         let hud_lines = vec![
-            Line::from(vec![
-                Span::styled(format!(" [{}] ", self.model_pill), Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)),
-                Span::raw(" "),
-                Span::styled(format!(" [Reasoning: {}] ", self.reasoning_effort), Style::default().fg(Color::Black).bg(Color::Magenta).add_modifier(Modifier::BOLD)),
-                Span::raw(" "),
-                Span::styled(format!(" [👤 {}] ", self.auth_account), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                Span::raw(" "),
-                Span::styled(format!(" [📁 {}] ", self.workspace_path), Style::default().fg(Color::LightBlue)),
-            ]),
+            Line::from(hud_row1),
             Line::from(vec![
                 Span::styled("🔥 Thermal: ", Style::default().fg(Color::Yellow)),
                 Span::styled(format!("{:.1}°C  ", self.telemetry.peak_temperature_celsius), Style::default().fg(temp_color).add_modifier(Modifier::BOLD)),
@@ -1318,7 +1476,7 @@ impl CockpitState {
             .enumerate()
             .map(|(idx, node)| {
                 let depth = node_depth(node, &self.nodes);
-                let (badge, color) = node.status.badge();
+                let (badge, color) = node.status.dynamic_badge(self.processing_tick);
                 let is_sel = idx == self.selected_index;
                 let marker = if is_sel { "▶ " } else { "  " };
 
@@ -2050,6 +2208,154 @@ impl CockpitState {
             }
         }
 
+        // If actively processing a prompt, display responsive animated processing card
+        if self.is_processing {
+            const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+            const PULSE_COLORS: &[Color] = &[
+                Color::Cyan,
+                Color::LightCyan,
+                Color::Blue,
+                Color::LightBlue,
+                Color::Magenta,
+                Color::LightMagenta,
+            ];
+            const WAVE_PATTERNS: &[&str] = &[
+                "▰▱▱▱▱",
+                "▰▰▱▱▱",
+                "▰▰▰▱▱",
+                "▰▰▰▰▱",
+                "▰▰▰▰▰",
+                "▱▰▰▰▰",
+                "▱▱▰▰▰",
+                "▱▱▱▰▰",
+                "▱▱▱▱▰",
+                "▱▱▱▱▱",
+            ];
+
+            let spinner = SPINNER_FRAMES[self.processing_tick % SPINNER_FRAMES.len()];
+            let pulse_color = PULSE_COLORS[(self.processing_tick / 2) % PULSE_COLORS.len()];
+            let wave = WAVE_PATTERNS[self.processing_tick % WAVE_PATTERNS.len()];
+
+            let elapsed_str = if let Some(start) = self.processing_start {
+                let millis = (Utc::now() - start).num_milliseconds().max(0);
+                format!("{:.1}s", millis as f64 / 1000.0)
+            } else {
+                "0.0s".to_string()
+            };
+
+            let title_text = format!("Processing Prompt ({})", self.model_pill);
+            let title_w = UnicodeWidthStr::width(title_text.as_str());
+
+            // Line 1: Spinner, Thinking, Wave, Timer, Esc pill
+            let status_body = format!("Thinking...  {}   ⏱ {}   [Esc to cancel]", wave, elapsed_str);
+            let status_body_w = UnicodeWidthStr::width(status_body.as_str());
+            let line1_natural_w = status_body_w + 7;
+
+            // Line 2: Prompt preview if present
+            let prompt_line = if !self.processing_prompt_preview.is_empty() {
+                format!("Prompt: \"{}\"", self.processing_prompt_preview)
+            } else {
+                String::new()
+            };
+            let prompt_line_w = UnicodeWidthStr::width(prompt_line.as_str());
+            let line2_natural_w = if prompt_line_w > 0 { prompt_line_w + 6 } else { 0 };
+
+            let natural_w = line1_natural_w.max(line2_natural_w).max(title_w + 8);
+            let max_allowed = usable_width.saturating_sub(2).max(44);
+            let card_w = natural_w.max(44).min(max_allowed);
+
+            // 1. Top Border: "╭─ Processing Prompt (model) ────╮"
+            let max_title_w = card_w.saturating_sub(6);
+            let (disp_title, disp_title_w) = if title_w > max_title_w && max_title_w > 3 {
+                let mut truncated = String::new();
+                for c in title_text.chars() {
+                    if UnicodeWidthStr::width(truncated.as_str()) + UnicodeWidthChar::width(c).unwrap_or(1) + 3 <= max_title_w {
+                        truncated.push(c);
+                    } else {
+                        break;
+                    }
+                }
+                truncated.push_str("...");
+                let w = UnicodeWidthStr::width(truncated.as_str());
+                (truncated, w)
+            } else {
+                (title_text.clone(), title_w)
+            };
+
+            let dash_count = card_w.saturating_sub(disp_title_w + 5);
+            let top_dashes = "─".repeat(dash_count);
+            chat_lines.push(Line::from(vec![
+                Span::styled("╭─ ", Style::default().fg(pulse_color)),
+                Span::styled(disp_title, Style::default().fg(pulse_color).add_modifier(Modifier::BOLD)),
+                Span::raw(" "),
+                Span::styled(top_dashes, Style::default().fg(pulse_color)),
+                Span::styled("╮", Style::default().fg(pulse_color)),
+            ]));
+
+            // 2. Animated Status Line:
+            let inner_max_w = card_w.saturating_sub(5);
+            let (disp_status, disp_status_w) = if status_body_w + 2 > inner_max_w && inner_max_w > 4 {
+                let mut truncated = String::new();
+                for c in status_body.chars() {
+                    if UnicodeWidthStr::width(truncated.as_str()) + UnicodeWidthChar::width(c).unwrap_or(1) + 5 <= inner_max_w {
+                        truncated.push(c);
+                    } else {
+                        break;
+                    }
+                }
+                truncated.push_str("...");
+                let w = UnicodeWidthStr::width(truncated.as_str());
+                (truncated, w)
+            } else {
+                (status_body.clone(), status_body_w)
+            };
+
+            let pad1 = card_w.saturating_sub(disp_status_w + 7);
+            chat_lines.push(Line::from(vec![
+                Span::styled("│  ", Style::default().fg(pulse_color)),
+                Span::styled(spinner, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::raw(" "),
+                Span::styled(disp_status, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::raw(" ".repeat(pad1)),
+                Span::styled(" │", Style::default().fg(pulse_color)),
+            ]));
+
+            // 3. Prompt Preview Line (if present):
+            if !prompt_line.is_empty() {
+                let max_preview_w = card_w.saturating_sub(5);
+                let (disp_p, disp_p_w) = if prompt_line_w > max_preview_w && max_preview_w > 3 {
+                    let mut truncated = String::new();
+                    for c in prompt_line.chars() {
+                        if UnicodeWidthStr::width(truncated.as_str()) + UnicodeWidthChar::width(c).unwrap_or(1) + 3 <= max_preview_w {
+                            truncated.push(c);
+                        } else {
+                            break;
+                        }
+                    }
+                    truncated.push_str("...");
+                    let w = UnicodeWidthStr::width(truncated.as_str());
+                    (truncated, w)
+                } else {
+                    (prompt_line.clone(), prompt_line_w)
+                };
+                let pad2 = card_w.saturating_sub(disp_p_w + 5);
+                chat_lines.push(Line::from(vec![
+                    Span::styled("│  ", Style::default().fg(pulse_color)),
+                    Span::styled(disp_p, Style::default().fg(Color::DarkGray)),
+                    Span::raw(" ".repeat(pad2)),
+                    Span::styled(" │", Style::default().fg(pulse_color)),
+                ]));
+            }
+
+            // 4. Bottom Border: "╰────────────────────────────╯"
+            let bottom_dashes = "─".repeat(card_w.saturating_sub(2));
+            chat_lines.push(Line::from(Span::styled(
+                format!("╰{}╯", bottom_dashes),
+                Style::default().fg(pulse_color),
+            )));
+            chat_lines.push(Line::from(""));
+        }
+
         // Viewport scrolling
         let mut estimated_rows = 0;
         for line in &chat_lines {
@@ -2127,15 +2433,32 @@ impl CockpitState {
             ])
         };
 
-        let prompt_title = match self.execution_mode.as_str() {
-            "plan" => " ❯ type a prompt (plan mode · Shift+Tab to switch) ",
-            "accept-edits" => " ❯ type a prompt (accept-edits mode · Shift+Tab to switch) ",
-            _ => " ❯ type a prompt (? shortcuts, / commands, Ctrl+T cockpit) ",
+        let (prompt_title, border_color) = if self.is_processing {
+            const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+            let spinner = SPINNER_FRAMES[self.processing_tick % SPINNER_FRAMES.len()];
+            let elapsed_str = if let Some(start) = self.processing_start {
+                let millis = (Utc::now() - start).num_milliseconds().max(0);
+                format!("{:.1}s", millis as f64 / 1000.0)
+            } else {
+                "0.0s".to_string()
+            };
+            (
+                format!(" ❯ [PROCESSING {}] Thinking ({}) · Esc to cancel ", spinner, elapsed_str),
+                Color::Yellow,
+            )
+        } else {
+            let title = match self.execution_mode.as_str() {
+                "plan" => " ❯ type a prompt (plan mode · Shift+Tab to switch) ".to_string(),
+                "accept-edits" => " ❯ type a prompt (accept-edits mode · Shift+Tab to switch) ".to_string(),
+                _ => " ❯ type a prompt (? shortcuts, / commands, Ctrl+T cockpit) ".to_string(),
+            };
+            (title, Color::Cyan)
         };
+
         let input_box = Paragraph::new(prompt_content).block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan))
+                .border_style(Style::default().fg(border_color))
                 .title(prompt_title),
         );
         frame.render_widget(input_box, chunks[3]);
@@ -2147,13 +2470,34 @@ impl CockpitState {
             String::new()
         };
 
-        let statusline = Line::from(vec![
-            Span::styled("? shortcuts · Shift+Tab mode · Ctrl+T cockpit · Esc clear", Style::default().fg(Color::DarkGray)),
-            Span::raw("   "),
-            Span::styled(bg_tasks_info, Style::default().fg(Color::Yellow)),
-            Span::raw("   "),
-            Span::styled(format!("👤 {} · 12µs IPC", self.auth_account), Style::default().fg(Color::DarkGray)),
-        ]);
+        let statusline = if self.is_processing {
+            const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+            let spinner = SPINNER_FRAMES[self.processing_tick % SPINNER_FRAMES.len()];
+            let elapsed_str = if let Some(start) = self.processing_start {
+                let millis = (Utc::now() - start).num_milliseconds().max(0);
+                format!("{:.1}s", millis as f64 / 1000.0)
+            } else {
+                "0.0s".to_string()
+            };
+            Line::from(vec![
+                Span::styled(format!(" {} Executing on {} ", spinner, self.model_pill), Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::raw(" "),
+                Span::styled(format!("⏱ {} ", elapsed_str), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled(" [Esc] Cancel ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+                Span::raw("   "),
+                Span::styled(bg_tasks_info, Style::default().fg(Color::Yellow)),
+                Span::raw("   "),
+                Span::styled(format!("👤 {}", self.auth_account), Style::default().fg(Color::DarkGray)),
+            ])
+        } else {
+            Line::from(vec![
+                Span::styled("? shortcuts · Shift+Tab mode · Ctrl+T cockpit · Esc clear", Style::default().fg(Color::DarkGray)),
+                Span::raw("   "),
+                Span::styled(bg_tasks_info, Style::default().fg(Color::Yellow)),
+                Span::raw("   "),
+                Span::styled(format!("👤 {} · 12µs IPC", self.auth_account), Style::default().fg(Color::DarkGray)),
+            ])
+        };
         frame.render_widget(Paragraph::new(statusline), chunks[4]);
     }
 
@@ -2348,7 +2692,7 @@ impl CockpitState {
 
     /// Launch interactive terminal cockpit session (blocking)
     pub fn run_interactive_blocking(&mut self) -> io::Result<()> {
-        let rt = tokio::runtime::Builder::new_current_thread()
+        let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()?;
         rt.block_on(self.run_interactive())
@@ -2365,7 +2709,27 @@ impl CockpitState {
             "gemini-2.5-pro",
         ];
 
+        let mut prompt_rx: Option<tokio::sync::oneshot::Receiver<PromptExecutionResult>> = None;
+
         loop {
+            // Check background prompt execution if active
+            if self.is_processing {
+                self.processing_tick = self.processing_tick.wrapping_add(1);
+                if let Some(mut rx) = prompt_rx.take() {
+                    match rx.try_recv() {
+                        Ok(res) => {
+                            self.apply_prompt_result(res);
+                        }
+                        Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {
+                            prompt_rx = Some(rx);
+                        }
+                        Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                            self.cancel_processing();
+                        }
+                    }
+                }
+            }
+
             terminal.draw(|f| self.render_ui(f))?;
 
             if event::poll(Duration::from_millis(50))? {
@@ -2426,6 +2790,11 @@ impl CockpitState {
                                     continue;
                                 }
                                 KeyCode::Char('c') | KeyCode::Char('C') => {
+                                    if self.is_processing {
+                                        self.cancel_processing();
+                                        prompt_rx = None;
+                                        continue;
+                                    }
                                     if self.prompt_input.is_empty() {
                                         break;
                                     } else {
@@ -2648,6 +3017,11 @@ impl CockpitState {
                         // 7. Prompt Input Handling
                         match key.code {
                             KeyCode::Esc => {
+                                if self.is_processing {
+                                    self.cancel_processing();
+                                    prompt_rx = None;
+                                    continue;
+                                }
                                 if self.chat_scroll > 0 {
                                     self.scroll_chat_to_bottom();
                                 } else if self.view_mode == CockpitViewMode::CockpitSplit {
@@ -2716,8 +3090,8 @@ impl CockpitState {
                                         }
                                     }
                                     self.clear_prompt();
-                                } else if !input.is_empty() {
-                                    self.submit_current_prompt().await;
+                                } else if !input.is_empty() && !self.is_processing {
+                                    prompt_rx = self.submit_current_prompt();
                                 }
                             }
                             KeyCode::Backspace => {

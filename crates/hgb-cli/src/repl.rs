@@ -1489,18 +1489,50 @@ impl HagibisRepl {
     async fn execute_prompt(&self, prompt: &str) -> Result<(), Box<dyn std::error::Error>> {
         let model_str = self.model.as_deref().unwrap_or("gemini-2.5-flash");
         let is_local = hgb_core::OllamaProvider::is_ollama_model(model_str);
-        if is_local {
-            println!("{}", format!("  ⚡ Local Ollama Reasoning (model: {})...", model_str).magenta().bold());
-        } else {
-            println!("{}", format!("  ⚡ AGY Reasoning (model: {})...", model_str).cyan().bold());
-        }
         let req = HgbRequest::Prompt {
             prompt: prompt.to_string(),
             model: self.model.clone(),
             provider: None,
             stream: false,
         };
+
+        // Live animated spinner in REPL while waiting for response
+        let spinner_active = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let spinner_active_clone = spinner_active.clone();
+        let model_name = model_str.to_string();
+
+        let spinner_handle = tokio::spawn(async move {
+            let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+            let waves = [
+                "▰▱▱▱▱", "▰▰▱▱▱", "▰▰▰▱▱", "▰▰▰▰▱", "▰▰▰▰▰",
+                "▱▰▰▰▰", "▱▱▰▰▰", "▱▱▱▰▰", "▱▱▱▱▰", "▱▱▱▱▱",
+            ];
+            let start = std::time::Instant::now();
+            let mut tick = 0;
+            use std::io::Write;
+            while spinner_active_clone.load(std::sync::atomic::Ordering::Relaxed) {
+                let frame = frames[tick % frames.len()];
+                let wave = waves[tick % waves.len()];
+                let elapsed = start.elapsed().as_secs_f64();
+                let engine = if is_local { "Ollama" } else { "AGY" };
+                let color_code = if is_local { "\x1b[35m" } else { "\x1b[36m" };
+                print!(
+                    "\r  {}{} {} Thinking... (model: {}) {} ⏱ {:.1}s\x1b[0m",
+                    color_code, frame, engine, model_name, wave, elapsed
+                );
+                let _ = std::io::stdout().flush();
+                tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
+                tick += 1;
+            }
+            // Clear spinner line with ANSI escape sequence \r\x1b[2K
+            print!("\r\x1b[2K");
+            let _ = std::io::stdout().flush();
+        });
+
         let resp = self.dispatch(req).await;
+        spinner_active.store(false, std::sync::atomic::Ordering::Relaxed);
+        let _ = spinner_handle.await;
+
         self.render_response(resp);
         Ok(())
     }
