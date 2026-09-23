@@ -683,17 +683,67 @@ fn test_brutal_banner_auto_width_and_unbroken_lines() {
     let banner_snippet = lines.iter().find(|l| l.contains("│   I'm sorry")).expect("Snippet line found");
     let banner_bottom = lines.iter().find(|l| l.contains('╰') && l.contains('╯')).expect("Bottom border found");
 
-    // All banner lines must have closing characters
-    assert!(banner_top.contains('╮'));
-    assert!(banner_status.contains('│'));
-    assert!(banner_snippet.contains('│'));
-    assert!(banner_bottom.contains('╯'));
+    println!("\n--- RENDERED BANNER WIDE ---");
+    println!("{}", banner_top);
+    println!("{}", banner_status);
+    println!("{}", banner_snippet);
+    println!("{}", banner_bottom);
+    // Check coordinates in Ratatui Buffer
+    let buf = state.render_headless(140, 25);
+    let mut top_corner_x = None;
+    let mut status_bar_x = None;
+    let mut bottom_corner_x = None;
+
+    for y in 0..25 {
+        for x in 0..140 {
+            if let Some(c) = buf.cell((x, y)) {
+                if c.symbol() == "╮" {
+                    top_corner_x = Some(x);
+                }
+                if c.symbol() == "│" && status_bar_x.is_none() {
+                    // find rightmost │ on status line
+                    let mut rightmost_pipe = x;
+                    for x2 in (x + 1)..140 {
+                        if let Some(c2) = buf.cell((x2, y)) {
+                            if c2.symbol() == "│" {
+                                rightmost_pipe = x2;
+                            }
+                        }
+                    }
+                    if rightmost_pipe > x {
+                        status_bar_x = Some(rightmost_pipe);
+                    }
+                }
+                if c.symbol() == "╯" {
+                    bottom_corner_x = Some(x);
+                }
+            }
+        }
+    }
+
+    println!("top_corner_x: {:?}", top_corner_x);
+    println!("status_bar_x: {:?}", status_bar_x);
+    println!("bottom_corner_x: {:?}", bottom_corner_x);
+
+    assert_eq!(top_corner_x, bottom_corner_x, "Top and bottom corners must match!");
+    assert_eq!(status_bar_x, bottom_corner_x, "Status right border and bottom corner must match!");
 
     // 2. Render in a narrower terminal (80 cols): long line must wrap cleanly inside without breaking the box
     let rendered_narrow = state.render_headless_to_string(80, 25);
+    println!("\n--- RENDERED BANNER NARROW (80 cols) ---");
+    for line in rendered_narrow.lines() {
+        if line.contains('╭') || line.contains('│') || line.contains('╰') {
+            println!("{}", line);
+        }
+    }
+    println!("----------------------------------------\n");
     assert!(rendered_narrow.contains("ollama/local_inference"));
     assert!(rendered_narrow.contains("[SUCCESS]"));
     assert!(rendered_narrow.contains("Duration: 12120ms"));
     assert!(rendered_narrow.contains("I'm sorry"));
+    // Verify words are cleanly wrapped at word boundaries without breaking mid-word
+    assert!(rendered_narrow.contains("Could you"));
+    assert!(rendered_narrow.contains("please provide more context"));
+    assert!(!rendered_narrow.contains("Could you pl"));
 }
 

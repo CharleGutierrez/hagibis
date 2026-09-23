@@ -81,7 +81,7 @@ impl ToolCallCard {
             "run_command" | "exec" | "sh" | "bash" => "💻",
             "view_file" | "cat" | "read" => "📖",
             "write_to_file" | "write" => "📝",
-            "replace_file_content" | "edit" => "✂️ ",
+            "replace_file_content" | "edit" => "✂️",
             "find_by_name" | "find" => "🔍",
             "grep_search" | "grep" => "🔎",
             "list_dir" | "ls" => "📁",
@@ -150,8 +150,8 @@ impl ToolCallCard {
 
         // 1. Header line: ╭─── 🔧 tool_name ───────────────────────╮
         let header_prefix = format!("╭─── {} {} ", tool_icon, self.tool_name.bold().cyan());
-        let remaining = if width > prefix_len + 2 {
-            width - prefix_len - 2
+        let remaining = if width > prefix_len + 1 {
+            width - prefix_len - 1
         } else {
             1
         };

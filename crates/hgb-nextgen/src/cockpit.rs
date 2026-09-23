@@ -28,32 +28,67 @@ use std::io::{self, stdout};
 use std::time::Duration;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-/// Wrap a string cleanly to fit within max_width visual columns without breaking words
+/// Wrap a string cleanly to fit within max_width visual columns with proper word boundaries
 fn wrap_line_to_width(text: &str, max_width: usize) -> Vec<String> {
     if max_width == 0 {
         return vec![text.to_string()];
     }
-    let mut chunks = Vec::new();
-    let mut current = String::new();
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return vec![String::new()];
+    }
+
+    let mut lines = Vec::new();
+    let words = trimmed.split_whitespace();
+    let mut current_line = String::new();
     let mut current_width = 0;
 
-    for ch in text.chars() {
-        let ch_w = UnicodeWidthChar::width(ch).unwrap_or(1);
-        if current_width + ch_w > max_width && !current.is_empty() {
-            chunks.push(current);
-            current = String::new();
-            current_width = 0;
+    for word in words {
+        let word_width = UnicodeWidthStr::width(word);
+        if word_width > max_width {
+            // Very long word exceeds max_width on its own: break across lines character-by-character
+            if !current_line.is_empty() {
+                lines.push(current_line);
+                current_line = String::new();
+                current_width = 0;
+            }
+            let mut sub = String::new();
+            let mut sub_w = 0;
+            for ch in word.chars() {
+                let ch_w = UnicodeWidthChar::width(ch).unwrap_or(1);
+                if sub_w + ch_w > max_width && !sub.is_empty() {
+                    lines.push(sub);
+                    sub = String::new();
+                    sub_w = 0;
+                }
+                sub.push(ch);
+                sub_w += ch_w;
+            }
+            if !sub.is_empty() {
+                current_line = sub;
+                current_width = sub_w;
+            }
+        } else if current_width == 0 {
+            current_line.push_str(word);
+            current_width = word_width;
+        } else if current_width + 1 + word_width <= max_width {
+            current_line.push(' ');
+            current_line.push_str(word);
+            current_width += 1 + word_width;
+        } else {
+            lines.push(current_line);
+            current_line = word.to_string();
+            current_width = word_width;
         }
-        current.push(ch);
-        current_width += ch_w;
     }
-    if !current.is_empty() {
-        chunks.push(current);
+
+    if !current_line.is_empty() {
+        lines.push(current_line);
     }
-    if chunks.is_empty() {
-        chunks.push(String::new());
+    if lines.is_empty() {
+        lines.push(String::new());
     }
-    chunks
+    lines
 }
 
 /// Truncate a string cleanly to fit within max_width visual columns
@@ -1019,7 +1054,7 @@ impl CockpitState {
                                             format!("model={}", self.model_pill),
                                             "SUCCESS",
                                             duration_ms,
-                                            Some(output.chars().take(120).collect()),
+                                            Some(output.clone()),
                                         );
                                         if let Some(node) = self.nodes.iter_mut().find(|n| n.id == node_id) {
                                             node.status = CockpitNodeStatus::Succeeded { duration_ms };
@@ -1068,7 +1103,7 @@ impl CockpitState {
                             format!("model={}", self.model_pill),
                             "SUCCESS",
                             elapsed,
-                            Some(output.chars().take(120).collect()),
+                            Some(output.clone()),
                         );
                         if let Some(node) = self.nodes.iter_mut().find(|n| n.id == node_id) {
                             node.status = CockpitNodeStatus::Succeeded { duration_ms: elapsed };
@@ -1101,7 +1136,7 @@ impl CockpitState {
                         format!("model={}", self.model_pill),
                         "SUCCESS",
                         elapsed,
-                        Some(output.chars().take(120).collect()),
+                        Some(output.clone()),
                     );
                     if let Some(node) = self.nodes.iter_mut().find(|n| n.id == node_id) {
                         node.status = CockpitNodeStatus::Succeeded { duration_ms: elapsed };
@@ -1668,21 +1703,29 @@ impl CockpitState {
                             let max_allowed = usable_width.saturating_sub(2).max(36);
                             let t_banner_w = natural_w.max(48).min(max_allowed);
 
-                            let max_title_w = t_banner_w.saturating_sub(9);
-                            let (display_title, display_title_w) = if title_w > max_title_w && max_title_w > 3 {
-                                let truncated = truncate_str_by_width(&title_body, max_title_w.saturating_sub(1));
-                                let tw = UnicodeWidthStr::width(truncated.as_str()) + 1;
-                                (format!("{}…", truncated), tw)
+                            let prefix_str = "╭─ 💭 ";
+                            let prefix_w = UnicodeWidthStr::width(prefix_str);
+                            let max_title_w = t_banner_w.saturating_sub(prefix_w + 3);
+                            let (display_title, display_title_w) = if title_w > max_title_w {
+                                if max_title_w == 0 {
+                                    ("".to_string(), 0)
+                                } else if max_title_w == 1 {
+                                    ("…".to_string(), 1)
+                                } else {
+                                    let truncated = truncate_str_by_width(&title_body, max_title_w.saturating_sub(1));
+                                    let tw = UnicodeWidthStr::width(truncated.as_str()) + 1;
+                                    (format!("{}…", truncated), tw)
+                                }
                             } else {
                                 (title_body.clone(), title_w)
                             };
 
-                            let used_header_w = 5 + display_title_w + 2; // "╭─ 💭 " (5) + title + " " (1) + "╮" (1)
+                            let used_header_w = prefix_w + display_title_w + 2; // prefix + title + " " (1) + "╮" (1)
                             let dashes_count = t_banner_w.saturating_sub(used_header_w).max(1);
                             let dashes = "─".repeat(dashes_count);
 
                             chat_lines.push(Line::from(vec![
-                                Span::styled("╭─ 💭 ", Style::default().fg(Color::Magenta)),
+                                Span::styled(prefix_str, Style::default().fg(Color::Magenta)),
                                 Span::styled(display_title, Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
                                 Span::raw(" "),
                                 Span::styled(format!("{}╮", dashes), Style::default().fg(Color::Magenta)),
@@ -1716,7 +1759,7 @@ impl CockpitState {
                                 "run_command" | "exec" | "sh" | "bash" => "💻",
                                 "view_file" | "cat" | "read" => "📖",
                                 "write_to_file" | "write" => "📝",
-                                "replace_file_content" | "edit" => "✂️ ",
+                                "replace_file_content" | "edit" => "✂️",
                                 "find_by_name" | "find" => "🔍",
                                 "grep_search" | "grep" => "🔎",
                                 "list_dir" | "ls" => "📁",
@@ -1743,7 +1786,7 @@ impl CockpitState {
                             // Calculate auto-width: find max width across header, status, and snippet lines
                             let mut natural_w = (title_w + icon_w + 7).max(status_row_w + 2);
                             if let Some(ref snippet) = tool.output_snippet {
-                                for s_line in snippet.trim().lines().take(6) {
+                                for s_line in snippet.trim().lines().take(50) {
                                     let sw = UnicodeWidthStr::width(s_line) + 6;
                                     if sw > natural_w {
                                         natural_w = sw;
@@ -1757,10 +1800,16 @@ impl CockpitState {
 
                             // 1. Header Line (Top Border)
                             let max_title_w = banner_width.saturating_sub(icon_w + 7);
-                            let (display_title, display_title_w) = if title_w > max_title_w && max_title_w > 3 {
-                                let truncated = truncate_str_by_width(&title_body, max_title_w.saturating_sub(1));
-                                let tw = UnicodeWidthStr::width(truncated.as_str()) + 1;
-                                (format!("{}…", truncated), tw)
+                            let (display_title, display_title_w) = if title_w > max_title_w {
+                                if max_title_w == 0 {
+                                    ("".to_string(), 0)
+                                } else if max_title_w == 1 {
+                                    ("…".to_string(), 1)
+                                } else {
+                                    let truncated = truncate_str_by_width(&title_body, max_title_w.saturating_sub(1));
+                                    let tw = UnicodeWidthStr::width(truncated.as_str()) + 1;
+                                    (format!("{}…", truncated), tw)
+                                }
                             } else {
                                 (title_body.clone(), title_w)
                             };
@@ -1779,11 +1828,24 @@ impl CockpitState {
                             ]));
 
                             // 2. Status Line (closed with right border │)
-                            let status_pad = banner_width.saturating_sub(status_row_w + 1);
+                            let (dur_part_str, status_w) = if status_row_w + 1 > banner_width {
+                                let short_dur = format!(" {}ms", tool.duration_ms);
+                                let test_w = UnicodeWidthStr::width(status_prefix)
+                                    + UnicodeWidthStr::width(status_badge.as_str())
+                                    + UnicodeWidthStr::width(short_dur.as_str());
+                                if test_w + 1 <= banner_width {
+                                    (short_dur, test_w)
+                                } else {
+                                    ("".to_string(), UnicodeWidthStr::width(status_prefix) + UnicodeWidthStr::width(status_badge.as_str()))
+                                }
+                            } else {
+                                (dur_part, status_row_w)
+                            };
+                            let status_pad = banner_width.saturating_sub(status_w + 1);
                             chat_lines.push(Line::from(vec![
                                 Span::styled(status_prefix, Style::default().fg(Color::Cyan)),
                                 Span::styled(status_badge, Style::default().fg(status_color).add_modifier(Modifier::BOLD)),
-                                Span::styled(dur_part, Style::default().fg(Color::DarkGray)),
+                                Span::styled(dur_part_str, Style::default().fg(Color::DarkGray)),
                                 Span::raw(" ".repeat(status_pad)),
                                 Span::styled("│", Style::default().fg(Color::Cyan)),
                             ]));
@@ -1792,19 +1854,31 @@ impl CockpitState {
                             if let Some(ref snippet) = tool.output_snippet {
                                 let trimmed = snippet.trim();
                                 if !trimmed.is_empty() {
-                                    let max_chunk_w = banner_width.saturating_sub(6).max(10);
-                                    for raw_line in trimmed.lines().take(6) {
+                                    let max_chunk_w = banner_width.saturating_sub(6);
+                                    let line_count = trimmed.lines().count();
+                                    for raw_line in trimmed.lines().take(50) {
                                         let chunks = wrap_line_to_width(raw_line, max_chunk_w);
                                         for chunk in chunks {
                                             let chunk_w = UnicodeWidthStr::width(chunk.as_str());
                                             let pad_w = max_chunk_w.saturating_sub(chunk_w);
                                             chat_lines.push(Line::from(vec![
                                                 Span::styled("│   ", Style::default().fg(Color::Cyan)),
-                                                Span::styled(chunk, Style::default().fg(Color::DarkGray)),
+                                                Span::styled(chunk, Style::default().fg(Color::White)),
                                                 Span::raw(" ".repeat(pad_w)),
                                                 Span::styled(" │", Style::default().fg(Color::Cyan)),
                                             ]));
                                         }
+                                    }
+                                    if line_count > 50 {
+                                        let more_msg = format!("... ({} more lines truncated)", line_count - 50);
+                                        let more_w = UnicodeWidthStr::width(more_msg.as_str());
+                                        let pad_w = max_chunk_w.saturating_sub(more_w);
+                                        chat_lines.push(Line::from(vec![
+                                            Span::styled("│   ", Style::default().fg(Color::Cyan)),
+                                            Span::styled(more_msg, Style::default().fg(Color::DarkGray)),
+                                            Span::raw(" ".repeat(pad_w)),
+                                            Span::styled(" │", Style::default().fg(Color::Cyan)),
+                                        ]));
                                     }
                                 }
                             }
