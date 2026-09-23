@@ -77,7 +77,18 @@ impl HagibisDaemon {
             HgbRequest::Ping => HgbResponse::Pong { latency_us: 12 },
             HgbRequest::Status => {
                 let uptime_secs = state.start_time.elapsed().as_secs();
-                let mut active_models = vec!["in-process-gguf".to_string(), "ollama".to_string()];
+                let mut active_models = vec!["in-process-gguf".to_string()];
+                if hgb_core::OllamaProvider::is_available() {
+                    if let Some(prov) = hgb_core::OllamaProvider::auto_discover() {
+                        if let Ok(models) = prov.list_models().await {
+                            for m in models {
+                                active_models.push(format!("ollama/{}", m));
+                            }
+                        } else {
+                            active_models.push("ollama".to_string());
+                        }
+                    }
+                }
                 if hgb_core::GeminiProvider::is_available() {
                     active_models.push("gemini-2.5-flash".to_string());
                     active_models.push("gemini-2.5-pro".to_string());
@@ -94,8 +105,23 @@ impl HagibisDaemon {
             HgbRequest::Doctor => {
                 let gemini_status = if hgb_core::GeminiProvider::is_available() { "READY" } else { "CONFIG_NEEDED" };
                 let gemini_msg = hgb_core::GeminiProvider::credential_status();
+
+                let ollama_status = if hgb_core::OllamaProvider::is_available() { "READY" } else { "OFFLINE" };
+                let ollama_msg = if let Some(prov) = hgb_core::OllamaProvider::auto_discover() {
+                    match prov.list_models().await {
+                        Ok(models) if !models.is_empty() => {
+                            format!("Local Ollama active ({}): {} models ({})", prov.base_url(), models.len(), models.join(", "))
+                        }
+                        Ok(_) => format!("Local Ollama active ({}) with no models installed", prov.base_url()),
+                        Err(_) => format!("Local Ollama reachable at {}", prov.base_url()),
+                    }
+                } else {
+                    "Local Ollama offline (run 'ollama serve' to enable local models)".to_string()
+                };
+
                 HgbResponse::DoctorReport(vec![
                     DoctorPillar { name: "Microkernel Tokio IPC".to_string(), status: "READY".to_string(), message: "Sub-500µs UDS socket connected".to_string() },
+                    DoctorPillar { name: "Local LLM Engine (Ollama)".to_string(), status: ollama_status.to_string(), message: ollama_msg },
                     DoctorPillar { name: "Google Gemini Cloud Provider".to_string(), status: gemini_status.to_string(), message: gemini_msg },
                     DoctorPillar { name: "Blake3 Provenance Ledger".to_string(), status: "READY".to_string(), message: "SC A.M. 03-8-02-SC & Rule 141 evidentiary roots active".to_string() },
                     DoctorPillar { name: "Time-Travel Checkpoints".to_string(), status: "READY".to_string(), message: "Append-only WAL initialized".to_string() },
@@ -134,10 +160,17 @@ impl HagibisDaemon {
             HgbRequest::Prompt { prompt, model, .. } => {
                 use hgb_core::HgbProvider;
                 let start = std::time::Instant::now();
-                let is_gemini = model.as_deref().map(|m| m.contains("gemini") || m.contains("flash") || m.contains("pro") || m == "auto").unwrap_or(true);
-                if is_gemini && hgb_core::GeminiProvider::is_available() {
-                    if let Some(prov) = hgb_core::GeminiProvider::auto_discover() {
-                        match prov.complete(&prompt, model.as_deref()).await {
+                let req_model = model.as_deref().unwrap_or("auto");
+
+                // Dual-Brain Check:
+                // 1. Explicit local Ollama model OR fallback if Gemini is unconfigured
+                let is_ollama_explicit = hgb_core::OllamaProvider::is_ollama_model(req_model);
+                let fallback_to_ollama = (req_model == "auto" || req_model == "default") && !hgb_core::GeminiProvider::is_available();
+
+                if (is_ollama_explicit || fallback_to_ollama) && hgb_core::OllamaProvider::is_available() {
+                    if let Some(prov) = hgb_core::OllamaProvider::auto_discover() {
+                        let model_arg = if req_model == "auto" || req_model == "default" { None } else { Some(req_model) };
+                        match prov.complete(&prompt, model_arg).await {
                             Ok(text) => {
                                 let duration_ms = start.elapsed().as_millis() as u64;
                                 return HgbResponse::Complete {
@@ -147,16 +180,57 @@ impl HagibisDaemon {
                                 };
                             }
                             Err(e) => {
+                                return HgbResponse::Error(format!("Local Ollama API Error: {}", e));
+                            }
+                        }
+                    }
+                }
+
+                // 2. Google Gemini Cloud routing
+                let is_gemini = req_model.contains("gemini") || req_model.contains("flash") || req_model.contains("pro") || req_model == "auto";
+                if is_gemini && hgb_core::GeminiProvider::is_available() {
+                    if let Some(prov) = hgb_core::GeminiProvider::auto_discover() {
+                        match prov.complete(&prompt, Some(req_model)).await {
+                            Ok(text) => {
+                                let duration_ms = start.elapsed().as_millis() as u64;
+                                return HgbResponse::Complete {
+                                    output: text,
+                                    tokens_used: prompt.len() / 4,
+                                    duration_ms,
+                                };
+                            }
+                            Err(e) => {
+                                // Automatic Dual-Brain failover: If Gemini is overloaded (e.g. 503/429) and Ollama is available, failover locally!
+                                if hgb_core::OllamaProvider::is_available() {
+                                    if let Some(ollama_prov) = hgb_core::OllamaProvider::auto_discover() {
+                                        if let Ok(text) = ollama_prov.complete(&prompt, None).await {
+                                            let duration_ms = start.elapsed().as_millis() as u64;
+                                            return HgbResponse::Complete {
+                                                output: format!("⚠️ [Gemini Error: {} -> Switched to Local Ollama ({})]\n\n{}", e, ollama_prov.default_model(), text),
+                                                tokens_used: prompt.len() / 4,
+                                                duration_ms,
+                                            };
+                                        }
+                                    }
+                                }
                                 return HgbResponse::Error(format!("Gemini API Error: {}", e));
                             }
                         }
                     }
                 }
 
+                // 3. Fallback: neither provider handled request
                 let cred_status = hgb_core::GeminiProvider::credential_status();
+                let ollama_status = if hgb_core::OllamaProvider::is_available() {
+                    "Connected (http://127.0.0.1:11434)"
+                } else {
+                    "Offline"
+                };
                 let output = format!(
-                    "⚡ Hagibis Microkernel: No active Gemini connection.\nCredential status: {}\nTo connect Google Gemini: run 'hgb login' or export GEMINI_API_KEY=...",
-                    cred_status
+                    "⚡ Hagibis Microkernel: No active model connection for '{}'.\n• Google Gemini: {}\n• Local Ollama: {}\n\nTo connect:\n  - Gemini: run 'hgb login' or export GEMINI_API_KEY=...\n  - Ollama: run 'ollama serve' and specify '-m qwen2.5-coder:1.5b' or any installed model.",
+                    req_model,
+                    cred_status,
+                    ollama_status
                 );
                 HgbResponse::Complete {
                     output,

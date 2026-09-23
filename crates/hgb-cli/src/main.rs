@@ -280,7 +280,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Cockpit { .. } => unreachable!(),
         Commands::Run { text, model, provider } => {
             let active_model = model.as_deref().unwrap_or("gemini-2.5-flash");
-            println!("{}", format!("  ⚡ AGY Reasoning (model: {})...", active_model).cyan().bold());
+            let is_local = hgb_core::OllamaProvider::is_ollama_model(active_model);
+            if is_local {
+                println!("{}", format!("  ⚡ Local Ollama Reasoning (model: {})...", active_model).magenta().bold());
+            } else {
+                println!("{}", format!("  ⚡ AGY Reasoning (model: {})...", active_model).cyan().bold());
+            }
             let t0 = std::time::Instant::now();
             let req = HgbRequest::Prompt {
                 prompt: text,
@@ -571,11 +576,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Model { name } => {
             if let Some(m) = name {
-                println!("✔ Default model set to: {}", m);
+                let is_local = hgb_core::OllamaProvider::is_ollama_model(&m);
+                println!("✔ Default model set to: {}", m.green().bold());
+                if is_local {
+                    println!("  [•] Provider: {}", "Local Ollama Engine (0ms latency, zero cloud cost)".magenta());
+                } else {
+                    let status = hgb_core::GeminiProvider::credential_status();
+                    println!("  [•] Provider: Google Gemini Cloud ({})", status.cyan());
+                }
                 Ok(())
             } else {
                 let status = hgb_core::GeminiProvider::credential_status();
-                println!("  [•] Active Provider / Credential: {}", status);
+                let ollama_status = if hgb_core::OllamaProvider::is_available() {
+                    "Ready (127.0.0.1:11434)".green().to_string()
+                } else {
+                    "Offline".dimmed().to_string()
+                };
+                println!("  [•] Google Gemini Cloud: {}", status.cyan());
+                println!("  [•] Local Ollama Engine: {}", ollama_status);
+                if let Some(prov) = hgb_core::OllamaProvider::auto_discover() {
+                    if let Ok(models) = prov.list_models().await {
+                        if !models.is_empty() {
+                            println!("  [•] Installed Local Models: {}", models.join(", ").magenta());
+                        }
+                    }
+                }
                 Ok(())
             }
         }

@@ -10,6 +10,6 @@ pub use auth::{GeminiOAuthManager, GeminiOAuthTokens};
 pub use crud::{AgyCrud, DirEntryInfo, FindEntry, GrepMatch, ReplaceOptions, ViewFileOptions, ViewFileResult};
 pub use error::{HgbError, Result};
 pub use protocol::{DaemonStatus, DoctorPillar, HgbRequest, HgbResponse};
-pub use providers::GeminiProvider;
+pub use providers::{GeminiProvider, OllamaProvider};
 pub use security::AgentShieldLight;
 pub use traits::{HgbProvider, HgbTool};

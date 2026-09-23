@@ -513,13 +513,18 @@ impl ReplEditor {
                 "gemini-2.5-pro",
                 "gemini-2.0-flash",
                 "gemini-2.5-flash-lite",
+                "qwen2.5-coder:1.5b",
+                "qwen2.5:0.5b",
+                "llama3.2:1b",
+                "smollm2:1.7b",
+                "phi3:mini",
+                "ollama",
                 "deepseek",
                 "deepseek-chat",
                 "anthropic",
                 "claude-3-5-sonnet-20241022",
                 "openai",
                 "gpt-4o",
-                "ollama",
             ];
             for c in candidates {
                 if c.starts_with(arg) {
@@ -1079,7 +1084,13 @@ impl HagibisRepl {
 
         // 2. Active Model Pill
         let active_model = model.unwrap_or("gemini-2.5-flash");
-        let model_pill_colored = if active_model.contains("gemini") {
+        let model_pill_colored = if hgb_core::OllamaProvider::is_ollama_model(active_model) {
+            format!(
+                "{} {}",
+                format!("[{}]", active_model).on_magenta().black().bold(),
+                "(0ms local)".dimmed().magenta()
+            )
+        } else if active_model.contains("gemini") {
             format!(
                 "{} {}",
                 format!("[{}]", active_model).on_cyan().black().bold(),
@@ -1217,14 +1228,32 @@ impl HagibisRepl {
                 if args.is_empty() {
                     let current = self.model.as_deref().unwrap_or("gemini (auto)");
                     let cred = hgb_core::GeminiProvider::credential_status();
-                    println!("  [•] Active Model: {}", current.yellow());
-                    println!("  [•] Credential: {}", cred.cyan());
+                    let ollama_status = if hgb_core::OllamaProvider::is_available() {
+                        "Ready (127.0.0.1:11434)".green().to_string()
+                    } else {
+                        "Offline".dimmed().to_string()
+                    };
+                    println!("  [•] Active Model: {}", current.yellow().bold());
+                    println!("  [•] Google Gemini Cloud: {}", cred.cyan());
+                    println!("  [•] Local Ollama Engine: {}", ollama_status);
+                    if let Some(prov) = hgb_core::OllamaProvider::auto_discover() {
+                        if let Ok(models) = prov.list_models().await {
+                            if !models.is_empty() {
+                                println!("  [•] Installed Local Models: {}", models.join(", ").magenta());
+                            }
+                        }
+                    }
                 } else {
                     let clean = args.trim().to_string();
+                    let is_local = hgb_core::OllamaProvider::is_ollama_model(&clean);
                     self.model = Some(clean.clone());
-                    let cred = hgb_core::GeminiProvider::credential_status();
-                    println!("  ✔ Model set to: {}", clean.green());
-                    println!("  [•] Credential: {}", cred.cyan());
+                    println!("  ✔ Model set to: {}", clean.green().bold());
+                    if is_local {
+                        println!("  [•] Provider: {}", "Local Ollama Engine (0ms latency, zero cloud cost)".magenta());
+                    } else {
+                        let cred = hgb_core::GeminiProvider::credential_status();
+                        println!("  [•] Provider: Google Gemini Cloud ({})", cred.cyan());
+                    }
                 }
             }
             "/login" => {
@@ -1459,7 +1488,12 @@ impl HagibisRepl {
 
     async fn execute_prompt(&self, prompt: &str) -> Result<(), Box<dyn std::error::Error>> {
         let model_str = self.model.as_deref().unwrap_or("gemini-2.5-flash");
-        println!("{}", format!("  ⚡ AGY Reasoning (model: {})...", model_str).cyan().bold());
+        let is_local = hgb_core::OllamaProvider::is_ollama_model(model_str);
+        if is_local {
+            println!("{}", format!("  ⚡ Local Ollama Reasoning (model: {})...", model_str).magenta().bold());
+        } else {
+            println!("{}", format!("  ⚡ AGY Reasoning (model: {})...", model_str).cyan().bold());
+        }
         let req = HgbRequest::Prompt {
             prompt: prompt.to_string(),
             model: self.model.clone(),
@@ -1657,6 +1691,11 @@ mod tests {
         assert!(names.contains(&"/model gemini ".to_string()));
         assert!(names.contains(&"/model gemini-2.5-flash ".to_string()));
         assert!(names.contains(&"/model gemini-2.5-pro ".to_string()));
+
+        let comp_q = ReplEditor::get_completions("/model qwen");
+        let q_names: Vec<String> = comp_q.into_iter().map(|(s, _)| s).collect();
+        assert!(q_names.contains(&"/model qwen2.5-coder:1.5b ".to_string()));
+        assert!(q_names.contains(&"/model qwen2.5:0.5b ".to_string()));
     }
 
     #[test]
@@ -1674,6 +1713,8 @@ mod tests {
         HagibisRepl::print_banner();
         HagibisRepl::print_banner_with_model(Some("gemini-2.5-pro"));
         HagibisRepl::print_banner_with_model(Some("deepseek-chat"));
+        HagibisRepl::print_banner_with_model(Some("qwen2.5-coder:1.5b"));
+        HagibisRepl::print_banner_with_model(Some("llama3.2:1b"));
     }
 
     #[test]

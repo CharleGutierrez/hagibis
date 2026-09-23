@@ -25,6 +25,9 @@ pub enum HgbError {
 
     #[error("Network error: {0}")]
     Network(String),
+
+    #[error("Provider error: {0}")]
+    Provider(String),
 }
 
 pub type Result<T> = std::result::Result<T, HgbError>;
