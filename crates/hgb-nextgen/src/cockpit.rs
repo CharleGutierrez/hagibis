@@ -6,7 +6,9 @@
 
 use chrono::Utc;
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind},
+    event::{
+        self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind,
+    },
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use hgb_core::{HgbError, Result};
@@ -15,12 +17,16 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Clear, List, ListItem, Paragraph, Row, Table, Tabs, Wrap},
+    widgets::{
+        Block, Borders, Cell, Clear, List, ListItem, Paragraph, Row, Scrollbar,
+        ScrollbarOrientation, ScrollbarState, Table, Tabs, Wrap,
+    },
     Frame, Terminal,
 };
 use serde::{Deserialize, Serialize};
 use std::io::{self, stdout};
 use std::time::Duration;
+use unicode_width::UnicodeWidthStr;
 
 /// Operational status of a DAG node visualized in the Cockpit
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -361,6 +367,9 @@ pub struct CockpitState {
     pub prompt_input: String,
     pub prompt_history: Vec<String>,
     pub cursor_position: usize,
+    pub history_index: usize,
+    pub draft_prompt: String,
+    pub kill_ring: String,
     pub model_pill: String,
     pub reasoning_effort: String,
     pub auth_account: String,
@@ -406,6 +415,9 @@ impl CockpitState {
             prompt_input: String::new(),
             prompt_history: Vec::new(),
             cursor_position: 0,
+            history_index: 0,
+            draft_prompt: String::new(),
+            kill_ring: String::new(),
             model_pill: default_model,
             reasoning_effort: "High".to_string(),
             auth_account,
@@ -461,6 +473,211 @@ impl CockpitState {
             thinking: None,
             tool_calls: Vec::new(),
         });
+    }
+
+    // ── Prompt Buffer & AGY Keybindings ──
+
+    pub fn insert_char(&mut self, c: char) {
+        let mut chars: Vec<char> = self.prompt_input.chars().collect();
+        let idx = self.cursor_position.min(chars.len());
+        chars.insert(idx, c);
+        self.prompt_input = chars.into_iter().collect();
+        self.cursor_position = idx + 1;
+    }
+
+    pub fn insert_str(&mut self, s: &str) {
+        for c in s.chars() {
+            self.insert_char(c);
+        }
+    }
+
+    pub fn delete_backward(&mut self) {
+        if self.cursor_position > 0 && !self.prompt_input.is_empty() {
+            let mut chars: Vec<char> = self.prompt_input.chars().collect();
+            if self.cursor_position <= chars.len() {
+                chars.remove(self.cursor_position - 1);
+                self.prompt_input = chars.into_iter().collect();
+                self.cursor_position -= 1;
+            }
+        }
+    }
+
+    pub fn delete_forward(&mut self) {
+        let mut chars: Vec<char> = self.prompt_input.chars().collect();
+        if self.cursor_position < chars.len() {
+            chars.remove(self.cursor_position);
+            self.prompt_input = chars.into_iter().collect();
+        }
+    }
+
+    pub fn move_cursor_left(&mut self) {
+        if self.cursor_position > 0 {
+            self.cursor_position -= 1;
+        }
+    }
+
+    pub fn move_cursor_right(&mut self) {
+        let count = self.prompt_input.chars().count();
+        if self.cursor_position < count {
+            self.cursor_position += 1;
+        }
+    }
+
+    pub fn move_to_start(&mut self) {
+        self.cursor_position = 0;
+    }
+
+    pub fn move_to_end(&mut self) {
+        self.cursor_position = self.prompt_input.chars().count();
+    }
+
+    pub fn move_word_backward(&mut self) {
+        let chars: Vec<char> = self.prompt_input.chars().collect();
+        if self.cursor_position == 0 || chars.is_empty() {
+            self.cursor_position = 0;
+            return;
+        }
+        let mut i = self.cursor_position.min(chars.len());
+        while i > 0 && chars[i - 1].is_whitespace() {
+            i -= 1;
+        }
+        while i > 0 && !chars[i - 1].is_whitespace() {
+            i -= 1;
+        }
+        self.cursor_position = i;
+    }
+
+    pub fn move_word_forward(&mut self) {
+        let chars: Vec<char> = self.prompt_input.chars().collect();
+        let len = chars.len();
+        if self.cursor_position >= len {
+            self.cursor_position = len;
+            return;
+        }
+        let mut i = self.cursor_position;
+        while i < len && !chars[i].is_whitespace() {
+            i += 1;
+        }
+        while i < len && chars[i].is_whitespace() {
+            i += 1;
+        }
+        self.cursor_position = i;
+    }
+
+    pub fn kill_to_end(&mut self) {
+        let chars: Vec<char> = self.prompt_input.chars().collect();
+        if self.cursor_position < chars.len() {
+            self.kill_ring = chars[self.cursor_position..].iter().collect();
+            self.prompt_input = chars[..self.cursor_position].iter().collect();
+        }
+    }
+
+    pub fn kill_to_start(&mut self) {
+        let chars: Vec<char> = self.prompt_input.chars().collect();
+        if self.cursor_position > 0 {
+            let kill_idx = self.cursor_position.min(chars.len());
+            self.kill_ring = chars[..kill_idx].iter().collect();
+            self.prompt_input = chars[kill_idx..].iter().collect();
+            self.cursor_position = 0;
+        }
+    }
+
+    pub fn kill_word_backward(&mut self) {
+        let chars: Vec<char> = self.prompt_input.chars().collect();
+        if self.cursor_position == 0 || chars.is_empty() {
+            return;
+        }
+        let curr = self.cursor_position.min(chars.len());
+        let mut i = curr;
+        while i > 0 && chars[i - 1].is_whitespace() {
+            i -= 1;
+        }
+        while i > 0 && !chars[i - 1].is_whitespace() {
+            i -= 1;
+        }
+        self.kill_ring = chars[i..curr].iter().collect();
+        let mut remaining = Vec::with_capacity(chars.len() - (curr - i));
+        remaining.extend_from_slice(&chars[..i]);
+        remaining.extend_from_slice(&chars[curr..]);
+        self.prompt_input = remaining.into_iter().collect();
+        self.cursor_position = i;
+    }
+
+    pub fn kill_word_forward(&mut self) {
+        let chars: Vec<char> = self.prompt_input.chars().collect();
+        let len = chars.len();
+        if self.cursor_position >= len {
+            return;
+        }
+        let curr = self.cursor_position;
+        let mut i = curr;
+        while i < len && !chars[i].is_whitespace() {
+            i += 1;
+        }
+        while i < len && chars[i].is_whitespace() {
+            i += 1;
+        }
+        self.kill_ring = chars[curr..i].iter().collect();
+        let mut remaining = Vec::with_capacity(chars.len() - (i - curr));
+        remaining.extend_from_slice(&chars[..curr]);
+        remaining.extend_from_slice(&chars[i..]);
+        self.prompt_input = remaining.into_iter().collect();
+    }
+
+    pub fn yank(&mut self) {
+        if !self.kill_ring.is_empty() {
+            let text = self.kill_ring.clone();
+            self.insert_str(&text);
+        }
+    }
+
+    pub fn clear_prompt(&mut self) {
+        self.prompt_input.clear();
+        self.cursor_position = 0;
+    }
+
+    pub fn history_prev(&mut self) {
+        if self.prompt_history.is_empty() {
+            return;
+        }
+        if self.history_index == self.prompt_history.len() {
+            self.draft_prompt = self.prompt_input.clone();
+        }
+        if self.history_index > 0 {
+            self.history_index -= 1;
+            self.prompt_input = self.prompt_history[self.history_index].clone();
+            self.cursor_position = self.prompt_input.chars().count();
+        }
+    }
+
+    pub fn history_next(&mut self) {
+        if self.history_index + 1 < self.prompt_history.len() {
+            self.history_index += 1;
+            self.prompt_input = self.prompt_history[self.history_index].clone();
+            self.cursor_position = self.prompt_input.chars().count();
+        } else if self.history_index + 1 == self.prompt_history.len() {
+            self.history_index = self.prompt_history.len();
+            self.prompt_input = self.draft_prompt.clone();
+            self.cursor_position = self.prompt_input.chars().count();
+        }
+    }
+
+    // ── Chat Viewport Scrolling ──
+
+    pub fn scroll_chat_up(&mut self, lines: usize) {
+        self.chat_scroll = self.chat_scroll.saturating_add(lines);
+    }
+
+    pub fn scroll_chat_down(&mut self, lines: usize) {
+        self.chat_scroll = self.chat_scroll.saturating_sub(lines);
+    }
+
+    pub fn scroll_chat_to_top(&mut self) {
+        self.chat_scroll = 9999;
+    }
+
+    pub fn scroll_chat_to_bottom(&mut self) {
+        self.chat_scroll = 0;
     }
 
     pub fn toggle_view_mode(&mut self) {
@@ -677,8 +894,11 @@ impl CockpitState {
         }
 
         self.prompt_history.push(prompt.clone());
+        self.history_index = self.prompt_history.len();
+        self.draft_prompt.clear();
         self.prompt_input.clear();
         self.cursor_position = 0;
+        self.chat_scroll = 0;
 
         // 1. Record User message in Chat Canvas
         self.add_user_message(prompt.clone());
@@ -1482,27 +1702,84 @@ impl CockpitState {
         }
 
         // Viewport scrolling
-        let viewport_height = chunks[2].height;
-        let total_lines = chat_lines.len() as u16;
-        let scroll_y = if total_lines > viewport_height {
-            let auto = total_lines.saturating_sub(viewport_height);
-            auto.saturating_sub(self.chat_scroll as u16)
-        } else {
-            0
-        };
+        let viewport_height = chunks[2].height as usize;
+        let usable_width = chunks[2].width.saturating_sub(2).max(1) as usize;
+        let mut estimated_rows = 0;
+        for line in &chat_lines {
+            let width: usize = line.spans.iter().map(|s| UnicodeWidthStr::width(s.content.as_ref())).sum();
+            let rows = if width == 0 { 1 } else { (width + usable_width - 1) / usable_width };
+            estimated_rows += rows;
+        }
+
+        let total_lines = estimated_rows.max(chat_lines.len());
+        let max_scroll = total_lines.saturating_sub(viewport_height);
+
+        // Clamped scroll value
+        let current_scroll = self.chat_scroll.min(max_scroll);
+        let scroll_y = max_scroll.saturating_sub(current_scroll) as u16;
 
         let chat_paragraph = Paragraph::new(chat_lines)
             .wrap(Wrap { trim: false })
             .scroll((scroll_y, 0));
         frame.render_widget(chat_paragraph, chunks[2]);
 
-        // 4. Input Box (Always Focused, authentic AGY box)
-        let prompt_cursor = Span::styled("█", Style::default().fg(Color::Cyan));
-        let prompt_content = Line::from(vec![
-            Span::styled("> ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            Span::styled(&self.prompt_input, Style::default().fg(Color::White)),
-            prompt_cursor,
-        ]);
+        // If content overflows the viewport, render scrollbar on right
+        if total_lines > viewport_height {
+            let mut scrollbar_state = ScrollbarState::new(max_scroll)
+                .position(scroll_y as usize);
+            let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(Some("▲"))
+                .end_symbol(Some("▼"))
+                .track_symbol(Some("│"))
+                .thumb_symbol("█")
+                .style(Style::default().fg(Color::DarkGray));
+            frame.render_stateful_widget(scrollbar, chunks[2], &mut scrollbar_state);
+        }
+
+        // Floating scroll status pill if user has scrolled up
+        if current_scroll > 0 {
+            let pill_text = format!(" ▲ SCROLLED UP (+{} lines) • Press End or scroll down to bottom ", current_scroll);
+            let pill_width = pill_text.len() as u16;
+            let pill_x = chunks[2].x + chunks[2].width.saturating_sub(pill_width + 2);
+            let pill_y = chunks[2].y;
+            let pill_area = Rect::new(pill_x, pill_y, pill_width, 1);
+            frame.render_widget(
+                Paragraph::new(Span::styled(
+                    pill_text,
+                    Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD),
+                )),
+                pill_area,
+            );
+        }
+
+        // 4. Input Box (Always Focused, authentic AGY box with accurate cursor)
+        let chars: Vec<char> = self.prompt_input.chars().collect();
+        let prompt_prefix = Span::styled("> ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+
+        let prompt_content = if chars.is_empty() {
+            Line::from(vec![
+                prompt_prefix,
+                Span::styled("█", Style::default().fg(Color::Cyan)),
+            ])
+        } else if self.cursor_position < chars.len() {
+            let before: String = chars[..self.cursor_position].iter().collect();
+            let at_char: String = chars[self.cursor_position].to_string();
+            let after: String = chars[self.cursor_position + 1..].iter().collect();
+            Line::from(vec![
+                prompt_prefix,
+                Span::styled(before, Style::default().fg(Color::White)),
+                Span::styled(at_char, Style::default().fg(Color::Black).bg(Color::Cyan)),
+                Span::styled(after, Style::default().fg(Color::White)),
+            ])
+        } else {
+            let text: String = chars.iter().collect();
+            Line::from(vec![
+                prompt_prefix,
+                Span::styled(text, Style::default().fg(Color::White)),
+                Span::styled("█", Style::default().fg(Color::Cyan)),
+            ])
+        };
+
         let prompt_title = match self.execution_mode.as_str() {
             "plan" => " ❯ type a prompt (plan mode · Shift+Tab to switch) ",
             "accept-edits" => " ❯ type a prompt (accept-edits mode · Shift+Tab to switch) ",
@@ -1551,13 +1828,23 @@ impl CockpitState {
 
         let rows = vec![
             Row::new(vec![Cell::from("Enter").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), Cell::from("Submit prompt to microkernel")]),
-            Row::new(vec![Cell::from("?").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), Cell::from("Toggle this keyboard shortcuts help modal")]),
+            Row::new(vec![Cell::from("Shift+Enter / Alt+Enter").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), Cell::from("Insert newline without submitting (multiline prompt)")]),
+            Row::new(vec![Cell::from("Up / Down").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), Cell::from("Navigate prompt history (previous / next prompt)")]),
+            Row::new(vec![Cell::from("PageUp / PageDown / Mouse").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), Cell::from("Scroll conversation viewport up / down")]),
+            Row::new(vec![Cell::from("Shift+Up / Shift+Down").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), Cell::from("Fine-grained conversation scrolling (1 line)")]),
+            Row::new(vec![Cell::from("End (when scrolled)").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), Cell::from("Snap conversation viewport back to bottom")]),
+            Row::new(vec![Cell::from("Ctrl+A / Ctrl+E (Home / End)").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), Cell::from("Move cursor to beginning / end of prompt")]),
+            Row::new(vec![Cell::from("Ctrl+Left / Ctrl+Right").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), Cell::from("Move cursor backward / forward by word (Alt+B / Alt+F)")]),
+            Row::new(vec![Cell::from("Ctrl+K / Ctrl+U").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), Cell::from("Cut prompt to end / start into kill ring")]),
+            Row::new(vec![Cell::from("Ctrl+W / Alt+D").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), Cell::from("Cut word backward / forward into kill ring")]),
+            Row::new(vec![Cell::from("Ctrl+Y").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), Cell::from("Paste (yank) text from kill ring at cursor")]),
             Row::new(vec![Cell::from("Shift+Tab").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), Cell::from("Cycle execution mode (default ➔ plan ➔ accept-edits)")]),
             Row::new(vec![Cell::from("Ctrl+T").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), Cell::from("Toggle between AGY Chat Canvas and DAG Cockpit")]),
+            Row::new(vec![Cell::from("Ctrl+D").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), Cell::from("Exit CLI on empty line / Delete char under cursor")]),
+            Row::new(vec![Cell::from("Ctrl+C").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), Cell::from("Clear current prompt buffer / Cancel")]),
+            Row::new(vec![Cell::from("Ctrl+L").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), Cell::from("Clear screen and repaint terminal")]),
             Row::new(vec![Cell::from("Tab").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), Cell::from("Autocomplete slash commands and models")]),
-            Row::new(vec![Cell::from("PageUp / PageDown").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), Cell::from("Scroll conversation history up / down")]),
-            Row::new(vec![Cell::from("Ctrl+C").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), Cell::from("Clear input buffer / Quit session")]),
-            Row::new(vec![Cell::from("Esc").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), Cell::from("Close modal dialog / clear input buffer")]),
+            Row::new(vec![Cell::from("?").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), Cell::from("Toggle this keyboard shortcuts help modal")]),
             Row::new(vec![Cell::from("──────────────").style(Style::default().fg(Color::DarkGray)), Cell::from("──────────────────────────────────────────────────").style(Style::default().fg(Color::DarkGray))]),
             Row::new(vec![Cell::from("/model [name]").style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)), Cell::from("Switch active AI model (Ollama local or Gemini cloud)")]),
             Row::new(vec![Cell::from("/cockpit").style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)), Cell::from("Switch to full-screen multi-pane DAG Swarm Cockpit")]),
@@ -1568,7 +1855,7 @@ impl CockpitState {
             Row::new(vec![Cell::from("/exit, /quit").style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)), Cell::from("Exit Hagibis interactive session")]),
         ];
 
-        let table = Table::new(rows, [Constraint::Percentage(28), Constraint::Percentage(72)])
+        let table = Table::new(rows, [Constraint::Percentage(32), Constraint::Percentage(68)])
             .header(Row::new(vec!["Key / Command", "Action"]).style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)))
             .block(modal_block);
 
@@ -1699,14 +1986,14 @@ impl CockpitState {
     pub async fn run_interactive(&mut self) -> io::Result<()> {
         enable_raw_mode()?;
         let mut stdout_handle = stdout();
-        crossterm::execute!(stdout_handle, EnterAlternateScreen)?;
+        crossterm::execute!(stdout_handle, EnterAlternateScreen, crossterm::event::EnableMouseCapture)?;
         let backend = CrosstermBackend::new(stdout_handle);
         let mut terminal = Terminal::new(backend)?;
 
         let res = self.event_loop(&mut terminal).await;
 
         disable_raw_mode()?;
-        crossterm::execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+        crossterm::execute!(terminal.backend_mut(), LeaveAlternateScreen, crossterm::event::DisableMouseCapture)?;
         terminal.show_cursor()?;
 
         res
@@ -1735,241 +2022,400 @@ impl CockpitState {
             terminal.draw(|f| self.render_ui(f))?;
 
             if event::poll(Duration::from_millis(50))? {
-                if let Event::Key(key) = event::read()? {
-                    if key.kind == KeyEventKind::Release {
-                        continue;
-                    }
-
-                    // 1. If an overlay modal is active, modal takes priority
-                    if self.overlay != CockpitOverlay::None {
-                        match &mut self.overlay {
-                            CockpitOverlay::ModelPicker { ref mut selected } => match key.code {
-                                KeyCode::Esc => {
-                                    self.overlay = CockpitOverlay::None;
-                                }
-                                KeyCode::Up | KeyCode::Char('k') => {
-                                    *selected = selected.saturating_sub(1);
-                                }
-                                KeyCode::Down | KeyCode::Char('j') => {
-                                    *selected = (*selected + 1).min(models_list.len() - 1);
-                                }
-                                KeyCode::Enter => {
-                                    let new_model = models_list[*selected].to_string();
-                                    self.model_pill = new_model.clone();
-                                    self.add_system_notice(format!("Active model switched to: {}", new_model));
-                                    self.overlay = CockpitOverlay::None;
-                                }
-                                _ => {}
-                            },
-                            CockpitOverlay::Shortcuts | CockpitOverlay::Tasks => match key.code {
-                                KeyCode::Esc | KeyCode::Enter | KeyCode::Char('?') | KeyCode::Char('q') => {
-                                    self.overlay = CockpitOverlay::None;
-                                }
-                                _ => {}
-                            },
-                            CockpitOverlay::None => {}
-                        }
-                        continue;
-                    }
-
-                    // 2. Global Hotkeys across both ChatCanvas and CockpitSplit
-                    if key.modifiers.contains(event::KeyModifiers::CONTROL) {
-                        match key.code {
-                            KeyCode::Char('t') | KeyCode::Char('T') => {
-                                self.toggle_view_mode();
-                                continue;
+                match event::read()? {
+                    Event::Mouse(mouse_event) => {
+                        match mouse_event.kind {
+                            MouseEventKind::ScrollUp => {
+                                self.scroll_chat_up(3);
                             }
-                            KeyCode::Char('c') | KeyCode::Char('C') => {
-                                if self.prompt_input.is_empty() {
-                                    break;
-                                } else {
-                                    self.prompt_input.clear();
-                                    self.cursor_position = 0;
+                            MouseEventKind::ScrollDown => {
+                                self.scroll_chat_down(3);
+                            }
+                            _ => {}
+                        }
+                    }
+                    Event::Key(key) => {
+                        if key.kind == KeyEventKind::Release {
+                            continue;
+                        }
+
+                        // 1. If an overlay modal is active, modal takes priority
+                        if self.overlay != CockpitOverlay::None {
+                            match &mut self.overlay {
+                                CockpitOverlay::ModelPicker { ref mut selected } => match key.code {
+                                    KeyCode::Esc => {
+                                        self.overlay = CockpitOverlay::None;
+                                    }
+                                    KeyCode::Up | KeyCode::Char('k') => {
+                                        *selected = selected.saturating_sub(1);
+                                    }
+                                    KeyCode::Down | KeyCode::Char('j') => {
+                                        *selected = (*selected + 1).min(models_list.len() - 1);
+                                    }
+                                    KeyCode::Enter => {
+                                        let new_model = models_list[*selected].to_string();
+                                        self.model_pill = new_model.clone();
+                                        self.add_system_notice(format!("Active model switched to: {}", new_model));
+                                        self.overlay = CockpitOverlay::None;
+                                    }
+                                    _ => {}
+                                },
+                                CockpitOverlay::Shortcuts | CockpitOverlay::Tasks => match key.code {
+                                    KeyCode::Esc | KeyCode::Enter | KeyCode::Char('?') | KeyCode::Char('q') => {
+                                        self.overlay = CockpitOverlay::None;
+                                    }
+                                    _ => {}
+                                },
+                                CockpitOverlay::None => {}
+                            }
+                            continue;
+                        }
+
+                        // 2. Control Key Combinations (AGY Readline Parity)
+                        if key.modifiers.contains(KeyModifiers::CONTROL) {
+                            match key.code {
+                                KeyCode::Char('t') | KeyCode::Char('T') => {
+                                    self.toggle_view_mode();
                                     continue;
                                 }
-                            }
-                            _ => {}
-                        }
-                    }
-
-                    if key.code == KeyCode::BackTab || (key.modifiers.contains(event::KeyModifiers::SHIFT) && key.code == KeyCode::Tab) {
-                        self.cycle_execution_mode();
-                        continue;
-                    }
-
-                    if key.code == KeyCode::PageUp {
-                        self.chat_scroll = self.chat_scroll.saturating_add(4);
-                        continue;
-                    }
-
-                    if key.code == KeyCode::PageDown {
-                        self.chat_scroll = self.chat_scroll.saturating_sub(4);
-                        continue;
-                    }
-
-                    // If in CockpitSplit view mode, handle navigation & steering keys when not typing
-                    if self.view_mode == CockpitViewMode::CockpitSplit && self.input_mode == CockpitInputMode::Normal {
-                        match key.code {
-                            KeyCode::Char('q') | KeyCode::Char('Q') => break,
-                            KeyCode::Tab => { self.next_tab(); continue; }
-                            KeyCode::Down | KeyCode::Char('j') => { self.select_next(); continue; }
-                            KeyCode::Up | KeyCode::Char('k') => { self.select_prev(); continue; }
-                            KeyCode::Char('1') => { self.set_active_tab(CockpitActiveTab::LiveStream); continue; }
-                            KeyCode::Char('2') => { self.set_active_tab(CockpitActiveTab::ArtifactDiffs); continue; }
-                            KeyCode::Char('3') => { self.set_active_tab(CockpitActiveTab::BackgroundTasks); continue; }
-                            KeyCode::Char('p') | KeyCode::Char('P') => {
-                                if let Some(node) = self.selected_node() {
-                                    let id = node.id.clone();
-                                    let _ = self.apply_steering(SteeringAction::Pause { node_id: id });
-                                }
-                                continue;
-                            }
-                            KeyCode::Char('r') | KeyCode::Char('R') => {
-                                if let Some(node) = self.selected_node() {
-                                    let id = node.id.clone();
-                                    let _ = self.apply_steering(SteeringAction::Resume { node_id: id });
-                                }
-                                continue;
-                            }
-                            KeyCode::Char('e') | KeyCode::Char('E') => {
-                                if let Some(node) = self.selected_node() {
-                                    let id = node.id.clone();
-                                    let _ = self.apply_steering(SteeringAction::EditScratchpad {
-                                        node_id: id,
-                                        new_scratchpad: format!("Steered manually in Cockpit @ {}", Utc::now().format("%H:%M:%S")),
-                                    });
-                                }
-                                continue;
-                            }
-                            KeyCode::Char('t') | KeyCode::Char('T') => {
-                                if let Some(node) = self.selected_node() {
-                                    let id = node.id.clone();
-                                    let _ = self.apply_steering(SteeringAction::RedirectTool {
-                                        node_id: id,
-                                        new_tool_name: "hgb_surgical_edit".to_string(),
-                                        parameters: serde_json::json!({"action": "redirected"}),
-                                    });
-                                }
-                                continue;
-                            }
-                            KeyCode::Char('a') | KeyCode::Char('A') => {
-                                if let Some(node) = self.selected_node() {
-                                    let id = node.id.clone();
-                                    let _ = self.apply_steering(SteeringAction::Abort {
-                                        node_id: id,
-                                        reason: "Manual supervisor abort in Cockpit".to_string(),
-                                    });
-                                }
-                                continue;
-                            }
-                            KeyCode::Char('i') | KeyCode::Char('/') => {
-                                self.input_mode = CockpitInputMode::Input;
-                                continue;
-                            }
-                            _ => {}
-                        }
-                    }
-
-                    // 3. Direct Prompt Input Handling (AGY default behavior)
-                    match key.code {
-                        KeyCode::Esc => {
-                            if self.view_mode == CockpitViewMode::CockpitSplit {
-                                self.input_mode = CockpitInputMode::Normal;
-                            }
-                            self.prompt_input.clear();
-                            self.cursor_position = 0;
-                        }
-                        KeyCode::Char('?') if self.prompt_input.is_empty() => {
-                            self.overlay = CockpitOverlay::Shortcuts;
-                        }
-                        KeyCode::Tab => {
-                            // Slash command autocompletion
-                            if let Some(prefix) = self.prompt_input.strip_prefix('/') {
-                                let commands = ["model", "cockpit", "chat", "tasks", "plan", "clear", "help", "exit", "quit"];
-                                for cmd in commands {
-                                    if cmd.starts_with(prefix) {
-                                        self.prompt_input = format!("/{} ", cmd);
-                                        self.cursor_position = self.prompt_input.len();
+                                KeyCode::Char('c') | KeyCode::Char('C') => {
+                                    if self.prompt_input.is_empty() {
                                         break;
+                                    } else {
+                                        self.clear_prompt();
+                                        continue;
                                     }
                                 }
+                                KeyCode::Char('d') | KeyCode::Char('D') => {
+                                    if self.prompt_input.is_empty() {
+                                        break;
+                                    } else {
+                                        self.delete_forward();
+                                        continue;
+                                    }
+                                }
+                                KeyCode::Char('l') | KeyCode::Char('L') => {
+                                    terminal.clear()?;
+                                    continue;
+                                }
+                                KeyCode::Char('a') | KeyCode::Char('A') => {
+                                    self.move_to_start();
+                                    continue;
+                                }
+                                KeyCode::Char('e') | KeyCode::Char('E') => {
+                                    self.move_to_end();
+                                    continue;
+                                }
+                                KeyCode::Char('b') | KeyCode::Char('B') => {
+                                    self.move_cursor_left();
+                                    continue;
+                                }
+                                KeyCode::Char('f') | KeyCode::Char('F') => {
+                                    self.move_cursor_right();
+                                    continue;
+                                }
+                                KeyCode::Char('k') | KeyCode::Char('K') => {
+                                    self.kill_to_end();
+                                    continue;
+                                }
+                                KeyCode::Char('u') | KeyCode::Char('U') => {
+                                    self.kill_to_start();
+                                    continue;
+                                }
+                                KeyCode::Char('w') | KeyCode::Char('W') => {
+                                    self.kill_word_backward();
+                                    continue;
+                                }
+                                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                                    self.yank();
+                                    continue;
+                                }
+                                KeyCode::Left => {
+                                    self.move_word_backward();
+                                    continue;
+                                }
+                                KeyCode::Right => {
+                                    self.move_word_forward();
+                                    continue;
+                                }
+                                KeyCode::Up => {
+                                    self.scroll_chat_up(2);
+                                    continue;
+                                }
+                                KeyCode::Down => {
+                                    self.scroll_chat_down(2);
+                                    continue;
+                                }
+                                _ => {}
                             }
                         }
-                        KeyCode::Enter => {
-                            let input = self.prompt_input.trim().to_string();
-                            if input.starts_with('/') {
-                                let parts: Vec<&str> = input.split_whitespace().collect();
-                                let cmd = parts.first().copied().unwrap_or("");
-                                let arg = parts.get(1).copied().unwrap_or("");
-                                match cmd {
-                                    "/help" | "/?" => {
-                                        self.overlay = CockpitOverlay::Shortcuts;
+
+                        // 3. Alt / Meta Key Combinations
+                        if key.modifiers.contains(KeyModifiers::ALT) {
+                            match key.code {
+                                KeyCode::Char('b') | KeyCode::Char('B') | KeyCode::Left => {
+                                    self.move_word_backward();
+                                    continue;
+                                }
+                                KeyCode::Char('f') | KeyCode::Char('F') | KeyCode::Right => {
+                                    self.move_word_forward();
+                                    continue;
+                                }
+                                KeyCode::Char('d') | KeyCode::Char('D') => {
+                                    self.kill_word_forward();
+                                    continue;
+                                }
+                                KeyCode::Up => {
+                                    self.scroll_chat_up(2);
+                                    continue;
+                                }
+                                KeyCode::Down => {
+                                    self.scroll_chat_down(2);
+                                    continue;
+                                }
+                                KeyCode::Enter => {
+                                    self.insert_char('\n');
+                                    continue;
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        // 4. Shift Key Combinations
+                        if key.modifiers.contains(KeyModifiers::SHIFT) {
+                            match key.code {
+                                KeyCode::Up => {
+                                    self.scroll_chat_up(2);
+                                    continue;
+                                }
+                                KeyCode::Down => {
+                                    self.scroll_chat_down(2);
+                                    continue;
+                                }
+                                KeyCode::PageUp => {
+                                    self.scroll_chat_up(8);
+                                    continue;
+                                }
+                                KeyCode::PageDown => {
+                                    self.scroll_chat_down(8);
+                                    continue;
+                                }
+                                KeyCode::Home => {
+                                    self.scroll_chat_to_top();
+                                    continue;
+                                }
+                                KeyCode::End => {
+                                    self.scroll_chat_to_bottom();
+                                    continue;
+                                }
+                                KeyCode::Enter => {
+                                    self.insert_char('\n');
+                                    continue;
+                                }
+                                KeyCode::Tab => {
+                                    self.cycle_execution_mode();
+                                    continue;
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        if key.code == KeyCode::BackTab {
+                            self.cycle_execution_mode();
+                            continue;
+                        }
+
+                        // 5. Standalone Page Scrolling
+                        if key.code == KeyCode::PageUp {
+                            self.scroll_chat_up(5);
+                            continue;
+                        }
+                        if key.code == KeyCode::PageDown {
+                            self.scroll_chat_down(5);
+                            continue;
+                        }
+
+                        // 6. CockpitSplit Navigation & Steering Keys (when not typing)
+                        if self.view_mode == CockpitViewMode::CockpitSplit && self.input_mode == CockpitInputMode::Normal {
+                            match key.code {
+                                KeyCode::Char('q') | KeyCode::Char('Q') => break,
+                                KeyCode::Tab => { self.next_tab(); continue; }
+                                KeyCode::Down | KeyCode::Char('j') => { self.select_next(); continue; }
+                                KeyCode::Up | KeyCode::Char('k') => { self.select_prev(); continue; }
+                                KeyCode::Char('1') => { self.set_active_tab(CockpitActiveTab::LiveStream); continue; }
+                                KeyCode::Char('2') => { self.set_active_tab(CockpitActiveTab::ArtifactDiffs); continue; }
+                                KeyCode::Char('3') => { self.set_active_tab(CockpitActiveTab::BackgroundTasks); continue; }
+                                KeyCode::Char('p') | KeyCode::Char('P') => {
+                                    if let Some(node) = self.selected_node() {
+                                        let id = node.id.clone();
+                                        let _ = self.apply_steering(SteeringAction::Pause { node_id: id });
                                     }
-                                    "/model" => {
-                                        if !arg.is_empty() {
-                                            self.model_pill = arg.to_string();
-                                            self.add_system_notice(format!("Active model set to: {}", arg));
-                                        } else {
-                                            self.overlay = CockpitOverlay::ModelPicker { selected: 0 };
+                                    continue;
+                                }
+                                KeyCode::Char('r') | KeyCode::Char('R') => {
+                                    if let Some(node) = self.selected_node() {
+                                        let id = node.id.clone();
+                                        let _ = self.apply_steering(SteeringAction::Resume { node_id: id });
+                                    }
+                                    continue;
+                                }
+                                KeyCode::Char('e') | KeyCode::Char('E') => {
+                                    if let Some(node) = self.selected_node() {
+                                        let id = node.id.clone();
+                                        let _ = self.apply_steering(SteeringAction::EditScratchpad {
+                                            node_id: id,
+                                            new_scratchpad: format!("Steered manually in Cockpit @ {}", Utc::now().format("%H:%M:%S")),
+                                        });
+                                    }
+                                    continue;
+                                }
+                                KeyCode::Char('t') | KeyCode::Char('T') => {
+                                    if let Some(node) = self.selected_node() {
+                                        let id = node.id.clone();
+                                        let _ = self.apply_steering(SteeringAction::RedirectTool {
+                                            node_id: id,
+                                            new_tool_name: "hgb_surgical_edit".to_string(),
+                                            parameters: serde_json::json!({"action": "redirected"}),
+                                        });
+                                    }
+                                    continue;
+                                }
+                                KeyCode::Char('a') | KeyCode::Char('A') => {
+                                    if let Some(node) = self.selected_node() {
+                                        let id = node.id.clone();
+                                        let _ = self.apply_steering(SteeringAction::Abort {
+                                            node_id: id,
+                                            reason: "Manual supervisor abort in Cockpit".to_string(),
+                                        });
+                                    }
+                                    continue;
+                                }
+                                KeyCode::Char('i') | KeyCode::Char('/') => {
+                                    self.input_mode = CockpitInputMode::Input;
+                                    continue;
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        // 7. Prompt Input Handling
+                        match key.code {
+                            KeyCode::Esc => {
+                                if self.chat_scroll > 0 {
+                                    self.scroll_chat_to_bottom();
+                                } else if self.view_mode == CockpitViewMode::CockpitSplit {
+                                    self.input_mode = CockpitInputMode::Normal;
+                                    self.clear_prompt();
+                                } else {
+                                    self.clear_prompt();
+                                }
+                            }
+                            KeyCode::Char('?') if self.prompt_input.is_empty() => {
+                                self.overlay = CockpitOverlay::Shortcuts;
+                            }
+                            KeyCode::Tab => {
+                                // Slash command autocompletion
+                                if let Some(prefix) = self.prompt_input.strip_prefix('/') {
+                                    let commands = ["model", "cockpit", "chat", "tasks", "plan", "clear", "help", "exit", "quit"];
+                                    for cmd in commands {
+                                        if cmd.starts_with(prefix) {
+                                            self.prompt_input = format!("/{} ", cmd);
+                                            self.cursor_position = self.prompt_input.chars().count();
+                                            break;
                                         }
                                     }
-                                    "/cockpit" => {
-                                        self.view_mode = CockpitViewMode::CockpitSplit;
-                                    }
-                                    "/chat" => {
-                                        self.view_mode = CockpitViewMode::ChatCanvas;
-                                    }
-                                    "/tasks" => {
-                                        self.overlay = CockpitOverlay::Tasks;
-                                    }
-                                    "/plan" => {
-                                        self.execution_mode = "plan".to_string();
-                                        self.add_system_notice("Switched execution mode to: plan");
-                                    }
-                                    "/clear" => {
-                                        self.conversation.clear();
-                                    }
-                                    "/exit" | "/quit" => {
-                                        break;
-                                    }
-                                    _ => {
-                                        self.add_system_notice(format!("Unknown command '{}'. Type '/help' for commands.", cmd));
-                                    }
                                 }
-                                self.prompt_input.clear();
-                                self.cursor_position = 0;
-                            } else if !input.is_empty() {
-                                self.submit_current_prompt().await;
                             }
-                        }
-                        KeyCode::Backspace => {
-                            if self.cursor_position > 0 && !self.prompt_input.is_empty() {
-                                self.prompt_input.remove(self.cursor_position - 1);
-                                self.cursor_position -= 1;
+                            KeyCode::Enter => {
+                                let input = self.prompt_input.trim().to_string();
+                                if input.starts_with('/') {
+                                    let parts: Vec<&str> = input.split_whitespace().collect();
+                                    let cmd = parts.first().copied().unwrap_or("");
+                                    let arg = parts.get(1).copied().unwrap_or("");
+                                    match cmd {
+                                        "/help" | "/?" => {
+                                            self.overlay = CockpitOverlay::Shortcuts;
+                                        }
+                                        "/model" => {
+                                            if !arg.is_empty() {
+                                                self.model_pill = arg.to_string();
+                                                self.add_system_notice(format!("Active model set to: {}", arg));
+                                            } else {
+                                                self.overlay = CockpitOverlay::ModelPicker { selected: 0 };
+                                            }
+                                        }
+                                        "/cockpit" => {
+                                            self.view_mode = CockpitViewMode::CockpitSplit;
+                                        }
+                                        "/chat" => {
+                                            self.view_mode = CockpitViewMode::ChatCanvas;
+                                        }
+                                        "/tasks" => {
+                                            self.overlay = CockpitOverlay::Tasks;
+                                        }
+                                        "/plan" => {
+                                            self.execution_mode = "plan".to_string();
+                                            self.add_system_notice("Switched execution mode to: plan");
+                                        }
+                                        "/clear" => {
+                                            self.conversation.clear();
+                                            self.chat_scroll = 0;
+                                        }
+                                        "/exit" | "/quit" => {
+                                            break;
+                                        }
+                                        _ => {
+                                            self.add_system_notice(format!("Unknown command '{}'. Type '/help' for commands.", cmd));
+                                        }
+                                    }
+                                    self.clear_prompt();
+                                } else if !input.is_empty() {
+                                    self.submit_current_prompt().await;
+                                }
                             }
-                        }
-                        KeyCode::Left => {
-                            if self.cursor_position > 0 {
-                                self.cursor_position -= 1;
+                            KeyCode::Backspace => {
+                                self.delete_backward();
                             }
-                        }
-                        KeyCode::Right => {
-                            if self.cursor_position < self.prompt_input.len() {
-                                self.cursor_position += 1;
+                            KeyCode::Delete => {
+                                self.delete_forward();
                             }
+                            KeyCode::Left => {
+                                self.move_cursor_left();
+                            }
+                            KeyCode::Right => {
+                                self.move_cursor_right();
+                            }
+                            KeyCode::Home => {
+                                self.move_to_start();
+                            }
+                            KeyCode::End => {
+                                if self.chat_scroll > 0 {
+                                    self.scroll_chat_to_bottom();
+                                } else {
+                                    self.move_to_end();
+                                }
+                            }
+                            KeyCode::Up => {
+                                if self.view_mode == CockpitViewMode::CockpitSplit && self.input_mode == CockpitInputMode::Normal {
+                                    self.select_prev();
+                                } else {
+                                    self.history_prev();
+                                }
+                            }
+                            KeyCode::Down => {
+                                if self.view_mode == CockpitViewMode::CockpitSplit && self.input_mode == CockpitInputMode::Normal {
+                                    self.select_next();
+                                } else {
+                                    self.history_next();
+                                }
+                            }
+                            KeyCode::Char(c) => {
+                                self.insert_char(c);
+                            }
+                            _ => {}
                         }
-                        KeyCode::Home => {
-                            self.cursor_position = 0;
-                        }
-                        KeyCode::End => {
-                            self.cursor_position = self.prompt_input.len();
-                        }
-                        KeyCode::Char(c) => {
-                            self.prompt_input.insert(self.cursor_position, c);
-                            self.cursor_position += 1;
-                        }
-                        _ => {}
                     }
+                    _ => {}
                 }
             }
         }

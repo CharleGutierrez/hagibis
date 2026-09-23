@@ -498,3 +498,152 @@ fn test_brutal_view_mode_and_execution_mode_toggles() {
     state.cycle_execution_mode();
     assert_eq!(state.execution_mode, "default");
 }
+
+#[test]
+fn test_brutal_chat_canvas_scrolling_and_indicator() {
+    let mut state = CockpitState::new();
+    assert_eq!(state.chat_scroll, 0);
+
+    // Add many messages to fill the viewport
+    for i in 1..=20 {
+        state.add_user_message(format!("Turn #{}: Show me invariant check", i));
+        state.add_assistant_message(
+            format!("Response #{}: Verification succeeded with Blake3 leaf hash 0x{:04x}", i, i * 42),
+            "gemini-2.5-flash",
+            120,
+            15,
+            None,
+            Vec::new(),
+        );
+    }
+
+    // When at bottom (chat_scroll == 0), rendered output contains latest message and NO scrolled-up pill
+    let rendered_bottom = state.render_headless_to_string(100, 25);
+    assert!(rendered_bottom.contains("Turn #20"));
+    assert!(!rendered_bottom.contains("SCROLLED UP"));
+
+    // Scroll up by 6 lines
+    state.scroll_chat_up(6);
+    assert_eq!(state.chat_scroll, 6);
+
+    let rendered_scrolled = state.render_headless_to_string(100, 25);
+    // Floating gold pill must now be visible
+    assert!(rendered_scrolled.contains("SCROLLED UP"));
+    assert!(rendered_scrolled.contains("+6 lines"));
+
+    // Scroll down by 2 lines
+    state.scroll_chat_down(2);
+    assert_eq!(state.chat_scroll, 4);
+
+    // Scroll to top
+    state.scroll_chat_to_top();
+    assert!(state.chat_scroll >= 100);
+
+    // Scroll back to bottom
+    state.scroll_chat_to_bottom();
+    assert_eq!(state.chat_scroll, 0);
+
+    let rendered_reset = state.render_headless_to_string(100, 25);
+    assert!(!rendered_reset.contains("SCROLLED UP"));
+}
+
+#[test]
+fn test_brutal_agy_prompt_keybindings_and_kill_ring() {
+    let mut state = CockpitState::new();
+
+    // 1. Text insertion & cursor movement
+    state.insert_str("hello world rust");
+    assert_eq!(state.prompt_input, "hello world rust");
+    assert_eq!(state.cursor_position, 16);
+
+    state.move_cursor_left();
+    assert_eq!(state.cursor_position, 15);
+
+    state.move_to_start();
+    assert_eq!(state.cursor_position, 0);
+
+    state.move_to_end();
+    assert_eq!(state.cursor_position, 16);
+
+    // Word navigation backward/forward
+    state.move_word_backward();
+    assert_eq!(state.cursor_position, 12); // start of "rust"
+
+    state.move_word_backward();
+    assert_eq!(state.cursor_position, 6); // start of "world"
+
+    state.move_word_forward();
+    assert_eq!(state.cursor_position, 12); // after "world "
+
+    // 2. Kill ring & deletion
+    // Kill word forward ("rust")
+    state.kill_word_forward();
+    assert_eq!(state.prompt_input, "hello world ");
+    assert_eq!(state.kill_ring, "rust");
+
+    // Yank back at cursor
+    state.yank();
+    assert_eq!(state.prompt_input, "hello world rust");
+
+    // Kill word backward ("rust")
+    state.kill_word_backward();
+    assert_eq!(state.prompt_input, "hello world ");
+    assert_eq!(state.kill_ring, "rust");
+
+    // Kill to start (Ctrl+U)
+    state.kill_to_start();
+    assert_eq!(state.prompt_input, "");
+    assert_eq!(state.kill_ring, "hello world ");
+    assert_eq!(state.cursor_position, 0);
+
+    // Yank back
+    state.yank();
+    assert_eq!(state.prompt_input, "hello world ");
+
+    // Kill to end (Ctrl+K)
+    state.cursor_position = 5;
+    state.kill_to_end();
+    assert_eq!(state.prompt_input, "hello");
+    assert_eq!(state.kill_ring, " world ");
+
+    // 3. Prompt History navigation (Up / Down)
+    state.prompt_history = vec![
+        "cargo check".to_string(),
+        "git status".to_string(),
+        "hgb doctor".to_string(),
+    ];
+    state.history_index = 3;
+    state.prompt_input = "my current draft".to_string();
+    state.cursor_position = 16;
+
+    // Up: save draft and go to "hgb doctor"
+    state.history_prev();
+    assert_eq!(state.history_index, 2);
+    assert_eq!(state.prompt_input, "hgb doctor");
+
+    // Up: go to "git status"
+    state.history_prev();
+    assert_eq!(state.history_index, 1);
+    assert_eq!(state.prompt_input, "git status");
+
+    // Up: go to "cargo check"
+    state.history_prev();
+    assert_eq!(state.history_index, 0);
+    assert_eq!(state.prompt_input, "cargo check");
+
+    // Down: go to "git status"
+    state.history_next();
+    assert_eq!(state.history_index, 1);
+    assert_eq!(state.prompt_input, "git status");
+
+    // Down: go to "hgb doctor"
+    state.history_next();
+    assert_eq!(state.history_index, 2);
+    assert_eq!(state.prompt_input, "hgb doctor");
+
+    // Down: restore draft!
+    state.history_next();
+    assert_eq!(state.history_index, 3);
+    assert_eq!(state.prompt_input, "my current draft");
+}
+
