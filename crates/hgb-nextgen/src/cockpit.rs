@@ -26,7 +26,50 @@ use ratatui::{
 use serde::{Deserialize, Serialize};
 use std::io::{self, stdout};
 use std::time::Duration;
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+/// Wrap a string cleanly to fit within max_width visual columns without breaking words
+fn wrap_line_to_width(text: &str, max_width: usize) -> Vec<String> {
+    if max_width == 0 {
+        return vec![text.to_string()];
+    }
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    let mut current_width = 0;
+
+    for ch in text.chars() {
+        let ch_w = UnicodeWidthChar::width(ch).unwrap_or(1);
+        if current_width + ch_w > max_width && !current.is_empty() {
+            chunks.push(current);
+            current = String::new();
+            current_width = 0;
+        }
+        current.push(ch);
+        current_width += ch_w;
+    }
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+    if chunks.is_empty() {
+        chunks.push(String::new());
+    }
+    chunks
+}
+
+/// Truncate a string cleanly to fit within max_width visual columns
+fn truncate_str_by_width(text: &str, max_width: usize) -> String {
+    let mut result = String::new();
+    let mut current_w = 0;
+    for ch in text.chars() {
+        let ch_w = UnicodeWidthChar::width(ch).unwrap_or(1);
+        if current_w + ch_w > max_width {
+            break;
+        }
+        result.push(ch);
+        current_w += ch_w;
+    }
+    result
+}
 
 /// Operational status of a DAG node visualized in the Cockpit
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1574,6 +1617,8 @@ impl CockpitState {
         frame.render_widget(divider, chunks[1]);
 
         // 3. Main Chat Viewport
+        let viewport_height = chunks[2].height as usize;
+        let usable_width = chunks[2].width.saturating_sub(2).max(1) as usize;
         let mut chat_lines = Vec::new();
         if self.conversation.is_empty() {
             chat_lines.push(Line::from(""));
@@ -1609,69 +1654,207 @@ impl CockpitState {
                         chat_lines.push(Line::from(""));
                     }
                     CockpitChatSender::Assistant { model } => {
-                        // Render thinking block if present
+                        // Render thinking block if present with dynamic auto-width and closed borders
                         if let Some(ref thinking) = item.thinking {
+                            let title_body = format!("Thinking Process ({} tokens)", item.tokens);
+                            let title_w = UnicodeWidthStr::width(title_body.as_str());
+                            let mut natural_w = title_w + 10;
+                            for t_line in thinking.lines() {
+                                let w = UnicodeWidthStr::width(t_line) + 4;
+                                if w > natural_w {
+                                    natural_w = w;
+                                }
+                            }
+                            let max_allowed = usable_width.saturating_sub(2).max(36);
+                            let t_banner_w = natural_w.max(48).min(max_allowed);
+
+                            let max_title_w = t_banner_w.saturating_sub(9);
+                            let (display_title, display_title_w) = if title_w > max_title_w && max_title_w > 3 {
+                                let truncated = truncate_str_by_width(&title_body, max_title_w.saturating_sub(1));
+                                let tw = UnicodeWidthStr::width(truncated.as_str()) + 1;
+                                (format!("{}…", truncated), tw)
+                            } else {
+                                (title_body.clone(), title_w)
+                            };
+
+                            let used_header_w = 5 + display_title_w + 2; // "╭─ 💭 " (5) + title + " " (1) + "╮" (1)
+                            let dashes_count = t_banner_w.saturating_sub(used_header_w).max(1);
+                            let dashes = "─".repeat(dashes_count);
+
+                            chat_lines.push(Line::from(vec![
+                                Span::styled("╭─ 💭 ", Style::default().fg(Color::Magenta)),
+                                Span::styled(display_title, Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+                                Span::raw(" "),
+                                Span::styled(format!("{}╮", dashes), Style::default().fg(Color::Magenta)),
+                            ]));
+
+                            let max_chunk_w = t_banner_w.saturating_sub(4).max(10);
+                            for t_line in thinking.lines() {
+                                let chunks = wrap_line_to_width(t_line, max_chunk_w);
+                                for chunk in chunks {
+                                    let chunk_w = UnicodeWidthStr::width(chunk.as_str());
+                                    let pad_w = max_chunk_w.saturating_sub(chunk_w);
+                                    chat_lines.push(Line::from(vec![
+                                        Span::styled("│ ", Style::default().fg(Color::Magenta)),
+                                        Span::styled(chunk, Style::default().fg(Color::DarkGray)),
+                                        Span::raw(" ".repeat(pad_w)),
+                                        Span::styled(" │", Style::default().fg(Color::Magenta)),
+                                    ]));
+                                }
+                            }
+
+                            let bottom_dashes = "─".repeat(t_banner_w.saturating_sub(2));
                             chat_lines.push(Line::from(Span::styled(
-                                format!("╭── 💭 Thinking Process ({} tokens) ──╮", item.tokens),
+                                format!("╰{}╯", bottom_dashes),
                                 Style::default().fg(Color::Magenta),
                             )));
-                            for t_line in thinking.lines() {
-                                chat_lines.push(Line::from(Span::styled(format!("│ {}", t_line), Style::default().fg(Color::DarkGray))));
-                            }
-                            chat_lines.push(Line::from(Span::styled("╰──────────────────────────────────────╯", Style::default().fg(Color::Magenta))));
                         }
 
-                        // Render tool calls
+                        // Render tool calls with dynamic auto-width and perfectly closed borders
                         for tool in &item.tool_calls {
+                            let tool_icon = match tool.tool_name.as_str() {
+                                "run_command" | "exec" | "sh" | "bash" => "💻",
+                                "view_file" | "cat" | "read" => "📖",
+                                "write_to_file" | "write" => "📝",
+                                "replace_file_content" | "edit" => "✂️ ",
+                                "find_by_name" | "find" => "🔍",
+                                "grep_search" | "grep" => "🔎",
+                                "list_dir" | "ls" => "📁",
+                                "invoke_subagent" | "subagent" => "🤖",
+                                _ => "🔧",
+                            };
+
+                            let title_body = format!("{} ({})", tool.tool_name, tool.parameters_summary);
+                            let icon_w = UnicodeWidthStr::width(tool_icon);
+                            let title_w = UnicodeWidthStr::width(title_body.as_str());
+
                             let status_color = match tool.status.as_str() {
                                 "SUCCESS" => Color::Green,
                                 "FAILED" => Color::Red,
                                 _ => Color::Yellow,
                             };
-                            chat_lines.push(Line::from(Span::styled(
-                                format!("╭── 🔧 {} ({}) ───╮", tool.tool_name, tool.parameters_summary),
-                                Style::default().fg(Color::Cyan),
-                            )));
-                            chat_lines.push(Line::from(vec![
-                                Span::styled("│ Status: ", Style::default().fg(Color::Cyan)),
-                                Span::styled(format!("[{}]", tool.status), Style::default().fg(status_color).add_modifier(Modifier::BOLD)),
-                                Span::styled(format!("  Duration: {}ms", tool.duration_ms), Style::default().fg(Color::DarkGray)),
-                            ]));
+                            let status_prefix = "│ Status: ";
+                            let status_badge = format!("[{}]", tool.status);
+                            let dur_part = format!("  Duration: {}ms", tool.duration_ms);
+                            let status_row_w = UnicodeWidthStr::width(status_prefix)
+                                + UnicodeWidthStr::width(status_badge.as_str())
+                                + UnicodeWidthStr::width(dur_part.as_str());
+
+                            // Calculate auto-width: find max width across header, status, and snippet lines
+                            let mut natural_w = (title_w + icon_w + 7).max(status_row_w + 2);
                             if let Some(ref snippet) = tool.output_snippet {
-                                for s_line in snippet.lines().take(4) {
-                                    chat_lines.push(Line::from(vec![
-                                        Span::styled("│   ", Style::default().fg(Color::Cyan)),
-                                        Span::styled(s_line, Style::default().fg(Color::DarkGray)),
-                                    ]));
+                                for s_line in snippet.trim().lines().take(6) {
+                                    let sw = UnicodeWidthStr::width(s_line) + 6;
+                                    if sw > natural_w {
+                                        natural_w = sw;
+                                    }
                                 }
                             }
-                            chat_lines.push(Line::from(Span::styled("╰──────────────────────────────────────╯", Style::default().fg(Color::Cyan))));
+
+                            // Banner auto-fits information, bounded between 48 and usable_width - 2
+                            let max_allowed = usable_width.saturating_sub(2).max(40);
+                            let banner_width = natural_w.max(48).min(max_allowed);
+
+                            // 1. Header Line (Top Border)
+                            let max_title_w = banner_width.saturating_sub(icon_w + 7);
+                            let (display_title, display_title_w) = if title_w > max_title_w && max_title_w > 3 {
+                                let truncated = truncate_str_by_width(&title_body, max_title_w.saturating_sub(1));
+                                let tw = UnicodeWidthStr::width(truncated.as_str()) + 1;
+                                (format!("{}…", truncated), tw)
+                            } else {
+                                (title_body.clone(), title_w)
+                            };
+
+                            let used_header_w = 3 + icon_w + 1 + display_title_w + 2; // "╭─ " (3) + icon (icon_w) + " " (1) + title + " " (1) + "╮" (1)
+                            let dashes_count = banner_width.saturating_sub(used_header_w).max(1);
+                            let dashes = "─".repeat(dashes_count);
+
+                            chat_lines.push(Line::from(vec![
+                                Span::styled("╭─ ", Style::default().fg(Color::Cyan)),
+                                Span::styled(tool_icon, Style::default().fg(Color::Yellow)),
+                                Span::raw(" "),
+                                Span::styled(display_title, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                                Span::raw(" "),
+                                Span::styled(format!("{}╮", dashes), Style::default().fg(Color::Cyan)),
+                            ]));
+
+                            // 2. Status Line (closed with right border │)
+                            let status_pad = banner_width.saturating_sub(status_row_w + 1);
+                            chat_lines.push(Line::from(vec![
+                                Span::styled(status_prefix, Style::default().fg(Color::Cyan)),
+                                Span::styled(status_badge, Style::default().fg(status_color).add_modifier(Modifier::BOLD)),
+                                Span::styled(dur_part, Style::default().fg(Color::DarkGray)),
+                                Span::raw(" ".repeat(status_pad)),
+                                Span::styled("│", Style::default().fg(Color::Cyan)),
+                            ]));
+
+                            // 3. Output Snippet Lines (cleanly wrapped to inner width with closed borders)
+                            if let Some(ref snippet) = tool.output_snippet {
+                                let trimmed = snippet.trim();
+                                if !trimmed.is_empty() {
+                                    let max_chunk_w = banner_width.saturating_sub(6).max(10);
+                                    for raw_line in trimmed.lines().take(6) {
+                                        let chunks = wrap_line_to_width(raw_line, max_chunk_w);
+                                        for chunk in chunks {
+                                            let chunk_w = UnicodeWidthStr::width(chunk.as_str());
+                                            let pad_w = max_chunk_w.saturating_sub(chunk_w);
+                                            chat_lines.push(Line::from(vec![
+                                                Span::styled("│   ", Style::default().fg(Color::Cyan)),
+                                                Span::styled(chunk, Style::default().fg(Color::DarkGray)),
+                                                Span::raw(" ".repeat(pad_w)),
+                                                Span::styled(" │", Style::default().fg(Color::Cyan)),
+                                            ]));
+                                        }
+                                    }
+                                }
+                            }
+
+                            // 4. Footer Line (Bottom Border) - exact match to banner_width
+                            let bottom_dashes = "─".repeat(banner_width.saturating_sub(2));
+                            chat_lines.push(Line::from(Span::styled(
+                                format!("╰{}╯", bottom_dashes),
+                                Style::default().fg(Color::Cyan),
+                            )));
                         }
 
                         // Render markdown lines
                         let mut in_code_block = false;
+                        let mut current_code_width = usable_width.saturating_sub(2).min(100).max(48);
                         for line in item.content.lines() {
                             if line.starts_with("```") {
                                 if !in_code_block {
                                     in_code_block = true;
                                     let code_lang = line.trim_start_matches("```").trim();
                                     let tag = if code_lang.is_empty() { "code" } else { code_lang };
-                                    chat_lines.push(Line::from(Span::styled(
-                                        format!("╭─── {} ──────────────────────────────╮", tag),
-                                        Style::default().fg(Color::Cyan),
-                                    )));
+                                    current_code_width = usable_width.saturating_sub(2).min(100).max(48);
+                                    let tag_w = UnicodeWidthStr::width(tag);
+                                    let dashes_count = current_code_width.saturating_sub(tag_w + 7).max(1);
+                                    chat_lines.push(Line::from(vec![
+                                        Span::styled("╭─── [", Style::default().fg(Color::Cyan)),
+                                        Span::styled(tag, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                                        Span::styled(format!("] {}╮", "─".repeat(dashes_count)), Style::default().fg(Color::Cyan)),
+                                    ]));
                                 } else {
                                     in_code_block = false;
+                                    let bottom_dashes = "─".repeat(current_code_width.saturating_sub(2));
                                     chat_lines.push(Line::from(Span::styled(
-                                        "╰────────────────────────────────────────────╯",
+                                        format!("╰{}╯", bottom_dashes),
                                         Style::default().fg(Color::Cyan),
                                     )));
                                 }
                             } else if in_code_block {
-                                chat_lines.push(Line::from(vec![
-                                    Span::styled("│ ", Style::default().fg(Color::Cyan)),
-                                    Span::styled(line, Style::default().fg(Color::White)),
-                                ]));
+                                let max_chunk_w = current_code_width.saturating_sub(4).max(10);
+                                let chunks = wrap_line_to_width(line, max_chunk_w);
+                                for chunk in chunks {
+                                    let chunk_w = UnicodeWidthStr::width(chunk.as_str());
+                                    let pad_w = max_chunk_w.saturating_sub(chunk_w);
+                                    chat_lines.push(Line::from(vec![
+                                        Span::styled("│ ", Style::default().fg(Color::Cyan)),
+                                        Span::styled(chunk, Style::default().fg(Color::White)),
+                                        Span::raw(" ".repeat(pad_w)),
+                                        Span::styled(" │", Style::default().fg(Color::Cyan)),
+                                    ]));
+                                }
                             } else if line.starts_with("+ ") || line.starts_with("+\t") {
                                 chat_lines.push(Line::from(Span::styled(line, Style::default().fg(Color::Green))));
                             } else if line.starts_with("- ") || line.starts_with("-\t") {
@@ -1702,8 +1885,6 @@ impl CockpitState {
         }
 
         // Viewport scrolling
-        let viewport_height = chunks[2].height as usize;
-        let usable_width = chunks[2].width.saturating_sub(2).max(1) as usize;
         let mut estimated_rows = 0;
         for line in &chat_lines {
             let width: usize = line.spans.iter().map(|s| UnicodeWidthStr::width(s.content.as_ref())).sum();

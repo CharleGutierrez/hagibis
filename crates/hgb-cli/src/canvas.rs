@@ -6,7 +6,7 @@
 //!    syntax-colored diffs (`+` green, `-` red), thinking streams, tables, and blockquotes.
 
 use colored::Colorize;
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// Status of an inline tool call execution
 #[derive(Debug, Clone, PartialEq)]
@@ -77,10 +77,6 @@ impl ToolCallCard {
 
     /// Render tool call card into a beautiful AGY Unicode boxed frame
     pub fn render_box(&self, max_width: usize) -> String {
-        let width = if max_width < 40 { 80 } else { max_width.min(100) };
-        let mut out = String::new();
-
-        // 1. Header line: ╭─── 🔧 tool_name ───────────────────────╮
         let tool_icon = match self.tool_name.as_str() {
             "run_command" | "exec" | "sh" | "bash" => "💻",
             "view_file" | "cat" | "read" => "📖",
@@ -93,19 +89,76 @@ impl ToolCallCard {
             _ => "🔧",
         };
 
-        let header_prefix = format!("╭─── {} {} ", tool_icon, self.tool_name.bold().cyan());
+        // Header raw width
         let header_prefix_raw = format!("╭─── {} {} ", tool_icon, self.tool_name);
         let prefix_len = UnicodeWidthStr::width(header_prefix_raw.as_str());
 
+        // Status raw width
+        let badge_raw = match &self.status {
+            ToolCardStatus::Running => "[RUNNING]",
+            ToolCardStatus::Success { exit_code, .. } => {
+                if *exit_code == 0 {
+                    "[DONE]"
+                } else {
+                    "[EXIT code]"
+                }
+            }
+            ToolCardStatus::Failed { .. } => "[FAILED]",
+        };
+        let dur_raw = match self.status.duration_str() {
+            Some(d) => format!("  ⏱️ {}", d),
+            None => "".to_string(),
+        };
+        let target_raw = if !self.summary.is_empty() {
+            format!("  🎯 {}", self.summary)
+        } else {
+            "".to_string()
+        };
+        let status_raw_len = 11
+            + UnicodeWidthStr::width(badge_raw)
+            + UnicodeWidthStr::width(dur_raw.as_str())
+            + UnicodeWidthStr::width(target_raw.as_str());
+
+        let mut natural_w = (prefix_len + 6).max(status_raw_len + 4);
+
+        if let ToolCardStatus::Failed { ref error, .. } = self.status {
+            let err_w = UnicodeWidthStr::width(error.as_str()) + 14;
+            if err_w > natural_w {
+                natural_w = err_w;
+            }
+        }
+
+        if let Some(ref details) = self.extra_details {
+            let det_w = UnicodeWidthStr::width(details.as_str()) + 8;
+            if det_w > natural_w {
+                natural_w = det_w;
+            }
+        }
+
+        if let Some(ref snippet) = self.output_snippet {
+            for line in snippet.trim().lines().take(25) {
+                let lw = UnicodeWidthStr::width(line) + 6;
+                if lw > natural_w {
+                    natural_w = lw;
+                }
+            }
+        }
+
+        let max_bound = if max_width < 40 { 80 } else { max_width };
+        let width = natural_w.max(50).min(max_bound);
+        let mut out = String::new();
+
+        // 1. Header line: ╭─── 🔧 tool_name ───────────────────────╮
+        let header_prefix = format!("╭─── {} {} ", tool_icon, self.tool_name.bold().cyan());
         let remaining = if width > prefix_len + 2 {
             width - prefix_len - 2
         } else {
-            4
+            1
         };
         let dashes = "─".repeat(remaining);
         out.push_str(&format!("{}{}{}\n", header_prefix, dashes.dimmed(), "╮".dimmed()));
 
-        // 2. Status & Details Line: │ Status: [DONE]  Duration: 14ms  Target: file.rs │
+        // 2. Status & Details Line: │  Status: [DONE]  Duration: 14ms  Target: file.rs  │
         let badge = self.status.badge();
         let dur_part = match self.status.duration_str() {
             Some(d) => format!("  ⏱️ {}", d.cyan()),
@@ -117,25 +170,50 @@ impl ToolCallCard {
             "".to_string()
         };
 
-        let status_line = format!("│  Status: {}{}{}", badge, dur_part, target_part);
-        out.push_str(&status_line);
-        out.push('\n');
+        let status_content_len = 11
+            + UnicodeWidthStr::width(badge_raw)
+            + UnicodeWidthStr::width(dur_raw.as_str())
+            + UnicodeWidthStr::width(target_raw.as_str());
+        let status_pad = width.saturating_sub(status_content_len + 2);
+        out.push_str(&format!(
+            "│  Status: {}{}{}{}{}\n",
+            badge,
+            dur_part,
+            target_part,
+            " ".repeat(status_pad),
+            "│".dimmed()
+        ));
 
         // Render error if failed
         if let ToolCardStatus::Failed { ref error, .. } = self.status {
-            out.push_str(&format!("│  ✖ Error: {}\n", error.red().bold()));
+            let err_len = UnicodeWidthStr::width(error.as_str()) + 13;
+            let pad = width.saturating_sub(err_len + 2);
+            out.push_str(&format!(
+                "│  ✖ Error: {}{}{}\n",
+                error.red().bold(),
+                " ".repeat(pad),
+                "│".dimmed()
+            ));
         }
 
         // Extra details if present
         if let Some(ref details) = self.extra_details {
-            out.push_str(&format!("│  ℹ️  {}\n", details.dimmed()));
+            let det_len = UnicodeWidthStr::width(details.as_str()) + 7;
+            let pad = width.saturating_sub(det_len + 2);
+            out.push_str(&format!(
+                "│  ℹ️  {}{}{}\n",
+                details.dimmed(),
+                " ".repeat(pad),
+                "│".dimmed()
+            ));
         }
 
         // 3. Output snippet if present
         if let Some(ref snippet) = self.output_snippet {
             let trimmed = snippet.trim();
             if !trimmed.is_empty() {
-                out.push_str(&format!("│  {}\n", "─".repeat(width.saturating_sub(4)).dimmed()));
+                out.push_str(&format!("├{}┤\n", "─".repeat(width.saturating_sub(2)).dimmed()));
+                let max_inner = width.saturating_sub(6).max(10);
                 for line in trimmed.lines().take(25) {
                     let formatted_line = if line.starts_with('+') && !line.starts_with("+++") {
                         line.green().to_string()
@@ -148,15 +226,32 @@ impl ToolCallCard {
                     } else {
                         line.dimmed().to_string()
                     };
-                    out.push_str(&format!("│  {}\n", formatted_line));
+                    let lw = UnicodeWidthStr::width(line);
+                    let (safe_line, safe_lw) = if lw > max_inner {
+                        let mut tr = String::new();
+                        let mut cw = 0;
+                        for ch in line.chars() {
+                            let w = UnicodeWidthChar::width(ch).unwrap_or(1);
+                            if cw + w > max_inner.saturating_sub(1) {
+                                break;
+                            }
+                            tr.push(ch);
+                            cw += w;
+                        }
+                        tr.push('…');
+                        (tr, cw + 1)
+                    } else {
+                        (formatted_line, lw)
+                    };
+                    let pad = max_inner.saturating_sub(safe_lw);
+                    out.push_str(&format!("│  {}  {}{}\n", safe_line, " ".repeat(pad), "│".dimmed()));
                 }
                 let line_count = trimmed.lines().count();
                 if line_count > 25 {
-                    out.push_str(&format!(
-                        "│  {} ({} more lines truncated)\n",
-                        "...".dimmed(),
-                        line_count - 25
-                    ));
+                    let trunc_msg = format!("... ({} more lines truncated)", line_count - 25);
+                    let tw = UnicodeWidthStr::width(trunc_msg.as_str());
+                    let pad = max_inner.saturating_sub(tw);
+                    out.push_str(&format!("│  {}  {}{}\n", trunc_msg.dimmed(), " ".repeat(pad), "│".dimmed()));
                 }
             }
         }

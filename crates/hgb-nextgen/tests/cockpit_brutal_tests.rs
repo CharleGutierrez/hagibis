@@ -647,3 +647,53 @@ fn test_brutal_agy_prompt_keybindings_and_kill_ring() {
     assert_eq!(state.prompt_input, "my current draft");
 }
 
+#[test]
+fn test_brutal_banner_auto_width_and_unbroken_lines() {
+    let mut state = CockpitState::new();
+    let long_snippet = "I'm sorry, I didn't understand what you meant by \"adada\". Could you please provide more context or clarify what you're asking?";
+    let tool_call = CockpitToolCall::new(
+        "ollama/local_inference",
+        "model=qwen2.5-coder:1.5b",
+        "SUCCESS",
+        12120,
+        Some(long_snippet.to_string()),
+    );
+
+    state.add_assistant_message(
+        "Direct model output processed.".to_string(),
+        "qwen2.5-coder:1.5b",
+        85,
+        12120,
+        None,
+        vec![tool_call],
+    );
+
+    // 1. Render in a wide terminal (140 cols): banner should auto-expand to fit long snippet cleanly
+    let rendered_wide = state.render_headless_to_string(140, 25);
+    assert!(rendered_wide.contains("ollama/local_inference"));
+    assert!(rendered_wide.contains("model=qwen2.5-coder:1.5b"));
+    assert!(rendered_wide.contains("[SUCCESS]"));
+    assert!(rendered_wide.contains("Duration: 12120ms"));
+    assert!(rendered_wide.contains("I'm sorry, I didn't understand"));
+
+    // Verify unbroken lines:
+    let lines: Vec<&str> = rendered_wide.lines().collect();
+    let banner_top = lines.iter().find(|l| l.contains("╭─") && l.contains("ollama/local_inference")).expect("Banner top found");
+    let banner_status = lines.iter().find(|l| l.contains("│ Status: [SUCCESS]")).expect("Status line found");
+    let banner_snippet = lines.iter().find(|l| l.contains("│   I'm sorry")).expect("Snippet line found");
+    let banner_bottom = lines.iter().find(|l| l.contains('╰') && l.contains('╯')).expect("Bottom border found");
+
+    // All banner lines must have closing characters
+    assert!(banner_top.contains('╮'));
+    assert!(banner_status.contains('│'));
+    assert!(banner_snippet.contains('│'));
+    assert!(banner_bottom.contains('╯'));
+
+    // 2. Render in a narrower terminal (80 cols): long line must wrap cleanly inside without breaking the box
+    let rendered_narrow = state.render_headless_to_string(80, 25);
+    assert!(rendered_narrow.contains("ollama/local_inference"));
+    assert!(rendered_narrow.contains("[SUCCESS]"));
+    assert!(rendered_narrow.contains("Duration: 12120ms"));
+    assert!(rendered_narrow.contains("I'm sorry"));
+}
+
