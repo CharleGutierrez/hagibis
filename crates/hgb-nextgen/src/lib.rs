@@ -1,10 +1,12 @@
 pub mod checkpoint;
+pub mod cockpit;
 pub mod fuzz;
 pub mod hybrid;
 pub mod mesh;
 pub mod provenance;
 
 pub use checkpoint::{SwarmCheckpoint, SwarmCheckpointManager, SwarmEvent, SwarmWal};
+pub use cockpit::{CockpitDagNode, CockpitNodeStatus, CockpitState, CockpitTelemetry, SteeringAction};
 pub use fuzz::{AgenticFuzzEngine, FuzzViolation};
 pub use hybrid::{CandidateToken, DraftDistribution, LakandiwaVerdict, SpeculativeHybridEngine};
 pub use mesh::{MeshNode, P2pSwarmMesh};

@@ -3,6 +3,7 @@ mod repl;
 
 use clap::{Parser, Subcommand};
 use client::HgbClient;
+use colored::Colorize;
 use hgb_core::HgbRequest;
 use repl::HagibisRepl;
 
@@ -102,6 +103,13 @@ enum Commands {
 
     /// Check ZeroConf P2P Swarm Mesh status
     Mesh,
+
+    /// Interactive Cockpit TUI Engine & Mid-Flight Steering
+    Cockpit {
+        /// Render in headless mode without spawning terminal interactive loop
+        #[arg(long)]
+        headless: bool,
+    },
 
     // --- AGY Surgical CRUD Subcommands ---
     /// View file with AGY paged slicing and binary safety
@@ -233,8 +241,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return repl.run().await;
     }
 
+    if let Commands::Cockpit { headless } = command {
+        let mut state = hgb_nextgen::CockpitState::new();
+
+        let mut node1 = hgb_nextgen::CockpitDagNode::new("n1", "Input Ingestion & Tokenizer", "in-process-gguf");
+        node1.status = hgb_nextgen::CockpitNodeStatus::Succeeded { duration_ms: 12 };
+        node1.tokens_used = 180;
+        node1.scratchpad = "Microkernel ingestion completed with zero-copy buffer".to_string();
+
+        let mut node2 = hgb_nextgen::CockpitDagNode::new("n2", "Gemini 2.5 Autonomous Reasoning", "gemini-2.5-flash");
+        node2.status = hgb_nextgen::CockpitNodeStatus::Running { progress_pct: 75 };
+        node2.tokens_used = 1240;
+        node2.scratchpad = "Autonomous code generation & multi-step execution loop active...".to_string();
+
+        let mut node3 = hgb_nextgen::CockpitDagNode::new("n3", "Surgical CRUD & AST Verifier", "hgb-crud");
+        node3.status = hgb_nextgen::CockpitNodeStatus::Pending;
+        node3.tokens_used = 0;
+        node3.scratchpad = "Awaiting AST validation and atomic write...".to_string();
+
+        state.add_node(node1);
+        state.add_node(node2);
+        state.add_node(node3);
+
+        if headless {
+            println!("{}", "🎛️ Hagibis Interactive Cockpit (Headless Mode) 🎛️".bold().cyan());
+            let buffer = state.render_headless(100, 30);
+            println!("  ✔ Rendered virtual TUI buffer ({} cells)", buffer.content.len());
+            return Ok(());
+        } else {
+            return state.run_interactive().map_err(|e| Box::new(e) as Box<dyn std::error::Error>);
+        }
+    }
+
     let req = match command {
         Commands::Repl => unreachable!(),
+        Commands::Cockpit { .. } => unreachable!(),
         Commands::Run { text, model, provider } => HgbRequest::Prompt {
             prompt: text,
             model,

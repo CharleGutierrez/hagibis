@@ -38,6 +38,7 @@ base64 = "0.22"
 sha2 = "0.10"
 crossterm = { version = "0.28", features = ["event-stream"] }
 unicode-width = "0.2"
+ratatui = "0.29"
 
 [profile.release]
 opt-level = "z"

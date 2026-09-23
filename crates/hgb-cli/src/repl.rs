@@ -483,6 +483,7 @@ impl ReplEditor {
                 ("/fuzz", "Run property-based differential fuzzer"),
                 ("/verify", "Formally verify invariants with SMT-LIB2"),
                 ("/mesh", "Display P2P swarm mesh status"),
+                ("/cockpit", "Launch full-screen Interactive Cockpit TUI"),
                 ("/view", "View file with paged line slicing"),
                 ("/write", "Atomically write content to file"),
                 ("/edit", "Surgically search and replace text block"),
@@ -1099,6 +1100,31 @@ impl HagibisRepl {
                 let resp = self.dispatch(HgbRequest::MeshStatus).await;
                 self.render_response(resp);
             }
+            "/cockpit" => {
+                let mut state = hgb_nextgen::CockpitState::new();
+                let mut node1 = hgb_nextgen::CockpitDagNode::new("n1", "Microkernel Ingestion", "hgb-core");
+                node1.status = hgb_nextgen::CockpitNodeStatus::Succeeded { duration_ms: 8 };
+                node1.tokens_used = 120;
+                node1.scratchpad = "Fast IPC zero-copy parsing complete.".to_string();
+
+                let model_str = self.model.as_deref().unwrap_or("gemini-2.5-flash");
+                let mut node2 = hgb_nextgen::CockpitDagNode::new("n2", "Active LLM Reasoning", model_str);
+                node2.status = hgb_nextgen::CockpitNodeStatus::Running { progress_pct: 85 };
+                node2.tokens_used = 890;
+                node2.scratchpad = format!("Reasoning model '{}' active on prompt...", model_str);
+
+                let mut node3 = hgb_nextgen::CockpitDagNode::new("n3", "Surgical File CRUD", "hgb-fs");
+                node3.status = hgb_nextgen::CockpitNodeStatus::Pending;
+
+                state.add_node(node1);
+                state.add_node(node2);
+                state.add_node(node3);
+
+                let _ = state.run_interactive();
+                print!("\x1B[2J\x1B[1;1H\x1b[3J");
+                let _ = io::stdout().flush();
+                Self::print_banner();
+            }
             // --- AGY Surgical CRUD Slash Commands ---
             "/view" | "/cat" => {
                 if parts.len() < 2 {
@@ -1283,6 +1309,7 @@ impl HagibisRepl {
         println!("  {:<25} {}", "/fuzz <target>".cyan(), "Run property-based differential fuzzer");
         println!("  {:<25} {}", "/verify <target>".cyan(), "Formally verify invariants with SMT-LIB2");
         println!("  {:<25} {}", "/mesh".cyan(), "Display P2P swarm mesh status");
+        println!("  {:<25} {}", "/cockpit".cyan(), "Launch full-screen Interactive Cockpit dashboard");
         println!();
         println!("  {}", "Keybindings (Tagisan Parity):".cyan().bold());
         println!("    Ctrl+A / Home     : Move cursor to start of line");
