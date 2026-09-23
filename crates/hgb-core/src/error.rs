@@ -19,6 +19,12 @@ pub enum HgbError {
 
     #[error("Not found: {0}")]
     NotFound(String),
+
+    #[error("Authentication error: {0}")]
+    Authentication(String),
+
+    #[error("Network error: {0}")]
+    Network(String),
 }
 
 pub type Result<T> = std::result::Result<T, HgbError>;

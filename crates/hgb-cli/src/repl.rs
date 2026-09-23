@@ -1,7 +1,974 @@
 use crate::client::HgbClient;
 use colored::Colorize;
+use crossterm::{
+    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
+    terminal::{disable_raw_mode, enable_raw_mode},
+};
 use hgb_core::{HgbRequest, HgbResponse};
-use std::io::{self, BufRead, Write};
+use std::fs::OpenOptions;
+use std::io::{self, IsTerminal, Write};
+use std::path::PathBuf;
+
+/// Result of an interactive readline session
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReadlineResult {
+    Submit(String),
+    Eof,
+    #[allow(dead_code)]
+    Interrupted,
+}
+
+/// RAII Guard ensuring raw terminal mode and bracketed paste are safely restored on drop
+pub struct RawModeGuard {
+    active: bool,
+}
+
+impl RawModeGuard {
+    pub fn enter() -> io::Result<Self> {
+        enable_raw_mode()?;
+        let _ = crossterm::execute!(io::stdout(), crossterm::event::EnableBracketedPaste);
+        Ok(Self { active: true })
+    }
+}
+
+impl Drop for RawModeGuard {
+    fn drop(&mut self) {
+        if self.active {
+            let _ = crossterm::execute!(io::stdout(), crossterm::event::DisableBracketedPaste);
+            let _ = disable_raw_mode();
+            self.active = false;
+        }
+    }
+}
+
+/// Interactive readline and Tagisan keyboard navigation editor
+pub struct ReplEditor {
+    pub history: Vec<String>,
+    pub history_index: usize,
+    pub draft: Vec<char>,
+    pub kill_ring: String,
+    pub history_file: Option<PathBuf>,
+}
+
+impl Default for ReplEditor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ReplEditor {
+    pub fn new() -> Self {
+        let history_file = Self::resolve_history_path();
+        let history = if let Some(ref path) = history_file {
+            Self::load_history_from_file(path)
+        } else {
+            Vec::new()
+        };
+        let history_index = history.len();
+        Self {
+            history,
+            history_index,
+            draft: Vec::new(),
+            kill_ring: String::new(),
+            history_file,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn with_history(history: Vec<String>) -> Self {
+        let history_index = history.len();
+        Self {
+            history,
+            history_index,
+            draft: Vec::new(),
+            kill_ring: String::new(),
+            history_file: None,
+        }
+    }
+
+    fn resolve_history_path() -> Option<PathBuf> {
+        if let Ok(home) = std::env::var("HOME") {
+            let hgb_dir = PathBuf::from(&home).join(".config").join("hagibis");
+            let _ = std::fs::create_dir_all(&hgb_dir);
+            let hgb_file = hgb_dir.join("repl_history.txt");
+            if !hgb_file.exists() {
+                let tgs_file = PathBuf::from(&home).join(".tagisan").join("repl_history.txt");
+                if tgs_file.exists() {
+                    let _ = std::fs::copy(&tgs_file, &hgb_file);
+                }
+            }
+            Some(hgb_file)
+        } else {
+            let dir = PathBuf::from(".hagibis");
+            let _ = std::fs::create_dir_all(&dir);
+            Some(dir.join("repl_history.txt"))
+        }
+    }
+
+    fn load_history_from_file(path: &PathBuf) -> Vec<String> {
+        if !path.exists() {
+            return Vec::new();
+        }
+        let content = std::fs::read_to_string(path).unwrap_or_default();
+        let mut lines: Vec<String> = content
+            .lines()
+            .map(|s| s.to_string())
+            .filter(|s| !s.trim().is_empty())
+            .collect();
+        if lines.len() > 5000 {
+            lines = lines.split_off(lines.len() - 5000);
+        }
+        lines
+    }
+
+    pub fn add_history(&mut self, line: &str) {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        if self.history.last().map(|s| s.as_str()) == Some(trimmed) {
+            self.history_index = self.history.len();
+            return;
+        }
+        self.history.push(trimmed.to_string());
+        self.history_index = self.history.len();
+
+        if let Some(ref path) = self.history_file {
+            if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+                let _ = writeln!(file, "{}", trimmed);
+            }
+        }
+    }
+
+    pub fn find_word_backward(buffer: &[char], cursor: usize) -> usize {
+        if cursor == 0 {
+            return 0;
+        }
+        let mut i = cursor;
+        while i > 0 && buffer[i - 1].is_whitespace() {
+            i -= 1;
+        }
+        while i > 0 && !buffer[i - 1].is_whitespace() {
+            i -= 1;
+        }
+        i
+    }
+
+    pub fn find_word_forward(buffer: &[char], cursor: usize) -> usize {
+        let len = buffer.len();
+        if cursor >= len {
+            return len;
+        }
+        let mut i = cursor;
+        while i < len && !buffer[i].is_whitespace() {
+            i += 1;
+        }
+        while i < len && buffer[i].is_whitespace() {
+            i += 1;
+        }
+        i
+    }
+
+    pub fn longest_common_prefix(strings: &[String]) -> String {
+        if strings.is_empty() {
+            return String::new();
+        }
+        let first = &strings[0];
+        let mut len = 0;
+        for (i, c) in first.chars().enumerate() {
+            if strings.iter().all(|s| s.chars().nth(i) == Some(c)) {
+                len += c.len_utf8();
+            } else {
+                break;
+            }
+        }
+        first[..len].to_string()
+    }
+
+    pub fn visible_width(s: &str) -> usize {
+        let mut width = 0;
+        let mut in_escape = false;
+        let mut in_csi = false;
+
+        for c in s.chars() {
+            if c == '\x1b' {
+                in_escape = true;
+                in_csi = false;
+            } else if in_escape {
+                if c == '[' {
+                    in_csi = true;
+                } else if in_csi {
+                    if (c >= '@' && c <= '~') || c.is_ascii_alphabetic() {
+                        in_escape = false;
+                        in_csi = false;
+                    }
+                } else {
+                    in_escape = false;
+                }
+            } else {
+                width += unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+            }
+        }
+        width
+    }
+
+    pub fn has_unclosed_delimiters(s: &str) -> bool {
+        let count_triple_double = s.matches("\"\"\"").count();
+        if count_triple_double % 2 != 0 {
+            return true;
+        }
+        let count_triple_single = s.matches("'''").count();
+        if count_triple_single % 2 != 0 {
+            return true;
+        }
+
+        let count_code_fences = s.matches("```").count();
+        if count_code_fences % 2 != 0 {
+            return true;
+        }
+
+        let mut round = 0i32;
+        let mut square = 0i32;
+        let mut curly = 0i32;
+        let mut in_str = false;
+        let mut escape = false;
+
+        for c in s.chars() {
+            if escape {
+                escape = false;
+                continue;
+            }
+            if c == '\\' {
+                escape = true;
+                continue;
+            }
+            if c == '"' {
+                in_str = !in_str;
+                continue;
+            }
+            if in_str {
+                continue;
+            }
+            match c {
+                '(' => round += 1,
+                ')' => round = (round - 1).max(0),
+                '[' => square += 1,
+                ']' => square = (square - 1).max(0),
+                '{' => curly += 1,
+                '}' => curly = (curly - 1).max(0),
+                _ => {}
+            }
+        }
+
+        round > 0 || square > 0 || curly > 0
+    }
+
+    fn compute_layout(
+        prompt: &str,
+        continuation_prompt: &str,
+        buffer: &[char],
+        cursor: usize,
+        term_width: usize,
+    ) -> (String, usize, usize, usize, usize) {
+        let p0_width = Self::visible_width(prompt);
+        let pc_width = Self::visible_width(continuation_prompt);
+
+        let mut output_text = String::new();
+        output_text.push_str(prompt);
+
+        let mut cur_row = 0;
+        let mut cur_col = p0_width;
+
+        let mut cursor_row = 0;
+        let mut cursor_col = p0_width;
+
+        for (i, &c) in buffer.iter().enumerate() {
+            if i == cursor {
+                cursor_row = cur_row;
+                cursor_col = cur_col;
+            }
+
+            if c == '\n' {
+                output_text.push_str("\r\n");
+                output_text.push_str(continuation_prompt);
+                cur_row += 1;
+                cur_col = pc_width;
+            } else {
+                let cw = unicode_width::UnicodeWidthChar::width(c).unwrap_or(1);
+                if cur_col + cw > term_width {
+                    cur_row += 1;
+                    cur_col = cw;
+                } else {
+                    cur_col += cw;
+                }
+                output_text.push(c);
+            }
+        }
+
+        if cursor >= buffer.len() {
+            cursor_row = cur_row;
+            cursor_col = cur_col;
+        }
+
+        (output_text, cursor_row, cursor_col, cur_row, cur_col)
+    }
+
+    fn redraw_multiline(
+        prompt: &str,
+        continuation_prompt: &str,
+        buffer: &[char],
+        cursor: usize,
+        last_cursor_row: &mut usize,
+    ) -> io::Result<()> {
+        let term_width = crossterm::terminal::size().map(|(w, _)| w as usize).unwrap_or(80).max(20);
+        let (output_text, cursor_row, cursor_col, end_row, _end_col) =
+            Self::compute_layout(prompt, continuation_prompt, buffer, cursor, term_width);
+
+        let mut stdout = io::stdout();
+
+        if *last_cursor_row > 0 {
+            write!(stdout, "\x1b[{}A", *last_cursor_row)?;
+        }
+
+        write!(stdout, "\r\x1b[J")?;
+        write!(stdout, "{}", output_text)?;
+
+        if end_row > cursor_row {
+            write!(stdout, "\x1b[{}A", end_row - cursor_row)?;
+        }
+        write!(stdout, "\r")?;
+        if cursor_col > 0 {
+            write!(stdout, "\x1b[{}C", cursor_col.min(term_width))?;
+        }
+
+        stdout.flush()?;
+        *last_cursor_row = cursor_row;
+        Ok(())
+    }
+
+    fn finalize_for_submit(
+        prompt: &str,
+        continuation_prompt: &str,
+        buffer: &[char],
+        cursor: usize,
+    ) -> io::Result<()> {
+        let term_width = crossterm::terminal::size().map(|(w, _)| w as usize).unwrap_or(80).max(20);
+        let (_, cursor_row, _, end_row, _) =
+            Self::compute_layout(prompt, continuation_prompt, buffer, cursor, term_width);
+        let mut stdout = io::stdout();
+
+        if end_row > cursor_row {
+            write!(stdout, "\x1b[{}B", end_row - cursor_row)?;
+        }
+        write!(stdout, "\r\n")?;
+        stdout.flush()?;
+        Ok(())
+    }
+
+    fn redraw_line(prompt: &str, buffer: &[char], cursor: usize) -> io::Result<()> {
+        let mut row = 0;
+        Self::redraw_multiline(prompt, "  │ ", buffer, cursor, &mut row)
+    }
+
+    fn run_reverse_search(
+        history: &[String],
+        buffer: &mut Vec<char>,
+        cursor: &mut usize,
+        active_prompt: &str,
+    ) -> io::Result<()> {
+        let original_buf = buffer.clone();
+        let original_cursor = *cursor;
+
+        let mut query = String::new();
+        let mut search_idx: Option<usize> = None;
+
+        let find_match = |q: &str, start_from: Option<usize>| -> Option<usize> {
+            if q.is_empty() || history.is_empty() {
+                return None;
+            }
+            let end = start_from.unwrap_or(history.len().saturating_sub(1));
+            for i in (0..=end).rev() {
+                if history[i].contains(q) {
+                    return Some(i);
+                }
+            }
+            None
+        };
+
+        loop {
+            let mut stdout = io::stdout();
+            let match_display = if let Some(idx) = search_idx {
+                &history[idx]
+            } else {
+                ""
+            };
+            let prompt_str = if search_idx.is_some() || query.is_empty() {
+                format!("(reverse-i-search)`{}': {}", query.bold().green(), match_display)
+            } else {
+                format!("(failed reverse-i-search)`{}': {}", query.bold().red(), match_display)
+            };
+            write!(stdout, "\r\x1b[2K{}", prompt_str)?;
+            stdout.flush()?;
+
+            if let Event::Key(key_event) = event::read()? {
+                if key_event.kind == KeyEventKind::Release {
+                    continue;
+                }
+                match key_event.code {
+                    KeyCode::Char('r') if key_event.modifiers.contains(KeyModifiers::CONTROL) => {
+                        if let Some(idx) = search_idx {
+                            if idx > 0 {
+                                search_idx = find_match(&query, Some(idx - 1));
+                            }
+                        }
+                    }
+                    KeyCode::Char('c') | KeyCode::Char('g') if key_event.modifiers.contains(KeyModifiers::CONTROL) => {
+                        *buffer = original_buf;
+                        *cursor = original_cursor;
+                        Self::redraw_line(active_prompt, buffer, *cursor)?;
+                        return Ok(());
+                    }
+                    KeyCode::Esc => {
+                        *buffer = original_buf;
+                        *cursor = original_cursor;
+                        Self::redraw_line(active_prompt, buffer, *cursor)?;
+                        return Ok(());
+                    }
+                    KeyCode::Enter => {
+                        if let Some(idx) = search_idx {
+                            *buffer = history[idx].chars().collect();
+                            *cursor = buffer.len();
+                        }
+                        return Ok(());
+                    }
+                    KeyCode::Backspace => {
+                        query.pop();
+                        search_idx = find_match(&query, None);
+                    }
+                    KeyCode::Char(c) if !key_event.modifiers.contains(KeyModifiers::CONTROL) && !key_event.modifiers.contains(KeyModifiers::ALT) => {
+                        query.push(c);
+                        search_idx = find_match(&query, None);
+                    }
+                    _ => {
+                        if let Some(idx) = search_idx {
+                            *buffer = history[idx].chars().collect();
+                            *cursor = buffer.len();
+                        }
+                        return Ok(());
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn get_completions(prefix: &str) -> Vec<(String, usize)> {
+        let mut results = Vec::new();
+        let trimmed_prefix = prefix.trim_start();
+
+        // 1. Slash commands completion
+        if trimmed_prefix.starts_with('/') && !trimmed_prefix.contains(' ') {
+            let slash_cmds = [
+                ("/help", "Show help manual"),
+                ("/clear", "Clear terminal screen"),
+                ("/exit", "Exit interactive session"),
+                ("/quit", "Exit interactive session"),
+                ("/ping", "Measure UDS IPC latency"),
+                ("/status", "Display daemon status and memory RSS"),
+                ("/doctor", "Run full health audit across all pillars"),
+                ("/model", "Switch or view active model"),
+                ("/login", "Authenticate with Google Account via OAuth"),
+                ("/auth", "Check Google Gemini credential status"),
+                ("/provenance", "Append or audit Blake3 Merkle ledger"),
+                ("/checkpoint", "Create or view time-travel state snapshot"),
+                ("/fuzz", "Run property-based differential fuzzer"),
+                ("/verify", "Formally verify invariants with SMT-LIB2"),
+                ("/mesh", "Display P2P swarm mesh status"),
+                ("/view", "View file with paged line slicing"),
+                ("/write", "Atomically write content to file"),
+                ("/edit", "Surgically search and replace text block"),
+                ("/ls", "List directory contents"),
+                ("/grep", "Search files recursively for pattern"),
+                ("/find", "Find files by name/wildcard in directory"),
+            ];
+
+            for (cmd, _) in slash_cmds {
+                if cmd.starts_with(trimmed_prefix) {
+                    let completed = format!("{cmd} ");
+                    let len = completed.chars().count();
+                    results.push((completed, len));
+                }
+            }
+            return results;
+        }
+
+        // 2. /model <name>
+        if let Some(rest) = trimmed_prefix.strip_prefix("/model ") {
+            let arg = rest.trim_start();
+            let candidates = [
+                "gemini",
+                "gemini-2.5-flash",
+                "gemini-2.5-pro",
+                "gemini-2.0-flash",
+                "gemini-2.5-flash-lite",
+                "deepseek",
+                "deepseek-chat",
+                "anthropic",
+                "claude-3-5-sonnet-20241022",
+                "openai",
+                "gpt-4o",
+                "ollama",
+            ];
+            for c in candidates {
+                if c.starts_with(arg) {
+                    let completed = format!("/model {} ", c);
+                    let len = completed.chars().count();
+                    results.push((completed, len));
+                }
+            }
+            return results;
+        }
+
+        // 3. /provenance <action>
+        if let Some(rest) = trimmed_prefix.strip_prefix("/provenance ").or_else(|| trimmed_prefix.strip_prefix("/prov ")) {
+            let arg = rest.trim_start();
+            let actions = ["append", "audit", "verify", "status"];
+            for a in actions {
+                if a.starts_with(arg) {
+                    let completed = format!("/provenance {} ", a);
+                    let len = completed.chars().count();
+                    results.push((completed, len));
+                }
+            }
+            return results;
+        }
+
+        // 4. /checkpoint <action>
+        if let Some(rest) = trimmed_prefix.strip_prefix("/checkpoint ").or_else(|| trimmed_prefix.strip_prefix("/ckpt ")) {
+            let arg = rest.trim_start();
+            let actions = ["create", "list", "restore", "rollback"];
+            for a in actions {
+                if a.starts_with(arg) {
+                    let completed = format!("/checkpoint {} ", a);
+                    let len = completed.chars().count();
+                    results.push((completed, len));
+                }
+            }
+            return results;
+        }
+
+        // 5. /fuzz <target>
+        if let Some(rest) = trimmed_prefix.strip_prefix("/fuzz ") {
+            let arg = rest.trim_start();
+            let targets = ["sample_target", "invariants", "mesh", "storage"];
+            for t in targets {
+                if t.starts_with(arg) {
+                    let completed = format!("/fuzz {} ", t);
+                    let len = completed.chars().count();
+                    results.push((completed, len));
+                }
+            }
+            return results;
+        }
+
+        // 6. /verify <target>
+        if let Some(rest) = trimmed_prefix.strip_prefix("/verify ") {
+            let arg = rest.trim_start();
+            let invariants = ["division", "bounds", "overflow", "x > 0"];
+            for inv in invariants {
+                if inv.starts_with(arg) {
+                    let completed = format!("/verify {} ", inv);
+                    let len = completed.chars().count();
+                    results.push((completed, len));
+                }
+            }
+            return results;
+        }
+
+        // 7. Path autocompletion for /view, /edit, /ls, /find
+        if let Some((cmd_prefix, target_path)) = trimmed_prefix
+            .strip_prefix("/view ")
+            .map(|p| ("/view ", p))
+            .or_else(|| trimmed_prefix.strip_prefix("/edit ").map(|p| ("/edit ", p)))
+            .or_else(|| trimmed_prefix.strip_prefix("/ls ").map(|p| ("/ls ", p)))
+            .or_else(|| trimmed_prefix.strip_prefix("/find ").map(|p| ("/find ", p)))
+        {
+            let clean_path = target_path.trim_start();
+            let (dir_part, file_prefix) = match clean_path.rfind('/') {
+                Some(idx) => (&clean_path[..=idx], &clean_path[idx + 1..]),
+                None => ("", clean_path),
+            };
+            let dir_to_read = if dir_part.is_empty() { "." } else { dir_part };
+            if let Ok(entries) = std::fs::read_dir(dir_to_read) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if name.starts_with(file_prefix) && !name.starts_with('.') {
+                        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+                        let suffix = if is_dir { "/" } else { " " };
+                        let completed = format!("{}{}{}{}", cmd_prefix, dir_part, name, suffix);
+                        let len = completed.chars().count();
+                        results.push((completed, len));
+                    }
+                }
+            }
+        }
+
+        results
+    }
+
+    /// Read an interactive line with full raw terminal mode and Tagisan keybindings
+    pub fn read_line(
+        &mut self,
+        prompt: &str,
+        on_repaint: &dyn Fn(),
+    ) -> io::Result<ReadlineResult> {
+        if !io::stdin().is_terminal() {
+            let mut line = String::new();
+            match io::stdin().read_line(&mut line) {
+                Ok(0) => return Ok(ReadlineResult::Eof),
+                Ok(_) => {
+                    let trimmed = line.trim_end_matches(&['\r', '\n'][..]).to_string();
+                    self.add_history(&trimmed);
+                    return Ok(ReadlineResult::Submit(trimmed));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        let mut buffer: Vec<char> = Vec::new();
+        let mut cursor: usize = 0;
+        let mut last_cursor_row: usize = 0;
+        let continuation_prompt = "  │ ";
+        self.history_index = self.history.len();
+        self.draft.clear();
+
+        let _raw_guard = match RawModeGuard::enter() {
+            Ok(guard) => Some(guard),
+            Err(_) => None,
+        };
+
+        if _raw_guard.is_none() {
+            let mut line = String::new();
+            match io::stdin().read_line(&mut line) {
+                Ok(0) => return Ok(ReadlineResult::Eof),
+                Ok(_) => {
+                    let trimmed = line.trim_end_matches(&['\r', '\n'][..]).to_string();
+                    self.add_history(&trimmed);
+                    return Ok(ReadlineResult::Submit(trimmed));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        Self::redraw_multiline(prompt, continuation_prompt, &buffer, cursor, &mut last_cursor_row)?;
+
+        loop {
+            let event = match event::read() {
+                Ok(ev) => ev,
+                Err(e) => return Err(e),
+            };
+
+            match event {
+                Event::Paste(pasted_text) => {
+                    let normalized = pasted_text.replace("\r\n", "\n").replace('\r', "\n");
+                    for ch in normalized.chars() {
+                        buffer.insert(cursor, ch);
+                        cursor += 1;
+                    }
+                    Self::redraw_multiline(prompt, continuation_prompt, &buffer, cursor, &mut last_cursor_row)?;
+                }
+                Event::Resize(_, _) => {
+                    Self::redraw_multiline(prompt, continuation_prompt, &buffer, cursor, &mut last_cursor_row)?;
+                }
+                Event::Key(key_event) => {
+                    if key_event.kind == KeyEventKind::Release {
+                        continue;
+                    }
+
+                    match key_event.code {
+                        // ── Screen & Interrupt Handling ──────────────────
+                        KeyCode::Char('c') if key_event.modifiers.contains(KeyModifiers::CONTROL) => {
+                            if !buffer.is_empty() {
+                                let _ = Self::finalize_for_submit(prompt, continuation_prompt, &buffer, cursor);
+                                buffer.clear();
+                                cursor = 0;
+                                last_cursor_row = 0;
+                                let _ = write!(io::stdout(), "^C\r\n");
+                                Self::redraw_multiline(prompt, continuation_prompt, &buffer, cursor, &mut last_cursor_row)?;
+                            } else {
+                                let _ = write!(io::stdout(), "^C\r\n  💡 Press Ctrl+D or type /exit to quit\r\n");
+                                last_cursor_row = 0;
+                                Self::redraw_multiline(prompt, continuation_prompt, &buffer, cursor, &mut last_cursor_row)?;
+                            }
+                        }
+                        KeyCode::Char('d') if key_event.modifiers.contains(KeyModifiers::CONTROL) => {
+                            if buffer.is_empty() {
+                                let _ = write!(io::stdout(), "\r\n");
+                                return Ok(ReadlineResult::Eof);
+                            } else if cursor < buffer.len() {
+                                buffer.remove(cursor);
+                                Self::redraw_multiline(prompt, continuation_prompt, &buffer, cursor, &mut last_cursor_row)?;
+                            } else if buffer.contains(&'\n') {
+                                Self::finalize_for_submit(prompt, continuation_prompt, &buffer, cursor)?;
+                                let final_line: String = buffer.iter().collect();
+                                self.add_history(&final_line);
+                                return Ok(ReadlineResult::Submit(final_line));
+                            }
+                        }
+                        KeyCode::Char('l') if key_event.modifiers.contains(KeyModifiers::CONTROL) => {
+                            let _ = write!(io::stdout(), "\x1b[2J\x1b[H\x1b[3J");
+                            let _ = io::stdout().flush();
+                            on_repaint();
+                            last_cursor_row = 0;
+                            Self::redraw_multiline(prompt, continuation_prompt, &buffer, cursor, &mut last_cursor_row)?;
+                        }
+
+                        // ── Inline Editing & Navigation ──────────────────
+                        KeyCode::Char('a') if key_event.modifiers.contains(KeyModifiers::CONTROL) => {
+                            let line_start = buffer[..cursor].iter().rposition(|&c| c == '\n').map(|p| p + 1).unwrap_or(0);
+                            cursor = if cursor == line_start { 0 } else { line_start };
+                            Self::redraw_multiline(prompt, continuation_prompt, &buffer, cursor, &mut last_cursor_row)?;
+                        }
+                        KeyCode::Char('e') if key_event.modifiers.contains(KeyModifiers::CONTROL) => {
+                            let line_end = buffer[cursor..].iter().position(|&c| c == '\n').map(|p| cursor + p).unwrap_or(buffer.len());
+                            cursor = if cursor == line_end { buffer.len() } else { line_end };
+                            Self::redraw_multiline(prompt, continuation_prompt, &buffer, cursor, &mut last_cursor_row)?;
+                        }
+                        KeyCode::Home => {
+                            let line_start = buffer[..cursor].iter().rposition(|&c| c == '\n').map(|p| p + 1).unwrap_or(0);
+                            cursor = if cursor == line_start { 0 } else { line_start };
+                            Self::redraw_multiline(prompt, continuation_prompt, &buffer, cursor, &mut last_cursor_row)?;
+                        }
+                        KeyCode::End => {
+                            let line_end = buffer[cursor..].iter().position(|&c| c == '\n').map(|p| cursor + p).unwrap_or(buffer.len());
+                            cursor = if cursor == line_end { buffer.len() } else { line_end };
+                            Self::redraw_multiline(prompt, continuation_prompt, &buffer, cursor, &mut last_cursor_row)?;
+                        }
+                        KeyCode::Left => {
+                            if key_event.modifiers.contains(KeyModifiers::CONTROL) || key_event.modifiers.contains(KeyModifiers::ALT) {
+                                cursor = Self::find_word_backward(&buffer, cursor);
+                            } else if cursor > 0 {
+                                cursor -= 1;
+                            }
+                            Self::redraw_multiline(prompt, continuation_prompt, &buffer, cursor, &mut last_cursor_row)?;
+                        }
+                        KeyCode::Right => {
+                            if key_event.modifiers.contains(KeyModifiers::CONTROL) || key_event.modifiers.contains(KeyModifiers::ALT) {
+                                cursor = Self::find_word_forward(&buffer, cursor);
+                            } else if cursor < buffer.len() {
+                                cursor += 1;
+                            }
+                            Self::redraw_multiline(prompt, continuation_prompt, &buffer, cursor, &mut last_cursor_row)?;
+                        }
+                        KeyCode::Char('b') if key_event.modifiers.contains(KeyModifiers::ALT) => {
+                            cursor = Self::find_word_backward(&buffer, cursor);
+                            Self::redraw_multiline(prompt, continuation_prompt, &buffer, cursor, &mut last_cursor_row)?;
+                        }
+                        KeyCode::Char('f') if key_event.modifiers.contains(KeyModifiers::ALT) => {
+                            cursor = Self::find_word_forward(&buffer, cursor);
+                            Self::redraw_multiline(prompt, continuation_prompt, &buffer, cursor, &mut last_cursor_row)?;
+                        }
+
+                        // ── Kill Ring & Deletion ────────────────────────
+                        KeyCode::Char('k') if key_event.modifiers.contains(KeyModifiers::CONTROL) => {
+                            if cursor < buffer.len() {
+                                let line_end = buffer[cursor..].iter().position(|&c| c == '\n').map(|p| cursor + p).unwrap_or(buffer.len());
+                                let kill_len = if line_end == cursor { 1 } else { line_end - cursor };
+                                self.kill_ring = buffer[cursor..cursor + kill_len].iter().collect();
+                                buffer.drain(cursor..cursor + kill_len);
+                                Self::redraw_multiline(prompt, continuation_prompt, &buffer, cursor, &mut last_cursor_row)?;
+                            }
+                        }
+                        KeyCode::Char('u') if key_event.modifiers.contains(KeyModifiers::CONTROL) => {
+                            if cursor > 0 {
+                                let line_start = buffer[..cursor].iter().rposition(|&c| c == '\n').map(|p| p + 1).unwrap_or(0);
+                                let kill_start = if line_start == cursor { cursor - 1 } else { line_start };
+                                self.kill_ring = buffer[kill_start..cursor].iter().collect();
+                                buffer.drain(kill_start..cursor);
+                                cursor = kill_start;
+                                Self::redraw_multiline(prompt, continuation_prompt, &buffer, cursor, &mut last_cursor_row)?;
+                            }
+                        }
+                        KeyCode::Char('w') if key_event.modifiers.contains(KeyModifiers::CONTROL) => {
+                            if cursor > 0 {
+                                let kill_start = Self::find_word_backward(&buffer, cursor);
+                                self.kill_ring = buffer[kill_start..cursor].iter().collect();
+                                buffer.drain(kill_start..cursor);
+                                cursor = kill_start;
+                                Self::redraw_multiline(prompt, continuation_prompt, &buffer, cursor, &mut last_cursor_row)?;
+                            }
+                        }
+                        KeyCode::Char('d') if key_event.modifiers.contains(KeyModifiers::ALT) => {
+                            let kill_end = Self::find_word_forward(&buffer, cursor);
+                            if kill_end > cursor {
+                                self.kill_ring = buffer[cursor..kill_end].iter().collect();
+                                buffer.drain(cursor..kill_end);
+                                Self::redraw_multiline(prompt, continuation_prompt, &buffer, cursor, &mut last_cursor_row)?;
+                            }
+                        }
+                        KeyCode::Char('y') if key_event.modifiers.contains(KeyModifiers::CONTROL) => {
+                            if !self.kill_ring.is_empty() {
+                                for ch in self.kill_ring.chars() {
+                                    buffer.insert(cursor, ch);
+                                    cursor += 1;
+                                }
+                                Self::redraw_multiline(prompt, continuation_prompt, &buffer, cursor, &mut last_cursor_row)?;
+                            }
+                        }
+                        KeyCode::Backspace | KeyCode::Char('h') if key_event.code == KeyCode::Backspace || key_event.modifiers.contains(KeyModifiers::CONTROL) => {
+                            if cursor > 0 {
+                                buffer.remove(cursor - 1);
+                                cursor -= 1;
+                                Self::redraw_multiline(prompt, continuation_prompt, &buffer, cursor, &mut last_cursor_row)?;
+                            }
+                        }
+                        KeyCode::Delete => {
+                            if cursor < buffer.len() {
+                                buffer.remove(cursor);
+                                Self::redraw_multiline(prompt, continuation_prompt, &buffer, cursor, &mut last_cursor_row)?;
+                            }
+                        }
+
+                        // ── Multiline & History Navigation ──────────────
+                        KeyCode::Up => {
+                            let line_start = buffer[..cursor].iter().rposition(|&c| c == '\n').map(|p| p + 1).unwrap_or(0);
+                            if line_start > 0 {
+                                let col_offset = cursor - line_start;
+                                let prev_line_end = line_start - 1;
+                                let prev_line_start = buffer[..prev_line_end].iter().rposition(|&c| c == '\n').map(|p| p + 1).unwrap_or(0);
+                                let prev_line_len = prev_line_end - prev_line_start;
+                                cursor = prev_line_start + col_offset.min(prev_line_len);
+                                Self::redraw_multiline(prompt, continuation_prompt, &buffer, cursor, &mut last_cursor_row)?;
+                            } else {
+                                if self.history_index == self.history.len() {
+                                    self.draft = buffer.clone();
+                                }
+                                if self.history_index > 0 {
+                                    self.history_index -= 1;
+                                    buffer = self.history[self.history_index].chars().collect();
+                                    cursor = buffer.len();
+                                    Self::redraw_multiline(prompt, continuation_prompt, &buffer, cursor, &mut last_cursor_row)?;
+                                }
+                            }
+                        }
+                        KeyCode::Down => {
+                            let line_start = buffer[..cursor].iter().rposition(|&c| c == '\n').map(|p| p + 1).unwrap_or(0);
+                            let col_offset = cursor - line_start;
+                            let next_line_rel = buffer[cursor..].iter().position(|&c| c == '\n');
+                            if let Some(pos) = next_line_rel {
+                                let next_line_start = cursor + pos + 1;
+                                let next_line_end = buffer[next_line_start..].iter().position(|&c| c == '\n').map(|p| next_line_start + p).unwrap_or(buffer.len());
+                                let next_line_len = next_line_end - next_line_start;
+                                cursor = next_line_start + col_offset.min(next_line_len);
+                                Self::redraw_multiline(prompt, continuation_prompt, &buffer, cursor, &mut last_cursor_row)?;
+                            } else {
+                                if self.history_index + 1 < self.history.len() {
+                                    self.history_index += 1;
+                                    buffer = self.history[self.history_index].chars().collect();
+                                    cursor = buffer.len();
+                                    Self::redraw_multiline(prompt, continuation_prompt, &buffer, cursor, &mut last_cursor_row)?;
+                                } else if self.history_index + 1 == self.history.len() {
+                                    self.history_index = self.history.len();
+                                    buffer = self.draft.clone();
+                                    cursor = buffer.len();
+                                    Self::redraw_multiline(prompt, continuation_prompt, &buffer, cursor, &mut last_cursor_row)?;
+                                }
+                            }
+                        }
+                        KeyCode::Char('r') if key_event.modifiers.contains(KeyModifiers::CONTROL) => {
+                            let _ = Self::run_reverse_search(&self.history, &mut buffer, &mut cursor, prompt);
+                            last_cursor_row = 0;
+                            Self::redraw_multiline(prompt, continuation_prompt, &buffer, cursor, &mut last_cursor_row)?;
+                        }
+
+                        // ── Tab Autocompletion ──────────────────────────
+                        KeyCode::Tab => {
+                            let current_text: String = buffer.iter().collect();
+                            let prefix = &current_text[..cursor];
+
+                            let completions = Self::get_completions(prefix);
+                            if completions.is_empty() {
+                                // No match
+                            } else if completions.len() == 1 {
+                                let (replacement, new_cursor) = completions[0].clone();
+                                buffer = replacement.chars().collect();
+                                cursor = new_cursor;
+                                Self::redraw_multiline(prompt, continuation_prompt, &buffer, cursor, &mut last_cursor_row)?;
+                            } else {
+                                let replacement_strings: Vec<String> = completions.iter().map(|(r, _)| r.clone()).collect();
+                                let common = Self::longest_common_prefix(&replacement_strings);
+                                if common.len() > prefix.len() {
+                                    buffer = common.chars().collect();
+                                    cursor = buffer.len();
+                                }
+
+                                let mut stdout = io::stdout();
+                                let _ = write!(stdout, "\r\n");
+                                let pills: Vec<String> = completions
+                                    .iter()
+                                    .map(|(r, _)| {
+                                        let label = r.split_whitespace().last().unwrap_or(r.as_str());
+                                        format!("  {} {}", "▸".cyan(), label.bold().white())
+                                    })
+                                    .collect();
+
+                                for chunk in pills.chunks(4) {
+                                    let _ = writeln!(stdout, "{}\r", chunk.join("    "));
+                                }
+                                last_cursor_row = 0;
+                                Self::redraw_multiline(prompt, continuation_prompt, &buffer, cursor, &mut last_cursor_row)?;
+                            }
+                        }
+
+                        // ── Submission & Multi-Line Continuation ────────
+                        KeyCode::Char('j') if key_event.modifiers.contains(KeyModifiers::CONTROL) => {
+                            buffer.insert(cursor, '\n');
+                            cursor += 1;
+                            Self::redraw_multiline(prompt, continuation_prompt, &buffer, cursor, &mut last_cursor_row)?;
+                        }
+                        KeyCode::Enter => {
+                            let is_explicit_continuation = key_event.modifiers.contains(KeyModifiers::ALT)
+                                || key_event.modifiers.contains(KeyModifiers::SHIFT);
+
+                            let has_trailing_backslash = buffer.ends_with(&['\\']);
+
+                            let buf_str: String = buffer.iter().collect();
+                            let is_inside_unclosed = Self::has_unclosed_delimiters(&buf_str);
+
+                            let is_rapid_paste = event::poll(std::time::Duration::from_millis(10)).unwrap_or(false);
+
+                            if is_explicit_continuation || has_trailing_backslash || is_inside_unclosed || is_rapid_paste {
+                                if has_trailing_backslash {
+                                    buffer.pop();
+                                    if cursor > buffer.len() {
+                                        cursor = buffer.len();
+                                    }
+                                }
+                                buffer.insert(cursor, '\n');
+                                cursor += 1;
+                                Self::redraw_multiline(prompt, continuation_prompt, &buffer, cursor, &mut last_cursor_row)?;
+                            } else {
+                                Self::finalize_for_submit(prompt, continuation_prompt, &buffer, cursor)?;
+                                let final_line: String = buffer.iter().collect();
+                                self.add_history(&final_line);
+                                return Ok(ReadlineResult::Submit(final_line));
+                            }
+                        }
+
+                        // ── Regular Characters ──────────────────────────
+                        KeyCode::Char(c) if !key_event.modifiers.contains(KeyModifiers::CONTROL) && !key_event.modifiers.contains(KeyModifiers::ALT) => {
+                            buffer.insert(cursor, c);
+                            cursor += 1;
+                            Self::redraw_multiline(prompt, continuation_prompt, &buffer, cursor, &mut last_cursor_row)?;
+                        }
+
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
 
 pub struct HagibisRepl {
     client: HgbClient,
@@ -16,36 +983,44 @@ impl HagibisRepl {
         }
     }
 
-    pub async fn run(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn print_banner() {
         println!("{}", "================================================================================".cyan());
         println!("{}", " ⚡ HAGIBIS (hgb) INTERACTIVE REPL v0.1.0 ⚡ ".bold().cyan());
         println!("{}", " Sub-Millisecond Microkernel & Swarm Engine in Systems-Grade Rust".italic());
         println!("{}", " Type any prompt to execute, or '/help' for slash commands. '/exit' to quit.".dimmed());
         println!("{}", "================================================================================".cyan());
+    }
 
-        let stdin = io::stdin();
-        let mut reader = stdin.lock();
+    pub async fn run(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        Self::print_banner();
+
+        let mut editor = ReplEditor::new();
 
         loop {
-            print!("{} ", "hgb ❯".bold().green());
-            io::stdout().flush()?;
+            let prompt = format!("{} ", "hgb ❯".bold().green());
+            let repaint = || {
+                Self::print_banner();
+            };
 
-            let mut line = String::new();
-            if reader.read_line(&mut line)? == 0 {
-                break; // EOF
-            }
+            let line_result = editor.read_line(&prompt, &repaint)?;
 
-            let input = line.trim();
-            if input.is_empty() {
+            let input = match line_result {
+                ReadlineResult::Submit(s) => s,
+                ReadlineResult::Eof => break,
+                ReadlineResult::Interrupted => continue,
+            };
+
+            let trimmed = input.trim();
+            if trimmed.is_empty() {
                 continue;
             }
 
-            if input.starts_with('/') {
-                if !self.handle_slash_command(input).await? {
+            if trimmed.starts_with('/') {
+                if !self.handle_slash_command(trimmed).await? {
                     break;
                 }
             } else {
-                self.execute_prompt(input).await?;
+                self.execute_prompt(trimmed).await?;
             }
         }
 
@@ -62,8 +1037,9 @@ impl HagibisRepl {
             "/exit" | "/quit" | "/q" => return Ok(false),
             "/help" | "/?" | "/h" => self.print_help(),
             "/clear" | "/cls" => {
-                print!("\x1B[2J\x1B[1;1H");
-                io::stdout().flush()?;
+                print!("\x1B[2J\x1B[1;1H\x1b[3J");
+                let _ = io::stdout().flush();
+                Self::print_banner();
             }
             "/ping" => {
                 let resp = self.dispatch(HgbRequest::Ping).await;
@@ -79,12 +1055,25 @@ impl HagibisRepl {
             }
             "/model" => {
                 if args.is_empty() {
-                    let current = self.model.as_deref().unwrap_or("auto");
+                    let current = self.model.as_deref().unwrap_or("gemini (auto)");
+                    let cred = hgb_core::GeminiProvider::credential_status();
                     println!("  [•] Active Model: {}", current.yellow());
+                    println!("  [•] Credential: {}", cred.cyan());
                 } else {
-                    self.model = Some(args.clone());
-                    println!("  ✔ Model set to: {}", args.green());
+                    let clean = args.trim().to_string();
+                    self.model = Some(clean.clone());
+                    let cred = hgb_core::GeminiProvider::credential_status();
+                    println!("  ✔ Model set to: {}", clean.green());
+                    println!("  [•] Credential: {}", cred.cyan());
                 }
+            }
+            "/login" => {
+                let resp = self.dispatch(HgbRequest::Login).await;
+                self.render_response(resp);
+            }
+            "/auth" => {
+                let resp = self.dispatch(HgbRequest::AuthStatus).await;
+                self.render_response(resp);
             }
             "/provenance" | "/prov" => {
                 let action = if args.is_empty() { "append".to_string() } else { args };
@@ -276,6 +1265,8 @@ impl HagibisRepl {
         println!("  {:<25} {}", "/ping".green(), "Measure UDS IPC latency (in microseconds)");
         println!("  {:<25} {}", "/status".green(), "Display daemon status and memory RSS");
         println!("  {:<25} {}", "/model [name]".green(), "View or set active model");
+        println!("  {:<25} {}", "/login".green(), "Authenticate with Google Account (OAuth)");
+        println!("  {:<25} {}", "/auth".green(), "Check Google Gemini credential status");
         println!();
         println!("  {}", "--- AGY Surgical CRUD ---".dimmed());
         println!("  {:<25} {}", "/view <path> [s] [e]".yellow(), "View file with paged line slicing");
@@ -293,6 +1284,115 @@ impl HagibisRepl {
         println!("  {:<25} {}", "/verify <target>".cyan(), "Formally verify invariants with SMT-LIB2");
         println!("  {:<25} {}", "/mesh".cyan(), "Display P2P swarm mesh status");
         println!();
+        println!("  {}", "Keybindings (Tagisan Parity):".cyan().bold());
+        println!("    Ctrl+A / Home     : Move cursor to start of line");
+        println!("    Ctrl+E / End      : Move cursor to end of line");
+        println!("    Alt+B / Ctrl+Left : Move backward one word");
+        println!("    Alt+F / Ctrl+Right: Move forward one word");
+        println!("    Ctrl+K            : Kill from cursor to end of line");
+        println!("    Ctrl+U            : Kill from cursor to start of line");
+        println!("    Ctrl+W            : Kill backward one word");
+        println!("    Alt+D             : Kill forward one word");
+        println!("    Ctrl+Y            : Yank (paste) last killed text");
+        println!("    Ctrl+R            : Reverse incremental history search");
+        println!("    Tab               : Smart autocomplete commands, models, and paths");
+        println!("    Ctrl+J / Alt+Enter: Insert newline without submitting (multiline)");
+        println!("    Ctrl+L            : Clear screen & redraw");
+        println!("    Ctrl+C            : Clear line buffer");
+        println!("    Ctrl+D            : Exit REPL (on empty line)");
+        println!();
         println!("  {}", "Pro-tip: Any plain text without a '/' prefix executes as an AI swarm prompt.".italic().dimmed());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_find_word_backward() {
+        let text: Vec<char> = "hello beautiful world".chars().collect();
+        let pos1 = ReplEditor::find_word_backward(&text, 21);
+        assert_eq!(pos1, 16); // start of "world"
+
+        let pos2 = ReplEditor::find_word_backward(&text, 16);
+        assert_eq!(pos2, 6); // start of "beautiful"
+
+        let pos3 = ReplEditor::find_word_backward(&text, 6);
+        assert_eq!(pos3, 0); // start of "hello"
+
+        let pos4 = ReplEditor::find_word_backward(&text, 0);
+        assert_eq!(pos4, 0);
+    }
+
+    #[test]
+    fn test_find_word_forward() {
+        let text: Vec<char> = "hello beautiful world".chars().collect();
+        let pos1 = ReplEditor::find_word_forward(&text, 0);
+        assert_eq!(pos1, 6); // start of "beautiful"
+
+        let pos2 = ReplEditor::find_word_forward(&text, 6);
+        assert_eq!(pos2, 16); // start of "world"
+
+        let pos3 = ReplEditor::find_word_forward(&text, 16);
+        assert_eq!(pos3, 21); // end of "world"
+
+        let pos4 = ReplEditor::find_word_forward(&text, 21);
+        assert_eq!(pos4, 21);
+    }
+
+    #[test]
+    fn test_longest_common_prefix() {
+        let list1 = vec!["/help".to_string(), "/history".to_string()];
+        assert_eq!(ReplEditor::longest_common_prefix(&list1), "/h");
+
+        let list2 = vec!["/plan".to_string(), "/prompt".to_string()];
+        assert_eq!(ReplEditor::longest_common_prefix(&list2), "/p");
+
+        let list3 = vec!["single".to_string()];
+        assert_eq!(ReplEditor::longest_common_prefix(&list3), "single");
+
+        let list4: Vec<String> = vec![];
+        assert_eq!(ReplEditor::longest_common_prefix(&list4), "");
+    }
+
+    #[test]
+    fn test_has_unclosed_delimiters() {
+        assert!(ReplEditor::has_unclosed_delimiters("```rust\nfn main() {"));
+        assert!(!ReplEditor::has_unclosed_delimiters("```rust\nfn main() {}\n```"));
+        assert!(ReplEditor::has_unclosed_delimiters("let s = \"\"\"multi line"));
+        assert!(!ReplEditor::has_unclosed_delimiters("let s = \"\"\"multi line\"\"\""));
+        assert!(ReplEditor::has_unclosed_delimiters("fn test(a: i32, b: i32"));
+        assert!(!ReplEditor::has_unclosed_delimiters("fn test(a: i32, b: i32)"));
+    }
+
+    #[test]
+    fn test_get_completions_slash_commands() {
+        let comp_h = ReplEditor::get_completions("/h");
+        let names: Vec<String> = comp_h.into_iter().map(|(s, _)| s).collect();
+        assert!(names.contains(&"/help ".to_string()));
+
+        let comp_m = ReplEditor::get_completions("/m");
+        let names: Vec<String> = comp_m.into_iter().map(|(s, _)| s).collect();
+        assert!(names.contains(&"/model ".to_string()));
+        assert!(names.contains(&"/mesh ".to_string()));
+    }
+
+    #[test]
+    fn test_get_completions_model() {
+        let comp_g = ReplEditor::get_completions("/model gem");
+        let names: Vec<String> = comp_g.into_iter().map(|(s, _)| s).collect();
+        assert!(names.contains(&"/model gemini ".to_string()));
+        assert!(names.contains(&"/model gemini-2.5-flash ".to_string()));
+        assert!(names.contains(&"/model gemini-2.5-pro ".to_string()));
+    }
+
+    #[test]
+    fn test_visible_width() {
+        let plain = "hello world";
+        assert_eq!(ReplEditor::visible_width(plain), 11);
+
+        let colored_str = format!("{}", "hello world".green().bold());
+        assert_eq!(ReplEditor::visible_width(&colored_str), 11);
     }
 }

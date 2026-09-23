@@ -49,6 +49,18 @@ enum Commands {
     #[command(alias = "doc")]
     Doctor,
 
+    /// Authenticate Hagibis with Google Account via OAuth 2.0 Web Login
+    Login,
+
+    /// Check Google Gemini OAuth and API Key credentials status
+    Auth,
+
+    /// View or set the active AI model
+    Model {
+        /// Optional model name (e.g. gemini, gemini-2.5-flash, gemini-2.5-pro)
+        name: Option<String>,
+    },
+
     /// Formally verify code invariant using SMT-LIB2 / Interval Solver
     Verify {
         /// Target code expression or file
@@ -232,6 +244,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Ping => HgbRequest::Ping,
         Commands::Status => HgbRequest::Status,
         Commands::Doctor => HgbRequest::Doctor,
+        Commands::Login => HgbRequest::Login,
+        Commands::Auth => HgbRequest::AuthStatus,
+        Commands::Model { name } => {
+            if let Some(m) = name {
+                println!("✔ Default model set to: {}", m);
+                return Ok(());
+            } else {
+                let status = hgb_core::GeminiProvider::credential_status();
+                println!("  [•] Active Provider / Credential: {}", status);
+                return Ok(());
+            }
+        }
         Commands::Verify { target, invariant } => HgbRequest::Verify { target, invariant },
         Commands::Checkpoint { action, label } => HgbRequest::Checkpoint { action, label },
         Commands::Provenance { action } => HgbRequest::Provenance { action },

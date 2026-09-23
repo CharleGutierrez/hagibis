@@ -77,18 +77,26 @@ impl HagibisDaemon {
             HgbRequest::Ping => HgbResponse::Pong { latency_us: 12 },
             HgbRequest::Status => {
                 let uptime_secs = state.start_time.elapsed().as_secs();
+                let mut active_models = vec!["in-process-gguf".to_string(), "ollama".to_string()];
+                if hgb_core::GeminiProvider::is_available() {
+                    active_models.push("gemini-2.5-flash".to_string());
+                    active_models.push("gemini-2.5-pro".to_string());
+                }
                 HgbResponse::Status(DaemonStatus {
                     version: env!("CARGO_PKG_VERSION").to_string(),
                     uptime_secs,
-                    active_models: vec!["in-process-gguf".to_string(), "ollama".to_string()],
+                    active_models,
                     memory_rss_mb: 8.4,
                     active_peers: 1,
                     socket_path: state.socket_path.to_string_lossy().to_string(),
                 })
             }
             HgbRequest::Doctor => {
+                let gemini_status = if hgb_core::GeminiProvider::is_available() { "READY" } else { "CONFIG_NEEDED" };
+                let gemini_msg = hgb_core::GeminiProvider::credential_status();
                 HgbResponse::DoctorReport(vec![
                     DoctorPillar { name: "Microkernel Tokio IPC".to_string(), status: "READY".to_string(), message: "Sub-500µs UDS socket connected".to_string() },
+                    DoctorPillar { name: "Google Gemini Cloud Provider".to_string(), status: gemini_status.to_string(), message: gemini_msg },
                     DoctorPillar { name: "Blake3 Provenance Ledger".to_string(), status: "READY".to_string(), message: "SC A.M. 03-8-02-SC & Rule 141 evidentiary roots active".to_string() },
                     DoctorPillar { name: "Time-Travel Checkpoints".to_string(), status: "READY".to_string(), message: "Append-only WAL initialized".to_string() },
                     DoctorPillar { name: "Differential Fuzz Engine".to_string(), status: "READY".to_string(), message: "Boundary & Homoglyph mutation suite ready".to_string() },
@@ -96,12 +104,64 @@ impl HagibisDaemon {
                     DoctorPillar { name: "SQLite Skill Storage".to_string(), status: "READY".to_string(), message: "Decoupled fast-paging storage active".to_string() },
                 ])
             }
-            HgbRequest::Prompt { prompt, model, provider, .. } => {
-                let output = format!("⚡ Hagibis Response (Microkernel Engine): Processed prompt '{}' with model '{:?}' and provider '{:?}'", prompt, model, provider);
+            HgbRequest::AuthStatus => {
+                let status = hgb_core::GeminiProvider::credential_status();
+                let email = hgb_core::GeminiOAuthManager::get_account_email();
+                let is_auth = hgb_core::GeminiProvider::is_available();
+                HgbResponse::Complete {
+                    output: format!("🔐 Google Authentication Status:\n  [•] Active: {}\n  [•] Account: {}\n  [•] Credential: {}", 
+                        if is_auth { "✔ Authenticated" } else { "✖ Not Authenticated" },
+                        email.as_deref().unwrap_or("None"),
+                        status
+                    ),
+                    tokens_used: 0,
+                    duration_ms: 1,
+                }
+            }
+            HgbRequest::Login => {
+                match hgb_core::GeminiOAuthManager::start_web_login(None, None).await {
+                    Ok(tokens) => {
+                        let email = tokens.email.unwrap_or_else(|| "Google Account".to_string());
+                        HgbResponse::Complete {
+                            output: format!("✔ Successfully authenticated Hagibis with Google Account: {}", email),
+                            tokens_used: 0,
+                            duration_ms: 5,
+                        }
+                    }
+                    Err(e) => HgbResponse::Error(format!("Google OAuth authentication failed: {}", e)),
+                }
+            }
+            HgbRequest::Prompt { prompt, model, .. } => {
+                use hgb_core::HgbProvider;
+                let start = std::time::Instant::now();
+                let is_gemini = model.as_deref().map(|m| m.contains("gemini") || m.contains("flash") || m.contains("pro") || m == "auto").unwrap_or(true);
+                if is_gemini && hgb_core::GeminiProvider::is_available() {
+                    if let Some(prov) = hgb_core::GeminiProvider::auto_discover() {
+                        match prov.complete(&prompt, model.as_deref()).await {
+                            Ok(text) => {
+                                let duration_ms = start.elapsed().as_millis() as u64;
+                                return HgbResponse::Complete {
+                                    output: text,
+                                    tokens_used: prompt.len() / 4,
+                                    duration_ms,
+                                };
+                            }
+                            Err(e) => {
+                                return HgbResponse::Error(format!("Gemini API Error: {}", e));
+                            }
+                        }
+                    }
+                }
+
+                let cred_status = hgb_core::GeminiProvider::credential_status();
+                let output = format!(
+                    "⚡ Hagibis Microkernel: No active Gemini connection.\nCredential status: {}\nTo connect Google Gemini: run 'hgb login' or export GEMINI_API_KEY=...",
+                    cred_status
+                );
                 HgbResponse::Complete {
                     output,
-                    tokens_used: prompt.len() / 4,
-                    duration_ms: 18,
+                    tokens_used: 0,
+                    duration_ms: start.elapsed().as_millis() as u64,
                 }
             }
             HgbRequest::Verify { target, invariant } => {

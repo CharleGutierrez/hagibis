@@ -28,6 +28,8 @@ pub enum HgbRequest {
         iterations: usize,
     },
     MeshStatus,
+    AuthStatus,
+    Login,
     // --- AGY Surgical CRUD Requests ---
     CrudView {
         path: String,
