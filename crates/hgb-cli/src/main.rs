@@ -1,3 +1,4 @@
+pub mod canvas;
 mod client;
 mod repl;
 
@@ -269,7 +270,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("  ✔ Rendered virtual TUI buffer ({} cells)", buffer.content.len());
             return Ok(());
         } else {
-            return state.run_interactive().map_err(|e| Box::new(e) as Box<dyn std::error::Error>);
+            return state.run_interactive().await.map_err(|e| Box::new(e) as Box<dyn std::error::Error>);
         }
     }
 

@@ -1,3 +1,4 @@
+use crate::canvas::{ChatCanvas, ToolCallCard, ToolCardStatus};
 use crate::client::HgbClient;
 use colored::Colorize;
 use crossterm::{
@@ -1120,7 +1121,7 @@ impl HagibisRepl {
                 state.add_node(node2);
                 state.add_node(node3);
 
-                let _ = state.run_interactive();
+                let _ = state.run_interactive().await;
                 print!("\x1B[2J\x1B[1;1H\x1b[3J");
                 let _ = io::stdout().flush();
                 Self::print_banner();
@@ -1133,8 +1134,22 @@ impl HagibisRepl {
                     let path = parts[1].to_string();
                     let start_line = parts.get(2).and_then(|s| s.parse::<usize>().ok());
                     let end_line = parts.get(3).and_then(|s| s.parse::<usize>().ok());
-                    let resp = self.dispatch(HgbRequest::CrudView { path, start_line, end_line, offset: None }).await;
-                    self.render_response(resp);
+                    let start_timer = std::time::Instant::now();
+                    let resp = self.dispatch(HgbRequest::CrudView { path: path.clone(), start_line, end_line, offset: None }).await;
+                    let dur_ms = start_timer.elapsed().as_millis() as u64;
+                    match resp {
+                        HgbResponse::Complete { output, tokens_used, .. } => {
+                            let summary = format!("path='{}', lines={:?}-{:?}", path, start_line, end_line);
+                            let card = ToolCallCard::new("view_file", summary, ToolCardStatus::Success {
+                                duration_ms: dur_ms,
+                                exit_code: 0,
+                            })
+                            .with_output(output)
+                            .with_details(format!("Total lines: {}", tokens_used));
+                            card.print();
+                        }
+                        other => self.render_response(other),
+                    }
                 }
             }
             "/write" => {
@@ -1143,13 +1158,25 @@ impl HagibisRepl {
                 } else {
                     let path = parts[1].to_string();
                     let content = parts[2..].join(" ");
+                    let start_timer = std::time::Instant::now();
                     let resp = self.dispatch(HgbRequest::CrudWrite {
-                        path,
-                        content,
+                        path: path.clone(),
+                        content: content.clone(),
                         overwrite: true,
                         artifact_summary: None,
                     }).await;
-                    self.render_response(resp);
+                    let dur_ms = start_timer.elapsed().as_millis() as u64;
+                    match resp {
+                        HgbResponse::Complete { output, .. } => {
+                            let summary = format!("path='{}', bytes={}", path, content.len());
+                            let card = ToolCallCard::new("write_to_file", summary, ToolCardStatus::Success {
+                                duration_ms: dur_ms,
+                                exit_code: 0,
+                            }).with_output(output);
+                            card.print();
+                        }
+                        other => self.render_response(other),
+                    }
                 }
             }
             "/edit" => {
@@ -1159,10 +1186,11 @@ impl HagibisRepl {
                     let path = parts[1].to_string();
                     let target = parts[2].to_string();
                     let replacement = parts[3..].join(" ");
+                    let start_timer = std::time::Instant::now();
                     let resp = self.dispatch(HgbRequest::CrudEdit {
-                        path,
-                        target,
-                        replacement,
+                        path: path.clone(),
+                        target: target.clone(),
+                        replacement: replacement.clone(),
                         start_line: None,
                         end_line: None,
                         allow_multiple: false,
@@ -1170,13 +1198,35 @@ impl HagibisRepl {
                         description: None,
                         target_lint_error_ids: Vec::new(),
                     }).await;
-                    self.render_response(resp);
+                    let dur_ms = start_timer.elapsed().as_millis() as u64;
+                    match resp {
+                        HgbResponse::Complete { output, .. } => {
+                            let summary = format!("path='{}', target='{}'", path, target);
+                            let card = ToolCallCard::new("replace_file_content", summary, ToolCardStatus::Success {
+                                duration_ms: dur_ms,
+                                exit_code: 0,
+                            }).with_output(output);
+                            card.print();
+                        }
+                        other => self.render_response(other),
+                    }
                 }
             }
             "/ls" | "/dir" => {
                 let path = if parts.len() > 1 { parts[1].to_string() } else { ".".to_string() };
-                let resp = self.dispatch(HgbRequest::CrudList { path }).await;
-                self.render_response(resp);
+                let start_timer = std::time::Instant::now();
+                let resp = self.dispatch(HgbRequest::CrudList { path: path.clone() }).await;
+                let dur_ms = start_timer.elapsed().as_millis() as u64;
+                match resp {
+                    HgbResponse::Complete { output, .. } => {
+                        let card = ToolCallCard::new("list_dir", format!("path='{}'", path), ToolCardStatus::Success {
+                            duration_ms: dur_ms,
+                            exit_code: 0,
+                        }).with_output(output);
+                        card.print();
+                    }
+                    other => self.render_response(other),
+                }
             }
             "/grep" => {
                 if parts.len() < 2 {
@@ -1184,15 +1234,27 @@ impl HagibisRepl {
                 } else {
                     let pattern = parts[1].to_string();
                     let path = parts.get(2).map(|p| p.to_string());
+                    let start_timer = std::time::Instant::now();
                     let resp = self.dispatch(HgbRequest::CrudGrep {
-                        pattern,
-                        path,
+                        pattern: pattern.clone(),
+                        path: path.clone(),
                         is_regex: false,
                         case_insensitive: true,
                         match_per_line: true,
                         includes: Vec::new(),
                     }).await;
-                    self.render_response(resp);
+                    let dur_ms = start_timer.elapsed().as_millis() as u64;
+                    match resp {
+                        HgbResponse::Complete { output, .. } => {
+                            let summary = format!("pattern='{}', path={:?}", pattern, path);
+                            let card = ToolCallCard::new("grep_search", summary, ToolCardStatus::Success {
+                                duration_ms: dur_ms,
+                                exit_code: 0,
+                            }).with_output(output);
+                            card.print();
+                        }
+                        other => self.render_response(other),
+                    }
                 }
             }
             "/find" | "/search" => {
@@ -1206,15 +1268,27 @@ impl HagibisRepl {
                     } else {
                         Vec::new()
                     };
+                    let start_timer = std::time::Instant::now();
                     let resp = self.dispatch(HgbRequest::CrudFind {
-                        search_directory,
-                        pattern,
+                        search_directory: search_directory.clone(),
+                        pattern: pattern.clone(),
                         extensions,
                         excludes: Vec::new(),
                         max_depth: None,
                         target_type: None,
                     }).await;
-                    self.render_response(resp);
+                    let dur_ms = start_timer.elapsed().as_millis() as u64;
+                    match resp {
+                        HgbResponse::Complete { output, .. } => {
+                            let summary = format!("pattern={:?}, dir='{}'", pattern, search_directory);
+                            let card = ToolCallCard::new("find_by_name", summary, ToolCardStatus::Success {
+                                duration_ms: dur_ms,
+                                exit_code: 0,
+                            }).with_output(output);
+                            card.print();
+                        }
+                        other => self.render_response(other),
+                    }
                 }
             }
             _ => {
@@ -1272,13 +1346,24 @@ impl HagibisRepl {
                 println!("{}", "================================================================================".cyan());
             }
             HgbResponse::Complete { output, tokens_used, duration_ms } => {
-                println!("{}", output);
+                ChatCanvas::print_markdown(&output);
                 if tokens_used > 0 {
-                    println!("  {} {} lines/tokens in {} ms", "⏱️".cyan(), tokens_used, duration_ms);
+                    let tok_s = if duration_ms > 0 {
+                        format!(" ({:.1} tok/s)", (tokens_used as f64) / (duration_ms as f64 / 1000.0))
+                    } else {
+                        "".to_string()
+                    };
+                    println!("  {} {} tokens in {} ms{}", "⏱️".cyan(), tokens_used, duration_ms, tok_s.dimmed());
                 }
             }
             HgbResponse::TextChunk(chunk) => print!("{}", chunk),
-            HgbResponse::Error(err) => eprintln!("{} {}", "✖ ERROR:".red().bold(), err),
+            HgbResponse::Error(err) => {
+                let card = ToolCallCard::new("error", "Execution Failed", ToolCardStatus::Failed {
+                    duration_ms: 0,
+                    error: err.clone(),
+                }).with_output(&err);
+                card.print();
+            }
         }
     }
 
