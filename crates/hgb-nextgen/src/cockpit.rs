@@ -91,6 +91,37 @@ fn wrap_line_to_width(text: &str, max_width: usize) -> Vec<String> {
     lines
 }
 
+/// Wrap a code line cleanly to fit within max_width without stripping indentation
+fn wrap_code_line_to_width(line: &str, max_width: usize) -> Vec<String> {
+    if max_width == 0 {
+        return vec![line.to_string()];
+    }
+    let total_w = UnicodeWidthStr::width(line);
+    if total_w <= max_width {
+        return vec![line.to_string()];
+    }
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    let mut cur_w = 0;
+    for ch in line.chars() {
+        let ch_w = UnicodeWidthChar::width(ch).unwrap_or(1);
+        if cur_w + ch_w > max_width && !current.is_empty() {
+            chunks.push(current);
+            current = String::new();
+            cur_w = 0;
+        }
+        current.push(ch);
+        cur_w += ch_w;
+    }
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+    if chunks.is_empty() {
+        chunks.push(String::new());
+    }
+    chunks
+}
+
 /// Truncate a string cleanly to fit within max_width visual columns
 fn truncate_str_by_width(text: &str, max_width: usize) -> String {
     let mut result = String::new();
@@ -1891,59 +1922,120 @@ impl CockpitState {
                             )));
                         }
 
-                        // Render markdown lines
-                        let mut in_code_block = false;
-                        let mut current_code_width = usable_width.saturating_sub(2).min(100).max(48);
+                        // Parse markdown lines, grouping code blocks for auto-width banner rendering
+                        enum MarkdownItem<'a> {
+                            Line(&'a str),
+                            CodeBlock {
+                                lang: &'a str,
+                                lines: Vec<&'a str>,
+                            },
+                        }
+
+                        let mut md_items = Vec::new();
+                        let mut in_block = false;
+                        let mut block_lang = "";
+                        let mut block_lines = Vec::new();
+
                         for line in item.content.lines() {
                             if line.starts_with("```") {
-                                if !in_code_block {
-                                    in_code_block = true;
-                                    let code_lang = line.trim_start_matches("```").trim();
-                                    let tag = if code_lang.is_empty() { "code" } else { code_lang };
-                                    current_code_width = usable_width.saturating_sub(2).min(100).max(48);
+                                if in_block {
+                                    in_block = false;
+                                    md_items.push(MarkdownItem::CodeBlock {
+                                        lang: block_lang,
+                                        lines: std::mem::take(&mut block_lines),
+                                    });
+                                } else {
+                                    in_block = true;
+                                    block_lang = line.trim_start_matches("```").trim();
+                                    block_lines.clear();
+                                }
+                            } else if in_block {
+                                block_lines.push(line);
+                            } else {
+                                md_items.push(MarkdownItem::Line(line));
+                            }
+                        }
+                        if in_block {
+                            md_items.push(MarkdownItem::CodeBlock {
+                                lang: block_lang,
+                                lines: block_lines,
+                            });
+                        }
+
+                        for md_item in md_items {
+                            match md_item {
+                                MarkdownItem::CodeBlock { lang, lines } => {
+                                    let tag = if lang.is_empty() { "code" } else { lang };
                                     let tag_w = UnicodeWidthStr::width(tag);
-                                    let dashes_count = current_code_width.saturating_sub(tag_w + 7).max(1);
+                                    let max_content_w = lines.iter().map(|l| UnicodeWidthStr::width(*l)).max().unwrap_or(0);
+
+                                    // Natural width auto-fits content: "│ " (2) + content + " │" (2) = content + 4,
+                                    // and header "╭─── [" (6) + tag (tag_w) + "] " (2) + "─" (1) + "╮" (1) = tag_w + 10
+                                    let natural_w = (max_content_w + 4).max(tag_w + 10);
+                                    let max_allowed = usable_width.saturating_sub(2).max(36);
+                                    let code_box_w = natural_w.max(36).min(max_allowed);
+
+                                    // 1. Top border: "╭─── [tag] ────╮"
+                                    let max_tag_w = code_box_w.saturating_sub(10);
+                                    let (display_tag, display_tag_w) = if tag_w > max_tag_w && max_tag_w > 2 {
+                                        let trunc = truncate_str_by_width(tag, max_tag_w.saturating_sub(1));
+                                        let tw = UnicodeWidthStr::width(trunc.as_str()) + 1;
+                                        (format!("{}…", trunc), tw)
+                                    } else {
+                                        (tag.to_string(), tag_w)
+                                    };
+
+                                    let used_top_w = 6 + display_tag_w + 3; // "╭─── [" (6) + tag + "] " (2) + "╮" (1)
+                                    let dashes_count = code_box_w.saturating_sub(used_top_w).max(1);
+                                    let top_dashes = "─".repeat(dashes_count);
+
                                     chat_lines.push(Line::from(vec![
                                         Span::styled("╭─── [", Style::default().fg(Color::Cyan)),
-                                        Span::styled(tag, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-                                        Span::styled(format!("] {}╮", "─".repeat(dashes_count)), Style::default().fg(Color::Cyan)),
+                                        Span::styled(display_tag, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                                        Span::styled(format!("] {}╮", top_dashes), Style::default().fg(Color::Cyan)),
                                     ]));
-                                } else {
-                                    in_code_block = false;
-                                    let bottom_dashes = "─".repeat(current_code_width.saturating_sub(2));
+
+                                    // 2. Content lines: wrapped preserving indentation with closed right border
+                                    let max_chunk_w = code_box_w.saturating_sub(4);
+                                    for code_l in lines {
+                                        let chunks = wrap_code_line_to_width(code_l, max_chunk_w);
+                                        for chunk in chunks {
+                                            let chunk_w = UnicodeWidthStr::width(chunk.as_str());
+                                            let pad_w = max_chunk_w.saturating_sub(chunk_w);
+                                            chat_lines.push(Line::from(vec![
+                                                Span::styled("│ ", Style::default().fg(Color::Cyan)),
+                                                Span::styled(chunk, Style::default().fg(Color::White)),
+                                                Span::raw(" ".repeat(pad_w)),
+                                                Span::styled(" │", Style::default().fg(Color::Cyan)),
+                                            ]));
+                                        }
+                                    }
+
+                                    // 3. Bottom border: "╰──────────────╯"
+                                    let bottom_dashes = "─".repeat(code_box_w.saturating_sub(2));
                                     chat_lines.push(Line::from(Span::styled(
                                         format!("╰{}╯", bottom_dashes),
                                         Style::default().fg(Color::Cyan),
                                     )));
                                 }
-                            } else if in_code_block {
-                                let max_chunk_w = current_code_width.saturating_sub(4).max(10);
-                                let chunks = wrap_line_to_width(line, max_chunk_w);
-                                for chunk in chunks {
-                                    let chunk_w = UnicodeWidthStr::width(chunk.as_str());
-                                    let pad_w = max_chunk_w.saturating_sub(chunk_w);
-                                    chat_lines.push(Line::from(vec![
-                                        Span::styled("│ ", Style::default().fg(Color::Cyan)),
-                                        Span::styled(chunk, Style::default().fg(Color::White)),
-                                        Span::raw(" ".repeat(pad_w)),
-                                        Span::styled(" │", Style::default().fg(Color::Cyan)),
-                                    ]));
+                                MarkdownItem::Line(line) => {
+                                    if line.starts_with("+ ") || line.starts_with("+\t") {
+                                        chat_lines.push(Line::from(Span::styled(line, Style::default().fg(Color::Green))));
+                                    } else if line.starts_with("- ") || line.starts_with("-\t") {
+                                        chat_lines.push(Line::from(Span::styled(line, Style::default().fg(Color::Red))));
+                                    } else if line.starts_with("## ") {
+                                        chat_lines.push(Line::from(Span::styled(&line[3..], Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))));
+                                    } else if line.starts_with("# ") {
+                                        chat_lines.push(Line::from(Span::styled(&line[2..], Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))));
+                                    } else if line.starts_with("* ") || line.starts_with("- ") {
+                                        chat_lines.push(Line::from(vec![
+                                            Span::styled("  • ", Style::default().fg(Color::Cyan)),
+                                            Span::styled(&line[2..], Style::default().fg(Color::White)),
+                                        ]));
+                                    } else {
+                                        chat_lines.push(Line::from(Span::styled(line, Style::default().fg(Color::White))));
+                                    }
                                 }
-                            } else if line.starts_with("+ ") || line.starts_with("+\t") {
-                                chat_lines.push(Line::from(Span::styled(line, Style::default().fg(Color::Green))));
-                            } else if line.starts_with("- ") || line.starts_with("-\t") {
-                                chat_lines.push(Line::from(Span::styled(line, Style::default().fg(Color::Red))));
-                            } else if line.starts_with("## ") {
-                                chat_lines.push(Line::from(Span::styled(&line[3..], Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))));
-                            } else if line.starts_with("# ") {
-                                chat_lines.push(Line::from(Span::styled(&line[2..], Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))));
-                            } else if line.starts_with("* ") || line.starts_with("- ") {
-                                chat_lines.push(Line::from(vec![
-                                    Span::styled("  • ", Style::default().fg(Color::Cyan)),
-                                    Span::styled(&line[2..], Style::default().fg(Color::White)),
-                                ]));
-                            } else {
-                                chat_lines.push(Line::from(Span::styled(line, Style::default().fg(Color::White))));
                             }
                         }
 

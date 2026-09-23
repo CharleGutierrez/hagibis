@@ -747,3 +747,96 @@ fn test_brutal_banner_auto_width_and_unbroken_lines() {
     assert!(!rendered_narrow.contains("Could you pl"));
 }
 
+#[test]
+fn test_brutal_code_banner_auto_width_and_border_alignment() {
+    let mut state = CockpitState::new();
+    let code_content = "Here is the implementation:\n```rust\nfn compute(x: i32) -> i32 {\n    let y = x * 2;\n    y + 42\n}\n```\nDone.";
+
+    state.add_assistant_message(
+        code_content.to_string(),
+        "qwen2.5-coder:1.5b",
+        45,
+        1500,
+        None,
+        vec![],
+    );
+
+    // 1. Render in 120-column terminal: code banner should auto-fit content (not stretch to 100 or 120)
+    let buf = state.render_headless(120, 25);
+    let mut code_top_x = None;
+    let mut code_pipe_x = None;
+    let mut code_bot_x = None;
+
+    for y in 0..25 {
+        for x in 0..120 {
+            if let Some(c) = buf.cell((x, y)) {
+                if c.symbol() == "╮" && code_top_x.is_none() {
+                    // Check if line contains "rust" tag
+                    let mut row_str = String::new();
+                    for xi in 0..120 {
+                        if let Some(ci) = buf.cell((xi, y)) {
+                            row_str.push_str(ci.symbol());
+                        }
+                    }
+                    if row_str.contains("[rust]") {
+                        code_top_x = Some(x);
+                    }
+                }
+                if c.symbol() == "╯" && code_bot_x.is_none() {
+                    code_bot_x = Some(x);
+                }
+            }
+        }
+    }
+
+    // Also find the rightmost '│' on the code content lines
+    for y in 0..25 {
+        let mut row_str = String::new();
+        for xi in 0..120 {
+            if let Some(ci) = buf.cell((xi, y)) {
+                row_str.push_str(ci.symbol());
+            }
+        }
+        if row_str.contains("compute") || row_str.contains("let y =") {
+            let mut rightmost = 0;
+            for xi in 0..120 {
+                if let Some(ci) = buf.cell((xi, y)) {
+                    if ci.symbol() == "│" {
+                        rightmost = xi;
+                    }
+                }
+            }
+            code_pipe_x = Some(rightmost);
+            break;
+        }
+    }
+
+    let rendered = state.render_headless_to_string(120, 25);
+    println!("\n--- RENDERED CODE BANNER AUTO-WIDTH ---");
+    for line in rendered.lines() {
+        if line.contains('╭') || line.contains('│') || line.contains('╰') {
+            println!("{}", line);
+        }
+    }
+    println!("code_top_x: {:?}", code_top_x);
+    println!("code_pipe_x: {:?}", code_pipe_x);
+    println!("code_bot_x: {:?}", code_bot_x);
+
+    assert!(code_top_x.is_some(), "Code top corner ╮ must be found");
+    assert!(code_bot_x.is_some(), "Code bottom corner ╯ must be found");
+    assert!(code_pipe_x.is_some(), "Code content right border │ must be found");
+
+    // All must match at the EXACT same column!
+    assert_eq!(code_top_x, code_bot_x, "Top right corner and bottom right corner must match!");
+    assert_eq!(code_pipe_x, code_bot_x, "Content right border and bottom corner must match!");
+
+    // Auto-width verification: the code snippet is ~27 chars wide, so banner width should be around 36, NOT 100 or 120!
+    let width = code_top_x.unwrap();
+    assert!(width < 50, "Code banner must auto-fit to content (was {} cols, expected < 50)", width);
+    assert!(width >= 35, "Code banner must satisfy minimum visual width");
+
+    // Indentation verification: verify 4 spaces of indentation preserved in "    let y = x * 2;"
+    assert!(rendered.contains("    let y = x * 2;"), "Indentation in code banner must be preserved!");
+}
+
+

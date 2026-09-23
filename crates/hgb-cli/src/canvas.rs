@@ -429,36 +429,80 @@ impl ChatCanvas {
         let lang_tag = if lang.is_empty() { "code" } else { lang };
         let is_diff = lang_tag == "diff" || lang_tag == "patch";
 
-        let header = format!("╭─── [{}] ", lang_tag.cyan().bold());
+        let max_content_w = lines.iter().map(|l| UnicodeWidthStr::width(l.as_str())).max().unwrap_or(0);
         let header_raw = format!("╭─── [{}] ", lang_tag);
         let prefix_len = UnicodeWidthStr::width(header_raw.as_str());
-        let remaining = if width > prefix_len + 2 {
-            width - prefix_len - 2
+        let line_num_digits = lines.len().to_string().len().max(2);
+        let line_num_prefix_w = line_num_digits + 5; // "│ " (2) + digits + " │ " (3)
+
+        // Calculate auto-width: fits the code content up to terminal width
+        let natural_w = (max_content_w + line_num_prefix_w + 3).max(prefix_len + 6);
+        let max_bound = if width < 40 { 80 } else { width };
+        let box_w = natural_w.max(44).min(max_bound);
+
+        // 1. Header line: ╭─── [code] ────────╮
+        let header = format!("╭─── [{}] ", lang_tag.cyan().bold());
+        let remaining = if box_w > prefix_len + 1 {
+            box_w - prefix_len - 1
         } else {
-            4
+            1
         };
         let dashes = "─".repeat(remaining);
         out.push_str(&format!("{}{}{}\n", header, dashes.dimmed(), "╮".dimmed()));
 
+        // 2. Content lines with line numbers and closed right border │
+        let max_inner = box_w.saturating_sub(line_num_prefix_w + 2);
         for (idx, line) in lines.iter().enumerate() {
-            let line_num = format!("{:>3} │ ", idx + 1).dimmed();
-            let colored_content = if is_diff {
-                if line.starts_with('+') && !line.starts_with("+++") {
-                    line.green().to_string()
-                } else if line.starts_with('-') && !line.starts_with("---") {
-                    line.red().to_string()
-                } else if line.starts_with("@@") {
-                    line.cyan().bold().to_string()
-                } else {
-                    line.dimmed().to_string()
+            let line_num_str = format!("{:>w$} │ ", idx + 1, w = line_num_digits);
+            let line_w = UnicodeWidthStr::width(line.as_str());
+            let (colored_content, safe_w) = if line_w > max_inner && max_inner > 2 {
+                let mut tr = String::new();
+                let mut cw = 0;
+                for ch in line.chars() {
+                    let ch_w = UnicodeWidthChar::width(ch).unwrap_or(1);
+                    if cw + ch_w > max_inner.saturating_sub(1) {
+                        break;
+                    }
+                    tr.push(ch);
+                    cw += ch_w;
                 }
+                tr.push('…');
+                let clr = if is_diff {
+                    if line.starts_with('+') && !line.starts_with("+++") {
+                        tr.green().to_string()
+                    } else if line.starts_with('-') && !line.starts_with("---") {
+                        tr.red().to_string()
+                    } else if line.starts_with("@@") {
+                        tr.cyan().bold().to_string()
+                    } else {
+                        tr.dimmed().to_string()
+                    }
+                } else {
+                    tr
+                };
+                (clr, cw + 1)
             } else {
-                line.to_string()
+                let clr = if is_diff {
+                    if line.starts_with('+') && !line.starts_with("+++") {
+                        line.green().to_string()
+                    } else if line.starts_with('-') && !line.starts_with("---") {
+                        line.red().to_string()
+                    } else if line.starts_with("@@") {
+                        line.cyan().bold().to_string()
+                    } else {
+                        line.dimmed().to_string()
+                    }
+                } else {
+                    line.to_string()
+                };
+                (clr, line_w)
             };
-            out.push_str(&format!("│ {}{}\n", line_num, colored_content));
+            let pad_w = max_inner.saturating_sub(safe_w);
+            out.push_str(&format!("│ {}{}{}{}\n", line_num_str.dimmed(), colored_content, " ".repeat(pad_w), "│".dimmed()));
         }
 
-        let footer = format!("╰{}╯", "─".repeat(width.saturating_sub(2)));
+        // 3. Footer line: ╰────────────────────╯
+        let footer = format!("╰{}╯", "─".repeat(box_w.saturating_sub(2)));
         out.push_str(&footer.dimmed().to_string());
         out.push('\n');
         out
@@ -474,19 +518,44 @@ impl ChatCanvas {
         let header = format!("╭─── {} ", title.magenta().bold());
         let header_raw = format!("╭─── {} ", title);
         let prefix_len = UnicodeWidthStr::width(header_raw.as_str());
-        let remaining = if width > prefix_len + 2 {
-            width - prefix_len - 2
+
+        let max_content_w = lines.iter().map(|l| UnicodeWidthStr::width(l.as_str())).max().unwrap_or(0);
+        let natural_w = (max_content_w + 6).max(prefix_len + 6);
+        let max_bound = if width < 40 { 80 } else { width };
+        let box_w = natural_w.max(44).min(max_bound);
+
+        let remaining = if box_w > prefix_len + 1 {
+            box_w - prefix_len - 1
         } else {
-            4
+            1
         };
         let dashes = "─".repeat(remaining);
         out.push_str(&format!("{}{}{}\n", header, dashes.dimmed(), "╮".dimmed()));
 
+        let max_inner = box_w.saturating_sub(5);
         for line in lines {
-            out.push_str(&format!("│  {}\n", line.italic().dimmed()));
+            let line_w = UnicodeWidthStr::width(line.as_str());
+            let (safe_line, safe_w) = if line_w > max_inner && max_inner > 2 {
+                let mut tr = String::new();
+                let mut cw = 0;
+                for ch in line.chars() {
+                    let ch_w = UnicodeWidthChar::width(ch).unwrap_or(1);
+                    if cw + ch_w > max_inner.saturating_sub(1) {
+                        break;
+                    }
+                    tr.push(ch);
+                    cw += ch_w;
+                }
+                tr.push('…');
+                (tr, cw + 1)
+            } else {
+                (line.to_string(), line_w)
+            };
+            let pad_w = max_inner.saturating_sub(safe_w);
+            out.push_str(&format!("│  {}{}{}\n", safe_line.italic().dimmed(), " ".repeat(pad_w), "│".dimmed()));
         }
 
-        let footer = format!("╰{}╯", "─".repeat(width.saturating_sub(2)));
+        let footer = format!("╰{}╯", "─".repeat(box_w.saturating_sub(2)));
         out.push_str(&footer.dimmed().to_string());
         out.push('\n');
         out
