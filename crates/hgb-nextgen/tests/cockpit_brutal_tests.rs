@@ -12,8 +12,8 @@
 
 use hgb_nextgen::{
     CockpitActiveTab, CockpitArtifactDiff, CockpitBackgroundTask, CockpitDagNode,
-    CockpitInputMode, CockpitNodeStatus, CockpitState, CockpitTelemetry, CockpitToolCall,
-    SteeringAction,
+    CockpitInputMode, CockpitNodeStatus, CockpitOverlay, CockpitState, CockpitTelemetry,
+    CockpitToolCall, CockpitViewMode, SteeringAction,
 };
 
 #[test]
@@ -377,8 +377,124 @@ fn test_brutal_prompt_input_and_history() {
     state.prompt_input = "Verify Blake3 invariant".to_string();
     state.cursor_position = state.prompt_input.len();
 
-    // Verify headless rendering in Input mode shows cursor
-    let rendered = state.render_headless_to_string(100, 30);
-    assert!(rendered.contains("Verify Blake3 invariant"));
-    assert!(rendered.contains("PROMPT INPUT"));
+    // Verify headless rendering in ChatCanvas mode shows prompt
+    let rendered_canvas = state.render_headless_to_string(100, 30);
+    assert!(rendered_canvas.contains("Verify Blake3 invariant"));
+
+    // Verify headless rendering in CockpitSplit mode shows cursor and mode badge
+    state.view_mode = CockpitViewMode::CockpitSplit;
+    let rendered_split = state.render_headless_to_string(100, 30);
+    assert!(rendered_split.contains("Verify Blake3 invariant"));
+    assert!(rendered_split.contains("PROMPT INPUT"));
+}
+
+#[test]
+fn test_brutal_chat_canvas_and_conversation_rendering() {
+    let mut state = CockpitState::new();
+    assert_eq!(state.view_mode, CockpitViewMode::ChatCanvas);
+
+    // Add user turn
+    state.add_user_message("Can you verify the Blake3 Merkle tree and audit root?");
+
+    // Add assistant turn with thinking, tool calls, and markdown
+    let tool_call = CockpitToolCall::new(
+        "verify_merkle",
+        "leaves=8, root=0x9a8f",
+        "SUCCESS",
+        4,
+        Some("Audit root validated against statutory Rule 141".into()),
+    );
+    state.add_assistant_message(
+        "Here is the formal verification result:\n\n```rust\nlet root = tree.compute_root();\nassert!(root.is_valid());\n```\n\nAll Merkle invariants hold.",
+        "gemini-2.5-flash",
+        340,
+        18,
+        Some("1. Ingesting leaf nodes into Blake3 hasher\n2. Computing internal node hashes\n3. Checking statutory compliance".into()),
+        vec![tool_call],
+    );
+
+    // Add system notice
+    state.add_system_notice("Checkpoint ckpt-001 created automatically.");
+
+    let rendered = state.render_headless_to_string(120, 35);
+
+    // Verify header components
+    assert!(rendered.contains("HAGIBIS"));
+    // Verify user turn
+    assert!(rendered.contains("verify the Blake3 Merkle tree"));
+    // Verify assistant model badge & content
+    assert!(rendered.contains("gemini-2.5-flash"));
+    assert!(rendered.contains("All Merkle invariants hold."));
+    // Verify thinking block
+    assert!(rendered.contains("Thinking Process"));
+    assert!(rendered.contains("Ingesting leaf nodes"));
+    // Verify tool call card
+    assert!(rendered.contains("verify_merkle"));
+    assert!(rendered.contains("Audit root validated"));
+    // Verify code block
+    assert!(rendered.contains("let root = tree.compute_root()"));
+    // Verify system notice
+    assert!(rendered.contains("Checkpoint ckpt-001 created automatically"));
+    // Verify prompt input box
+    assert!(rendered.contains("type a prompt"));
+    // Verify statusline shortcuts
+    assert!(rendered.contains("shortcuts"));
+    assert!(rendered.contains("Shift+Tab"));
+    assert!(rendered.contains("Ctrl+T"));
+}
+
+#[test]
+fn test_brutal_overlays_rendering() {
+    let mut state = CockpitState::new();
+
+    // 1. Shortcuts overlay
+    state.overlay = CockpitOverlay::Shortcuts;
+    let rendered_shortcuts = state.render_headless_to_string(100, 30);
+    assert!(rendered_shortcuts.contains("Keyboard Shortcuts & Slash Commands"));
+    assert!(rendered_shortcuts.contains("Ctrl+T"));
+    assert!(rendered_shortcuts.contains("Shift+Tab"));
+    assert!(rendered_shortcuts.contains("/model"));
+
+    // 2. ModelPicker overlay
+    state.overlay = CockpitOverlay::ModelPicker { selected: 0 };
+    let rendered_model_picker = state.render_headless_to_string(100, 30);
+    assert!(rendered_model_picker.contains("Select AI Model"));
+    assert!(rendered_model_picker.contains("qwen2.5-coder:1.5b"));
+    assert!(rendered_model_picker.contains("gemini-2.5-flash"));
+
+    // 3. Tasks overlay
+    state.add_background_task(CockpitBackgroundTask::new(
+        "task-99",
+        "Surgical AST Validation",
+        "RUNNING",
+        5,
+    ));
+    state.overlay = CockpitOverlay::Tasks;
+    let rendered_tasks = state.render_headless_to_string(100, 30);
+    assert!(rendered_tasks.contains("Background Tasks Monitor"));
+    assert!(rendered_tasks.contains("task-99"));
+    assert!(rendered_tasks.contains("Surgical AST Validation"));
+}
+
+#[test]
+fn test_brutal_view_mode_and_execution_mode_toggles() {
+    let mut state = CockpitState::new();
+    assert_eq!(state.view_mode, CockpitViewMode::ChatCanvas);
+
+    // Toggle to CockpitSplit
+    state.toggle_view_mode();
+    assert_eq!(state.view_mode, CockpitViewMode::CockpitSplit);
+
+    // Toggle back to ChatCanvas
+    state.toggle_view_mode();
+    assert_eq!(state.view_mode, CockpitViewMode::ChatCanvas);
+
+    // Test execution mode cycling
+    assert_eq!(state.execution_mode, "default");
+    state.cycle_execution_mode();
+    assert_eq!(state.execution_mode, "plan");
+    state.cycle_execution_mode();
+    assert_eq!(state.execution_mode, "accept-edits");
+    state.cycle_execution_mode();
+    assert_eq!(state.execution_mode, "default");
 }

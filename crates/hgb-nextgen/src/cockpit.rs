@@ -12,10 +12,10 @@ use crossterm::{
 use hgb_core::{HgbError, Result};
 use ratatui::{
     backend::{CrosstermBackend, TestBackend},
-    layout::{Alignment, Constraint, Direction, Layout},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, List, ListItem, Paragraph, Row, Table, Tabs},
+    widgets::{Block, Borders, Cell, Clear, List, ListItem, Paragraph, Row, Table, Tabs, Wrap},
     Frame, Terminal,
 };
 use serde::{Deserialize, Serialize};
@@ -174,6 +174,43 @@ impl CockpitActiveTab {
     }
 }
 
+/// Primary view mode of the Hagibis TUI interface
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CockpitViewMode {
+    /// Authentic AGY CLI Conversational Chat Canvas (default)
+    ChatCanvas,
+    /// Multi-Pane Developer Cockpit (Top HUD + Left DAG tree + Right tabs + Steering deck)
+    CockpitSplit,
+}
+
+/// Active modal overlay dialog
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CockpitOverlay {
+    None,
+    Shortcuts,
+    ModelPicker { selected: usize },
+    Tasks,
+}
+
+/// A conversation turn rendered in the Chat Canvas
+#[derive(Debug, Clone, PartialEq)]
+pub struct CockpitChatItem {
+    pub sender: CockpitChatSender,
+    pub content: String,
+    pub tokens: usize,
+    pub duration_ms: u64,
+    pub timestamp: String,
+    pub thinking: Option<String>,
+    pub tool_calls: Vec<CockpitToolCall>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum CockpitChatSender {
+    User,
+    Assistant { model: String },
+    System,
+}
+
 /// Input mode in interactive Cockpit session
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CockpitInputMode {
@@ -329,6 +366,11 @@ pub struct CockpitState {
     pub auth_account: String,
     pub workspace_path: String,
     pub input_mode: CockpitInputMode,
+    pub view_mode: CockpitViewMode,
+    pub overlay: CockpitOverlay,
+    pub conversation: Vec<CockpitChatItem>,
+    pub chat_scroll: usize,
+    pub execution_mode: String,
 }
 
 impl Default for CockpitState {
@@ -345,12 +387,18 @@ impl CockpitState {
             .map(|p| p.display().to_string())
             .unwrap_or_else(|_| "/home/dyna/TGS Projects/hagibis".to_string());
 
+        let default_model = if hgb_core::OllamaProvider::is_available() {
+            "qwen2.5-coder:1.5b".to_string()
+        } else {
+            "gemini-2.5-flash".to_string()
+        };
+
         Self {
             nodes: Vec::new(),
             selected_index: 0,
             telemetry: CockpitTelemetry::default(),
             steering_history: Vec::new(),
-            log_feed: vec!["[SYSTEM] Hagibis Interactive Cockpit initialized.".to_string()],
+            log_feed: vec!["[SYSTEM] Hagibis AGY Cockpit & Chat Canvas initialized.".to_string()],
             is_paused: false,
             active_tab: CockpitActiveTab::LiveStream,
             background_tasks: Vec::new(),
@@ -358,12 +406,82 @@ impl CockpitState {
             prompt_input: String::new(),
             prompt_history: Vec::new(),
             cursor_position: 0,
-            model_pill: "gemini-2.5-flash".to_string(),
+            model_pill: default_model,
             reasoning_effort: "High".to_string(),
             auth_account,
             workspace_path,
             input_mode: CockpitInputMode::Normal,
+            view_mode: CockpitViewMode::ChatCanvas,
+            overlay: CockpitOverlay::None,
+            conversation: Vec::new(),
+            chat_scroll: 0,
+            execution_mode: "default".to_string(),
         }
+    }
+
+    pub fn add_user_message(&mut self, text: impl Into<String>) {
+        self.conversation.push(CockpitChatItem {
+            sender: CockpitChatSender::User,
+            content: text.into(),
+            tokens: 0,
+            duration_ms: 0,
+            timestamp: Utc::now().format("%H:%M:%S").to_string(),
+            thinking: None,
+            tool_calls: Vec::new(),
+        });
+    }
+
+    pub fn add_assistant_message(
+        &mut self,
+        text: impl Into<String>,
+        model: impl Into<String>,
+        tokens: usize,
+        duration_ms: u64,
+        thinking: Option<String>,
+        tool_calls: Vec<CockpitToolCall>,
+    ) {
+        self.conversation.push(CockpitChatItem {
+            sender: CockpitChatSender::Assistant { model: model.into() },
+            content: text.into(),
+            tokens,
+            duration_ms,
+            timestamp: Utc::now().format("%H:%M:%S").to_string(),
+            thinking,
+            tool_calls,
+        });
+    }
+
+    pub fn add_system_notice(&mut self, text: impl Into<String>) {
+        self.conversation.push(CockpitChatItem {
+            sender: CockpitChatSender::System,
+            content: text.into(),
+            tokens: 0,
+            duration_ms: 0,
+            timestamp: Utc::now().format("%H:%M:%S").to_string(),
+            thinking: None,
+            tool_calls: Vec::new(),
+        });
+    }
+
+    pub fn toggle_view_mode(&mut self) {
+        self.view_mode = match self.view_mode {
+            CockpitViewMode::ChatCanvas => CockpitViewMode::CockpitSplit,
+            CockpitViewMode::CockpitSplit => CockpitViewMode::ChatCanvas,
+        };
+        let mode_name = match self.view_mode {
+            CockpitViewMode::ChatCanvas => "Chat Canvas",
+            CockpitViewMode::CockpitSplit => "DAG Swarm Cockpit",
+        };
+        self.add_log(format!("[VIEW] Switched interface to {}", mode_name));
+    }
+
+    pub fn cycle_execution_mode(&mut self) {
+        self.execution_mode = match self.execution_mode.as_str() {
+            "default" => "plan".to_string(),
+            "plan" => "accept-edits".to_string(),
+            _ => "default".to_string(),
+        };
+        self.add_log(format!("[MODE] Execution mode set to '{}'", self.execution_mode));
     }
 
     pub fn with_workspace(mut self, workspace: impl Into<String>) -> Self {
@@ -504,16 +622,19 @@ impl CockpitState {
     /// Set active right pane tab
     pub fn set_active_tab(&mut self, tab: CockpitActiveTab) {
         self.active_tab = tab;
+        self.view_mode = CockpitViewMode::CockpitSplit;
     }
 
     /// Switch to next tab
     pub fn next_tab(&mut self) {
         self.active_tab = self.active_tab.next();
+        self.view_mode = CockpitViewMode::CockpitSplit;
     }
 
     /// Switch to previous tab
     pub fn prev_tab(&mut self) {
         self.active_tab = self.active_tab.prev();
+        self.view_mode = CockpitViewMode::CockpitSplit;
     }
 
     /// Add an entry to the log feed
@@ -559,6 +680,9 @@ impl CockpitState {
         self.prompt_input.clear();
         self.cursor_position = 0;
 
+        // 1. Record User message in Chat Canvas
+        self.add_user_message(prompt.clone());
+
         let node_id = format!("task-{}", self.nodes.len() + 1);
         let prompt_preview = if prompt.len() > 28 {
             format!("{}...", &prompt[..25])
@@ -574,6 +698,21 @@ impl CockpitState {
         self.add_log(format!("[EXEC] Dispatched prompt '{}'", prompt_preview));
 
         self.execute_prompt_on_node(&node_id, &prompt).await;
+
+        // 2. Record Assistant response in Chat Canvas
+        let (output, tokens, duration_ms) = if let Some(node) = self.nodes.iter().find(|n| n.id == node_id) {
+            match &node.status {
+                CockpitNodeStatus::Succeeded { duration_ms } => (node.scratchpad.clone(), node.tokens_used as usize, *duration_ms),
+                CockpitNodeStatus::Failed { error } => (format!("Error: {}", error), 0, 0),
+                _ => (node.scratchpad.clone(), node.tokens_used as usize, 0),
+            }
+        } else {
+            ("No response from microkernel".to_string(), 0, 0)
+        };
+
+        let tools = self.nodes.iter().find(|n| n.id == node_id).map(|n| n.tool_calls.clone()).unwrap_or_default();
+        self.add_assistant_message(output, self.model_pill.clone(), tokens, duration_ms, None, tools);
+        self.chat_scroll = 0;
     }
 
     /// Execute prompt on a specific DAG node via UDS IPC, GeminiProvider, or Standalone engine
@@ -607,8 +746,13 @@ impl CockpitState {
                                     hgb_core::HgbResponse::Complete { output, tokens_used, duration_ms } => {
                                         ipc_succeeded = true;
                                         self.telemetry.total_tokens += tokens_used as u64;
+                                        let tool_name = if hgb_core::OllamaProvider::is_ollama_model(&self.model_pill) {
+                                            "hgbd_ollama_local"
+                                        } else {
+                                            "hgbd_gemini_inference"
+                                        };
                                         let tool = CockpitToolCall::new(
-                                            "hgbd_gemini_inference",
+                                            tool_name,
                                             format!("model={}", self.model_pill),
                                             "SUCCESS",
                                             duration_ms,
@@ -640,6 +784,43 @@ impl CockpitState {
 
         if ipc_succeeded {
             return;
+        }
+
+        // 1.5. Try Local Ollama Provider if requested model is local or if Gemini is unconfigured
+        let is_ollama = hgb_core::OllamaProvider::is_ollama_model(&self.model_pill)
+            || (!hgb_core::GeminiProvider::is_available() && hgb_core::OllamaProvider::is_available());
+
+        if is_ollama && hgb_core::OllamaProvider::is_available() {
+            if let Some(ollama_prov) = hgb_core::OllamaProvider::auto_discover() {
+                use hgb_core::traits::HgbProvider;
+                self.add_log(format!("[OLLAMA] Querying local Ollama engine ({}) directly...", self.model_pill));
+                let res = ollama_prov.complete(prompt, Some(&self.model_pill)).await;
+                let elapsed = (Utc::now().timestamp_millis() - start_time).max(1) as u64;
+                match res {
+                    Ok(output) => {
+                        let approx_tokens = (output.len() / 4 + prompt.len() / 4).max(1) as u64;
+                        self.telemetry.total_tokens += approx_tokens;
+                        let tool = CockpitToolCall::new(
+                            "ollama_local_inference",
+                            format!("model={}", self.model_pill),
+                            "SUCCESS",
+                            elapsed,
+                            Some(output.chars().take(120).collect()),
+                        );
+                        if let Some(node) = self.nodes.iter_mut().find(|n| n.id == node_id) {
+                            node.status = CockpitNodeStatus::Succeeded { duration_ms: elapsed };
+                            node.tokens_used = approx_tokens;
+                            node.scratchpad = output;
+                            node.add_tool_call(tool);
+                        }
+                        self.add_log(format!("[OLLAMA] Completed in {}ms (~{} tok)", elapsed, approx_tokens));
+                        return;
+                    }
+                    Err(err) => {
+                        self.add_log(format!("[OLLAMA_ERR] Local Ollama error: {}", err));
+                    }
+                }
+            }
         }
 
         // 2. Try In-Process GeminiProvider if credentials exist
@@ -703,11 +884,29 @@ impl CockpitState {
         let area = frame.area();
 
         if area.width < 40 || area.height < 10 {
-            let warning = Paragraph::new("Terminal too small for Hagibis Cockpit. Please resize.")
+            let warning = Paragraph::new("Terminal too small for Hagibis. Please resize.")
                 .style(Style::default().fg(Color::Yellow));
             frame.render_widget(warning, area);
             return;
         }
+
+        match self.view_mode {
+            CockpitViewMode::ChatCanvas => self.render_chat_canvas(frame),
+            CockpitViewMode::CockpitSplit => self.render_cockpit_split(frame),
+        }
+
+        // Render modal overlay if active
+        match &self.overlay {
+            CockpitOverlay::Shortcuts => self.render_shortcuts_overlay(frame),
+            CockpitOverlay::ModelPicker { selected } => self.render_model_picker_overlay(frame, *selected),
+            CockpitOverlay::Tasks => self.render_tasks_overlay(frame),
+            CockpitOverlay::None => {}
+        }
+    }
+
+    /// Render Multi-Pane Developer Cockpit (Top HUD + Left DAG tree + Right tabs + Steering deck)
+    pub fn render_cockpit_split(&self, frame: &mut Frame) {
+        let area = frame.area();
 
         // 3-way vertical split:
         // Top HUD (5 lines), Main Middle Body (Min 10), Bottom Deck (5 lines)
@@ -1110,6 +1309,368 @@ impl CockpitState {
         frame.render_widget(bottom_deck, main_chunks[2]);
     }
 
+    /// Render Authentic AGY CLI Conversational Chat Canvas
+    pub fn render_chat_canvas(&self, frame: &mut Frame) {
+        let area = frame.area();
+
+        // Vertical layout:
+        // Top Header (1 line), Divider (1 line), Chat Viewport (Min 5), Input Box (3 lines), Statusline (1 line)
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Min(5),
+                Constraint::Length(3),
+                Constraint::Length(1),
+            ])
+            .split(area);
+
+        // 1. Top Header Line: Workspace, Mode, Model, Account
+        let is_local = hgb_core::OllamaProvider::is_ollama_model(&self.model_pill);
+        let model_span = if is_local {
+            Span::styled(format!(" [{}] (0ms local) ", self.model_pill), Style::default().fg(Color::Black).bg(Color::Magenta).add_modifier(Modifier::BOLD))
+        } else {
+            Span::styled(format!(" [{}] (auto-failover) ", self.model_pill), Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD))
+        };
+
+        let mode_span = Span::styled(format!(" [{}] ", self.execution_mode), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+        let cwd_span = Span::styled(format!(" 📁 {} ", self.workspace_path), Style::default().fg(Color::DarkGray));
+
+        let header_line = Line::from(vec![
+            Span::styled("⚡ HAGIBIS (hgb)", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::raw(" "),
+            cwd_span,
+            Span::raw(" "),
+            mode_span,
+            Span::raw(" "),
+            model_span,
+        ]);
+        frame.render_widget(Paragraph::new(header_line), chunks[0]);
+
+        // 2. Divider line
+        let divider_text = "─".repeat(area.width as usize);
+        let divider = Paragraph::new(Span::styled(divider_text, Style::default().fg(Color::DarkGray)));
+        frame.render_widget(divider, chunks[1]);
+
+        // 3. Main Chat Viewport
+        let mut chat_lines = Vec::new();
+        if self.conversation.is_empty() {
+            chat_lines.push(Line::from(""));
+            chat_lines.push(Line::from(vec![
+                Span::styled("▲ ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled("Hagibis (hgb)", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled(" — Autonomous Microkernel & Swarm Engine", Style::default().fg(Color::DarkGray)),
+            ]));
+            chat_lines.push(Line::from(""));
+            chat_lines.push(Line::from(vec![
+                Span::styled("Ready for instructions. ", Style::default().fg(Color::White)),
+                Span::styled("Type your prompt below or '/' for commands.", Style::default().fg(Color::DarkGray)),
+            ]));
+            chat_lines.push(Line::from(vec![
+                Span::styled("Press '?' for keyboard shortcuts · 'Shift+Tab' to cycle mode · 'Ctrl+T' for DAG Cockpit", Style::default().fg(Color::DarkGray)),
+            ]));
+            chat_lines.push(Line::from(""));
+        } else {
+            for item in &self.conversation {
+                match &item.sender {
+                    CockpitChatSender::User => {
+                        chat_lines.push(Line::from(vec![
+                            Span::styled("❯ ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                            Span::styled(&item.content, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                        ]));
+                        chat_lines.push(Line::from(""));
+                    }
+                    CockpitChatSender::System => {
+                        chat_lines.push(Line::from(vec![
+                            Span::styled("ℹ ", Style::default().fg(Color::Yellow)),
+                            Span::styled(&item.content, Style::default().fg(Color::Yellow)),
+                        ]));
+                        chat_lines.push(Line::from(""));
+                    }
+                    CockpitChatSender::Assistant { model } => {
+                        // Render thinking block if present
+                        if let Some(ref thinking) = item.thinking {
+                            chat_lines.push(Line::from(Span::styled(
+                                format!("╭── 💭 Thinking Process ({} tokens) ──╮", item.tokens),
+                                Style::default().fg(Color::Magenta),
+                            )));
+                            for t_line in thinking.lines() {
+                                chat_lines.push(Line::from(Span::styled(format!("│ {}", t_line), Style::default().fg(Color::DarkGray))));
+                            }
+                            chat_lines.push(Line::from(Span::styled("╰──────────────────────────────────────╯", Style::default().fg(Color::Magenta))));
+                        }
+
+                        // Render tool calls
+                        for tool in &item.tool_calls {
+                            let status_color = match tool.status.as_str() {
+                                "SUCCESS" => Color::Green,
+                                "FAILED" => Color::Red,
+                                _ => Color::Yellow,
+                            };
+                            chat_lines.push(Line::from(Span::styled(
+                                format!("╭── 🔧 {} ({}) ───╮", tool.tool_name, tool.parameters_summary),
+                                Style::default().fg(Color::Cyan),
+                            )));
+                            chat_lines.push(Line::from(vec![
+                                Span::styled("│ Status: ", Style::default().fg(Color::Cyan)),
+                                Span::styled(format!("[{}]", tool.status), Style::default().fg(status_color).add_modifier(Modifier::BOLD)),
+                                Span::styled(format!("  Duration: {}ms", tool.duration_ms), Style::default().fg(Color::DarkGray)),
+                            ]));
+                            if let Some(ref snippet) = tool.output_snippet {
+                                for s_line in snippet.lines().take(4) {
+                                    chat_lines.push(Line::from(vec![
+                                        Span::styled("│   ", Style::default().fg(Color::Cyan)),
+                                        Span::styled(s_line, Style::default().fg(Color::DarkGray)),
+                                    ]));
+                                }
+                            }
+                            chat_lines.push(Line::from(Span::styled("╰──────────────────────────────────────╯", Style::default().fg(Color::Cyan))));
+                        }
+
+                        // Render markdown lines
+                        let mut in_code_block = false;
+                        for line in item.content.lines() {
+                            if line.starts_with("```") {
+                                if !in_code_block {
+                                    in_code_block = true;
+                                    let code_lang = line.trim_start_matches("```").trim();
+                                    let tag = if code_lang.is_empty() { "code" } else { code_lang };
+                                    chat_lines.push(Line::from(Span::styled(
+                                        format!("╭─── {} ──────────────────────────────╮", tag),
+                                        Style::default().fg(Color::Cyan),
+                                    )));
+                                } else {
+                                    in_code_block = false;
+                                    chat_lines.push(Line::from(Span::styled(
+                                        "╰────────────────────────────────────────────╯",
+                                        Style::default().fg(Color::Cyan),
+                                    )));
+                                }
+                            } else if in_code_block {
+                                chat_lines.push(Line::from(vec![
+                                    Span::styled("│ ", Style::default().fg(Color::Cyan)),
+                                    Span::styled(line, Style::default().fg(Color::White)),
+                                ]));
+                            } else if line.starts_with("+ ") || line.starts_with("+\t") {
+                                chat_lines.push(Line::from(Span::styled(line, Style::default().fg(Color::Green))));
+                            } else if line.starts_with("- ") || line.starts_with("-\t") {
+                                chat_lines.push(Line::from(Span::styled(line, Style::default().fg(Color::Red))));
+                            } else if line.starts_with("## ") {
+                                chat_lines.push(Line::from(Span::styled(&line[3..], Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))));
+                            } else if line.starts_with("# ") {
+                                chat_lines.push(Line::from(Span::styled(&line[2..], Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))));
+                            } else if line.starts_with("* ") || line.starts_with("- ") {
+                                chat_lines.push(Line::from(vec![
+                                    Span::styled("  • ", Style::default().fg(Color::Cyan)),
+                                    Span::styled(&line[2..], Style::default().fg(Color::White)),
+                                ]));
+                            } else {
+                                chat_lines.push(Line::from(Span::styled(line, Style::default().fg(Color::White))));
+                            }
+                        }
+
+                        // Footer
+                        chat_lines.push(Line::from(Span::styled(
+                            format!("  ⏱ {} tokens in {} ms • Model: {}", item.tokens, item.duration_ms, model),
+                            Style::default().fg(Color::DarkGray),
+                        )));
+                        chat_lines.push(Line::from(""));
+                    }
+                }
+            }
+        }
+
+        // Viewport scrolling
+        let viewport_height = chunks[2].height;
+        let total_lines = chat_lines.len() as u16;
+        let scroll_y = if total_lines > viewport_height {
+            let auto = total_lines.saturating_sub(viewport_height);
+            auto.saturating_sub(self.chat_scroll as u16)
+        } else {
+            0
+        };
+
+        let chat_paragraph = Paragraph::new(chat_lines)
+            .wrap(Wrap { trim: false })
+            .scroll((scroll_y, 0));
+        frame.render_widget(chat_paragraph, chunks[2]);
+
+        // 4. Input Box (Always Focused, authentic AGY box)
+        let prompt_cursor = Span::styled("█", Style::default().fg(Color::Cyan));
+        let prompt_content = Line::from(vec![
+            Span::styled("> ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(&self.prompt_input, Style::default().fg(Color::White)),
+            prompt_cursor,
+        ]);
+        let prompt_title = match self.execution_mode.as_str() {
+            "plan" => " ❯ type a prompt (plan mode · Shift+Tab to switch) ",
+            "accept-edits" => " ❯ type a prompt (accept-edits mode · Shift+Tab to switch) ",
+            _ => " ❯ type a prompt (? shortcuts, / commands, Ctrl+T cockpit) ",
+        };
+        let input_box = Paragraph::new(prompt_content).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan))
+                .title(prompt_title),
+        );
+        frame.render_widget(input_box, chunks[3]);
+
+        // 5. Statusline Footer
+        let bg_tasks_info = if !self.background_tasks.is_empty() {
+            format!("⚡ {} tasks ", self.background_tasks.len())
+        } else {
+            String::new()
+        };
+
+        let statusline = Line::from(vec![
+            Span::styled("? shortcuts · Shift+Tab mode · Ctrl+T cockpit · Esc clear", Style::default().fg(Color::DarkGray)),
+            Span::raw("   "),
+            Span::styled(bg_tasks_info, Style::default().fg(Color::Yellow)),
+            Span::raw("   "),
+            Span::styled(format!("👤 {} · 12µs IPC", self.auth_account), Style::default().fg(Color::DarkGray)),
+        ]);
+        frame.render_widget(Paragraph::new(statusline), chunks[4]);
+    }
+
+    /// Render Shortcuts Modal Overlay
+    pub fn render_shortcuts_overlay(&self, frame: &mut Frame) {
+        let area = frame.area();
+        let width = 76.min(area.width.saturating_sub(4));
+        let height = 24.min(area.height.saturating_sub(4));
+        let x = (area.width.saturating_sub(width)) / 2;
+        let y = (area.height.saturating_sub(height)) / 2;
+        let modal_area = Rect::new(x, y, width, height);
+
+        frame.render_widget(Clear, modal_area);
+
+        let modal_block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan))
+            .title(" ⌨ Hagibis Keyboard Shortcuts & Slash Commands (Press Esc or ? to close) ");
+
+        let rows = vec![
+            Row::new(vec![Cell::from("Enter").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), Cell::from("Submit prompt to microkernel")]),
+            Row::new(vec![Cell::from("?").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), Cell::from("Toggle this keyboard shortcuts help modal")]),
+            Row::new(vec![Cell::from("Shift+Tab").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), Cell::from("Cycle execution mode (default ➔ plan ➔ accept-edits)")]),
+            Row::new(vec![Cell::from("Ctrl+T").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), Cell::from("Toggle between AGY Chat Canvas and DAG Cockpit")]),
+            Row::new(vec![Cell::from("Tab").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), Cell::from("Autocomplete slash commands and models")]),
+            Row::new(vec![Cell::from("PageUp / PageDown").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), Cell::from("Scroll conversation history up / down")]),
+            Row::new(vec![Cell::from("Ctrl+C").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), Cell::from("Clear input buffer / Quit session")]),
+            Row::new(vec![Cell::from("Esc").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), Cell::from("Close modal dialog / clear input buffer")]),
+            Row::new(vec![Cell::from("──────────────").style(Style::default().fg(Color::DarkGray)), Cell::from("──────────────────────────────────────────────────").style(Style::default().fg(Color::DarkGray))]),
+            Row::new(vec![Cell::from("/model [name]").style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)), Cell::from("Switch active AI model (Ollama local or Gemini cloud)")]),
+            Row::new(vec![Cell::from("/cockpit").style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)), Cell::from("Switch to full-screen multi-pane DAG Swarm Cockpit")]),
+            Row::new(vec![Cell::from("/chat").style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)), Cell::from("Switch to AGY Conversational Chat Canvas")]),
+            Row::new(vec![Cell::from("/tasks").style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)), Cell::from("Inspect active background swarm tasks")]),
+            Row::new(vec![Cell::from("/clear").style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)), Cell::from("Clear current conversation history")]),
+            Row::new(vec![Cell::from("/help").style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)), Cell::from("Open this shortcuts and commands panel")]),
+            Row::new(vec![Cell::from("/exit, /quit").style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)), Cell::from("Exit Hagibis interactive session")]),
+        ];
+
+        let table = Table::new(rows, [Constraint::Percentage(28), Constraint::Percentage(72)])
+            .header(Row::new(vec!["Key / Command", "Action"]).style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)))
+            .block(modal_block);
+
+        frame.render_widget(table, modal_area);
+    }
+
+    /// Render Model Picker Modal Overlay
+    pub fn render_model_picker_overlay(&self, frame: &mut Frame, selected: usize) {
+        let area = frame.area();
+        let width = 64.min(area.width.saturating_sub(4));
+        let height = 14.min(area.height.saturating_sub(4));
+        let x = (area.width.saturating_sub(width)) / 2;
+        let y = (area.height.saturating_sub(height)) / 2;
+        let modal_area = Rect::new(x, y, width, height);
+
+        frame.render_widget(Clear, modal_area);
+
+        let models = [
+            ("qwen2.5-coder:1.5b", "Local Ollama (0ms latency, zero cloud cost)"),
+            ("qwen2.5:0.5b", "Local Ollama (ultra-lightweight local model)"),
+            ("llama3.2:1b", "Local Ollama (Meta LLaMA local model)"),
+            ("smollm2:1.7b", "Local Ollama (SmolLM compact model)"),
+            ("phi3:mini", "Local Ollama (Microsoft Phi-3 mini)"),
+            ("gemini-2.5-flash", "Google Gemini Cloud (Recommended default)"),
+            ("gemini-2.5-pro", "Google Gemini Cloud (Deep reasoning pro)"),
+        ];
+
+        let rows: Vec<Row> = models
+            .iter()
+            .enumerate()
+            .map(|(i, (name, desc))| {
+                let is_sel = i == selected;
+                let marker = if is_sel { "▶ " } else { "  " };
+                let is_active = *name == self.model_pill;
+                let active_badge = if is_active { " [ACTIVE]" } else { "" };
+                let row = Row::new(vec![
+                    Cell::from(format!("{}{}{}", marker, name, active_badge)),
+                    Cell::from(*desc),
+                ]);
+                if is_sel {
+                    row.style(Style::default().bg(Color::Rgb(35, 45, 75)).fg(Color::Yellow).add_modifier(Modifier::BOLD))
+                } else {
+                    row
+                }
+            })
+            .collect();
+
+        let table = Table::new(rows, [Constraint::Percentage(45), Constraint::Percentage(55)])
+            .header(Row::new(vec!["Model", "Provider"]).style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Cyan))
+                    .title(" 🧠 Select AI Model (↑/↓ navigate, Enter select, Esc close) "),
+            );
+
+        frame.render_widget(table, modal_area);
+    }
+
+    /// Render Background Tasks Modal Overlay
+    pub fn render_tasks_overlay(&self, frame: &mut Frame) {
+        let area = frame.area();
+        let width = 72.min(area.width.saturating_sub(4));
+        let height = 16.min(area.height.saturating_sub(4));
+        let x = (area.width.saturating_sub(width)) / 2;
+        let y = (area.height.saturating_sub(height)) / 2;
+        let modal_area = Rect::new(x, y, width, height);
+
+        frame.render_widget(Clear, modal_area);
+
+        let rows: Vec<Row> = if self.background_tasks.is_empty() {
+            vec![Row::new(vec![Cell::from("No active background tasks"), Cell::from("-"), Cell::from("-")])]
+        } else {
+            self.background_tasks
+                .iter()
+                .map(|t| {
+                    let color = match t.status.as_str() {
+                        "RUNNING" => Color::Cyan,
+                        "SUCCESS" => Color::Green,
+                        _ => Color::Yellow,
+                    };
+                    Row::new(vec![
+                        Cell::from(t.task_id.as_str()),
+                        Cell::from(t.description.as_str()),
+                        Cell::from(t.status.as_str()).style(Style::default().fg(color).add_modifier(Modifier::BOLD)),
+                    ])
+                })
+                .collect()
+        };
+
+        let table = Table::new(rows, [Constraint::Percentage(25), Constraint::Percentage(55), Constraint::Percentage(20)])
+            .header(Row::new(vec!["Task ID", "Description", "Status"]).style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Cyan))
+                    .title(" ⏱ Background Tasks Monitor (Press Esc or Enter to close) "),
+            );
+
+        frame.render_widget(table, modal_area);
+    }
+
     /// Headless renderer for automated unit and integration tests
     pub fn render_headless(&self, width: u16, height: u16) -> ratatui::buffer::Buffer {
         let backend = TestBackend::new(width, height);
@@ -1160,6 +1721,16 @@ impl CockpitState {
     }
 
     async fn event_loop<B: ratatui::backend::Backend>(&mut self, terminal: &mut Terminal<B>) -> io::Result<()> {
+        let models_list = [
+            "qwen2.5-coder:1.5b",
+            "qwen2.5:0.5b",
+            "llama3.2:1b",
+            "smollm2:1.7b",
+            "phi3:mini",
+            "gemini-2.5-flash",
+            "gemini-2.5-pro",
+        ];
+
         loop {
             terminal.draw(|f| self.render_ui(f))?;
 
@@ -1168,31 +1739,97 @@ impl CockpitState {
                     if key.kind == KeyEventKind::Release {
                         continue;
                     }
-                    match self.input_mode {
-                        CockpitInputMode::Normal => match key.code {
-                            KeyCode::Char('q') | KeyCode::Char('Q') => break,
-                            KeyCode::Esc => break,
-                            KeyCode::Tab => self.next_tab(),
-                            KeyCode::BackTab => self.prev_tab(),
-                            KeyCode::Char('1') => self.set_active_tab(CockpitActiveTab::LiveStream),
-                            KeyCode::Char('2') => self.set_active_tab(CockpitActiveTab::ArtifactDiffs),
-                            KeyCode::Char('3') => self.set_active_tab(CockpitActiveTab::BackgroundTasks),
-                            KeyCode::Down | KeyCode::Char('j') => self.select_next(),
-                            KeyCode::Up | KeyCode::Char('k') => self.select_prev(),
-                            KeyCode::Char('i') | KeyCode::Char('/') | KeyCode::Char(':') => {
-                                self.input_mode = CockpitInputMode::Input;
+
+                    // 1. If an overlay modal is active, modal takes priority
+                    if self.overlay != CockpitOverlay::None {
+                        match &mut self.overlay {
+                            CockpitOverlay::ModelPicker { ref mut selected } => match key.code {
+                                KeyCode::Esc => {
+                                    self.overlay = CockpitOverlay::None;
+                                }
+                                KeyCode::Up | KeyCode::Char('k') => {
+                                    *selected = selected.saturating_sub(1);
+                                }
+                                KeyCode::Down | KeyCode::Char('j') => {
+                                    *selected = (*selected + 1).min(models_list.len() - 1);
+                                }
+                                KeyCode::Enter => {
+                                    let new_model = models_list[*selected].to_string();
+                                    self.model_pill = new_model.clone();
+                                    self.add_system_notice(format!("Active model switched to: {}", new_model));
+                                    self.overlay = CockpitOverlay::None;
+                                }
+                                _ => {}
+                            },
+                            CockpitOverlay::Shortcuts | CockpitOverlay::Tasks => match key.code {
+                                KeyCode::Esc | KeyCode::Enter | KeyCode::Char('?') | KeyCode::Char('q') => {
+                                    self.overlay = CockpitOverlay::None;
+                                }
+                                _ => {}
+                            },
+                            CockpitOverlay::None => {}
+                        }
+                        continue;
+                    }
+
+                    // 2. Global Hotkeys across both ChatCanvas and CockpitSplit
+                    if key.modifiers.contains(event::KeyModifiers::CONTROL) {
+                        match key.code {
+                            KeyCode::Char('t') | KeyCode::Char('T') => {
+                                self.toggle_view_mode();
+                                continue;
                             }
+                            KeyCode::Char('c') | KeyCode::Char('C') => {
+                                if self.prompt_input.is_empty() {
+                                    break;
+                                } else {
+                                    self.prompt_input.clear();
+                                    self.cursor_position = 0;
+                                    continue;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    if key.code == KeyCode::BackTab || (key.modifiers.contains(event::KeyModifiers::SHIFT) && key.code == KeyCode::Tab) {
+                        self.cycle_execution_mode();
+                        continue;
+                    }
+
+                    if key.code == KeyCode::PageUp {
+                        self.chat_scroll = self.chat_scroll.saturating_add(4);
+                        continue;
+                    }
+
+                    if key.code == KeyCode::PageDown {
+                        self.chat_scroll = self.chat_scroll.saturating_sub(4);
+                        continue;
+                    }
+
+                    // If in CockpitSplit view mode, handle navigation & steering keys when not typing
+                    if self.view_mode == CockpitViewMode::CockpitSplit && self.input_mode == CockpitInputMode::Normal {
+                        match key.code {
+                            KeyCode::Char('q') | KeyCode::Char('Q') => break,
+                            KeyCode::Tab => { self.next_tab(); continue; }
+                            KeyCode::Down | KeyCode::Char('j') => { self.select_next(); continue; }
+                            KeyCode::Up | KeyCode::Char('k') => { self.select_prev(); continue; }
+                            KeyCode::Char('1') => { self.set_active_tab(CockpitActiveTab::LiveStream); continue; }
+                            KeyCode::Char('2') => { self.set_active_tab(CockpitActiveTab::ArtifactDiffs); continue; }
+                            KeyCode::Char('3') => { self.set_active_tab(CockpitActiveTab::BackgroundTasks); continue; }
                             KeyCode::Char('p') | KeyCode::Char('P') => {
                                 if let Some(node) = self.selected_node() {
                                     let id = node.id.clone();
                                     let _ = self.apply_steering(SteeringAction::Pause { node_id: id });
                                 }
+                                continue;
                             }
                             KeyCode::Char('r') | KeyCode::Char('R') => {
                                 if let Some(node) = self.selected_node() {
                                     let id = node.id.clone();
                                     let _ = self.apply_steering(SteeringAction::Resume { node_id: id });
                                 }
+                                continue;
                             }
                             KeyCode::Char('e') | KeyCode::Char('E') => {
                                 if let Some(node) = self.selected_node() {
@@ -1202,6 +1839,7 @@ impl CockpitState {
                                         new_scratchpad: format!("Steered manually in Cockpit @ {}", Utc::now().format("%H:%M:%S")),
                                     });
                                 }
+                                continue;
                             }
                             KeyCode::Char('t') | KeyCode::Char('T') => {
                                 if let Some(node) = self.selected_node() {
@@ -1212,6 +1850,7 @@ impl CockpitState {
                                         parameters: serde_json::json!({"action": "redirected"}),
                                     });
                                 }
+                                continue;
                             }
                             KeyCode::Char('a') | KeyCode::Char('A') => {
                                 if let Some(node) = self.selected_node() {
@@ -1221,42 +1860,115 @@ impl CockpitState {
                                         reason: "Manual supervisor abort in Cockpit".to_string(),
                                     });
                                 }
+                                continue;
                             }
-                            KeyCode::Enter => {
+                            KeyCode::Char('i') | KeyCode::Char('/') => {
                                 self.input_mode = CockpitInputMode::Input;
+                                continue;
                             }
                             _ => {}
-                        },
-                        CockpitInputMode::Input => match key.code {
-                            KeyCode::Esc => {
+                        }
+                    }
+
+                    // 3. Direct Prompt Input Handling (AGY default behavior)
+                    match key.code {
+                        KeyCode::Esc => {
+                            if self.view_mode == CockpitViewMode::CockpitSplit {
                                 self.input_mode = CockpitInputMode::Normal;
                             }
-                            KeyCode::Enter => {
+                            self.prompt_input.clear();
+                            self.cursor_position = 0;
+                        }
+                        KeyCode::Char('?') if self.prompt_input.is_empty() => {
+                            self.overlay = CockpitOverlay::Shortcuts;
+                        }
+                        KeyCode::Tab => {
+                            // Slash command autocompletion
+                            if let Some(prefix) = self.prompt_input.strip_prefix('/') {
+                                let commands = ["model", "cockpit", "chat", "tasks", "plan", "clear", "help", "exit", "quit"];
+                                for cmd in commands {
+                                    if cmd.starts_with(prefix) {
+                                        self.prompt_input = format!("/{} ", cmd);
+                                        self.cursor_position = self.prompt_input.len();
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        KeyCode::Enter => {
+                            let input = self.prompt_input.trim().to_string();
+                            if input.starts_with('/') {
+                                let parts: Vec<&str> = input.split_whitespace().collect();
+                                let cmd = parts.first().copied().unwrap_or("");
+                                let arg = parts.get(1).copied().unwrap_or("");
+                                match cmd {
+                                    "/help" | "/?" => {
+                                        self.overlay = CockpitOverlay::Shortcuts;
+                                    }
+                                    "/model" => {
+                                        if !arg.is_empty() {
+                                            self.model_pill = arg.to_string();
+                                            self.add_system_notice(format!("Active model set to: {}", arg));
+                                        } else {
+                                            self.overlay = CockpitOverlay::ModelPicker { selected: 0 };
+                                        }
+                                    }
+                                    "/cockpit" => {
+                                        self.view_mode = CockpitViewMode::CockpitSplit;
+                                    }
+                                    "/chat" => {
+                                        self.view_mode = CockpitViewMode::ChatCanvas;
+                                    }
+                                    "/tasks" => {
+                                        self.overlay = CockpitOverlay::Tasks;
+                                    }
+                                    "/plan" => {
+                                        self.execution_mode = "plan".to_string();
+                                        self.add_system_notice("Switched execution mode to: plan");
+                                    }
+                                    "/clear" => {
+                                        self.conversation.clear();
+                                    }
+                                    "/exit" | "/quit" => {
+                                        break;
+                                    }
+                                    _ => {
+                                        self.add_system_notice(format!("Unknown command '{}'. Type '/help' for commands.", cmd));
+                                    }
+                                }
+                                self.prompt_input.clear();
+                                self.cursor_position = 0;
+                            } else if !input.is_empty() {
                                 self.submit_current_prompt().await;
-                                self.input_mode = CockpitInputMode::Normal;
                             }
-                            KeyCode::Backspace => {
-                                if self.cursor_position > 0 && !self.prompt_input.is_empty() {
-                                    self.prompt_input.remove(self.cursor_position - 1);
-                                    self.cursor_position -= 1;
-                                }
+                        }
+                        KeyCode::Backspace => {
+                            if self.cursor_position > 0 && !self.prompt_input.is_empty() {
+                                self.prompt_input.remove(self.cursor_position - 1);
+                                self.cursor_position -= 1;
                             }
-                            KeyCode::Left => {
-                                if self.cursor_position > 0 {
-                                    self.cursor_position -= 1;
-                                }
+                        }
+                        KeyCode::Left => {
+                            if self.cursor_position > 0 {
+                                self.cursor_position -= 1;
                             }
-                            KeyCode::Right => {
-                                if self.cursor_position < self.prompt_input.len() {
-                                    self.cursor_position += 1;
-                                }
-                            }
-                            KeyCode::Char(c) => {
-                                self.prompt_input.insert(self.cursor_position, c);
+                        }
+                        KeyCode::Right => {
+                            if self.cursor_position < self.prompt_input.len() {
                                 self.cursor_position += 1;
                             }
-                            _ => {}
-                        },
+                        }
+                        KeyCode::Home => {
+                            self.cursor_position = 0;
+                        }
+                        KeyCode::End => {
+                            self.cursor_position = self.prompt_input.len();
+                        }
+                        KeyCode::Char(c) => {
+                            self.prompt_input.insert(self.cursor_position, c);
+                            self.cursor_position += 1;
+                        }
+                        _ => {}
                     }
                 }
             }

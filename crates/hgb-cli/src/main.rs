@@ -15,17 +15,29 @@ use repl::HagibisRepl;
     bin_name = "hgb",
     version,
     about = "⚡ Hagibis (hgb): Sub-Millisecond Microkernel & Swarm Engine in Systems-Grade Rust",
-    long_about = "⚡ Hagibis (hgb) — The Sub-Millisecond Microkernel Swarm Engine in Systems-Grade Rust.\nRunning without arguments launches the interactive REPL."
+    long_about = "⚡ Hagibis (hgb) — The Sub-Millisecond Microkernel Swarm Engine in Systems-Grade Rust.\nRunning without arguments launches the AGY Chat Canvas & Interactive Cockpit."
 )]
 struct Cli {
+    /// Launch classic line-by-line scrolling terminal REPL instead of AGY Chat Canvas
+    #[arg(long, global = true)]
+    classic: bool,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Launch the interactive terminal REPL (default when run without arguments)
-    #[command(alias = "chat", alias = "i")]
+    /// Launch the classic terminal REPL (line-by-line scrolling mode)
+    #[command(alias = "repl")]
+    Classic,
+
+    /// Launch the AGY Conversational Chat Canvas & Cockpit (default)
+    #[command(alias = "canvas", alias = "c")]
+    Chat,
+
+    /// Legacy REPL command alias for backwards compatibility
+    #[command(hide = true)]
     Repl,
 
     /// Execute a prompt directly through the microkernel swarm
@@ -232,15 +244,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     let client = HgbClient::new();
 
-    // Default to Interactive REPL if no subcommand provided
+    // Default to AGY Chat Canvas & Cockpit if no subcommand provided, or classic REPL if --classic is specified
     let command = match cli.command {
         Some(cmd) => cmd,
-        None => Commands::Repl,
+        None => {
+            if cli.classic {
+                Commands::Classic
+            } else {
+                Commands::Chat
+            }
+        }
     };
 
-    if let Commands::Repl = command {
+    if matches!(command, Commands::Repl | Commands::Classic) {
         let mut repl = HagibisRepl::new(client);
         return repl.run().await;
+    }
+
+    if let Commands::Chat = command {
+        let mut state = hgb_nextgen::CockpitState::new();
+        return state.run_interactive().await.map_err(|e| Box::new(e) as Box<dyn std::error::Error>);
     }
 
     if let Commands::Cockpit { headless } = command {
@@ -276,7 +299,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     match command {
-        Commands::Repl => unreachable!(),
+        Commands::Repl | Commands::Classic | Commands::Chat => unreachable!(),
         Commands::Cockpit { .. } => unreachable!(),
         Commands::Run { text, model, provider } => {
             let active_model = model.as_deref().unwrap_or("gemini-2.5-flash");

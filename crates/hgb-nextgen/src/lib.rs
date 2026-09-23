@@ -6,9 +6,9 @@ pub mod mesh;
 pub mod provenance;
 pub use checkpoint::{SwarmCheckpoint, SwarmCheckpointManager, SwarmEvent, SwarmWal};
 pub use cockpit::{
-    CockpitActiveTab, CockpitArtifactDiff, CockpitBackgroundTask, CockpitDagNode,
-    CockpitInputMode, CockpitNodeStatus, CockpitState, CockpitTelemetry, CockpitToolCall,
-    SteeringAction,
+    CockpitActiveTab, CockpitArtifactDiff, CockpitBackgroundTask, CockpitChatItem,
+    CockpitChatSender, CockpitDagNode, CockpitInputMode, CockpitNodeStatus, CockpitOverlay,
+    CockpitState, CockpitTelemetry, CockpitToolCall, CockpitViewMode, SteeringAction,
 };
 pub use fuzz::{AgenticFuzzEngine, FuzzViolation};
 pub use hybrid::{CandidateToken, DraftDistribution, LakandiwaVerdict, SpeculativeHybridEngine};
