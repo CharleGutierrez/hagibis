@@ -7,6 +7,7 @@ use crate::auth::GeminiOAuthManager;
 use crate::error::{HgbError, Result};
 use crate::traits::HgbProvider;
 use async_trait::async_trait;
+use colored::Colorize;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -160,6 +161,30 @@ impl HgbProvider for GeminiProvider {
 
     async fn complete(&self, prompt: &str, model: Option<&str>) -> Result<String> {
         let model_name = Self::sanitize_model(model);
+        match self.complete_single(prompt, model_name).await {
+            Ok(res) => Ok(res),
+            Err(err) => {
+                let err_msg = err.to_string();
+                // Check if Google returned 503 or MODEL_CAPACITY_EXHAUSTED
+                if (err_msg.contains("503") || err_msg.contains("MODEL_CAPACITY_EXHAUSTED") || err_msg.contains("capacity available"))
+                    && model_name != "gemini-2.5-flash"
+                {
+                    eprintln!(
+                        "  {} Google server capacity exhausted for {}. Auto-routing to gemini-2.5-flash...",
+                        "ℹ".yellow(),
+                        model_name
+                    );
+                    self.complete_single(prompt, "gemini-2.5-flash").await
+                } else {
+                    Err(err)
+                }
+            }
+        }
+    }
+}
+
+impl GeminiProvider {
+    async fn complete_single(&self, prompt: &str, model_name: &str) -> Result<String> {
         let contents = vec![ContentMessage {
             role: "user".to_string(),
             parts: vec![ContentPart {
