@@ -2,10 +2,11 @@ pub mod canvas;
 mod client;
 mod repl;
 
+use canvas::{ChatCanvas, ToolCallCard, ToolCardStatus};
 use clap::{Parser, Subcommand};
 use client::HgbClient;
 use colored::Colorize;
-use hgb_core::HgbRequest;
+use hgb_core::{HgbRequest, HgbResponse};
 use repl::HagibisRepl;
 
 #[derive(Parser)]
@@ -199,7 +200,7 @@ enum Commands {
         #[arg(short = 'l', long)]
         files_only: bool,
         /// Glob patterns to include or exclude (e.g. *.rs or !**/target/*)
-        #[arg(short = 'i', long = "include")]
+        #[arg(short = 'I', long = "include")]
         includes: Vec<String>,
     },
 
@@ -274,47 +275,108 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let req = match command {
+    match command {
         Commands::Repl => unreachable!(),
         Commands::Cockpit { .. } => unreachable!(),
-        Commands::Run { text, model, provider } => HgbRequest::Prompt {
-            prompt: text,
-            model,
-            provider,
-            stream: false,
-        },
-        Commands::Ping => HgbRequest::Ping,
-        Commands::Status => HgbRequest::Status,
-        Commands::Doctor => HgbRequest::Doctor,
-        Commands::Login => HgbRequest::Login,
-        Commands::Auth => HgbRequest::AuthStatus,
-        Commands::Model { name } => {
-            if let Some(m) = name {
-                println!("✔ Default model set to: {}", m);
-                return Ok(());
-            } else {
-                let status = hgb_core::GeminiProvider::credential_status();
-                println!("  [•] Active Provider / Credential: {}", status);
-                return Ok(());
+        Commands::Run { text, model, provider } => {
+            let active_model = model.as_deref().unwrap_or("gemini-2.5-flash");
+            println!("{}", format!("  ⚡ AGY Reasoning (model: {})...", active_model).cyan().bold());
+            let t0 = std::time::Instant::now();
+            let req = HgbRequest::Prompt {
+                prompt: text,
+                model: model.clone(),
+                provider,
+                stream: false,
+            };
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(req).await;
+            match resp {
+                HgbResponse::Complete { output, tokens_used, duration_ms } => {
+                    ChatCanvas::print_markdown(&output);
+                    let wall_dur = t0.elapsed().as_millis() as u64;
+                    let dur = if duration_ms > 0 { duration_ms } else { wall_dur.max(1) };
+                    if tokens_used > 0 {
+                        let tps = (tokens_used as f64) / (dur as f64 / 1000.0).max(0.001);
+                        println!(
+                            "{}",
+                            format!("  ⏱️ {} tokens in {} ms ({:.1} tok/s) • Model: {}", tokens_used, dur, tps, active_model).dimmed()
+                        );
+                    }
+                }
+                HgbResponse::Error(err) => {
+                    eprintln!("{} {}", "✖ Prompt error:".red().bold(), err);
+                    std::process::exit(1);
+                }
+                other => repl_helper.render_response(other),
             }
+            Ok(())
         }
-        Commands::Verify { target, invariant } => HgbRequest::Verify { target, invariant },
-        Commands::Checkpoint { action, label } => HgbRequest::Checkpoint { action, label },
-        Commands::Provenance { action } => HgbRequest::Provenance { action },
-        Commands::Fuzz { target, iterations } => HgbRequest::Fuzz { target, iterations },
-        Commands::Mesh => HgbRequest::MeshStatus,
-        Commands::View { path, start, end, offset } => HgbRequest::CrudView {
-            path,
-            start_line: start,
-            end_line: end,
-            offset,
-        },
-        Commands::Write { path, content, overwrite, summary } => HgbRequest::CrudWrite {
-            path,
-            content,
-            overwrite,
-            artifact_summary: summary,
-        },
+        Commands::View { path, start, end, offset } => {
+            let t0 = std::time::Instant::now();
+            let summary = format!("path='{}', lines={:?}-{:?}", path, start, end);
+            let req = HgbRequest::CrudView {
+                path,
+                start_line: start,
+                end_line: end,
+                offset,
+            };
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(req).await;
+            let dur_ms = t0.elapsed().as_millis() as u64;
+            match resp {
+                HgbResponse::Complete { output, tokens_used, .. } => {
+                    let card = ToolCallCard::new("view_file", summary, ToolCardStatus::Success {
+                        duration_ms: dur_ms,
+                        exit_code: 0,
+                    })
+                    .with_output(output)
+                    .with_details(format!("Total lines: {}", tokens_used));
+                    card.print();
+                }
+                HgbResponse::Error(err) => {
+                    let card = ToolCallCard::new("view_file", summary, ToolCardStatus::Failed {
+                        duration_ms: dur_ms,
+                        error: err,
+                    });
+                    card.print();
+                    std::process::exit(1);
+                }
+                other => repl_helper.render_response(other),
+            }
+            Ok(())
+        }
+        Commands::Write { path, content, overwrite, summary } => {
+            let t0 = std::time::Instant::now();
+            let card_summary = format!("path='{}', bytes={}", path, content.len());
+            let req = HgbRequest::CrudWrite {
+                path,
+                content,
+                overwrite,
+                artifact_summary: summary,
+            };
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(req).await;
+            let dur_ms = t0.elapsed().as_millis() as u64;
+            match resp {
+                HgbResponse::Complete { output, .. } => {
+                    let card = ToolCallCard::new("write_to_file", card_summary, ToolCardStatus::Success {
+                        duration_ms: dur_ms,
+                        exit_code: 0,
+                    }).with_output(output);
+                    card.print();
+                }
+                HgbResponse::Error(err) => {
+                    let card = ToolCallCard::new("write_to_file", card_summary, ToolCardStatus::Failed {
+                        duration_ms: dur_ms,
+                        error: err,
+                    });
+                    card.print();
+                    std::process::exit(1);
+                }
+                other => repl_helper.render_response(other),
+            }
+            Ok(())
+        }
         Commands::Edit {
             path,
             target,
@@ -325,18 +387,70 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             instruction,
             description,
             lints,
-        } => HgbRequest::CrudEdit {
-            path,
-            target,
-            replacement,
-            start_line: start,
-            end_line: end,
-            allow_multiple: multiple,
-            instruction,
-            description,
-            target_lint_error_ids: lints,
-        },
-        Commands::Ls { path } => HgbRequest::CrudList { path },
+        } => {
+            let t0 = std::time::Instant::now();
+            let card_summary = format!("path='{}', target='{}'", path, target);
+            let req = HgbRequest::CrudEdit {
+                path,
+                target,
+                replacement,
+                start_line: start,
+                end_line: end,
+                allow_multiple: multiple,
+                instruction,
+                description,
+                target_lint_error_ids: lints,
+            };
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(req).await;
+            let dur_ms = t0.elapsed().as_millis() as u64;
+            match resp {
+                HgbResponse::Complete { output, .. } => {
+                    let card = ToolCallCard::new("replace_file_content", card_summary, ToolCardStatus::Success {
+                        duration_ms: dur_ms,
+                        exit_code: 0,
+                    }).with_output(output);
+                    card.print();
+                }
+                HgbResponse::Error(err) => {
+                    let card = ToolCallCard::new("replace_file_content", card_summary, ToolCardStatus::Failed {
+                        duration_ms: dur_ms,
+                        error: err,
+                    });
+                    card.print();
+                    std::process::exit(1);
+                }
+                other => repl_helper.render_response(other),
+            }
+            Ok(())
+        }
+        Commands::Ls { path } => {
+            let t0 = std::time::Instant::now();
+            let card_summary = format!("path='{}'", path);
+            let req = HgbRequest::CrudList { path };
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(req).await;
+            let dur_ms = t0.elapsed().as_millis() as u64;
+            match resp {
+                HgbResponse::Complete { output, .. } => {
+                    let card = ToolCallCard::new("list_dir", card_summary, ToolCardStatus::Success {
+                        duration_ms: dur_ms,
+                        exit_code: 0,
+                    }).with_output(output);
+                    card.print();
+                }
+                HgbResponse::Error(err) => {
+                    let card = ToolCallCard::new("list_dir", card_summary, ToolCardStatus::Failed {
+                        duration_ms: dur_ms,
+                        error: err,
+                    });
+                    card.print();
+                    std::process::exit(1);
+                }
+                other => repl_helper.render_response(other),
+            }
+            Ok(())
+        }
         Commands::Grep {
             pattern,
             path,
@@ -344,14 +458,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ignore_case,
             files_only,
             includes,
-        } => HgbRequest::CrudGrep {
-            pattern,
-            path: Some(path),
-            is_regex: regex,
-            case_insensitive: ignore_case,
-            match_per_line: !files_only,
-            includes,
-        },
+        } => {
+            let t0 = std::time::Instant::now();
+            let card_summary = format!("pattern='{}', path='{}'", pattern, path);
+            let req = HgbRequest::CrudGrep {
+                pattern,
+                path: Some(path),
+                is_regex: regex,
+                case_insensitive: ignore_case,
+                match_per_line: !files_only,
+                includes,
+            };
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(req).await;
+            let dur_ms = t0.elapsed().as_millis() as u64;
+            match resp {
+                HgbResponse::Complete { output, .. } => {
+                    let card = ToolCallCard::new("grep_search", card_summary, ToolCardStatus::Success {
+                        duration_ms: dur_ms,
+                        exit_code: 0,
+                    }).with_output(output);
+                    card.print();
+                }
+                HgbResponse::Error(err) => {
+                    let card = ToolCallCard::new("grep_search", card_summary, ToolCardStatus::Failed {
+                        duration_ms: dur_ms,
+                        error: err,
+                    });
+                    card.print();
+                    std::process::exit(1);
+                }
+                other => repl_helper.render_response(other),
+            }
+            Ok(())
+        }
         Commands::Find {
             pattern,
             dir,
@@ -366,20 +506,108 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 other => (dir, other),
             };
-            HgbRequest::CrudFind {
+            let t0 = std::time::Instant::now();
+            let card_summary = format!("pattern={:?}, dir='{}'", final_pat, final_dir);
+            let req = HgbRequest::CrudFind {
                 search_directory: final_dir,
                 pattern: final_pat,
                 extensions,
                 excludes,
                 max_depth,
                 target_type,
+            };
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(req).await;
+            let dur_ms = t0.elapsed().as_millis() as u64;
+            match resp {
+                HgbResponse::Complete { output, .. } => {
+                    let card = ToolCallCard::new("find_by_name", card_summary, ToolCardStatus::Success {
+                        duration_ms: dur_ms,
+                        exit_code: 0,
+                    }).with_output(output);
+                    card.print();
+                }
+                HgbResponse::Error(err) => {
+                    let card = ToolCallCard::new("find_by_name", card_summary, ToolCardStatus::Failed {
+                        duration_ms: dur_ms,
+                        error: err,
+                    });
+                    card.print();
+                    std::process::exit(1);
+                }
+                other => repl_helper.render_response(other),
             }
-        },
-    };
-
-    let repl_helper = HagibisRepl::new(client);
-    let resp = repl_helper.dispatch(req).await;
-    repl_helper.render_response(resp);
-
-    Ok(())
+            Ok(())
+        }
+        Commands::Ping => {
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::Ping).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::Status => {
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::Status).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::Doctor => {
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::Doctor).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::Login => {
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::Login).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::Auth => {
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::AuthStatus).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::Model { name } => {
+            if let Some(m) = name {
+                println!("✔ Default model set to: {}", m);
+                Ok(())
+            } else {
+                let status = hgb_core::GeminiProvider::credential_status();
+                println!("  [•] Active Provider / Credential: {}", status);
+                Ok(())
+            }
+        }
+        Commands::Verify { target, invariant } => {
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::Verify { target, invariant }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::Checkpoint { action, label } => {
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::Checkpoint { action, label }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::Provenance { action } => {
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::Provenance { action }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::Fuzz { target, iterations } => {
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::Fuzz { target, iterations }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::Mesh => {
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::MeshStatus).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+    }
 }
