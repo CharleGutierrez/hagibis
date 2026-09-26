@@ -533,6 +533,8 @@ pub struct CockpitState {
     pub last_copied_id: Option<String>,
     pub last_copied_time: Option<Instant>,
     pub copy_hitboxes: Arc<Mutex<Vec<CopyHitbox>>>,
+    pub scrollbar_hitbox: Arc<Mutex<Option<ScrollbarHitbox>>>,
+    pub scroll_pill_hitbox: Arc<Mutex<Option<ScrollPillHitbox>>>,
     pub pinned_goal: Option<String>,
     pub diff_cards: Vec<DiffCardItem>,
     pub diff_hitboxes: Arc<Mutex<Vec<DiffActionHitbox>>>,
@@ -716,6 +718,24 @@ pub struct CopyHitbox {
     pub content: String,
     pub card_id: String,
     pub label: String,
+}
+
+/// Clickable and draggable hitbox for the vertical scrollbar in the chat viewport
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScrollbarHitbox {
+    pub col: u16,
+    pub y_start: u16,
+    pub height: u16,
+    pub max_scroll: usize,
+}
+
+/// Clickable hitbox for the floating "SCROLLED UP" status pill
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScrollPillHitbox {
+    pub x: u16,
+    pub y: u16,
+    pub width: u16,
+    pub height: u16,
 }
 
 /// Semantic Telepathy search results card
@@ -1958,6 +1978,8 @@ impl CockpitState {
             last_copied_id: None,
             last_copied_time: None,
             copy_hitboxes: Arc::new(Mutex::new(Vec::new())),
+            scrollbar_hitbox: Arc::new(Mutex::new(None)),
+            scroll_pill_hitbox: Arc::new(Mutex::new(None)),
             pinned_goal: None,
             diff_cards: Vec::new(),
             diff_hitboxes: Arc::new(Mutex::new(Vec::new())),
@@ -2240,10 +2262,90 @@ impl CockpitState {
 
         if let Some(hb) = hit {
             self.copy_to_clipboard(&hb.content, &hb.card_id, &hb.label);
-            true
-        } else {
-            false
+            return true;
         }
+
+        // 4. Check floating scroll status pill (Click to jump back to bottom)
+        let pill_hit = if let Ok(pill_opt) = self.scroll_pill_hitbox.lock() {
+            *pill_opt
+        } else {
+            None
+        };
+        if let Some(pill) = pill_hit {
+            if row == pill.y && col >= pill.x && col < pill.x.saturating_add(pill.width) {
+                self.scroll_chat_to_bottom();
+                return true;
+            }
+        }
+
+        // 5. Check vertical scrollbar (Click on ▲, ▼, or jump on track)
+        let sb_hit = if let Ok(sb_opt) = self.scrollbar_hitbox.lock() {
+            *sb_opt
+        } else {
+            None
+        };
+
+        if let Some(sb) = sb_hit {
+            // Hit detection on scrollbar column (with 1-cell horizontal tolerance)
+            if (col == sb.col || col + 1 == sb.col || col == sb.col + 1)
+                && row >= sb.y_start
+                && row < sb.y_start.saturating_add(sb.height)
+            {
+                if row == sb.y_start {
+                    // Clicked top arrow ▲ -> scroll up
+                    self.scroll_chat_up(3);
+                } else if row == sb.y_start + sb.height.saturating_sub(1) {
+                    // Clicked bottom arrow ▼ -> scroll down
+                    self.scroll_chat_down(3);
+                } else {
+                    // Clicked track -> proportional jump
+                    let track_length = sb.height.saturating_sub(2);
+                    if track_length > 0 && sb.max_scroll > 0 {
+                        let offset = row.saturating_sub(sb.y_start + 1) as usize;
+                        let frac = (offset as f64 / track_length.saturating_sub(1).max(1) as f64).clamp(0.0, 1.0);
+                        let scroll_y = (frac * sb.max_scroll as f64).round() as usize;
+                        self.chat_scroll = sb.max_scroll.saturating_sub(scroll_y);
+                    }
+                }
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// Handle mouse drag in the terminal for dragging the vertical scrollbar thumb
+    pub fn handle_mouse_drag(&mut self, col: u16, row: u16) -> bool {
+        let sb_hit = if let Ok(sb_opt) = self.scrollbar_hitbox.lock() {
+            *sb_opt
+        } else {
+            None
+        };
+
+        if let Some(sb) = sb_hit {
+            // Allow 2-column horizontal tolerance when dragging the scrollbar
+            if col >= sb.col.saturating_sub(2) && col <= sb.col.saturating_add(2)
+                && row >= sb.y_start
+                && row < sb.y_start.saturating_add(sb.height)
+            {
+                if row == sb.y_start {
+                    self.scroll_chat_to_top();
+                } else if row == sb.y_start + sb.height.saturating_sub(1) {
+                    self.scroll_chat_to_bottom();
+                } else {
+                    let track_length = sb.height.saturating_sub(2);
+                    if track_length > 0 && sb.max_scroll > 0 {
+                        let offset = row.saturating_sub(sb.y_start + 1) as usize;
+                        let frac = (offset as f64 / track_length.saturating_sub(1).max(1) as f64).clamp(0.0, 1.0);
+                        let scroll_y = (frac * sb.max_scroll as f64).round() as usize;
+                        self.chat_scroll = sb.max_scroll.saturating_sub(scroll_y);
+                    }
+                }
+                return true;
+            }
+        }
+
+        false
     }
 
     pub fn add_user_message(&mut self, text: impl Into<String>) {
@@ -4923,6 +5025,19 @@ impl CockpitState {
                 .thumb_symbol("█")
                 .style(Style::default().fg(Color::DarkGray));
             frame.render_stateful_widget(scrollbar, chunks[2], &mut scrollbar_state);
+
+            if let Ok(mut sb) = self.scrollbar_hitbox.lock() {
+                *sb = Some(ScrollbarHitbox {
+                    col: chunks[2].x + chunks[2].width.saturating_sub(1),
+                    y_start: chunks[2].y,
+                    height: chunks[2].height,
+                    max_scroll,
+                });
+            }
+        } else {
+            if let Ok(mut sb) = self.scrollbar_hitbox.lock() {
+                *sb = None;
+            }
         }
 
         // Floating scroll status pill if user has scrolled up
@@ -4939,6 +5054,19 @@ impl CockpitState {
                 )),
                 pill_area,
             );
+
+            if let Ok(mut pill_hb) = self.scroll_pill_hitbox.lock() {
+                *pill_hb = Some(ScrollPillHitbox {
+                    x: pill_x,
+                    y: pill_y,
+                    width: pill_width,
+                    height: 1,
+                });
+            }
+        } else {
+            if let Ok(mut pill_hb) = self.scroll_pill_hitbox.lock() {
+                *pill_hb = None;
+            }
         }
 
         // 4. Input Box (Always Focused, authentic AGY box with accurate cursor)
@@ -5288,6 +5416,9 @@ impl CockpitState {
                             }
                             MouseEventKind::Down(MouseButton::Left) => {
                                 self.handle_mouse_click(mouse_event.column, mouse_event.row);
+                            }
+                            MouseEventKind::Drag(MouseButton::Left) => {
+                                self.handle_mouse_drag(mouse_event.column, mouse_event.row);
                             }
                             _ => {}
                         }
@@ -5934,5 +6065,80 @@ mod tests {
             let buffer = state.render_headless(120, 30);
             assert!(buffer.content.len() >= 120 * 30);
         }
+    }
+
+    #[test]
+    fn test_scrollbar_mouse_click_up_down() {
+        let mut state = CockpitState::new();
+        state.chat_scroll = 10;
+
+        if let Ok(mut sb) = state.scrollbar_hitbox.lock() {
+            *sb = Some(ScrollbarHitbox {
+                col: 80,
+                y_start: 5,
+                height: 20,
+                max_scroll: 50,
+            });
+        }
+
+        // Click top arrow ▲ at col=80, row=5 -> scrolls up
+        let handled = state.handle_mouse_click(80, 5);
+        assert!(handled);
+        assert_eq!(state.chat_scroll, 13);
+
+        // Click bottom arrow ▼ at col=80, row=24 -> scrolls down
+        let handled = state.handle_mouse_click(80, 24);
+        assert!(handled);
+        assert_eq!(state.chat_scroll, 10);
+    }
+
+    #[test]
+    fn test_scrollbar_mouse_drag_and_track_click() {
+        let mut state = CockpitState::new();
+        state.chat_scroll = 0;
+
+        if let Ok(mut sb) = state.scrollbar_hitbox.lock() {
+            *sb = Some(ScrollbarHitbox {
+                col: 80,
+                y_start: 5,
+                height: 22,
+                max_scroll: 100,
+            });
+        }
+
+        // Click track near top (row=6) -> frac=0.0 -> max_scroll (100)
+        let handled = state.handle_mouse_click(80, 6);
+        assert!(handled);
+        assert_eq!(state.chat_scroll, 100);
+
+        // Drag along track to bottom (row=25) -> frac=1.0 -> 0
+        let handled = state.handle_mouse_drag(80, 25);
+        assert!(handled);
+        assert_eq!(state.chat_scroll, 0);
+
+        // Drag along track to midpoint (row=15) -> frac ~ 0.5
+        let handled = state.handle_mouse_drag(80, 15);
+        assert!(handled);
+        assert!(state.chat_scroll >= 45 && state.chat_scroll <= 55);
+    }
+
+    #[test]
+    fn test_scroll_pill_click_to_bottom() {
+        let mut state = CockpitState::new();
+        state.chat_scroll = 42;
+
+        if let Ok(mut pill) = state.scroll_pill_hitbox.lock() {
+            *pill = Some(ScrollPillHitbox {
+                x: 30,
+                y: 5,
+                width: 40,
+                height: 1,
+            });
+        }
+
+        // Click within pill
+        let handled = state.handle_mouse_click(45, 5);
+        assert!(handled);
+        assert_eq!(state.chat_scroll, 0);
     }
 }
