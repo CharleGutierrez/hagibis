@@ -109,6 +109,7 @@ pub struct ReActAgentEngine {
     config: AgentLoopConfig,
     history: Vec<AgentMessage>,
     system_prompt: Option<String>,
+    custom_tools: HashMap<String, Arc<dyn crate::traits::HgbTool>>,
 }
 
 impl ReActAgentEngine {
@@ -118,12 +119,40 @@ impl ReActAgentEngine {
             config,
             history: Vec::new(),
             system_prompt: None,
+            custom_tools: HashMap::new(),
         }
     }
 
     pub fn with_system_prompt(mut self, prompt: impl Into<String>) -> Self {
         self.system_prompt = Some(prompt.into());
         self
+    }
+
+    pub fn register_tool(&mut self, tool: Arc<dyn crate::traits::HgbTool>) {
+        self.custom_tools.insert(tool.name().to_string(), tool);
+    }
+
+    pub fn with_tool(mut self, tool: Arc<dyn crate::traits::HgbTool>) -> Self {
+        self.register_tool(tool);
+        self
+    }
+
+    pub async fn register_mcp_client(
+        &mut self,
+        client: &Arc<crate::mcp::McpClient>,
+        prefix: Option<&str>,
+    ) -> Result<Vec<String>> {
+        let tools = crate::mcp::McpClient::create_hgb_tools(client, prefix).await?;
+        let mut names = Vec::new();
+        for tool in tools {
+            names.push(tool.name().to_string());
+            self.register_tool(tool);
+        }
+        Ok(names)
+    }
+
+    pub fn custom_tools(&self) -> &HashMap<String, Arc<dyn crate::traits::HgbTool>> {
+        &self.custom_tools
     }
 
     /// Construct the complete system prompt including tool definitions and constraints
@@ -152,8 +181,19 @@ impl ReActAgentEngine {
             9. search_web(query: string, max_results?: number)\n\
             10. record_memory(title: string, decision: string, context?: string, is_technical_debt?: boolean, severity?: string)\n\
             11. search_memory(query: string, max_results?: number)\n\
-            12. record_style_feedback(snippet: string, accepted: boolean)\n\n\
-            ## Tool Call Format:\n\
+            12. record_style_feedback(snippet: string, accepted: boolean)\n\n"
+        );
+
+        if !self.custom_tools.is_empty() {
+            prompt.push_str("## Extended MCP & Registered Dynamic Tools:\n");
+            for (idx, (name, tool)) in self.custom_tools.iter().enumerate() {
+                prompt.push_str(&format!("{}. {}: {}\n", 13 + idx, name, tool.description()));
+            }
+            prompt.push('\n');
+        }
+
+        prompt.push_str(
+            "## Tool Call Format:\n\
             When invoking a tool, emit a JSON block formatted exactly as:\n\
             ```tool_call\n\
             {\n\
@@ -669,7 +709,14 @@ impl ReActAgentEngine {
                     category, snippet, vault_path.display()
                 ))
             }
-            _ => Err(HgbError::Execution(format!("Unknown tool '{}'", name))),
+            _ => {
+                if let Some(tool) = self.custom_tools.get(name) {
+                    let res = tool.execute(args.clone()).await?;
+                    Ok(serde_json::to_string_pretty(&res).unwrap_or_else(|_| res.to_string()))
+                } else {
+                    Err(HgbError::Execution(format!("Unknown tool '{}'", name)))
+                }
+            }
         }
     }
 

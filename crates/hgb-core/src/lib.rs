@@ -32,8 +32,15 @@ pub mod trace;
 pub mod traits;
 pub mod variant_race;
 pub mod web_browser;
-
+pub mod mcp;
+pub mod timeline;
+pub mod verification_gate;
+pub mod shell_hook;
+pub mod ambient_vibe;
 pub use agent::{AgentEvent, AgentLoopConfig, AgentMessage, AgentRole, AgentSessionReport, AgentStepInfo, AgentToolCall, AgentToolResult, ReActAgentEngine};
+pub use ambient_vibe::{AmbientVibeConfig, AmbientVibeEngine, TestSuiteConfig, VibeWatchEvent};
+pub use verification_gate::{GoldenInvariant, VerificationCertificate, VerificationCheckKind, VerificationGate, VerificationStatus, VerificationStepResult};
+pub use shell_hook::{CrashCategory, CrashDiagnosis, CrashInterceptor, CrashRecord, ShellHookGenerator, SupportedShell};
 pub use ambient_ast::{AmbientAstFollower, AmbientContext};
 pub use ast_pruner::{AstPruner, PrunedAstResult};
 pub use ast_rewind::{AstRewindTimeline, SymbolRevision};
@@ -50,8 +57,9 @@ pub use drift_lock::{ArchitecturalDna, ComplianceAuditReport, DnaPillars, DriftS
 pub use env_sentinel::{EnvAuditReport, EnvReconciliationItem, EnvSentinel, EnvVarStatus, EnvVarUsage, SecretLeakFinding};
 pub use error::{HgbError, Result};
 pub use forge::{ForgeEngine, ForgeReport, ForgeStack};
-pub use glance::{CssSuggestion, DefectCategory, DefectSeverity, ImageMimeType, ImagePayload, LayoutDefect, VisualInspectionReport};
+pub use glance::{ComponentSynthesisResult, CssSuggestion, DefectCategory, DefectSeverity, ImageMimeType, ImagePayload, LayoutDefect, VisualInspectionReport, synthesize_component};
 pub use impact::{ImpactRadar, ImpactReport, RiskLevel, SymbolCallsite};
+pub use mcp::{McpClient, McpConfigFile, McpServerConfig, McpTool, McpToolAdapter};
 pub use memory::{
     AdrStatus, ArchitecturalDecision, DebtSeverity, MemoryDocument, ProjectMemoryLedger,
     ProjectRoadmapMilestone, TechDebtEntry,
@@ -66,6 +74,7 @@ pub use security::AgentShieldLight;
 pub use seed_engine::{EntityKind, PersonaSeedEngine, SeedBatch, SeedRecord};
 pub use style::{StyleFeedbackRecord, StyleMemoryVault};
 pub use syntax_slicer::{CallGraphNode, SyntaxSliceResult, TargetLanguage, TokenReductionMetrics};
+pub use timeline::{TimelineDiff, TimelineInfo, TimelineManager, TimelineMergeReport};
 pub use trace::{TraceEvent, TraceEventKind, TraceRingBuffer};
 pub use traits::{HgbProvider, HgbTool};
 pub use variant_race::{DesignArchetype, VariantCandidate, VariantRaceManifest, VariantRaceStatus};

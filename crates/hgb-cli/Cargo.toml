@@ -28,6 +28,7 @@ thiserror = { workspace = true }
 crossterm = { workspace = true }
 unicode-width = { workspace = true }
 ratatui = { workspace = true }
+chrono = { workspace = true }
 
 [dev-dependencies]
 hgb-storage = { path = "../hgb-storage" }

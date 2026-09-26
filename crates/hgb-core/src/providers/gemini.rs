@@ -7,7 +7,6 @@ use crate::auth::GeminiOAuthManager;
 use crate::error::{HgbError, Result};
 use crate::traits::HgbProvider;
 use async_trait::async_trait;
-use colored::Colorize;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -192,11 +191,6 @@ impl HgbProvider for GeminiProvider {
                 if (err_msg.contains("503") || err_msg.contains("MODEL_CAPACITY_EXHAUSTED") || err_msg.contains("capacity available"))
                     && model_name != "gemini-2.5-flash"
                 {
-                    eprintln!(
-                        "  {} Google server capacity exhausted for {}. Auto-routing to gemini-2.5-flash...",
-                        "ℹ".yellow(),
-                        model_name
-                    );
                     self.complete_single(prompt, "gemini-2.5-flash").await
                 } else {
                     Err(err)

@@ -67,7 +67,7 @@ fn wrap_line_to_width(text: &str, max_width: usize) -> Vec<String> {
     let mut current_width = 0;
 
     for word in words {
-        let word_width = UnicodeWidthStr::width(word);
+        let word_width = visual_str_width(word);
         if word_width > max_width {
             // Very long word exceeds max_width on its own: break across lines character-by-character
             if !current_line.is_empty() {
@@ -77,15 +77,29 @@ fn wrap_line_to_width(text: &str, max_width: usize) -> Vec<String> {
             }
             let mut sub = String::new();
             let mut sub_w = 0;
-            for ch in word.chars() {
-                let ch_w = UnicodeWidthChar::width(ch).unwrap_or(1);
+            let chars: Vec<char> = word.chars().collect();
+            let mut i = 0;
+            while i < chars.len() {
+                let ch = chars[i];
+                let ch_w = if ch == '\u{fe0f}' {
+                    0
+                } else if i + 1 < chars.len() && chars[i + 1] == '\u{fe0f}' {
+                    2
+                } else {
+                    UnicodeWidthChar::width(ch).unwrap_or(1)
+                };
                 if sub_w + ch_w > max_width && !sub.is_empty() {
                     lines.push(sub);
                     sub = String::new();
                     sub_w = 0;
                 }
                 sub.push(ch);
+                if ch_w == 2 && i + 1 < chars.len() && chars[i + 1] == '\u{fe0f}' {
+                    sub.push('\u{fe0f}');
+                    i += 1;
+                }
                 sub_w += ch_w;
+                i += 1;
             }
             if !sub.is_empty() {
                 current_line = sub;
@@ -119,22 +133,36 @@ fn wrap_code_line_to_width(line: &str, max_width: usize) -> Vec<String> {
     if max_width == 0 {
         return vec![line.to_string()];
     }
-    let total_w = UnicodeWidthStr::width(line);
+    let total_w = visual_str_width(line);
     if total_w <= max_width {
         return vec![line.to_string()];
     }
     let mut chunks = Vec::new();
     let mut current = String::new();
     let mut cur_w = 0;
-    for ch in line.chars() {
-        let ch_w = UnicodeWidthChar::width(ch).unwrap_or(1);
+    let chars: Vec<char> = line.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let ch = chars[i];
+        let ch_w = if ch == '\u{fe0f}' {
+            0
+        } else if i + 1 < chars.len() && chars[i + 1] == '\u{fe0f}' {
+            2
+        } else {
+            UnicodeWidthChar::width(ch).unwrap_or(1)
+        };
         if cur_w + ch_w > max_width && !current.is_empty() {
             chunks.push(current);
             current = String::new();
             cur_w = 0;
         }
         current.push(ch);
+        if ch_w == 2 && i + 1 < chars.len() && chars[i + 1] == '\u{fe0f}' {
+            current.push('\u{fe0f}');
+            i += 1;
+        }
         cur_w += ch_w;
+        i += 1;
     }
     if !current.is_empty() {
         chunks.push(current);
@@ -145,20 +173,61 @@ fn wrap_code_line_to_width(line: &str, max_width: usize) -> Vec<String> {
     chunks
 }
 
+/// Accurately compute visual terminal column width, properly accounting for
+/// Unicode emojis with variation selector-16 (U+FE0F) which modern terminal emulators
+/// render in 2 columns even when older unicode_width tables evaluate them as 1 column.
+pub fn visual_str_width(s: &str) -> usize {
+    let mut w = 0;
+    let chars: Vec<char> = s.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let ch = chars[i];
+        if ch == '\u{fe0f}' {
+            i += 1;
+            continue;
+        }
+        let next_is_vs16 = i + 1 < chars.len() && chars[i + 1] == '\u{fe0f}';
+        if next_is_vs16 {
+            w += 2;
+            i += 2;
+            continue;
+        }
+        let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
+        w += cw;
+        i += 1;
+    }
+    w
+}
+
 /// Truncate a string cleanly to fit within max_width visual columns
 fn truncate_str_by_width(text: &str, max_width: usize) -> String {
     let mut result = String::new();
     let mut current_w = 0;
-    for ch in text.chars() {
-        let ch_w = UnicodeWidthChar::width(ch).unwrap_or(1);
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let ch = chars[i];
+        let ch_w = if ch == '\u{fe0f}' {
+            0
+        } else if i + 1 < chars.len() && chars[i + 1] == '\u{fe0f}' {
+            2
+        } else {
+            UnicodeWidthChar::width(ch).unwrap_or(1)
+        };
         if current_w + ch_w > max_width {
             break;
         }
         result.push(ch);
+        if ch_w == 2 && i + 1 < chars.len() && chars[i + 1] == '\u{fe0f}' {
+            result.push('\u{fe0f}');
+            i += 1;
+        }
         current_w += ch_w;
+        i += 1;
     }
     result
 }
+
 
 /// Operational status of a DAG node visualized in the Cockpit
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -585,6 +654,7 @@ pub struct CockpitState {
     pub invariant_cards: Vec<InvariantCardItem>,
     pub architecture_dag_cards: Vec<ArchitectureDagCardItem>,
     pub voice_copilot_cards: Vec<VoiceCoPilotCardItem>,
+    pub needs_clear: bool,
 }
 
 /// Structured items rendered in the Chat Canvas
@@ -2030,6 +2100,7 @@ impl CockpitState {
             invariant_cards: Vec::new(),
             architecture_dag_cards: Vec::new(),
             voice_copilot_cards: Vec::new(),
+            needs_clear: false,
         }
     }
 
@@ -2607,6 +2678,7 @@ impl CockpitState {
             CockpitViewMode::CockpitSplit => "DAG Swarm Cockpit",
         };
         self.add_log(format!("[VIEW] Switched interface to {}", mode_name));
+        self.needs_clear = true;
     }
 
     pub fn cycle_execution_mode(&mut self) {
@@ -2838,6 +2910,7 @@ impl CockpitState {
         self.processing_tick = 0;
         self.processing_start = Some(Utc::now());
         self.processing_prompt_preview = prompt_preview;
+        self.needs_clear = true;
 
         let (tx, rx) = tokio::sync::oneshot::channel();
         let nid = node_id;
@@ -2859,6 +2932,7 @@ impl CockpitState {
         self.is_processing = false;
         self.processing_prompt_preview.clear();
         self.processing_start = None;
+        self.needs_clear = true;
 
         self.telemetry.total_tokens += result.tokens_used;
 
@@ -2909,6 +2983,7 @@ impl CockpitState {
         let preview = self.processing_prompt_preview.clone();
         self.processing_prompt_preview.clear();
         self.processing_start = None;
+        self.needs_clear = true;
 
         let node_id = format!("task-{}", self.nodes.len());
         if let Some(node) = self.nodes.iter_mut().find(|n| n.id == node_id) {
@@ -4375,10 +4450,10 @@ impl CockpitState {
                         // Render thinking block if present with dynamic auto-width and closed borders
                         if let Some(ref thinking) = item.thinking {
                             let title_body = format!("Thinking Process ({} tokens)", item.tokens);
-                            let title_w = UnicodeWidthStr::width(title_body.as_str());
+                            let title_w = visual_str_width(title_body.as_str());
                             let mut natural_w = title_w + 10;
                             for t_line in thinking.lines() {
-                                let w = UnicodeWidthStr::width(t_line) + 4;
+                                let w = visual_str_width(t_line) + 4;
                                 if w > natural_w {
                                     natural_w = w;
                                 }
@@ -4387,7 +4462,7 @@ impl CockpitState {
                             let t_banner_w = natural_w.max(48).min(max_allowed);
 
                             let prefix_str = "╭─ 💭 ";
-                            let prefix_w = UnicodeWidthStr::width(prefix_str);
+                            let prefix_w = visual_str_width(prefix_str);
                             let max_title_w = t_banner_w.saturating_sub(prefix_w + 3);
                             let (display_title, display_title_w) = if title_w > max_title_w {
                                 if max_title_w == 0 {
@@ -4396,7 +4471,7 @@ impl CockpitState {
                                     ("…".to_string(), 1)
                                 } else {
                                     let truncated = truncate_str_by_width(&title_body, max_title_w.saturating_sub(1));
-                                    let tw = UnicodeWidthStr::width(truncated.as_str()) + 1;
+                                    let tw = visual_str_width(truncated.as_str()) + 1;
                                     (format!("{}…", truncated), tw)
                                 }
                             } else {
@@ -4418,7 +4493,7 @@ impl CockpitState {
                             for t_line in thinking.lines() {
                                 let chunks = wrap_line_to_width(t_line, max_chunk_w);
                                 for chunk in chunks {
-                                    let chunk_w = UnicodeWidthStr::width(chunk.as_str());
+                                    let chunk_w = visual_str_width(chunk.as_str());
                                     let pad_w = max_chunk_w.saturating_sub(chunk_w);
                                     chat_lines.push(Line::from(vec![
                                         Span::styled("│ ", Style::default().fg(Color::Magenta)),
@@ -4467,8 +4542,8 @@ impl CockpitState {
                             };
 
                             let title_body = format!("{} ({})", tool.tool_name, tool.parameters_summary);
-                            let icon_w = UnicodeWidthStr::width(tool_icon);
-                            let title_w = UnicodeWidthStr::width(title_body.as_str());
+                            let icon_w = visual_str_width(tool_icon);
+                            let title_w = visual_str_width(title_body.as_str());
 
                             let status_color = match tool.status.as_str() {
                                 "SUCCESS" => Color::Green,
@@ -4478,16 +4553,16 @@ impl CockpitState {
                             let status_prefix = "│ Status: ";
                             let status_badge = format!("[{}]", tool.status);
                             let dur_part = format!("  Duration: {}ms", tool.duration_ms);
-                            let status_row_w = UnicodeWidthStr::width(status_prefix)
-                                + UnicodeWidthStr::width(status_badge.as_str())
-                                + UnicodeWidthStr::width(dur_part.as_str());
+                            let status_row_w = visual_str_width(status_prefix)
+                                + visual_str_width(status_badge.as_str())
+                                + visual_str_width(dur_part.as_str());
 
                             // Calculate auto-width: find max width across header, status, and snippet lines
                             let copy_btn_preview_w = if is_copied { 1 } else { 2 };
                             let mut natural_w = (title_w + icon_w + copy_btn_preview_w + 10).max(status_row_w + 2);
                             if let Some(ref snippet) = tool.output_snippet {
                                 for s_line in snippet.trim().lines().take(50) {
-                                    let sw = UnicodeWidthStr::width(s_line) + 6;
+                                    let sw = visual_str_width(s_line) + 6;
                                     if sw > natural_w {
                                         natural_w = sw;
                                     }
@@ -4524,7 +4599,7 @@ impl CockpitState {
                                     ("…".to_string(), 1)
                                 } else {
                                     let truncated = truncate_str_by_width(&title_body, max_title_w.saturating_sub(1));
-                                    let tw = UnicodeWidthStr::width(truncated.as_str()) + 1;
+                                    let tw = visual_str_width(truncated.as_str()) + 1;
                                     (format!("{}…", truncated), tw)
                                 }
                             } else {
@@ -4571,13 +4646,13 @@ impl CockpitState {
                             // 2. Status Line (closed with right border │)
                             let (dur_part_str, status_w) = if status_row_w + 1 > banner_width {
                                 let short_dur = format!(" {}ms", tool.duration_ms);
-                                let test_w = UnicodeWidthStr::width(status_prefix)
-                                    + UnicodeWidthStr::width(status_badge.as_str())
-                                    + UnicodeWidthStr::width(short_dur.as_str());
+                                let test_w = visual_str_width(status_prefix)
+                                    + visual_str_width(status_badge.as_str())
+                                    + visual_str_width(short_dur.as_str());
                                 if test_w + 1 <= banner_width {
                                     (short_dur, test_w)
                                 } else {
-                                    ("".to_string(), UnicodeWidthStr::width(status_prefix) + UnicodeWidthStr::width(status_badge.as_str()))
+                                    ("".to_string(), visual_str_width(status_prefix) + visual_str_width(status_badge.as_str()))
                                 }
                             } else {
                                 (dur_part, status_row_w)
@@ -4600,7 +4675,7 @@ impl CockpitState {
                                     for raw_line in trimmed.lines().take(50) {
                                         let chunks = wrap_line_to_width(raw_line, max_chunk_w);
                                         for chunk in chunks {
-                                            let chunk_w = UnicodeWidthStr::width(chunk.as_str());
+                                            let chunk_w = visual_str_width(chunk.as_str());
                                             let pad_w = max_chunk_w.saturating_sub(chunk_w);
                                             chat_lines.push(Line::from(vec![
                                                 Span::styled("│   ", Style::default().fg(Color::Cyan)),
@@ -4612,7 +4687,7 @@ impl CockpitState {
                                     }
                                     if line_count > 50 {
                                         let more_msg = format!("... ({} more lines truncated)", line_count - 50);
-                                        let more_w = UnicodeWidthStr::width(more_msg.as_str());
+                                        let more_w = visual_str_width(more_msg.as_str());
                                         let pad_w = max_chunk_w.saturating_sub(more_w);
                                         chat_lines.push(Line::from(vec![
                                             Span::styled("│   ", Style::default().fg(Color::Cyan)),
@@ -4688,8 +4763,8 @@ impl CockpitState {
                                 match md_item {
                                     MarkdownItem::CodeBlock { lang, lines } => {
                                         let tag = if lang.is_empty() { "code" } else { lang };
-                                        let tag_w = UnicodeWidthStr::width(tag);
-                                        let max_content_w = lines.iter().map(|l| UnicodeWidthStr::width(*l)).max().unwrap_or(0);
+                                        let tag_w = visual_str_width(tag);
+                                        let max_content_w = lines.iter().map(|l| visual_str_width(*l)).max().unwrap_or(0);
 
                                         // Natural width auto-fits content: "│ " (2) + content + " │" (2) = content + 4,
                                         // and header "╭─── [" (6) + tag (tag_w) + "] " (2) + "─" (1) + "╮" (1) = tag_w + 10
@@ -4701,7 +4776,7 @@ impl CockpitState {
                                         let max_tag_w = code_box_w.saturating_sub(10);
                                         let (display_tag, display_tag_w) = if tag_w > max_tag_w && max_tag_w > 2 {
                                             let trunc = truncate_str_by_width(tag, max_tag_w.saturating_sub(1));
-                                            let tw = UnicodeWidthStr::width(trunc.as_str()) + 1;
+                                            let tw = visual_str_width(trunc.as_str()) + 1;
                                             (format!("{}…", trunc), tw)
                                         } else {
                                             (tag.to_string(), tag_w)
@@ -4722,7 +4797,7 @@ impl CockpitState {
                                         for code_l in lines {
                                             let chunks = wrap_code_line_to_width(code_l, max_chunk_w);
                                             for chunk in chunks {
-                                                let chunk_w = UnicodeWidthStr::width(chunk.as_str());
+                                                let chunk_w = visual_str_width(chunk.as_str());
                                                 let pad_w = max_chunk_w.saturating_sub(chunk_w);
                                                 chat_lines.push(Line::from(vec![
                                                     Span::styled("│ ", Style::default().fg(Color::Cyan)),
@@ -4809,11 +4884,11 @@ impl CockpitState {
             };
 
             let title_text = format!("Processing Prompt ({})", self.model_pill);
-            let title_w = UnicodeWidthStr::width(title_text.as_str());
+            let title_w = visual_str_width(title_text.as_str());
 
             // Line 1: Spinner, Thinking, Wave, Timer, Esc pill
             let status_body = format!("Thinking...  {}   ⏱ {}   [Esc to cancel]", wave, elapsed_str);
-            let status_body_w = UnicodeWidthStr::width(status_body.as_str());
+            let status_body_w = visual_str_width(status_body.as_str());
             let line1_natural_w = status_body_w + 7;
 
             // Line 2: Prompt preview if present
@@ -4822,7 +4897,7 @@ impl CockpitState {
             } else {
                 String::new()
             };
-            let prompt_line_w = UnicodeWidthStr::width(prompt_line.as_str());
+            let prompt_line_w = visual_str_width(prompt_line.as_str());
             let line2_natural_w = if prompt_line_w > 0 { prompt_line_w + 6 } else { 0 };
 
             let natural_w = line1_natural_w.max(line2_natural_w).max(title_w + 8);
@@ -4832,17 +4907,9 @@ impl CockpitState {
             // 1. Top Border: "╭─ Processing Prompt (model) ────╮"
             let max_title_w = card_w.saturating_sub(6);
             let (disp_title, disp_title_w) = if title_w > max_title_w && max_title_w > 3 {
-                let mut truncated = String::new();
-                for c in title_text.chars() {
-                    if UnicodeWidthStr::width(truncated.as_str()) + UnicodeWidthChar::width(c).unwrap_or(1) + 3 <= max_title_w {
-                        truncated.push(c);
-                    } else {
-                        break;
-                    }
-                }
-                truncated.push_str("...");
-                let w = UnicodeWidthStr::width(truncated.as_str());
-                (truncated, w)
+                let truncated = truncate_str_by_width(&title_text, max_title_w.saturating_sub(3));
+                let w = visual_str_width(truncated.as_str()) + 3;
+                (format!("{}...", truncated), w)
             } else {
                 (title_text.clone(), title_w)
             };
@@ -4860,17 +4927,9 @@ impl CockpitState {
             // 2. Animated Status Line:
             let inner_max_w = card_w.saturating_sub(5);
             let (disp_status, disp_status_w) = if status_body_w + 2 > inner_max_w && inner_max_w > 4 {
-                let mut truncated = String::new();
-                for c in status_body.chars() {
-                    if UnicodeWidthStr::width(truncated.as_str()) + UnicodeWidthChar::width(c).unwrap_or(1) + 5 <= inner_max_w {
-                        truncated.push(c);
-                    } else {
-                        break;
-                    }
-                }
-                truncated.push_str("...");
-                let w = UnicodeWidthStr::width(truncated.as_str());
-                (truncated, w)
+                let truncated = truncate_str_by_width(&status_body, inner_max_w.saturating_sub(5));
+                let w = visual_str_width(truncated.as_str()) + 3;
+                (format!("{}...", truncated), w)
             } else {
                 (status_body.clone(), status_body_w)
             };
@@ -4889,17 +4948,9 @@ impl CockpitState {
             if !prompt_line.is_empty() {
                 let max_preview_w = card_w.saturating_sub(5);
                 let (disp_p, disp_p_w) = if prompt_line_w > max_preview_w && max_preview_w > 3 {
-                    let mut truncated = String::new();
-                    for c in prompt_line.chars() {
-                        if UnicodeWidthStr::width(truncated.as_str()) + UnicodeWidthChar::width(c).unwrap_or(1) + 3 <= max_preview_w {
-                            truncated.push(c);
-                        } else {
-                            break;
-                        }
-                    }
-                    truncated.push_str("...");
-                    let w = UnicodeWidthStr::width(truncated.as_str());
-                    (truncated, w)
+                    let truncated = truncate_str_by_width(&prompt_line, max_preview_w.saturating_sub(3));
+                    let w = visual_str_width(truncated.as_str()) + 3;
+                    (format!("{}...", truncated), w)
                 } else {
                     (prompt_line.clone(), prompt_line_w)
                 };
@@ -4926,7 +4977,7 @@ impl CockpitState {
         let mut line_row_offsets = Vec::with_capacity(chat_lines.len());
         for line in &chat_lines {
             line_row_offsets.push(estimated_rows);
-            let width: usize = line.spans.iter().map(|s| UnicodeWidthStr::width(s.content.as_ref())).sum();
+            let width: usize = line.spans.iter().map(|s| visual_str_width(s.content.as_ref())).sum();
             let rows = if width == 0 { 1 } else { (width + usable_width - 1) / usable_width };
             estimated_rows += rows;
         }
@@ -5207,7 +5258,10 @@ impl CockpitState {
             Row::new(vec![Cell::from("/cockpit").style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)), Cell::from("Switch to full-screen multi-pane DAG Swarm Cockpit")]),
             Row::new(vec![Cell::from("/chat").style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)), Cell::from("Switch to AGY Conversational Chat Canvas")]),
             Row::new(vec![Cell::from("/tasks").style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)), Cell::from("Inspect active background swarm tasks")]),
-            Row::new(vec![Cell::from("/clear").style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)), Cell::from("Clear current conversation history")]),
+            Row::new(vec![Cell::from("/mcp").style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)), Cell::from("Inspect Universal MCP tool servers & tools")]),
+            Row::new(vec![Cell::from("/timeline [name]").style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)), Cell::from("Ephemeral isolated worktree/snapshot timeline")]),
+            Row::new(vec![Cell::from("/verify").style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)), Cell::from("Run Verification Gate & Golden Invariant Guard")]),
+            Row::new(vec![Cell::from("/fix").style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)), Cell::from("Diagnose & fix latest shell command crash")]),
             Row::new(vec![Cell::from("/help").style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)), Cell::from("Open this shortcuts and commands panel")]),
             Row::new(vec![Cell::from("/exit, /quit").style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)), Cell::from("Exit Hagibis interactive session")]),
         ];
@@ -5402,6 +5456,11 @@ impl CockpitState {
                 }
             }
 
+            if self.needs_clear {
+                terminal.clear()?;
+                self.needs_clear = false;
+            }
+
             terminal.draw(|f| self.render_ui(f))?;
 
             if event::poll(Duration::from_millis(50))? {
@@ -5434,6 +5493,7 @@ impl CockpitState {
                                 CockpitOverlay::ModelPicker { ref mut selected } => match key.code {
                                     KeyCode::Esc => {
                                         self.overlay = CockpitOverlay::None;
+                                        self.needs_clear = true;
                                     }
                                     KeyCode::Up | KeyCode::Char('k') => {
                                         *selected = selected.saturating_sub(1);
@@ -5448,12 +5508,14 @@ impl CockpitState {
                                             self.add_system_notice(format!("Active model switched to: {}", new_model));
                                         }
                                         self.overlay = CockpitOverlay::None;
+                                        self.needs_clear = true;
                                     }
                                     _ => {}
                                 },
                                 CockpitOverlay::Shortcuts | CockpitOverlay::Tasks => match key.code {
                                     KeyCode::Esc | KeyCode::Enter | KeyCode::Char('?') | KeyCode::Char('q') => {
                                         self.overlay = CockpitOverlay::None;
+                                        self.needs_clear = true;
                                     }
                                     _ => {}
                                 },
@@ -5813,6 +5875,94 @@ impl CockpitState {
                                         }
                                         "/heal" => {
                                             self.trigger_heal();
+                                        }
+                                        "/mcp" => {
+                                            match hgb_core::mcp::McpConfigFile::load_from_dir(".") {
+                                                Ok(Some(cfg)) => {
+                                                    let count = cfg.mcp_servers.len();
+                                                    let names: Vec<String> = cfg.mcp_servers.keys().cloned().collect();
+                                                    self.add_system_notice(format!(
+                                                        "🔌 Universal MCP: {} configured server(s) [{}]",
+                                                        count,
+                                                        names.join(", ")
+                                                    ));
+                                                }
+                                                Ok(None) => {
+                                                    self.add_system_notice("Universal MCP: No hagibis.mcp.json or .hgb/mcp.json found in workspace. Create one to link external tool servers.".to_string());
+                                                }
+                                                Err(e) => {
+                                                    self.add_system_notice(format!("MCP config error: {}", e));
+                                                }
+                                            }
+                                        }
+                                        "/timeline" | "/fork" => {
+                                            let mgr = hgb_core::timeline::TimelineManager::new(".");
+                                            let sub = arg.trim();
+                                            if sub.is_empty() || sub == "list" || sub == "ls" {
+                                                match mgr.list_timelines() {
+                                                    Ok(list) => {
+                                                        if list.is_empty() {
+                                                            self.add_system_notice("No active ephemeral timelines. Run '/timeline <name>' to fork an isolated worktree.".to_string());
+                                                        } else {
+                                                            let names: Vec<String> = list.iter().map(|t| format!("{} ({})", t.name, if t.is_git_worktree { "worktree" } else { "snapshot" })).collect();
+                                                            self.add_system_notice(format!("Active Timelines ({}): {}", list.len(), names.join(", ")));
+                                                        }
+                                                    }
+                                                    Err(e) => self.add_system_notice(format!("Failed to list timelines: {}", e)),
+                                                }
+                                            } else if let Some(target) = sub.strip_prefix("merge ") {
+                                                match mgr.merge_timeline(target.trim()) {
+                                                    Ok(rep) => {
+                                                        if rep.success {
+                                                            self.add_system_notice(format!("✓ Merged timeline '{}' ({} files modified)", target.trim(), rep.merged_files.len()));
+                                                        } else {
+                                                            self.add_system_notice(format!("Merge failed for '{}': {}", target.trim(), rep.message));
+                                                        }
+                                                    }
+                                                    Err(e) => self.add_system_notice(format!("Timeline merge error: {}", e)),
+                                                }
+                                            } else if let Some(target) = sub.strip_prefix("diff ") {
+                                                match mgr.diff_timeline(target.trim()) {
+                                                    Ok(diff) => {
+                                                        self.add_system_notice(format!("Timeline '{}' diff: {} files changed. Modified: {:?}", target.trim(), diff.files_changed, diff.modified_files));
+                                                    }
+                                                    Err(e) => self.add_system_notice(format!("Timeline diff error: {}", e)),
+                                                }
+                                            } else if let Some(target) = sub.strip_prefix("discard ") {
+                                                match mgr.discard_timeline(target.trim()) {
+                                                    Ok(_) => self.add_system_notice(format!("✓ Discarded timeline '{}'", target.trim())),
+                                                    Err(e) => self.add_system_notice(format!("Timeline discard error: {}", e)),
+                                                }
+                                            } else {
+                                                let name = sub.strip_prefix("create ").unwrap_or(sub).trim();
+                                                match mgr.create_timeline(name, None) {
+                                                    Ok(info) => {
+                                                        self.add_system_notice(format!("✓ Ephemeral timeline '{}' created at {} ({})", info.name, info.path.display(), if info.is_git_worktree { "git worktree" } else { "snapshot fallback" }));
+                                                    }
+                                                    Err(e) => self.add_system_notice(format!("Failed to create timeline: {}", e)),
+                                                }
+                                            }
+                                        }
+                                        "/verify" => {
+                                            let mut gate = hgb_core::verification_gate::VerificationGate::new(".");
+                                            gate.auto_detect_invariants();
+                                            match gate.verify_and_heal::<fn(&[hgb_core::verification_gate::VerificationStepResult], usize) -> hgb_core::Result<Option<String>>>(None) {
+                                                Ok(cert) => {
+                                                    self.add_system_notice(format!("🛡️ Verification Gate: {} | Hash: {} | Summary: {}", cert.status, &cert.integrity_hash[..12.min(cert.integrity_hash.len())], cert.summary));
+                                                }
+                                                Err(e) => self.add_system_notice(format!("Verification Gate execution error: {}", e)),
+                                            }
+                                        }
+                                        "/fix" => {
+                                            let interceptor = hgb_core::shell_hook::CrashInterceptor::new(".");
+                                            match interceptor.load_latest_crash() {
+                                                Ok(Some(rec)) => {
+                                                    let diag = interceptor.diagnose_and_fix(&rec);
+                                                    self.add_system_notice(format!("🚨 Shell Crash [{:?}]: {}\nSuggested Fix: {}\nConfidence: {:.0}%", diag.category, diag.root_cause, diag.suggested_command_fix, diag.confidence * 100.0));
+                                                }
+                                                Ok(None) => self.add_system_notice("No recent shell crash recorded. (Install shell hook with 'hgb init <bash|zsh|fish>')".to_string()),
+                                                Err(e) => self.add_system_notice(format!("Crash inspection error: {}", e)),
+                                            }
                                         }
                                         "/share" | "/tunnel" => {
                                             let port: u16 = arg.parse().unwrap_or(3000);

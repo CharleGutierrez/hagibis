@@ -2622,6 +2622,141 @@ impl HagibisRepl {
                     println!("     Remediation: {}", v.remediation_hint.cyan());
                 }
             }
+            // --- Superpowers Vibe Coding Responses ---
+            HgbResponse::McpToolsList(tools) => {
+                println!("{}", format!("🔌 UNIVERSAL MCP DISCOVERED TOOLS ({}) 🔌", tools.len()).bold().cyan());
+                if tools.is_empty() {
+                    println!("  {}", "No tools discovered. Configure servers in 'hagibis.mcp.json' or '.hgb/mcp.json'.".dimmed());
+                } else {
+                    for t in tools {
+                        println!("  • {}", t.name.green().bold());
+                        if let Some(desc) = &t.description {
+                            println!("    {}", desc.dimmed());
+                        }
+                    }
+                }
+            }
+            HgbResponse::McpToolCallResult(val) => {
+                println!("{}", "🔌 MCP TOOL EXECUTION RESULT:".green().bold());
+                println!("{}", serde_json::to_string_pretty(&val).unwrap_or_else(|_| format!("{:?}", val)));
+            }
+            HgbResponse::TimelineCreated(info) => {
+                println!("{} Ephemeral timeline '{}' ready", "🌿 TIMELINE FORKED:".green().bold(), info.name.cyan());
+                println!("  [•] Location: {}", info.path.display().to_string().yellow());
+                println!("  [•] Type:     {}", if info.is_git_worktree { "Git Worktree" } else { "Snapshot Fallback" });
+                println!("  [•] Base:     {}", info.base_branch.unwrap_or_else(|| "default".into()));
+            }
+            HgbResponse::TimelineListReport(list) => {
+                println!("{}", format!("🌿 ACTIVE EPHEMERAL TIMELINES ({}) 🌿", list.len()).bold().cyan());
+                if list.is_empty() {
+                    println!("  {}", "No active timelines. Fork one with 'hgb timeline create <name>'".dimmed());
+                } else {
+                    for t in list {
+                        let kind = if t.is_git_worktree { "worktree" } else { "snapshot" };
+                        println!("  • {} [{}] ➔ {}", t.name.green().bold(), kind.cyan(), t.path.display().to_string().dimmed());
+                    }
+                }
+            }
+            HgbResponse::TimelineDiffReport(diff) => {
+                println!("{}", format!("🌿 TIMELINE DIFF: '{}' ({} files changed) 🌿", diff.timeline_name, diff.files_changed).bold().cyan());
+                if diff.files_changed == 0 {
+                    println!("  {}", "Timeline is identical to workspace.".green());
+                } else {
+                    for f in &diff.modified_files {
+                        println!("  ~ {}", f.yellow());
+                    }
+                    if !diff.diff_content.is_empty() {
+                        println!("\n{}", diff.diff_content);
+                    }
+                }
+            }
+            HgbResponse::TimelineMergeReport(rep) => {
+                if rep.success {
+                    println!("{} Timeline '{}' successfully merged into workspace!", "✔ TIMELINE MERGED:".green().bold(), rep.timeline_name.cyan());
+                    println!("  Modified files ({}):", rep.merged_files.len());
+                    for f in &rep.merged_files {
+                        println!("    • {}", f.green());
+                    }
+                } else {
+                    println!("{} Merge failed: {}", "✖ TIMELINE MERGE FAILED:".red().bold(), rep.message.red());
+                }
+            }
+            HgbResponse::TimelineDiscarded { name } => {
+                println!("{} Ephemeral timeline '{}' discarded and cleaned up.", "✔ TIMELINE DISCARDED:".green().bold(), name);
+            }
+            HgbResponse::VerificationGateCertificate(cert) => {
+                let badge = match cert.status {
+                    hgb_core::verification_gate::VerificationStatus::Passed => "PASSED [GREEN]".green().bold(),
+                    hgb_core::verification_gate::VerificationStatus::Healed => "HEALED [AUTO-REPAIRED]".cyan().bold(),
+                    hgb_core::verification_gate::VerificationStatus::Failed => "FAILED [INVARIANTS VIOLATED]".red().bold(),
+                    hgb_core::verification_gate::VerificationStatus::Rejected => "REJECTED".red().bold(),
+                };
+                println!("{}", "🛡️ VERIFICATION GATE & GOLDEN INVARIANT GUARD 🛡️".bold().cyan());
+                println!("  [•] Certificate ID: {}", cert.certificate_id.yellow());
+                println!("  [•] Status:         {}", badge);
+                println!("  [•] Blake3 Hash:    {}", cert.integrity_hash.dimmed());
+                println!("  [•] Steps Run:      {} steps (iterations: {})", cert.steps.len(), cert.iterations_run);
+                for step in &cert.steps {
+                    let st = if step.passed { "PASS".green().bold() } else { "FAIL".red().bold() };
+                    println!("    [{}] {} ({}ms)", st, step.name, step.duration_ms);
+                    if !step.passed && !step.output.is_empty() {
+                        let snippet: String = step.output.lines().take(4).collect::<Vec<_>>().join("\n      ");
+                        println!("      {}", snippet.dimmed());
+                    }
+                }
+                if !cert.healed_patches.is_empty() {
+                    println!("\n  🩹 Applied Self-Healing Patches:");
+                    for p in &cert.healed_patches {
+                        println!("    • {}", p.green());
+                    }
+                }
+            }
+            HgbResponse::ShellInitScript(script) => {
+                print!("{}", script);
+            }
+            HgbResponse::ShellCrashRecorded { crash_id } => {
+                println!("{} Logged crash to .hgb/crashes/{}.json", "🚨 Shell crash recorded:".red().bold(), crash_id);
+            }
+            HgbResponse::ShellCrashDiagnosis(diag) => {
+                println!("{}", "🚨 HGB SHELL COMPANION CRASH DIAGNOSIS 🚨".bold().red());
+                println!("  [•] Category:   {:?}", diag.category);
+                println!("  [•] Root Cause: {}", diag.root_cause.yellow().bold());
+                println!("  [•] Fix:        {}", diag.suggested_command_fix.green().bold());
+                println!("  [•] Confidence: {:.0}%", diag.confidence * 100.0);
+                println!("  [•] Why:        {}", diag.explanation);
+                if !diag.alternative_fixes.is_empty() {
+                    println!("  [•] Alternatives:");
+                    for alt in &diag.alternative_fixes {
+                        println!("      - {}", alt.cyan());
+                    }
+                }
+            }
+            HgbResponse::AmbientVibeReport(events) => {
+                println!("{}", "⚡ AMBIENT VIBE CHECK SUITE REPORT ⚡".bold().magenta());
+                for ev in events {
+                    match ev {
+                        hgb_core::ambient_vibe::VibeWatchEvent::CheckPassed { suite_name, duration_ms, summary } => {
+                            println!("  ✔ {} ({}ms): {}", suite_name.green().bold(), duration_ms, summary);
+                        }
+                        hgb_core::ambient_vibe::VibeWatchEvent::CheckFailed { suite_name, duration_ms, error_output, exit_code } => {
+                            println!("  ✖ {} ({}ms, exit code {}):", suite_name.red().bold(), duration_ms, exit_code);
+                            let snip: String = error_output.lines().take(3).collect::<Vec<_>>().join("\n    ");
+                            println!("    {}", snip.dimmed());
+                        }
+                        hgb_core::ambient_vibe::VibeWatchEvent::SpeculativePatchReady { file_path, explanation, .. } => {
+                            println!("  🩹 Speculative patch ready for {}: {}", file_path.display().to_string().cyan(), explanation);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            HgbResponse::GlanceSynthesizedCode { framework, code, css } => {
+                println!("{}", format!("✨ SYNTHESIZED {} COMPONENT ✨", framework.to_uppercase()).bold().green());
+                if let Some(c) = css {
+                    println!("  Styles: {}", c.cyan());
+                }
+                println!("\n{}", code);
+            }
         }
     }
 

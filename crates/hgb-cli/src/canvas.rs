@@ -6,6 +6,7 @@
 //!    syntax-colored diffs (`+` green, `-` red), thinking streams, tables, and blockquotes.
 
 use colored::Colorize;
+use hgb_nextgen::cockpit::visual_str_width;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// Status of an inline tool call execution
@@ -92,7 +93,7 @@ impl ToolCallCard {
 
         // Header raw width
         let header_prefix_raw = format!("╭─── {} {} ", tool_icon, self.tool_name);
-        let prefix_len = UnicodeWidthStr::width(header_prefix_raw.as_str());
+        let prefix_len = visual_str_width(header_prefix_raw.as_str());
 
         // Status raw width
         let badge_raw = match &self.status {
@@ -116,21 +117,21 @@ impl ToolCallCard {
             "".to_string()
         };
         let status_raw_len = 11
-            + UnicodeWidthStr::width(badge_raw)
-            + UnicodeWidthStr::width(dur_raw.as_str())
-            + UnicodeWidthStr::width(target_raw.as_str());
+            + visual_str_width(badge_raw)
+            + visual_str_width(dur_raw.as_str())
+            + visual_str_width(target_raw.as_str());
 
         let mut natural_w = (prefix_len + 16).max(status_raw_len + 4);
 
         if let ToolCardStatus::Failed { ref error, .. } = self.status {
-            let err_w = UnicodeWidthStr::width(error.as_str()) + 14;
+            let err_w = visual_str_width(error.as_str()) + 14;
             if err_w > natural_w {
                 natural_w = err_w;
             }
         }
 
         if let Some(ref details) = self.extra_details {
-            let det_w = UnicodeWidthStr::width(details.as_str()) + 8;
+            let det_w = visual_str_width(details.as_str()) + 8;
             if det_w > natural_w {
                 natural_w = det_w;
             }
@@ -138,7 +139,7 @@ impl ToolCallCard {
 
         if let Some(ref snippet) = self.output_snippet {
             for line in snippet.trim().lines().take(25) {
-                let lw = UnicodeWidthStr::width(line) + 6;
+                let lw = visual_str_width(line) + 6;
                 if lw > natural_w {
                     natural_w = lw;
                 }
@@ -180,9 +181,9 @@ impl ToolCallCard {
         };
 
         let status_content_len = 11
-            + UnicodeWidthStr::width(badge_raw)
-            + UnicodeWidthStr::width(dur_raw.as_str())
-            + UnicodeWidthStr::width(target_raw.as_str());
+            + visual_str_width(badge_raw)
+            + visual_str_width(dur_raw.as_str())
+            + visual_str_width(target_raw.as_str());
         let status_pad = width.saturating_sub(status_content_len + 2);
         out.push_str(&format!(
             "│  Status: {}{}{}{}{}\n",
@@ -195,7 +196,7 @@ impl ToolCallCard {
 
         // Render error if failed
         if let ToolCardStatus::Failed { ref error, .. } = self.status {
-            let err_len = UnicodeWidthStr::width(error.as_str()) + 13;
+            let err_len = visual_str_width(error.as_str()) + 13;
             let pad = width.saturating_sub(err_len + 2);
             out.push_str(&format!(
                 "│  ✖ Error: {}{}{}\n",
@@ -207,7 +208,7 @@ impl ToolCallCard {
 
         // Extra details if present
         if let Some(ref details) = self.extra_details {
-            let det_len = UnicodeWidthStr::width(details.as_str()) + 7;
+            let det_len = visual_str_width(details.as_str()) + 7;
             let pad = width.saturating_sub(det_len + 2);
             out.push_str(&format!(
                 "│  ℹ️  {}{}{}\n",
@@ -235,7 +236,7 @@ impl ToolCallCard {
                     } else {
                         line.dimmed().to_string()
                     };
-                    let lw = UnicodeWidthStr::width(line);
+                    let lw = visual_str_width(line);
                     let (safe_line, safe_lw) = if lw > max_inner {
                         let mut tr = String::new();
                         let mut cw = 0;
@@ -258,7 +259,7 @@ impl ToolCallCard {
                 let line_count = trimmed.lines().count();
                 if line_count > 25 {
                     let trunc_msg = format!("... ({} more lines truncated)", line_count - 25);
-                    let tw = UnicodeWidthStr::width(trunc_msg.as_str());
+                    let tw = visual_str_width(trunc_msg.as_str());
                     let pad = max_inner.saturating_sub(tw);
                     out.push_str(&format!("│  {}  {}{}\n", trunc_msg.dimmed(), " ".repeat(pad), "│".dimmed()));
                 }

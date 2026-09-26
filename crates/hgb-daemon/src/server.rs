@@ -1,4 +1,10 @@
 use hgb_core::{DaemonStatus, DoctorPillar, HgbError, HgbRequest, HgbResponse, Result};
+use hgb_core::mcp::{McpClient, McpConfigFile};
+use hgb_core::timeline::TimelineManager;
+use hgb_core::verification_gate::{VerificationGate, VerificationStepResult};
+use hgb_core::shell_hook::{CrashInterceptor, ShellHookGenerator, SupportedShell};
+use hgb_core::ambient_vibe::AmbientVibeEngine;
+use hgb_core::glance::{ImagePayload, synthesize_component};
 use hgb_nextgen::{
     race::SpeculativeRaceRunner, storyteller::PrStoryteller, AgenticFuzzEngine, ProvenanceLedger,
     SwarmCheckpointManager,
@@ -1121,6 +1127,165 @@ impl HagibisDaemon {
                     });
                 let report = hgb_nextgen::DriftLockEngine::audit_patch(&dna, &patch_content);
                 HgbResponse::ComplianceAuditResult(report)
+            }
+            // --- Superpowers Vibe Coding Handlers ---
+            // 1. Universal MCP Client
+            HgbRequest::McpListTools { config_path } => {
+                let cfg = if let Some(ref p) = config_path {
+                    let path = Path::new(p);
+                    if path.is_file() {
+                        match std::fs::read_to_string(path) {
+                            Ok(data) => serde_json::from_str(&data).unwrap_or_else(|_| McpConfigFile::new()),
+                            Err(_) => McpConfigFile::new(),
+                        }
+                    } else {
+                        McpConfigFile::load_from_dir(path).unwrap_or(None).unwrap_or_else(McpConfigFile::new)
+                    }
+                } else {
+                    McpConfigFile::load_from_dir(".").unwrap_or(None).unwrap_or_else(McpConfigFile::new)
+                };
+
+                let mut all_tools = Vec::new();
+                for (name, server_cfg) in cfg.mcp_servers {
+                    if server_cfg.disabled {
+                        continue;
+                    }
+                    if let Ok(client) = McpClient::spawn_and_handshake(&name, &server_cfg, None).await {
+                        if let Ok(tools) = client.list_tools().await {
+                            all_tools.extend(tools);
+                        }
+                    }
+                }
+                HgbResponse::McpToolsList(all_tools)
+            }
+            HgbRequest::McpCallTool { server_name, tool_name, arguments, config_path } => {
+                let cfg = if let Some(ref p) = config_path {
+                    let path = Path::new(p);
+                    if path.is_file() {
+                        match std::fs::read_to_string(path) {
+                            Ok(data) => serde_json::from_str(&data).unwrap_or_else(|_| McpConfigFile::new()),
+                            Err(_) => McpConfigFile::new(),
+                        }
+                    } else {
+                        McpConfigFile::load_from_dir(path).unwrap_or(None).unwrap_or_else(McpConfigFile::new)
+                    }
+                } else {
+                    McpConfigFile::load_from_dir(".").unwrap_or(None).unwrap_or_else(McpConfigFile::new)
+                };
+
+                let server_cfg = match cfg.mcp_servers.get(&server_name) {
+                    Some(s) => s,
+                    None => return HgbResponse::Error(format!("MCP Server '{}' not found in configuration", server_name)),
+                };
+                match McpClient::spawn_and_handshake(&server_name, server_cfg, None).await {
+                    Ok(client) => match client.call_tool(&tool_name, arguments).await {
+                        Ok(val) => HgbResponse::McpToolCallResult(val),
+                        Err(e) => HgbResponse::Error(format!("MCP tool execution failed: {}", e)),
+                    },
+                    Err(e) => HgbResponse::Error(format!("Failed to connect to MCP server '{}': {}", server_name, e)),
+                }
+            }
+            // 2. Ephemeral Worktree "What-If" Timelines
+            HgbRequest::TimelineCreate { name, base_branch, workspace_root } => {
+                let root = workspace_root.unwrap_or_else(|| ".".to_string());
+                let mgr = TimelineManager::new(&root);
+                match mgr.create_timeline(&name, base_branch.as_deref()) {
+                    Ok(info) => HgbResponse::TimelineCreated(info),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            HgbRequest::TimelineList { workspace_root } => {
+                let root = workspace_root.unwrap_or_else(|| ".".to_string());
+                let mgr = TimelineManager::new(&root);
+                match mgr.list_timelines() {
+                    Ok(list) => HgbResponse::TimelineListReport(list),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            HgbRequest::TimelineDiff { name, workspace_root } => {
+                let root = workspace_root.unwrap_or_else(|| ".".to_string());
+                let mgr = TimelineManager::new(&root);
+                match mgr.diff_timeline(&name) {
+                    Ok(diff) => HgbResponse::TimelineDiffReport(diff),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            HgbRequest::TimelineMerge { name, workspace_root } => {
+                let root = workspace_root.unwrap_or_else(|| ".".to_string());
+                let mgr = TimelineManager::new(&root);
+                match mgr.merge_timeline(&name) {
+                    Ok(rep) => HgbResponse::TimelineMergeReport(rep),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            HgbRequest::TimelineDiscard { name, workspace_root } => {
+                let root = workspace_root.unwrap_or_else(|| ".".to_string());
+                let mgr = TimelineManager::new(&root);
+                match mgr.discard_timeline(&name) {
+                    Ok(_) => HgbResponse::TimelineDiscarded { name },
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            // 3. Verification Gate & Golden Invariant Guard
+            HgbRequest::VerificationGateRun { workspace_root, auto_heal: _ } => {
+                let root = workspace_root.unwrap_or_else(|| ".".to_string());
+                let mut gate = VerificationGate::new(&root);
+                gate.auto_detect_invariants();
+                match gate.verify_and_heal::<fn(&[VerificationStepResult], usize) -> Result<Option<String>>>(None) {
+                    Ok(cert) => HgbResponse::VerificationGateCertificate(cert),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            // 4. Shell Companion & Crash Interceptor
+            HgbRequest::ShellInit { shell } => {
+                let supported = SupportedShell::from_str_name(&shell).unwrap_or(SupportedShell::Bash);
+                let script = ShellHookGenerator::generate(supported, "hgb");
+                HgbResponse::ShellInitScript(script)
+            }
+            HgbRequest::ShellCrashRecord { record } => {
+                let interceptor = CrashInterceptor::new(&record.cwd);
+                match interceptor.record_crash(record) {
+                    Ok(id) => HgbResponse::ShellCrashRecorded { crash_id: id },
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            HgbRequest::ShellCrashFix { workspace_root } => {
+                let root = workspace_root.unwrap_or_else(|| ".".to_string());
+                let interceptor = CrashInterceptor::new(&root);
+                match interceptor.load_latest_crash() {
+                    Ok(Some(rec)) => {
+                        let diag = interceptor.diagnose_and_fix(&rec);
+                        HgbResponse::ShellCrashDiagnosis(diag)
+                    }
+                    Ok(None) => HgbResponse::Error("No recent shell crash found in .hgb/crashes/".into()),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            // 5. Ambient Watch-and-Vibe Autonomous Loop
+            HgbRequest::AmbientVibeRunOnce { workspace_root } => {
+                let root = workspace_root.unwrap_or_else(|| ".".to_string());
+                let root_path = PathBuf::from(&root);
+                let suites = AmbientVibeEngine::detect_test_suites(&root_path);
+                let mut events = Vec::new();
+                for suite in suites {
+                    let ev = AmbientVibeEngine::run_suite(&suite, &root_path).await;
+                    events.push(ev);
+                }
+                HgbResponse::AmbientVibeReport(events)
+            }
+            // 6. Visual Ingestion Component Synthesis
+            HgbRequest::GlanceSynthesize { image_path, target_framework } => {
+                match ImagePayload::load_from_path(&image_path) {
+                    Ok(payload) => match synthesize_component(&payload, &target_framework, None).await {
+                        Ok(res) => HgbResponse::GlanceSynthesizedCode {
+                            framework: res.framework,
+                            code: res.component_code,
+                            css: res.stylesheet_or_tailwind,
+                        },
+                        Err(e) => HgbResponse::Error(e.to_string()),
+                    },
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
             }
         }
     }

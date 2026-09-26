@@ -311,6 +311,74 @@ pub enum HgbRequest {
     DriftLockAuditPatch {
         patch_content: String,
     },
+    // --- Superpowers Vibe Coding Requests ---
+    // 1. Universal MCP Client
+    McpListTools {
+        #[serde(default)]
+        config_path: Option<String>,
+    },
+    McpCallTool {
+        server_name: String,
+        tool_name: String,
+        arguments: serde_json::Value,
+        #[serde(default)]
+        config_path: Option<String>,
+    },
+    // 2. Ephemeral Worktree "What-If" Timelines
+    TimelineCreate {
+        name: String,
+        #[serde(default)]
+        base_branch: Option<String>,
+        #[serde(default)]
+        workspace_root: Option<String>,
+    },
+    TimelineList {
+        #[serde(default)]
+        workspace_root: Option<String>,
+    },
+    TimelineDiff {
+        name: String,
+        #[serde(default)]
+        workspace_root: Option<String>,
+    },
+    TimelineMerge {
+        name: String,
+        #[serde(default)]
+        workspace_root: Option<String>,
+    },
+    TimelineDiscard {
+        name: String,
+        #[serde(default)]
+        workspace_root: Option<String>,
+    },
+    // 3. Verification Gate & Golden Invariant Guard
+    VerificationGateRun {
+        #[serde(default)]
+        workspace_root: Option<String>,
+        #[serde(default)]
+        auto_heal: bool,
+    },
+    // 4. Shell Companion & Crash Interceptor
+    ShellInit {
+        shell: String,
+    },
+    ShellCrashRecord {
+        record: crate::shell_hook::CrashRecord,
+    },
+    ShellCrashFix {
+        #[serde(default)]
+        workspace_root: Option<String>,
+    },
+    // 5. Ambient Watch-and-Vibe Autonomous Loop
+    AmbientVibeRunOnce {
+        #[serde(default)]
+        workspace_root: Option<String>,
+    },
+    // 6. Visual Ingestion Component Synthesis
+    GlanceSynthesize {
+        image_path: String,
+        target_framework: String,
+    },
 }
 
 fn default_two() -> usize {
@@ -492,6 +560,24 @@ pub enum HgbResponse {
     AutoSpecListReport(Vec<crate::auto_spec::GoldenSpec>),
     DriftDnaReport(crate::drift_lock::ArchitecturalDna),
     ComplianceAuditResult(crate::drift_lock::ComplianceAuditReport),
+    // --- Superpowers Vibe Coding Responses ---
+    McpToolsList(Vec<crate::mcp::McpTool>),
+    McpToolCallResult(serde_json::Value),
+    TimelineCreated(crate::timeline::TimelineInfo),
+    TimelineListReport(Vec<crate::timeline::TimelineInfo>),
+    TimelineDiffReport(crate::timeline::TimelineDiff),
+    TimelineMergeReport(crate::timeline::TimelineMergeReport),
+    TimelineDiscarded { name: String },
+    VerificationGateCertificate(crate::verification_gate::VerificationCertificate),
+    ShellInitScript(String),
+    ShellCrashRecorded { crash_id: String },
+    ShellCrashDiagnosis(crate::shell_hook::CrashDiagnosis),
+    AmbientVibeReport(Vec<crate::ambient_vibe::VibeWatchEvent>),
+    GlanceSynthesizedCode {
+        framework: String,
+        code: String,
+        css: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -57,6 +57,48 @@ pub enum StyleSubcommand {
     View,
 }
 
+#[derive(Subcommand, Debug, Clone)]
+pub enum McpSubcommand {
+    /// List all discovered tools across configured external MCP servers
+    List {
+        #[arg(short, long)]
+        config: Option<String>,
+    },
+    /// Call an external MCP server tool with JSON arguments
+    Call {
+        server: String,
+        tool: String,
+        #[arg(default_value = "{}")]
+        args: String,
+        #[arg(short, long)]
+        config: Option<String>,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum TimelineSubcommand {
+    /// List active ephemeral timelines
+    List,
+    /// Create an isolated timeline worktree
+    Create {
+        name: String,
+        #[arg(short, long)]
+        base: Option<String>,
+    },
+    /// Diff changes in timeline against current workspace
+    Diff {
+        name: String,
+    },
+    /// Merge timeline changes back into main workspace
+    Merge {
+        name: String,
+    },
+    /// Discard and delete ephemeral timeline
+    Discard {
+        name: String,
+    },
+}
+
 #[derive(Subcommand)]
 enum Commands {
     /// Launch the classic terminal REPL (line-by-line scrolling mode)
@@ -106,9 +148,10 @@ enum Commands {
         name: Option<String>,
     },
 
-    /// Speculative dual-draft racing ("First Green Wins")
+    /// Speculative dual-draft racing & Ambient Watch-and-Vibe Autonomous Loop
     Vibe {
         /// Prompt or task description to race
+        #[arg(default_value = "")]
         prompt: String,
         /// Optional target directory
         #[arg(short, long)]
@@ -116,6 +159,9 @@ enum Commands {
         /// Enable speculative dual-draft racing
         #[arg(long, default_value_t = true)]
         race: bool,
+        /// Run continuous ambient watcher loop
+        #[arg(short, long)]
+        watch: bool,
     },
 
     /// Style Memory & Reject-Learner Vault
@@ -139,14 +185,17 @@ enum Commands {
         name: Option<String>,
     },
 
-    /// Formally verify code invariant using SMT-LIB2 / Interval Solver
+    /// Verification Gate & Golden Invariant Guard (or formal invariant solver)
     Verify {
-        /// Target code expression or file
+        /// Target code expression or file (optional; defaults to full workspace)
         #[arg(short, long)]
-        target: String,
+        target: Option<String>,
         /// Invariant type: division, bounds, overflow
         #[arg(short, long, default_value = "division")]
         invariant: String,
+        /// Attempt 3-iteration self-healing loop on invariant failures
+        #[arg(short, long)]
+        heal: bool,
     },
 
     /// Manage time-travel state checkpoints and WAL
@@ -455,8 +504,8 @@ enum Commands {
     /// Terminal Rescue: diagnose failed shell commands and suggest verified corrective fixes
     #[command(alias = "rescue")]
     Fix {
-        /// Failed command line to diagnose
-        command: String,
+        /// Failed command line to diagnose (defaults to latest recorded crash in .hgb/crashes/)
+        command: Option<String>,
         /// Exit code of the failure (default: 1)
         #[arg(short, long, default_value_t = 1)]
         exit_code: i32,
@@ -499,6 +548,9 @@ enum Commands {
         /// Optional path to source HTML/CSS file context
         #[arg(short, long)]
         context: Option<String>,
+        /// Synthesize production UI component code (react, html, ratatui)
+        #[arg(short, long)]
+        synthesize: Option<String>,
     },
 
     /// Dependency Hallucination Firewall: verify packages against live ecosystem registries
@@ -676,6 +728,38 @@ enum Commands {
         /// Audit patch file against Architectural DNA
         #[arg(long)]
         audit: Option<String>,
+    },
+
+    /// Internal helper invoked by shell integration hooks to record failed commands
+    #[command(name = "crash-record", hide = true)]
+    CrashRecord {
+        #[arg(long)]
+        cmd: String,
+        #[arg(long)]
+        code: i32,
+        #[arg(long)]
+        pwd: String,
+        #[arg(long, default_value = "")]
+        stderr: String,
+    },
+
+    /// Generate shell companion integration script for Bash, Zsh, or Fish
+    Init {
+        /// Target shell: bash, zsh, fish
+        shell: String,
+    },
+
+    /// Universal Model Context Protocol (MCP) Client
+    Mcp {
+        #[command(subcommand)]
+        action: McpSubcommand,
+    },
+
+    /// Manage Ephemeral "What-If" Worktree & Snapshot Timelines
+    #[command(alias = "fork")]
+    Timeline {
+        #[command(subcommand)]
+        action: TimelineSubcommand,
     },
 }
 
@@ -1113,29 +1197,81 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             Ok(())
         }
-        Commands::Vibe { prompt, target_dir, race: _ } => {
-            println!("{}", "🏎️ Speculative Dual-Draft Race: Fast Local vs Frontier Reasoner...".bold().cyan());
-            let repl_helper = HagibisRepl::new(client);
-            let resp = repl_helper.dispatch(HgbRequest::VibeRace { prompt, target_dir }).await;
-            match resp {
-                HgbResponse::RaceResult { winner, duration_ms, patch, passed_checks } => {
-                    if passed_checks {
-                        println!(
-                            "{} {} ({})",
-                            "🏆 First Green Candidate Won:".green().bold(),
-                            winner.bold().white(),
-                            format!("{} ms", duration_ms).dimmed()
-                        );
-                        ChatCanvas::print_markdown(&patch);
-                        hgb_core::play_vibe_chime(true);
-                    } else {
-                        println!("{} {} (all candidates failed checks)", "✖ Race Failed:".red().bold(), winner);
-                        hgb_core::play_vibe_chime(false);
+        Commands::Vibe { prompt, target_dir, race: _, watch } => {
+            if watch {
+                println!("{}", "⚡ Ambient Watch-and-Vibe Autonomous Loop starting... (Ctrl+C to stop)".magenta().bold());
+                let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(100);
+                let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+                let engine = hgb_core::ambient_vibe::AmbientVibeEngine::new(
+                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+                    hgb_core::ambient_vibe::AmbientVibeConfig::default(),
+                );
+                let handle = engine.spawn_loop(event_tx, cancel_rx);
+
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {
+                        let _ = cancel_tx.send(true);
+                        println!("\n{}", "🛑 Ambient Vibe Watcher stopped.".yellow());
                     }
+                    _ = async {
+                        while let Some(ev) = event_rx.recv().await {
+                            match ev {
+                                hgb_core::ambient_vibe::VibeWatchEvent::WorkspaceModified { changed_paths } => {
+                                    println!("{} Detected {} changed file(s):", "⚡ MODIFIED:".yellow().bold(), changed_paths.len());
+                                    for p in changed_paths {
+                                        println!("   ~ {}", p.display().to_string().cyan());
+                                    }
+                                }
+                                hgb_core::ambient_vibe::VibeWatchEvent::CheckStarted { suite_name, command } => {
+                                    println!("   ▶ Running {} [{}]...", suite_name.bold(), command.dimmed());
+                                }
+                                hgb_core::ambient_vibe::VibeWatchEvent::CheckPassed { suite_name, duration_ms, summary } => {
+                                    println!("   ✔ {} passed ({}ms): {}", suite_name.green().bold(), duration_ms, summary);
+                                    hgb_core::play_vibe_chime(true);
+                                }
+                                hgb_core::ambient_vibe::VibeWatchEvent::CheckFailed { suite_name, duration_ms, error_output, exit_code } => {
+                                    println!("   ✖ {} failed ({}ms, exit code {}):", suite_name.red().bold(), duration_ms, exit_code);
+                                    let snip: String = error_output.lines().take(4).collect::<Vec<_>>().join("\n     ");
+                                    println!("     {}", snip.dimmed());
+                                    hgb_core::play_vibe_chime(false);
+                                }
+                                hgb_core::ambient_vibe::VibeWatchEvent::SpeculativePatchReady { file_path, explanation, .. } => {
+                                    println!("   🩹 Speculative patch synthesized for {}: {}", file_path.display().to_string().cyan().bold(), explanation.green());
+                                }
+                                hgb_core::ambient_vibe::VibeWatchEvent::Idle => {}
+                            }
+                        }
+                    } => {}
                 }
-                other => {
-                    hgb_core::play_vibe_chime(false);
-                    repl_helper.render_response(other);
+                let _ = handle.await;
+            } else if prompt.is_empty() {
+                let repl_helper = HagibisRepl::new(client);
+                let resp = repl_helper.dispatch(HgbRequest::AmbientVibeRunOnce { workspace_root: None }).await;
+                repl_helper.render_response(resp);
+            } else {
+                println!("{}", "🏎️ Speculative Dual-Draft Race: Fast Local vs Frontier Reasoner...".bold().cyan());
+                let repl_helper = HagibisRepl::new(client);
+                let resp = repl_helper.dispatch(HgbRequest::VibeRace { prompt, target_dir }).await;
+                match resp {
+                    HgbResponse::RaceResult { winner, duration_ms, patch, passed_checks } => {
+                        if passed_checks {
+                            println!(
+                                "{} {} ({})",
+                                "🏆 First Green Candidate Won:".green().bold(),
+                                winner.bold().white(),
+                                format!("{} ms", duration_ms).dimmed()
+                            );
+                            ChatCanvas::print_markdown(&patch);
+                            hgb_core::play_vibe_chime(true);
+                        } else {
+                            println!("{} {} (all candidates failed checks)", "✖ Race Failed:".red().bold(), winner);
+                            hgb_core::play_vibe_chime(false);
+                        }
+                    }
+                    other => {
+                        hgb_core::play_vibe_chime(false);
+                        repl_helper.render_response(other);
+                    }
                 }
             }
             Ok(())
@@ -1224,10 +1360,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             Ok(())
         }
-        Commands::Verify { target, invariant } => {
+        Commands::Verify { target, invariant, heal } => {
             let repl_helper = HagibisRepl::new(client);
-            let resp = repl_helper.dispatch(HgbRequest::Verify { target, invariant }).await;
-            repl_helper.render_response(resp);
+            if let Some(tgt) = target {
+                let resp = repl_helper.dispatch(HgbRequest::Verify { target: tgt, invariant }).await;
+                repl_helper.render_response(resp);
+            } else {
+                println!("{}", "🛡️ Running Verification Gate & Golden Invariant Guard...".cyan().bold());
+                let resp = repl_helper.dispatch(HgbRequest::VerificationGateRun {
+                    workspace_root: None,
+                    auto_heal: heal,
+                }).await;
+                repl_helper.render_response(resp);
+            }
             Ok(())
         }
         Commands::Checkpoint { action, label } => {
@@ -1468,14 +1613,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Fix { command, exit_code, stderr, stdout } => {
             let repl_helper = HagibisRepl::new(client);
-            println!("{}", format!("🚨 Diagnosing failed command: '{}'...", command).cyan().bold());
-            let resp = repl_helper.dispatch(HgbRequest::RescueDiagnose {
-                failed_command: command,
-                exit_code,
-                stderr,
-                stdout,
-            }).await;
-            repl_helper.render_response(resp);
+            if let Some(cmd) = command {
+                println!("{}", format!("🚨 Diagnosing failed command: '{}'...", cmd).cyan().bold());
+                let resp = repl_helper.dispatch(HgbRequest::RescueDiagnose {
+                    failed_command: cmd,
+                    exit_code,
+                    stderr,
+                    stdout,
+                }).await;
+                repl_helper.render_response(resp);
+            } else {
+                println!("{}", "🚨 Inspecting latest shell crash from .hgb/crashes/...".cyan().bold());
+                let resp = repl_helper.dispatch(HgbRequest::ShellCrashFix {
+                    workspace_root: None,
+                }).await;
+                repl_helper.render_response(resp);
+            }
             Ok(())
         }
         Commands::Memory { record, title, decision, context, anchor, max_tokens } => {
@@ -1498,14 +1651,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             Ok(())
         }
-        Commands::Glance { image, context } => {
+        Commands::Glance { image, context, synthesize } => {
             let repl_helper = HagibisRepl::new(client);
-            println!("{}", format!("🖼️ Inspecting canvas: '{}'...", image).cyan().bold());
-            let resp = repl_helper.dispatch(HgbRequest::GlanceInspect {
-                image_path: image,
-                context_path: context,
-            }).await;
-            repl_helper.render_response(resp);
+            if let Some(fw) = synthesize {
+                println!("{}", format!("✨ Synthesizing {} component from '{}'...", fw.to_uppercase(), image).cyan().bold());
+                let resp = repl_helper.dispatch(HgbRequest::GlanceSynthesize {
+                    image_path: image,
+                    target_framework: fw,
+                }).await;
+                repl_helper.render_response(resp);
+            } else {
+                println!("{}", format!("🖼️ Inspecting canvas: '{}'...", image).cyan().bold());
+                let resp = repl_helper.dispatch(HgbRequest::GlanceInspect {
+                    image_path: image,
+                    context_path: context,
+                }).await;
+                repl_helper.render_response(resp);
+            }
             Ok(())
         }
         Commands::PkgCheck { ecosystem, name, version } => {
@@ -1685,6 +1847,87 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else if scan || audit.is_none() {
                 let resp = repl_helper.dispatch(HgbRequest::DriftLockScan { workspace_root: None }).await;
                 repl_helper.render_response(resp);
+            }
+            Ok(())
+        }
+        Commands::CrashRecord { cmd, code, pwd, stderr } => {
+            let repl_helper = HagibisRepl::new(client);
+            let rec = hgb_core::shell_hook::CrashRecord {
+                crash_id: String::new(),
+                command: cmd,
+                exit_code: code,
+                cwd: std::path::PathBuf::from(pwd),
+                stderr_snippet: stderr,
+                stdout_snippet: String::new(),
+                timestamp: chrono::Utc::now().to_rfc3339(),
+                environment: std::collections::HashMap::new(),
+            };
+            let _ = repl_helper.dispatch(HgbRequest::ShellCrashRecord { record: rec }).await;
+            Ok(())
+        }
+        Commands::Init { shell } => {
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::ShellInit { shell }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::Mcp { action } => {
+            let repl_helper = HagibisRepl::new(client);
+            match action {
+                McpSubcommand::List { config } => {
+                    let resp = repl_helper.dispatch(HgbRequest::McpListTools { config_path: config }).await;
+                    repl_helper.render_response(resp);
+                }
+                McpSubcommand::Call { server, tool, args, config } => {
+                    let parsed_args: serde_json::Value = serde_json::from_str(&args)
+                        .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+                    let resp = repl_helper.dispatch(HgbRequest::McpCallTool {
+                        server_name: server,
+                        tool_name: tool,
+                        arguments: parsed_args,
+                        config_path: config,
+                    }).await;
+                    repl_helper.render_response(resp);
+                }
+            }
+            Ok(())
+        }
+        Commands::Timeline { action } => {
+            let repl_helper = HagibisRepl::new(client);
+            match action {
+                TimelineSubcommand::List => {
+                    let resp = repl_helper.dispatch(HgbRequest::TimelineList { workspace_root: None }).await;
+                    repl_helper.render_response(resp);
+                }
+                TimelineSubcommand::Create { name, base } => {
+                    let resp = repl_helper.dispatch(HgbRequest::TimelineCreate {
+                        name,
+                        base_branch: base,
+                        workspace_root: None,
+                    }).await;
+                    repl_helper.render_response(resp);
+                }
+                TimelineSubcommand::Diff { name } => {
+                    let resp = repl_helper.dispatch(HgbRequest::TimelineDiff {
+                        name,
+                        workspace_root: None,
+                    }).await;
+                    repl_helper.render_response(resp);
+                }
+                TimelineSubcommand::Merge { name } => {
+                    let resp = repl_helper.dispatch(HgbRequest::TimelineMerge {
+                        name,
+                        workspace_root: None,
+                    }).await;
+                    repl_helper.render_response(resp);
+                }
+                TimelineSubcommand::Discard { name } => {
+                    let resp = repl_helper.dispatch(HgbRequest::TimelineDiscard {
+                        name,
+                        workspace_root: None,
+                    }).await;
+                    repl_helper.render_response(resp);
+                }
             }
             Ok(())
         }
