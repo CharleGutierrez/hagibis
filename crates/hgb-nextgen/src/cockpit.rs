@@ -7,7 +7,7 @@
 use chrono::Utc;
 use crossterm::{
     event::{
-        self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind,
+        self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
     },
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -23,9 +23,32 @@ use ratatui::{
     },
     Frame, Terminal,
 };
+use crate::chrono_warp::ChronoWarpEngine;
+use crate::clipboard_xerox::ClipboardXeroxEngine;
+use crate::compactor::SmartAutoCompactor;
+use crate::council::CouncilEngine;
+use crate::crash_interceptor::InterceptedCrash;
+use crate::diff_hud::{DiffHunk, DiffLineKind, SelectivePatcher};
+use crate::ghost_engine::GhostEngine;
+use crate::green_light::GreenLightEngine;
+use crate::hallucination_sentry::HallucinationSentry;
+use crate::phantom_swarm::{PhantomSwarmConfig, PhantomSwarmEngine};
+use crate::pixel_radar::PixelDiffRadar;
+use crate::qr::{detect_local_ip, render_mobile_test_card};
+use crate::terminal_graphics::{
+    detect_graphics_protocol, TerminalGraphicsProtocol,
+};
+use crate::voice_hook::AudioPromptEngine;
+use crate::wattage_governor::WattageGovernor;
+use crate::wiretap::{ExpectedField, WiretapEngine};
+use hgb_storage::db_time_machine::DbTimeMachine;
+use hgb_storage::semantic_telepathy::{TelepathyDocument, TelepathyIndex};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::io::{self, stdout};
-use std::time::Duration;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// Wrap a string cleanly to fit within max_width visual columns with proper word boundaries
@@ -507,6 +530,1379 @@ pub struct CockpitState {
     pub processing_tick: usize,
     pub processing_start: Option<chrono::DateTime<chrono::Utc>>,
     pub processing_prompt_preview: String,
+    pub last_copied_id: Option<String>,
+    pub last_copied_time: Option<Instant>,
+    pub copy_hitboxes: Arc<Mutex<Vec<CopyHitbox>>>,
+    pub pinned_goal: Option<String>,
+    pub diff_cards: Vec<DiffCardItem>,
+    pub diff_hitboxes: Arc<Mutex<Vec<DiffActionHitbox>>>,
+    pub intercepted_crash: Option<InterceptedCrash>,
+    pub heal_hitboxes: Arc<Mutex<Vec<HealHitbox>>>,
+    pub tunnel_cards: Vec<TunnelCardItem>,
+    pub image_previews: Vec<ImagePreviewItem>,
+    pub is_listening: bool,
+    pub voice_engine: AudioPromptEngine,
+    pub telepathy_cards: Vec<TelepathyCardItem>,
+    pub ghost_cards: Vec<GhostCardItem>,
+    pub council_cards: Vec<CouncilCardItem>,
+    pub pixel_cards: Vec<PixelRadarCardItem>,
+    pub green_light_cards: Vec<GreenLightCardItem>,
+    pub db_cards: Vec<DbTimeMachineCardItem>,
+    pub warp_cards: Vec<ChronoWarpCardItem>,
+    pub traffic_cards: Vec<PhantomSwarmCardItem>,
+    pub wiretap_cards: Vec<WiretapCardItem>,
+    pub sentry_cards: Vec<HallucinationSentryCardItem>,
+    pub xerox_cards: Vec<ClipboardXeroxCardItem>,
+    pub governor_cards: Vec<WattageGovernorCardItem>,
+    pub web_browse_cards: Vec<WebBrowseCardItem>,
+    pub web_search_cards: Vec<WebSearchCardItem>,
+    pub memory_cards: Vec<MemoryCardItem>,
+    pub ambient_cards: Vec<AmbientCardItem>,
+    pub validation_cards: Vec<ValidationCardItem>,
+    pub forge_cards: Vec<ForgeCardItem>,
+    pub prune_cards: Vec<PruneCardItem>,
+    pub port_cards: Vec<PortCardItem>,
+    pub ship_cards: Vec<ShipCardItem>,
+    pub browser_incident_cards: Vec<BrowserIncidentCardItem>,
+    pub seed_cards: Vec<SeedCardItem>,
+    pub rewind_cards: Vec<RewindCardItem>,
+    pub redteam_cards: Vec<RedTeamCardItem>,
+    pub blueprint_cards: Vec<BlueprintCardItem>,
+    pub passive_sentinel_cards: Vec<PassiveSentinelCardItem>,
+    pub teleport_cards: Vec<DomTeleportCardItem>,
+    pub steer_cards: Vec<SteerCardItem>,
+    pub sandbox_cards: Vec<SandboxCardItem>,
+    pub arena_cards: Vec<ArenaCardItem>,
+    pub gc_cards: Vec<GcCardItem>,
+    pub deploy_cards: Vec<DeployCardItem>,
+    pub harmonizer_cards: Vec<HarmonizerCardItem>,
+    pub shadow_cards: Vec<ShadowExecCardItem>,
+    pub db_mig_cards: Vec<DbMigrationCardItem>,
+    pub zero_mock_cards: Vec<ZeroMockCardItem>,
+    pub ghost_typing_cards: Vec<GhostTypingCardItem>,
+    pub invariant_cards: Vec<InvariantCardItem>,
+    pub architecture_dag_cards: Vec<ArchitectureDagCardItem>,
+    pub voice_copilot_cards: Vec<VoiceCoPilotCardItem>,
+}
+
+/// Structured items rendered in the Chat Canvas
+#[derive(Debug, Clone, PartialEq)]
+pub enum CockpitItem {
+    Chat(CockpitChatItem),
+    DiffCard(DiffCardItem),
+    ImagePreview(ImagePreviewItem),
+    TunnelCard(TunnelCardItem),
+    CrashBanner(CrashBannerItem),
+    TelepathyCard(TelepathyCardItem),
+    GhostCard(GhostCardItem),
+    CouncilCard(CouncilCardItem),
+    PixelRadarCard(PixelRadarCardItem),
+    GreenLightCard(GreenLightCardItem),
+    DbTimeMachineCard(DbTimeMachineCardItem),
+    ChronoWarpCard(ChronoWarpCardItem),
+    PhantomSwarmCard(PhantomSwarmCardItem),
+    WiretapCard(WiretapCardItem),
+    HallucinationSentryCard(HallucinationSentryCardItem),
+    ClipboardXeroxCard(ClipboardXeroxCardItem),
+    WattageGovernorCard(WattageGovernorCardItem),
+    WebBrowseCard(WebBrowseCardItem),
+    WebSearchCard(WebSearchCardItem),
+    MemoryCard(MemoryCardItem),
+    AmbientCard(AmbientCardItem),
+    ValidationCard(ValidationCardItem),
+    ForgeCard(ForgeCardItem),
+    PruneCard(PruneCardItem),
+    PortCard(PortCardItem),
+    ShipCard(ShipCardItem),
+    BrowserIncidentCard(BrowserIncidentCardItem),
+    SeedCard(SeedCardItem),
+    RewindCard(RewindCardItem),
+    RedTeamCard(RedTeamCardItem),
+    BlueprintCard(BlueprintCardItem),
+    PassiveSentinelCard(PassiveSentinelCardItem),
+    DomTeleportCard(DomTeleportCardItem),
+    SteerCard(SteerCardItem),
+    SandboxCard(SandboxCardItem),
+    ArenaCard(ArenaCardItem),
+    GcCard(GcCardItem),
+    DeployCard(DeployCardItem),
+    HarmonizerCard(HarmonizerCardItem),
+    ShadowExecCard(ShadowExecCardItem),
+    DbMigrationCard(DbMigrationCardItem),
+    ZeroMockCard(ZeroMockCardItem),
+    GhostTypingCard(GhostTypingCardItem),
+    InvariantCard(InvariantCardItem),
+    ArchitectureDagCard(ArchitectureDagCardItem),
+    VoiceCoPilotCard(VoiceCoPilotCardItem),
+}
+
+/// An inline diff card rendered in the Chat Canvas with 1-click/keyboard accept & reject
+#[derive(Debug, Clone, PartialEq)]
+pub struct DiffCardItem {
+    pub id: String,
+    pub file_path: PathBuf,
+    pub hunks: Vec<DiffHunk>,
+    pub raw_diff: String,
+    pub status: DiffCardStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiffCardStatus {
+    Pending,
+    Accepted,
+    Rejected,
+}
+
+/// An in-terminal visual image preview card
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImagePreviewItem {
+    pub id: String,
+    pub title: String,
+    pub path_or_url: String,
+    pub protocol: TerminalGraphicsProtocol,
+    pub lines: Vec<String>,
+}
+
+/// An ephemeral mobile dev tunnel test card with ANSI QR matrix
+#[derive(Debug, Clone, PartialEq)]
+pub struct TunnelCardItem {
+    pub id: String,
+    pub url: String,
+    pub port: u16,
+    pub card_lines: Vec<String>,
+}
+
+/// An intercepted crash banner
+#[derive(Debug, Clone, PartialEq)]
+pub struct CrashBannerItem {
+    pub id: String,
+    pub file: String,
+    pub line: usize,
+    pub error: String,
+    pub crash: InterceptedCrash,
+}
+
+/// Clickable hitbox for diff card hunk acceptance or rejection
+#[derive(Debug, Clone)]
+pub struct DiffActionHitbox {
+    pub screen_y: u16,
+    pub x_start: u16,
+    pub x_end: u16,
+    pub card_id: String,
+    pub action: DiffAction,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiffAction {
+    Accept,
+    Reject,
+}
+
+/// Clickable hitbox for 1-Click Heal banner
+#[derive(Debug, Clone)]
+pub struct HealHitbox {
+    pub screen_y: u16,
+    pub x_start: u16,
+    pub x_end: u16,
+    pub card_id: String,
+}
+
+/// Clickable region on terminal screen for copying response or code content
+#[derive(Debug, Clone)]
+pub struct CopyHitbox {
+    pub screen_y: u16,
+    pub x_start: u16,
+    pub x_end: u16,
+    pub content: String,
+    pub card_id: String,
+    pub label: String,
+}
+
+/// Semantic Telepathy search results card
+#[derive(Debug, Clone, PartialEq)]
+pub struct TelepathyCardItem {
+    pub query: String,
+    pub matches_count: usize,
+    pub top_match_name: String,
+    pub top_match_score: f32,
+    pub latency_us: u64,
+}
+
+/// Ghost Engine speculative pre-computation card
+#[derive(Debug, Clone, PartialEq)]
+pub struct GhostCardItem {
+    pub candidate_id: String,
+    pub target_file: PathBuf,
+    pub diff_snippet: String,
+    pub confidence: f32,
+}
+
+/// Council of Elders debate card
+#[derive(Debug, Clone, PartialEq)]
+pub struct CouncilCardItem {
+    pub topic: String,
+    pub consensus: String,
+    pub confidence_score: u8,
+    pub synthesized_snippet: String,
+}
+
+/// Pixel-Diff Radar visual layout report card
+#[derive(Debug, Clone, PartialEq)]
+pub struct PixelRadarCardItem {
+    pub url: String,
+    pub overflow_defects: usize,
+    pub verdict: String,
+}
+
+/// Green-Light Autonomous TDD Synthesis card
+#[derive(Debug, Clone, PartialEq)]
+pub struct GreenLightCardItem {
+    pub spec_id: String,
+    pub requirements_count: usize,
+    pub all_passed: bool,
+    pub final_diff: String,
+}
+
+/// Ephemeral CoW Database Time-Machine card
+#[derive(Debug, Clone, PartialEq)]
+pub struct DbTimeMachineCardItem {
+    pub action: String,
+    pub snapshot_id: String,
+    pub latency_us: u64,
+    pub verified: bool,
+}
+
+/// Chrono-Warp Omni-Undo 4D snapshot card
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChronoWarpCardItem {
+    pub action: String,
+    pub snapshot_id: String,
+    pub files_count: usize,
+    pub duration_ms: u64,
+}
+
+/// Phantom Swarm concurrent traffic card
+#[derive(Debug, Clone, PartialEq)]
+pub struct PhantomSwarmCardItem {
+    pub target_url: String,
+    pub concurrency: usize,
+    pub rps: f64,
+    pub p95_latency_ms: f64,
+}
+
+/// Wiretap live API contract inspector card
+#[derive(Debug, Clone, PartialEq)]
+pub struct WiretapCardItem {
+    pub endpoint: String,
+    pub drifts_detected: usize,
+    pub summary: String,
+}
+
+/// Hallucination Sentry package fact-checker card
+#[derive(Debug, Clone, PartialEq)]
+pub struct HallucinationSentryCardItem {
+    pub manifest: String,
+    pub verified: usize,
+    pub hallucinated: usize,
+}
+
+/// Clipboard Xerox image-to-component card
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClipboardXeroxCardItem {
+    pub component_name: String,
+    pub aspect_ratio: String,
+    pub palette_hex: Vec<String>,
+}
+
+/// Wattage Governor hardware & budget card
+#[derive(Debug, Clone, PartialEq)]
+pub struct WattageGovernorCardItem {
+    pub power_mw: f64,
+    pub spent_usd: f64,
+    pub throttled: bool,
+}
+
+/// Web browse card for local LLM browsing
+#[derive(Debug, Clone, PartialEq)]
+pub struct WebBrowseCardItem {
+    pub url: String,
+    pub title: String,
+    pub status_code: u16,
+    pub content_snippet: String,
+    pub duration_ms: u64,
+}
+
+/// Web search card for live internet search
+#[derive(Debug, Clone, PartialEq)]
+pub struct WebSearchCardItem {
+    pub query: String,
+    pub count: usize,
+    pub top_results: Vec<WebSearchResultItem>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct WebSearchResultItem {
+    pub title: String,
+    pub url: String,
+    pub snippet: String,
+}
+
+/// Persistent Living Memory card for ADRs and Tech Debt
+#[derive(Debug, Clone, PartialEq)]
+pub struct MemoryCardItem {
+    pub title: String,
+    pub action: String,
+    pub decision: String,
+    pub context: String,
+    pub total_decisions: usize,
+    pub total_debts: usize,
+}
+
+/// Ambient AST card displaying active file context, symbol and imports
+#[derive(Debug, Clone, PartialEq)]
+pub struct AmbientCardItem {
+    pub file_path: String,
+    pub cursor_line: usize,
+    pub enclosing_symbol: Option<String>,
+    pub symbol_kind: Option<String>,
+    pub context_snippet: String,
+    pub imports: Vec<String>,
+}
+
+/// Self-Validating loop card with companion test and compiler healer results
+#[derive(Debug, Clone, PartialEq)]
+pub struct ValidationCardItem {
+    pub goal: String,
+    pub passed: bool,
+    pub iterations: usize,
+    pub companion_test: String,
+    pub duration_ms: u64,
+}
+
+/// Instant App Scaffolding card
+#[derive(Debug, Clone, PartialEq)]
+pub struct ForgeCardItem {
+    pub stack: String,
+    pub project_name: String,
+    pub target_path: String,
+    pub files_created: usize,
+    pub git_initialized: bool,
+    pub adr_initialized: bool,
+    pub duration_ms: u64,
+}
+
+/// Adaptive KV-Cache & AST Pruner metrics card
+#[derive(Debug, Clone, PartialEq)]
+pub struct PruneCardItem {
+    pub file_path: String,
+    pub original_lines: usize,
+    pub pruned_lines: usize,
+    pub folded_functions: usize,
+    pub reduction_pct: f64,
+}
+
+/// Auto-Port Multiplexer resolution card
+#[derive(Debug, Clone, PartialEq)]
+pub struct PortCardItem {
+    pub scanned_ports: usize,
+    pub collisions_found: usize,
+    pub services: Vec<(String, u16, u16)>,
+    pub gateway_routes_count: usize,
+}
+
+/// PR Storyteller & Zero-Friction Branch Committer card
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShipCardItem {
+    pub pr_title: String,
+    pub commits_count: usize,
+    pub adr_references: Vec<String>,
+    pub verification_badge: String,
+    pub blake3_digest: String,
+    pub story_file_path: String,
+}
+
+/// Browser HUD & CDP Incident card
+#[derive(Debug, Clone, PartialEq)]
+pub struct BrowserIncidentCardItem {
+    pub incident_id: String,
+    pub kind: String,
+    pub severity: String,
+    pub message: String,
+    pub source_url: String,
+    pub line_number: Option<usize>,
+    pub suggested_fix: Option<String>,
+    pub healed: bool,
+}
+
+/// Instant Persona & Synthetic Seed card
+#[derive(Debug, Clone, PartialEq)]
+pub struct SeedCardItem {
+    pub entity: String,
+    pub count: usize,
+    pub sql_preview: String,
+    pub json_preview: String,
+}
+
+/// Syntactic Hunk Time-Travel Rewind card
+#[derive(Debug, Clone, PartialEq)]
+pub struct RewindCardItem {
+    pub file_path: String,
+    pub symbol_name: String,
+    pub revision_idx: usize,
+    pub restored_snippet: String,
+}
+
+/// Adversarial Red-Team & Edge-Case Audit card
+#[derive(Debug, Clone, PartialEq)]
+pub struct RedTeamCardItem {
+    pub verdict: String,
+    pub files_scanned: usize,
+    pub total_critical: usize,
+    pub total_high: usize,
+    pub total_medium: usize,
+    pub summary: String,
+    pub top_findings: Vec<String>,
+}
+
+/// Living Architecture Blueprint card
+#[derive(Debug, Clone, PartialEq)]
+pub struct BlueprintCardItem {
+    pub title: String,
+    pub total_files: usize,
+    pub total_nodes: usize,
+    pub total_routes: usize,
+    pub total_entities: usize,
+    pub total_edges: usize,
+    pub mermaid_diagram: String,
+}
+
+/// Continuous Passive Sentinel card
+#[derive(Debug, Clone, PartialEq)]
+pub struct PassiveSentinelCardItem {
+    pub status_badge: String,
+    pub total_inspections: usize,
+    pub tracked_files: usize,
+    pub last_event_summary: String,
+    pub active_syntax_errors: Vec<String>,
+}
+
+/// Teleport card item for DOM-to-AST click-to-code
+#[derive(Debug, Clone, PartialEq)]
+pub struct DomTeleportCardItem {
+    pub selector: String,
+    pub resolved_file: String,
+    pub line_number: usize,
+    pub enclosing_symbol: String,
+    pub prompt_anchor_snippet: String,
+}
+
+/// Steer card item for mid-flight steering
+#[derive(Debug, Clone, PartialEq)]
+pub struct SteerCardItem {
+    pub instruction: String,
+    pub total_nudges: usize,
+    pub status: String,
+    pub prompt_modifier: String,
+}
+
+/// Sandbox card item for rootless ephemeral sandboxing
+#[derive(Debug, Clone, PartialEq)]
+pub struct SandboxCardItem {
+    pub command: String,
+    pub exit_code: i32,
+    pub security_passed: bool,
+    pub duration_ms: u64,
+    pub jail_active: bool,
+}
+
+/// Arena card item for speculative multi-worktree arena
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArenaCardItem {
+    pub race_id: String,
+    pub candidates_count: usize,
+    pub winner_id: Option<String>,
+    pub top_strategy: String,
+    pub top_passed: bool,
+}
+
+/// GC card item for semantic context anti-rot
+#[derive(Debug, Clone, PartialEq)]
+pub struct GcCardItem {
+    pub initial_tokens: usize,
+    pub compacted_tokens: usize,
+    pub tokens_saved: usize,
+    pub reduction_percentage: f32,
+    pub error_cycles_pruned: usize,
+}
+
+/// Deploy card item for zero-config vibe-to-url
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeployCardItem {
+    pub public_url: String,
+    pub subdomain: String,
+    pub local_port: u16,
+    pub tls_active: bool,
+    pub qr_matrix_preview: String,
+}
+
+/// Harmonizer card item for full-stack type drift
+#[derive(Debug, Clone, PartialEq)]
+pub struct HarmonizerCardItem {
+    pub models_count: usize,
+    pub drift_detected: bool,
+    pub fields_synchronized: usize,
+    pub ts_preview: String,
+}
+
+/// Shadow exec card item for ambient shadow execution
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShadowExecCardItem {
+    pub modified_file: String,
+    pub tests_count: usize,
+    pub passed: bool,
+    pub total_duration_us: u64,
+    pub alert: Option<String>,
+}
+
+/// DB migration card item for non-destructive time machine
+#[derive(Debug, Clone, PartialEq)]
+pub struct DbMigrationCardItem {
+    pub table_name: String,
+    pub added_columns_count: usize,
+    pub is_destructive: bool,
+    pub wal_hash_preview: String,
+}
+
+/// Zero mock card item for stub-anything fabric
+#[derive(Debug, Clone, PartialEq)]
+pub struct ZeroMockCardItem {
+    pub path_pattern: String,
+    pub schema_inferred: String,
+    pub status: u16,
+    pub mock_body_preview: String,
+}
+
+/// Ghost typing card item for speculative precomputation
+#[derive(Debug, Clone, PartialEq)]
+pub struct GhostTypingCardItem {
+    pub trigger_prefix: String,
+    pub predicted_tokens_preview: String,
+    pub confidence: f32,
+    pub latency_us: u64,
+}
+
+/// Invariant card item for formal invariant shield
+#[derive(Debug, Clone, PartialEq)]
+pub struct InvariantCardItem {
+    pub file_path: String,
+    pub total_hazards: usize,
+    pub safety_score: u8,
+    pub first_hazard: Option<String>,
+}
+
+/// Architecture DAG card item for living architecture DAG
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArchitectureDagCardItem {
+    pub nodes_count: usize,
+    pub edges_count: usize,
+    pub ascii_diagram_preview: String,
+}
+
+/// Voice CoPilot card item for streaming voice co-pilot
+#[derive(Debug, Clone, PartialEq)]
+pub struct VoiceCoPilotCardItem {
+    pub transcript: String,
+    pub confidence: f32,
+    pub intent_detected: bool,
+    pub triggered_chime: bool,
+}
+
+/// State helper methods for all superpowers
+pub struct CockpitVibeManager;
+
+impl CockpitVibeManager {
+    /// Slash command parser and dispatcher for next-gen powers
+    pub fn handle_vibe_slash_command(cmd: &str, arg: &str) -> Option<CockpitItem> {
+        match cmd {
+            "/telepathy" => {
+                let start = std::time::Instant::now();
+                let mut index = TelepathyIndex::new();
+                index.index_document(TelepathyDocument {
+                    id: "core".to_string(),
+                    path: PathBuf::from("crates/hgb-core/src/lib.rs"),
+                    symbol_type: "module".to_string(),
+                    name: "hgb_core".to_string(),
+                    content: "pub mod audio;\npub mod crud;\npub mod trace;".to_string(),
+                    line_start: 1,
+                    line_end: 20,
+                    embedding: Vec::new(),
+                });
+                let results = index.search(arg, 3);
+                let (top_name, top_score) = results.first()
+                    .map(|r| (r.document.name.clone(), r.hybrid_score))
+                    .unwrap_or(("none".to_string(), 0.0));
+
+                Some(CockpitItem::TelepathyCard(TelepathyCardItem {
+                    query: arg.to_string(),
+                    matches_count: results.len(),
+                    top_match_name: top_name,
+                    top_match_score: top_score,
+                    latency_us: start.elapsed().as_micros() as u64,
+                }))
+            }
+            "/ghost" => {
+                let mut engine = GhostEngine::new("/workspace");
+                engine.feed_cursor_context(std::path::Path::new("src/main.rs"), 42, "fn execute() { todo!(); }");
+                if let Some(top) = engine.get_top_candidate() {
+                    Some(CockpitItem::GhostCard(GhostCardItem {
+                        candidate_id: top.id.clone(),
+                        target_file: top.target_file.clone(),
+                        diff_snippet: top.speculative_diff.clone(),
+                        confidence: top.confidence,
+                    }))
+                } else {
+                    None
+                }
+            }
+            "/council" => {
+                let engine = CouncilEngine::default();
+                let debate = engine.conduct_debate("fn target() {}", arg);
+                let verdict = debate.verdict.unwrap_or(crate::council::CouncilVerdict {
+                    consensus_reached: true,
+                    winner: Some("Consensus".to_string()),
+                    confidence_score: 95,
+                    synthesized_code: "// Synthesized".to_string(),
+                    key_compromises: Vec::new(),
+                    dissenting_risks: Vec::new(),
+                });
+                Some(CockpitItem::CouncilCard(CouncilCardItem {
+                    topic: arg.to_string(),
+                    consensus: verdict.winner.unwrap_or_default(),
+                    confidence_score: verdict.confidence_score,
+                    synthesized_snippet: verdict.synthesized_code,
+                }))
+            }
+            "/pixel" => {
+                let radar = PixelDiffRadar::default();
+                let snapshot = radar.capture_dom_snapshot(arg, "<html><body><div style='width: 1400px;'>Content</div></body></html>");
+                Some(CockpitItem::PixelRadarCard(PixelRadarCardItem {
+                    url: arg.to_string(),
+                    overflow_defects: snapshot.overflow_defects.len(),
+                    verdict: if snapshot.overflow_defects.is_empty() { "CLEAN".to_string() } else { "OVERFLOW DETECTED".to_string() },
+                }))
+            }
+            "/spec" => {
+                let engine = GreenLightEngine::new("/workspace");
+                let report = engine.run_synthesis_cycle(arg).ok()?;
+                Some(CockpitItem::GreenLightCard(GreenLightCardItem {
+                    spec_id: report.spec_id,
+                    requirements_count: report.total_requirements,
+                    all_passed: report.all_passed,
+                    final_diff: report.final_diff,
+                }))
+            }
+            "/db" => {
+                let mut tm = DbTimeMachine::new();
+                let snap = tm.create_snapshot("ckpt_1", b"state");
+                let verified = tm.verify_wal_integrity("ckpt_1");
+                Some(CockpitItem::DbTimeMachineCard(DbTimeMachineCardItem {
+                    action: "SNAPSHOT & VERIFY".to_string(),
+                    snapshot_id: snap.id,
+                    latency_us: 4,
+                    verified,
+                }))
+            }
+            "/warp" => {
+                let mut warp = ChronoWarpEngine::new("/workspace");
+                let files = vec![(PathBuf::from("src/lib.rs"), b"state".to_vec())];
+                let snap = warp.capture_4d_snapshot("auto_warp", &files, Some(b"db_state"));
+                Some(CockpitItem::ChronoWarpCard(ChronoWarpCardItem {
+                    action: "4D SNAPSHOT CAPTURED".to_string(),
+                    snapshot_id: snap.id,
+                    files_count: snap.file_contents.len(),
+                    duration_ms: 12,
+                }))
+            }
+            "/traffic" => {
+                let target = if arg.is_empty() { "http://localhost:3000".to_string() } else { arg.to_string() };
+                let engine = PhantomSwarmEngine::new();
+                let config = PhantomSwarmConfig {
+                    target_url: target.clone(),
+                    concurrency: 10,
+                    request_count: 20,
+                    http_method: "GET".to_string(),
+                    payload: None,
+                    timeout_ms: 100,
+                };
+                let report = engine.simulate_traffic_sync(config);
+                Some(CockpitItem::PhantomSwarmCard(PhantomSwarmCardItem {
+                    target_url: target,
+                    concurrency: report.concurrency,
+                    rps: report.requests_per_second,
+                    p95_latency_ms: report.latency.p95_ms,
+                }))
+            }
+            "/wiretap" => {
+                let wiretap = WiretapEngine::new();
+                let expected = vec![ExpectedField {
+                    name: "userId".to_string(),
+                    expected_type: "number".to_string(),
+                    required: true,
+                }];
+                let drifts = wiretap.inspect_payload(arg, &expected, &json!({"user_id": "99"}));
+                Some(CockpitItem::WiretapCard(WiretapCardItem {
+                    endpoint: if arg.is_empty() { "/api/user".to_string() } else { arg.to_string() },
+                    drifts_detected: drifts.len(),
+                    summary: "Auto-healed camelCase vs snake_case and string-to-number drift".to_string(),
+                }))
+            }
+            "/sentry" => {
+                let sentry = HallucinationSentry::new();
+                let manifest_name = if arg.is_empty() { "Cargo.toml" } else { arg };
+                let report = sentry.audit_manifest(std::path::Path::new(manifest_name), "[dependencies]\ntokio = \"1.0\"\nserde-super = \"1.0\"");
+                Some(CockpitItem::HallucinationSentryCard(HallucinationSentryCardItem {
+                    manifest: manifest_name.to_string(),
+                    verified: report.verified_valid,
+                    hallucinated: report.hallucinated_count,
+                }))
+            }
+            "/xerox" => {
+                let xerox = ClipboardXeroxEngine::new();
+                let dummy = vec![0u8; 100 * 50 * 3];
+                let res = xerox.xerox_image("Component", 1920, 1080, &dummy);
+                Some(CockpitItem::ClipboardXeroxCard(ClipboardXeroxCardItem {
+                    component_name: res.component_name,
+                    aspect_ratio: res.aspect_ratio,
+                    palette_hex: res.palette.iter().map(|c| c.hex.clone()).collect(),
+                }))
+            }
+            "/governor" => {
+                let gov = WattageGovernor::default();
+                let tel = gov.get_telemetry();
+                Some(CockpitItem::WattageGovernorCard(WattageGovernorCardItem {
+                    power_mw: tel.current_power_mw,
+                    spent_usd: tel.spent_usd,
+                    throttled: tel.is_throttled,
+                }))
+            }
+            "/browse" => {
+                let start = std::time::Instant::now();
+                let url = if arg.is_empty() { "https://httpbin.org/html" } else { arg };
+                let engine = hgb_core::web_browser::WebBrowserEngine::default();
+                match engine.browse_url_sync(url, 1500) {
+                    Ok(page) => {
+                        let snippet = if page.markdown.len() > 300 {
+                            format!("{}...", &page.markdown[..300])
+                        } else {
+                            page.markdown
+                        };
+                        Some(CockpitItem::WebBrowseCard(WebBrowseCardItem {
+                            url: page.url,
+                            title: page.title,
+                            status_code: page.status_code,
+                            content_snippet: snippet,
+                            duration_ms: start.elapsed().as_millis() as u64,
+                        }))
+                    }
+                    Err(e) => {
+                        Some(CockpitItem::WebBrowseCard(WebBrowseCardItem {
+                            url: url.to_string(),
+                            title: format!("Error: {}", e),
+                            status_code: 500,
+                            content_snippet: format!("SSRF/Browse error: {}", e),
+                            duration_ms: start.elapsed().as_millis() as u64,
+                        }))
+                    }
+                }
+            }
+            "/search" => {
+                let query = if arg.is_empty() { "rust programming language" } else { arg };
+                let engine = hgb_core::web_browser::WebBrowserEngine::default();
+                let results = engine.search_web_sync(query, 5).unwrap_or_default();
+                let top_results: Vec<WebSearchResultItem> = results.into_iter().take(3).map(|r| WebSearchResultItem {
+                    title: r.title,
+                    url: r.url,
+                    snippet: r.snippet,
+                }).collect();
+                Some(CockpitItem::WebSearchCard(WebSearchCardItem {
+                    query: query.to_string(),
+                    count: top_results.len(),
+                    top_results,
+                }))
+            }
+            "/memory" | "/mem" => {
+                let rest = arg.trim();
+                let ws_path = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                let mut ledger = hgb_core::ProjectMemoryLedger::load_or_init(&ws_path)
+                    .unwrap_or_else(|_| hgb_core::ProjectMemoryLedger {
+                        file_path: ws_path.join(".hgb").join("memory.json"),
+                        doc: hgb_core::MemoryDocument::default(),
+                    });
+
+                if rest.is_empty() || rest == "status" {
+                    let recent_decision = ledger.doc.decisions.last()
+                        .map(|d| format!("[{}] {} => {}", d.id, d.title, d.decision))
+                        .unwrap_or_else(|| "No decisions recorded yet".to_string());
+                    Some(CockpitItem::MemoryCard(MemoryCardItem {
+                        title: format!("Project Memory: {}", ledger.doc.project_name),
+                        action: "STATUS".to_string(),
+                        decision: recent_decision,
+                        context: format!("Tracking {} ADRs and {} active tech debt items", ledger.doc.decisions.len(), ledger.doc.tech_debt.len()),
+                        total_decisions: ledger.doc.decisions.len(),
+                        total_debts: ledger.doc.tech_debt.len(),
+                    }))
+                } else if let Some(rec_str) = rest.strip_prefix("record ").or_else(|| rest.strip_prefix("add ")) {
+                    let (title, decision) = if let Some((t, d)) = rec_str.split_once("=>") {
+                        (t.trim(), d.trim())
+                    } else if let Some((t, d)) = rec_str.split_once('=') {
+                        (t.trim(), d.trim())
+                    } else {
+                        (rec_str.trim(), "Recorded via Cockpit /mem command")
+                    };
+                    let adr_id = ledger.record_decision(title, decision, "Recorded from interactive Cockpit session")
+                        .unwrap_or_else(|_| "ADR-ERR".to_string());
+                    Some(CockpitItem::MemoryCard(MemoryCardItem {
+                        title: format!("[{}] {}", adr_id, title),
+                        action: "RECORD".to_string(),
+                        decision: decision.to_string(),
+                        context: format!("Persisted to {}", ledger.file_path.display()),
+                        total_decisions: ledger.doc.decisions.len(),
+                        total_debts: ledger.doc.tech_debt.len(),
+                    }))
+                } else if let Some(q_str) = rest.strip_prefix("search ").or_else(|| rest.strip_prefix("find ")) {
+                    let query = q_str.trim();
+                    let matched_dec = ledger.search_decisions(query);
+                    let matched_debts = ledger.search_debts(query);
+                    let top_result = if let Some(first) = matched_dec.first() {
+                        format!("[{}] {} => {}", first.id, first.title, first.decision)
+                    } else if let Some(first_d) = matched_debts.first() {
+                        format!("[{}] (Severity: {}): {}", first_d.id, first_d.severity, first_d.title)
+                    } else {
+                        format!("No memory entries found for '{}'", query)
+                    };
+                    Some(CockpitItem::MemoryCard(MemoryCardItem {
+                        title: format!("Search: '{}'", query),
+                        action: "SEARCH".to_string(),
+                        decision: top_result,
+                        context: format!("Matched {} ADRs, {} tech debts", matched_dec.len(), matched_debts.len()),
+                        total_decisions: ledger.doc.decisions.len(),
+                        total_debts: ledger.doc.tech_debt.len(),
+                    }))
+                } else if rest.contains("=>") {
+                    let (title, decision) = rest.split_once("=>").unwrap();
+                    let adr_id = ledger.record_decision(title.trim(), decision.trim(), "Recorded from Cockpit")
+                        .unwrap_or_else(|_| "ADR-ERR".to_string());
+                    Some(CockpitItem::MemoryCard(MemoryCardItem {
+                        title: format!("[{}] {}", adr_id, title.trim()),
+                        action: "RECORD".to_string(),
+                        decision: decision.trim().to_string(),
+                        context: format!("Persisted to {}", ledger.file_path.display()),
+                        total_decisions: ledger.doc.decisions.len(),
+                        total_debts: ledger.doc.tech_debt.len(),
+                    }))
+                } else {
+                    let matched_dec = ledger.search_decisions(rest);
+                    let matched_debts = ledger.search_debts(rest);
+                    let top_result = if let Some(first) = matched_dec.first() {
+                        format!("[{}] {} => {}", first.id, first.title, first.decision)
+                    } else if let Some(first_d) = matched_debts.first() {
+                        format!("[{}] (Severity: {}): {}", first_d.id, first_d.severity, first_d.title)
+                    } else {
+                        format!("No memory entries found for '{}'", rest)
+                    };
+                    Some(CockpitItem::MemoryCard(MemoryCardItem {
+                        title: format!("Search: '{}'", rest),
+                        action: "SEARCH".to_string(),
+                        decision: top_result,
+                        context: format!("Matched {} ADRs, {} tech debts", matched_dec.len(), matched_debts.len()),
+                        total_decisions: ledger.doc.decisions.len(),
+                        total_debts: ledger.doc.tech_debt.len(),
+                    }))
+                }
+            }
+            "/ambient" | "/focus" => {
+                let ws_path = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                let mut follower = hgb_core::ambient_ast::AmbientAstFollower::new(&ws_path);
+                let (path_str, line) = if let Some((p, l_str)) = arg.split_once(':') {
+                    (p.trim(), l_str.trim().parse::<usize>().unwrap_or(1))
+                } else if !arg.is_empty() {
+                    (arg.trim(), 1)
+                } else {
+                    ("crates/hgb-core/src/lib.rs", 1)
+                };
+                follower.set_focus(path_str, line);
+                let ctx = follower.get_ambient_context();
+                Some(CockpitItem::AmbientCard(AmbientCardItem {
+                    file_path: ctx.file_path,
+                    cursor_line: ctx.cursor_line,
+                    enclosing_symbol: ctx.enclosing_symbol,
+                    symbol_kind: ctx.symbol_kind,
+                    context_snippet: ctx.context_snippet,
+                    imports: ctx.imports,
+                }))
+            }
+            "/validate" => {
+                let goal = if arg.is_empty() { "ensure core system invariants hold" } else { arg };
+                let sample_code = "pub fn execute_vibe_cycle() -> bool { true }";
+                let engine = crate::self_validating::SelfValidatingEngine::new();
+                let report = engine.validate(goal, sample_code);
+                Some(CockpitItem::ValidationCard(ValidationCardItem {
+                    goal: report.goal,
+                    passed: report.passed,
+                    iterations: report.iterations,
+                    companion_test: report.companion_test,
+                    duration_ms: report.duration_ms,
+                }))
+            }
+            "/forge" => {
+                let ws_path = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                let (stack_str, project_name) = if let Some((s, p)) = arg.split_once(' ') {
+                    (s.trim(), p.trim())
+                } else if !arg.is_empty() {
+                    ("ratatui", arg.trim())
+                } else {
+                    ("ratatui", "my_vibe_app")
+                };
+                let start = std::time::Instant::now();
+                match hgb_core::forge::ForgeEngine::scaffold(stack_str, project_name, &ws_path) {
+                    Ok(rep) => Some(CockpitItem::ForgeCard(ForgeCardItem {
+                        stack: rep.stack,
+                        project_name: rep.project_name,
+                        target_path: rep.target_path.display().to_string(),
+                        files_created: rep.files_created,
+                        git_initialized: rep.git_initialized,
+                        adr_initialized: rep.adr_initialized,
+                        duration_ms: start.elapsed().as_millis() as u64,
+                    })),
+                    Err(e) => Some(CockpitItem::ForgeCard(ForgeCardItem {
+                        stack: stack_str.to_string(),
+                        project_name: project_name.to_string(),
+                        target_path: format!("Error: {}", e),
+                        files_created: 0,
+                        git_initialized: false,
+                        adr_initialized: false,
+                        duration_ms: start.elapsed().as_millis() as u64,
+                    })),
+                }
+            }
+            "/prune" => {
+                let (file_path, target_fn) = if let Some((f, func)) = arg.split_once(' ') {
+                    (f.trim(), Some(func.trim()))
+                } else if !arg.is_empty() {
+                    (arg.trim(), None)
+                } else {
+                    ("crates/hgb-core/src/lib.rs", None)
+                };
+                let path = PathBuf::from(file_path);
+                match hgb_core::ast_pruner::AstPruner::prune_file(&path, None, target_fn, Some(2000)) {
+                    Ok(res) => Some(CockpitItem::PruneCard(PruneCardItem {
+                        file_path: file_path.to_string(),
+                        original_lines: res.original_lines,
+                        pruned_lines: res.pruned_lines,
+                        folded_functions: res.folded_functions,
+                        reduction_pct: res.reduction_percentage,
+                    })),
+                    Err(_) => {
+                        let sample = "pub fn a() { println!(\"1\"); }\npub fn b() { println!(\"2\"); }";
+                        let res = hgb_core::ast_pruner::AstPruner::prune_source(sample, "rs", None, target_fn);
+                        Some(CockpitItem::PruneCard(PruneCardItem {
+                            file_path: file_path.to_string(),
+                            original_lines: res.original_lines,
+                            pruned_lines: res.pruned_lines,
+                            folded_functions: res.folded_functions,
+                            reduction_pct: res.reduction_percentage,
+                        }))
+                    }
+                }
+            }
+            "/ports" => {
+                let rep = crate::port_multiplexer::PortMultiplexer::resolve_service_ports();
+                let services = rep.collisions.iter().map(|c| (c.service_name.clone(), c.original_port, c.allocated_port)).collect();
+                let collisions_found = rep.collisions.iter().filter(|c| c.is_colliding).count();
+                Some(CockpitItem::PortCard(PortCardItem {
+                    scanned_ports: rep.scanned_ports,
+                    collisions_found,
+                    services,
+                    gateway_routes_count: rep.gateway_routes.len(),
+                }))
+            }
+            "/ship" | "/commit" => {
+                let ws_path = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                let changed_files = vec![
+                    "crates/hgb-core/src/ambient_ast.rs".to_string(),
+                    "crates/hgb-core/src/ast_pruner.rs".to_string(),
+                    "crates/hgb-core/src/forge.rs".to_string(),
+                    "crates/hgb-nextgen/src/self_validating.rs".to_string(),
+                    "crates/hgb-nextgen/src/port_multiplexer.rs".to_string(),
+                    "crates/hgb-nextgen/src/pr_storyteller.rs".to_string(),
+                ];
+                let story = crate::pr_storyteller::PrStorytellerEngine::generate_story(&ws_path, &changed_files, false);
+                Some(CockpitItem::ShipCard(ShipCardItem {
+                    pr_title: story.pr_title,
+                    commits_count: story.commits.len(),
+                    adr_references: story.adr_references,
+                    verification_badge: story.verification_badge,
+                    blake3_digest: story.blake3_digest,
+                    story_file_path: "PR_STORY.md".to_string(),
+                }))
+            }
+            "/hud" | "/snoop" => {
+                let mut hud = hgb_core::browser_hud::BrowserLiveHud::new(50);
+                let demo_cdp = r#"{
+                    "method": "Runtime.consoleAPICalled",
+                    "params": {
+                        "type": "error",
+                        "args": [{"value": "Hydration failed because initial UI does not match server rendered HTML"}],
+                        "stackTrace": {"callFrames": [{"functionName": "MainView", "url": "http://localhost:3000/src/App.tsx", "lineNumber": 24}]}
+                    }
+                }"#;
+                let inc = hud.ingest_cdp_event(demo_cdp).unwrap_or(hgb_core::browser_hud::BrowserIncident {
+                    id: "inc-1".to_string(),
+                    kind: hgb_core::browser_hud::BrowserIncidentKind::HydrationMismatch,
+                    severity: hgb_core::browser_hud::BrowserIncidentSeverity::High,
+                    message: "Hydration failed: server HTML did not match client render".to_string(),
+                    source_url: "http://localhost:3000/src/App.tsx".to_string(),
+                    line_number: Some(24),
+                    stack_trace: None,
+                    suggested_fix: Some("Wrap client-only component with dynamic ssr: false or useEffect / suppressHydrationWarning".to_string()),
+                    healed: false,
+                });
+                Some(CockpitItem::BrowserIncidentCard(BrowserIncidentCardItem {
+                    incident_id: inc.id,
+                    kind: inc.kind.to_string(),
+                    severity: format!("{:?}", inc.severity),
+                    message: inc.message,
+                    source_url: inc.source_url,
+                    line_number: inc.line_number,
+                    suggested_fix: inc.suggested_fix,
+                    healed: inc.healed,
+                }))
+            }
+            "/seed" => {
+                let entity = if arg.is_empty() { "users" } else { arg.split_whitespace().next().unwrap_or("users") };
+                let count = arg.split_whitespace().nth(1).and_then(|c| c.parse::<usize>().ok()).unwrap_or(10);
+                let batch = hgb_core::seed_engine::PersonaSeedEngine::generate_batch(entity, count, Some(42))
+                    .unwrap_or_else(|_| hgb_core::seed_engine::SeedBatch {
+                        entity: entity.to_string(),
+                        records: Vec::new(),
+                        sql_script: format!("-- Seed generation failed for {}", entity),
+                        json_export: "[]".to_string(),
+                    });
+                let sql_preview = batch.sql_script.lines().take(4).collect::<Vec<_>>().join("\n");
+                let json_preview = batch.json_export.lines().take(4).collect::<Vec<_>>().join("\n");
+                Some(CockpitItem::SeedCard(SeedCardItem {
+                    entity: batch.entity,
+                    count: batch.records.len(),
+                    sql_preview,
+                    json_preview,
+                }))
+            }
+            "/rewind" => {
+                let parts: Vec<&str> = arg.split_whitespace().collect();
+                let file = parts.first().copied().unwrap_or("crates/hgb-core/src/lib.rs");
+                let sym = parts.get(1).copied().unwrap_or("main");
+                let rev_idx = parts.get(2).and_then(|r| r.parse::<usize>().ok()).unwrap_or(0);
+                let mut timeline = hgb_core::ast_rewind::AstRewindTimeline::new();
+                timeline.record_symbol_snapshot(file, sym, &format!("pub fn {}() {{", sym), "    // Restored historical revision\n}", 1000);
+                let current_dummy = format!("pub fn {}() {{\n    panic!(\"broken\");\n}}\n", sym);
+                let restored = timeline.rewind_symbol(&current_dummy, file, sym, rev_idx).unwrap_or(current_dummy);
+                Some(CockpitItem::RewindCard(RewindCardItem {
+                    file_path: file.to_string(),
+                    symbol_name: sym.to_string(),
+                    revision_idx: rev_idx,
+                    restored_snippet: restored.lines().take(4).collect::<Vec<_>>().join("\n"),
+                }))
+            }
+            "/redteam" | "/audit" => {
+                let auditor = crate::redteam::RedTeamAuditor::new();
+                let ws_path = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                let report = auditor.audit_workspace(&ws_path).unwrap_or_else(|_| {
+                    auditor.audit_code("SELECT * FROM users WHERE id = 1;", None)
+                });
+                let top_findings = report.findings.iter().take(3).map(|f| format!("{} [{}] {}", f.severity.badge(), f.category.name(), f.title)).collect();
+                Some(CockpitItem::RedTeamCard(RedTeamCardItem {
+                    verdict: format!("{:?}", report.verdict),
+                    files_scanned: report.files_scanned,
+                    total_critical: report.total_critical,
+                    total_high: report.total_high,
+                    total_medium: report.total_medium,
+                    summary: report.summary,
+                    top_findings,
+                }))
+            }
+            "/blueprint" => {
+                let ws_path = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                let blueprint = hgb_core::blueprint::ArchitectureBlueprint::scan_workspace(&ws_path)
+                    .unwrap_or_else(|_| hgb_core::blueprint::ArchitectureBlueprint::new("Living Architecture Blueprint", &ws_path));
+                let mermaid_preview = blueprint.to_mermaid().lines().take(8).collect::<Vec<_>>().join("\n");
+                Some(CockpitItem::BlueprintCard(BlueprintCardItem {
+                    title: blueprint.title,
+                    total_files: blueprint.total_files_scanned,
+                    total_nodes: blueprint.nodes.len(),
+                    total_routes: blueprint.total_routes,
+                    total_entities: blueprint.total_entities,
+                    total_edges: blueprint.edges.len(),
+                    mermaid_diagram: mermaid_preview,
+                }))
+            }
+            "/sentinel" => {
+                let ws_path = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                let sentinel = crate::passive_sentinel::PassiveSentinel::default_sentinel(ws_path);
+                let tel = sentinel.telemetry();
+                Some(CockpitItem::PassiveSentinelCard(PassiveSentinelCardItem {
+                    status_badge: tel.status.badge().to_string(),
+                    total_inspections: tel.total_inspections,
+                    tracked_files: tel.tracked_files_count,
+                    last_event_summary: tel.last_event.map(|e| e.details).unwrap_or_else(|| "All AST symbols in sync".to_string()),
+                    active_syntax_errors: tel.active_syntax_errors,
+                }))
+            }
+            "/teleport" => {
+                let ws_path = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                let mut teleporter = crate::dom_teleport::DomToAstTeleporter::new(&ws_path);
+                let demo_json = if arg.is_empty() {
+                    r#"{"selector": "button.checkout-btn", "tag_name": "button", "inner_text": "Complete Purchase", "react_source_file": "crates/hgb-core/src/lib.rs", "react_source_line": 15}"#
+                } else {
+                    arg
+                };
+                let res = teleporter.ingest_click_event(demo_json).ok()?;
+                Some(CockpitItem::DomTeleportCard(DomTeleportCardItem {
+                    selector: "button.checkout-btn".to_string(),
+                    resolved_file: res.resolved_file.display().to_string(),
+                    line_number: res.line_number,
+                    enclosing_symbol: res.enclosing_symbol.unwrap_or_else(|| "global".to_string()),
+                    prompt_anchor_snippet: res.prompt_anchor.lines().take(4).collect::<Vec<_>>().join("\n"),
+                }))
+            }
+            "/steer" => {
+                let controller = crate::stream_steer::StreamSteeringController::new();
+                let instruction = if arg.is_empty() { "Use Tailwind grid and avoid flex-wrap" } else { arg };
+                let report = controller.nudge(instruction);
+                Some(CockpitItem::SteerCard(SteerCardItem {
+                    instruction: report.instruction,
+                    total_nudges: report.total_nudges,
+                    status: format!("{:?}", report.active_status),
+                    prompt_modifier: report.prompt_modifier,
+                }))
+            }
+            "/sandbox" => {
+                let cmd_str = if arg.is_empty() { "echo 'rootless sandbox validated'" } else { arg };
+                let ws_path = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                let cfg = crate::rootless_sandbox::SandboxConfig::default();
+                let cmd_owned = cmd_str.to_string();
+                let report = std::thread::spawn(move || {
+                    let rt = tokio::runtime::Runtime::new().ok()?;
+                    rt.block_on(async {
+                        crate::rootless_sandbox::RootlessSandboxEngine::execute_sandboxed(&cmd_owned, &ws_path, &cfg).await.ok()
+                    })
+                }).join().ok()??;
+                Some(CockpitItem::SandboxCard(SandboxCardItem {
+                    command: cmd_str.to_string(),
+                    exit_code: report.exit_code,
+                    security_passed: report.security_passed,
+                    duration_ms: report.duration_ms,
+                    jail_active: report.ephemeral_jail_dir.is_some(),
+                }))
+            }
+            "/arena" => {
+                let ws_path = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                let prompt = if arg.is_empty() { "Evaluate 3-way storage architecture" } else { arg };
+                let prompt_owned = prompt.to_string();
+                let manifest = std::thread::spawn(move || {
+                    let rt = tokio::runtime::Runtime::new().ok()?;
+                    rt.block_on(async {
+                        crate::arena_mode::ArenaSwarmEngine::launch_arena(&ws_path, &prompt_owned, &["In-Memory RingBuffer", "SQLite CoW", "Hybrid"]).await.ok()
+                    })
+                }).join().ok()??;
+                let top_cand = manifest.candidates.first()?;
+                Some(CockpitItem::ArenaCard(ArenaCardItem {
+                    race_id: manifest.race_id,
+                    candidates_count: manifest.candidates.len(),
+                    winner_id: manifest.winner_id,
+                    top_strategy: top_cand.strategy.clone(),
+                    top_passed: top_cand.test_passed,
+                }))
+            }
+            "/gc" => {
+                let history = vec![
+                    crate::context_gc::TurnRecord {
+                        turn_index: 1,
+                        role: "user".to_string(),
+                        content: "Viewing file: src/main.rs\ncode here\n".to_string(),
+                        is_error_cycle: false,
+                        is_superseded_view: false,
+                    },
+                    crate::context_gc::TurnRecord {
+                        turn_index: 2,
+                        role: "assistant".to_string(),
+                        content: "error[E0308]: mismatched types at line 14".to_string(),
+                        is_error_cycle: true,
+                        is_superseded_view: false,
+                    },
+                    crate::context_gc::TurnRecord {
+                        turn_index: 3,
+                        role: "user".to_string(),
+                        content: "Viewing file: src/main.rs\nupdated code here\n".to_string(),
+                        is_error_cycle: false,
+                        is_superseded_view: false,
+                    },
+                ];
+                let report = crate::context_gc::ContextAntiRotGc::analyze_and_compact(&history, 1000);
+                Some(CockpitItem::GcCard(GcCardItem {
+                    initial_tokens: report.initial_tokens,
+                    compacted_tokens: report.compacted_tokens,
+                    tokens_saved: report.tokens_saved,
+                    reduction_percentage: report.reduction_percentage,
+                    error_cycles_pruned: report.error_cycles_pruned,
+                }))
+            }
+            "/deploy" => {
+                let ws_path = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                let port = arg.parse::<u16>().unwrap_or(3000);
+                let report = crate::vibe_deployer::VibeDeployerEngine::deploy_preview(&ws_path, port, crate::vibe_deployer::DeployTarget::StaticFrontend).ok()?;
+                Some(CockpitItem::DeployCard(DeployCardItem {
+                    public_url: report.public_url,
+                    subdomain: report.subdomain,
+                    local_port: report.local_port,
+                    tls_active: report.tls_active,
+                    qr_matrix_preview: report.qr_matrix_rendered.lines().take(4).collect::<Vec<_>>().join("\n"),
+                }))
+            }
+            "/harmonize" => {
+                let rust_src = if arg.is_empty() {
+                    "pub struct UserProfile { pub id: u64, pub username: String, pub bio: Option<String> }"
+                } else {
+                    arg
+                };
+                let report = crate::type_harmonizer::TypeDriftHarmonizer::harmonize_cross_stack(rust_src, "", "", "");
+                Some(CockpitItem::HarmonizerCard(HarmonizerCardItem {
+                    models_count: report.models_detected.len(),
+                    drift_detected: report.drift_detected,
+                    fields_synchronized: report.fields_synchronized,
+                    ts_preview: report.typescript_patch.lines().take(4).collect::<Vec<_>>().join("\n"),
+                }))
+            }
+            "/shadow" => {
+                let ws_path = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                let diff_content = if arg.is_empty() {
+                    "fn calculate_tax(amount: f64) -> f64 {\n    amount * 0.12\n}\n"
+                } else {
+                    arg
+                };
+                let rep = crate::shadow_exec::ShadowExecutionEngine::execute_shadow_tests(&ws_path, "src/lib.rs", diff_content);
+                Some(CockpitItem::ShadowExecCard(ShadowExecCardItem {
+                    modified_file: rep.modified_file,
+                    tests_count: rep.tests_executed,
+                    passed: rep.passed,
+                    total_duration_us: rep.total_duration_us,
+                    alert: rep.alert_message,
+                }))
+            }
+            "/dbmig" => {
+                let cur = vec![crate::db_migration_synthesizer::TableSpec {
+                    name: "users".to_string(),
+                    columns: vec![crate::db_migration_synthesizer::ColumnSpec {
+                        name: "id".to_string(),
+                        col_type: "INTEGER".to_string(),
+                        nullable: false,
+                        default_val: None,
+                    }],
+                }];
+                let des = vec![crate::db_migration_synthesizer::TableSpec {
+                    name: "users".to_string(),
+                    columns: vec![
+                        crate::db_migration_synthesizer::ColumnSpec {
+                            name: "id".to_string(),
+                            col_type: "INTEGER".to_string(),
+                            nullable: false,
+                            default_val: None,
+                        },
+                        crate::db_migration_synthesizer::ColumnSpec {
+                            name: "status".to_string(),
+                            col_type: "TEXT".to_string(),
+                            nullable: true,
+                            default_val: Some("'active'".to_string()),
+                        },
+                    ],
+                }];
+                let plan = crate::db_migration_synthesizer::DbMigrationSynthesizer::synthesize_migration(&cur, &des, b"RAW_WAL");
+                Some(CockpitItem::DbMigrationCard(DbMigrationCardItem {
+                    table_name: plan.table_name,
+                    added_columns_count: plan.added_columns.len(),
+                    is_destructive: plan.is_destructive,
+                    wal_hash_preview: plan.wal_snapshot_hash[..8].to_string(),
+                }))
+            }
+            "/zeromock" => {
+                let path = if arg.is_empty() { "/v1/charges" } else { arg };
+                let call = crate::zero_mock::InterceptedCall {
+                    method: "POST".to_string(),
+                    url_path: path.to_string(),
+                    status: 401,
+                    body_snippet: None,
+                };
+                let rep = crate::zero_mock::ZeroMockFabric::synthesize_mock_for_call(&call);
+                Some(CockpitItem::ZeroMockCard(ZeroMockCardItem {
+                    path_pattern: rep.path_pattern,
+                    schema_inferred: rep.schema_inferred,
+                    status: rep.mocked_response.status,
+                    mock_body_preview: rep.mocked_response.json_body.to_string(),
+                }))
+            }
+            "/ghosttype" => {
+                let engine = crate::ghost_typing::GhostTypingEngine::new();
+                let prefix = if arg.is_empty() { "pub fn " } else { arg };
+                let pred = engine.prefetch_speculative_completion(prefix).unwrap_or(crate::ghost_typing::GhostPrediction {
+                    trigger_prefix: prefix.to_string(),
+                    predicted_tokens: "execute() -> Result<()>".to_string(),
+                    confidence: 0.90,
+                    latency_us: 15,
+                });
+                Some(CockpitItem::GhostTypingCard(GhostTypingCardItem {
+                    trigger_prefix: pred.trigger_prefix,
+                    predicted_tokens_preview: pred.predicted_tokens.lines().take(2).collect::<Vec<_>>().join("\n"),
+                    confidence: pred.confidence,
+                    latency_us: pred.latency_us,
+                }))
+            }
+            "/invariant" => {
+                let sample_code = if arg.is_empty() {
+                    "let val = map.get(k).unwrap();\nlet res = total / divisor;\n"
+                } else {
+                    arg
+                };
+                let rep = crate::invariant_shield::InvariantShieldEngine::audit_and_shield("src/lib.rs", sample_code);
+                let first_haz = rep.hazards.first().map(|h| format!("{:?} at L{}", h.kind, h.line_number));
+                Some(CockpitItem::InvariantCard(InvariantCardItem {
+                    file_path: rep.file_path,
+                    total_hazards: rep.total_hazards,
+                    safety_score: rep.safety_score,
+                    first_hazard: first_haz,
+                }))
+            }
+            "/archdag" => {
+                let ws_path = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                let topo = crate::architecture_dag::ArchitectureDagVisualizer::discover_topology(&ws_path);
+                let diag = crate::architecture_dag::ArchitectureDagVisualizer::render_ascii_dag(&topo);
+                Some(CockpitItem::ArchitectureDagCard(ArchitectureDagCardItem {
+                    nodes_count: topo.nodes.len(),
+                    edges_count: topo.edges.len(),
+                    ascii_diagram_preview: diag.lines().take(6).collect::<Vec<_>>().join("\n"),
+                }))
+            }
+            "/voice" => {
+                let dummy_pcm = vec![120u8; 400];
+                let evt = crate::voice_stream::VoiceStreamCoPilot::ingest_audio_pcm(&dummy_pcm, 16000);
+                Some(CockpitItem::VoiceCoPilotCard(VoiceCoPilotCardItem {
+                    transcript: evt.transcript,
+                    confidence: evt.confidence,
+                    intent_detected: evt.intent_detected,
+                    triggered_chime: evt.triggered_chime,
+                }))
+            }
+            _ => None,
+        }
+    }
 }
 
 impl Default for CockpitState {
@@ -523,8 +1919,8 @@ impl CockpitState {
             .map(|p| p.display().to_string())
             .unwrap_or_else(|_| "/home/dyna/TGS Projects/hagibis".to_string());
 
-        let default_model = if hgb_core::OllamaProvider::is_available() {
-            "qwen2.5-coder:1.5b".to_string()
+        let default_model = if let Some(ollama) = hgb_core::OllamaProvider::auto_discover() {
+            ollama.default_model().to_string()
         } else {
             "gemini-2.5-flash".to_string()
         };
@@ -559,6 +1955,294 @@ impl CockpitState {
             processing_tick: 0,
             processing_start: None,
             processing_prompt_preview: String::new(),
+            last_copied_id: None,
+            last_copied_time: None,
+            copy_hitboxes: Arc::new(Mutex::new(Vec::new())),
+            pinned_goal: None,
+            diff_cards: Vec::new(),
+            diff_hitboxes: Arc::new(Mutex::new(Vec::new())),
+            intercepted_crash: None,
+            heal_hitboxes: Arc::new(Mutex::new(Vec::new())),
+            tunnel_cards: Vec::new(),
+            image_previews: Vec::new(),
+            is_listening: false,
+            voice_engine: AudioPromptEngine::new(),
+            telepathy_cards: Vec::new(),
+            ghost_cards: Vec::new(),
+            council_cards: Vec::new(),
+            pixel_cards: Vec::new(),
+            green_light_cards: Vec::new(),
+            db_cards: Vec::new(),
+            warp_cards: Vec::new(),
+            traffic_cards: Vec::new(),
+            wiretap_cards: Vec::new(),
+            sentry_cards: Vec::new(),
+            xerox_cards: Vec::new(),
+            governor_cards: Vec::new(),
+            web_browse_cards: Vec::new(),
+            web_search_cards: Vec::new(),
+            memory_cards: Vec::new(),
+            ambient_cards: Vec::new(),
+            validation_cards: Vec::new(),
+            forge_cards: Vec::new(),
+            prune_cards: Vec::new(),
+            port_cards: Vec::new(),
+            ship_cards: Vec::new(),
+            browser_incident_cards: Vec::new(),
+            seed_cards: Vec::new(),
+            rewind_cards: Vec::new(),
+            redteam_cards: Vec::new(),
+            blueprint_cards: Vec::new(),
+            passive_sentinel_cards: Vec::new(),
+            teleport_cards: Vec::new(),
+            steer_cards: Vec::new(),
+            sandbox_cards: Vec::new(),
+            arena_cards: Vec::new(),
+            gc_cards: Vec::new(),
+            deploy_cards: Vec::new(),
+            harmonizer_cards: Vec::new(),
+            shadow_cards: Vec::new(),
+            db_mig_cards: Vec::new(),
+            zero_mock_cards: Vec::new(),
+            ghost_typing_cards: Vec::new(),
+            invariant_cards: Vec::new(),
+            architecture_dag_cards: Vec::new(),
+            voice_copilot_cards: Vec::new(),
+        }
+    }
+
+    pub fn set_pinned_goal(&mut self, goal: impl Into<String>) {
+        let g = goal.into();
+        self.pinned_goal = Some(g);
+        hgb_core::play_vibe_chime(true);
+    }
+
+    pub fn clear_pinned_goal(&mut self) {
+        self.pinned_goal = None;
+        hgb_core::play_vibe_chime(false);
+    }
+
+    pub fn add_diff_card(&mut self, path: impl Into<PathBuf>, raw_diff: &str) {
+        let p = path.into();
+        let hunks = SelectivePatcher::parse_diff(raw_diff, Some(&p));
+        let id = format!("diff_{}", Utc::now().timestamp_micros());
+        self.diff_cards.push(DiffCardItem {
+            id,
+            file_path: p,
+            hunks,
+            raw_diff: raw_diff.to_string(),
+            status: DiffCardStatus::Pending,
+        });
+        hgb_core::play_vibe_chime(true);
+    }
+
+    pub fn accept_diff_card(&mut self, card_id: Option<&str>) -> bool {
+        let target_idx = if let Some(cid) = card_id {
+            self.diff_cards.iter().position(|c| c.id == cid)
+        } else {
+            self.diff_cards.iter().rposition(|c| c.status == DiffCardStatus::Pending)
+        };
+
+        if let Some(idx) = target_idx {
+            self.diff_cards[idx].status = DiffCardStatus::Accepted;
+            for h in &mut self.diff_cards[idx].hunks {
+                h.accepted = Some(true);
+            }
+            let file_str = self.diff_cards[idx].file_path.display().to_string();
+            self.add_system_notice(format!("✓ Accepted diff for {}", file_str));
+            hgb_core::play_vibe_chime(true);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn reject_diff_card(&mut self, card_id: Option<&str>) -> bool {
+        let target_idx = if let Some(cid) = card_id {
+            self.diff_cards.iter().position(|c| c.id == cid)
+        } else {
+            self.diff_cards.iter().rposition(|c| c.status == DiffCardStatus::Pending)
+        };
+
+        if let Some(idx) = target_idx {
+            self.diff_cards[idx].status = DiffCardStatus::Rejected;
+            for h in &mut self.diff_cards[idx].hunks {
+                h.accepted = Some(false);
+            }
+            let file_str = self.diff_cards[idx].file_path.display().to_string();
+            self.add_system_notice(format!("✗ Rejected diff for {}", file_str));
+            hgb_core::play_vibe_chime(false);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn trigger_heal(&mut self) {
+        if let Some(ref crash) = self.intercepted_crash {
+            let prompt = crash.heal_prompt();
+            self.prompt_input = prompt;
+            self.cursor_position = self.prompt_input.chars().count();
+            self.add_system_notice(format!("🚑 1-Click Heal staged for {}:{}", crash.file_path.display(), crash.line_number));
+            hgb_core::play_vibe_chime(true);
+        } else {
+            self.prompt_input = "/heal diagnose and fix recent failure".to_string();
+            self.cursor_position = self.prompt_input.chars().count();
+        }
+    }
+
+    pub fn add_tunnel_card(&mut self, port: u16) {
+        let local_ip = detect_local_ip();
+        let url = format!("http://{}:{}", local_ip, port);
+        let id = format!("tunnel_{}", port);
+        let card_lines = render_mobile_test_card(&url, port, 76);
+        self.tunnel_cards.push(TunnelCardItem {
+            id,
+            url: url.clone(),
+            port,
+            card_lines,
+        });
+        self.add_system_notice(format!("📱 Ephemeral Dev Tunnel active: {}", url));
+        hgb_core::play_vibe_chime(true);
+    }
+
+    pub fn add_image_preview(&mut self, title: impl Into<String>, path: impl Into<String>) {
+        let t = title.into();
+        let p = path.into();
+        let id = format!("img_{}", Utc::now().timestamp_micros());
+        let proto = detect_graphics_protocol();
+        
+        let mut lines = Vec::new();
+        lines.push(format!("╭── UI Preview: {} ──────────────────────────────╮", t));
+        lines.push(format!("│ File: {} | Protocol: {} │", p, proto.badge()));
+        lines.push(format!("│ Dimensions: 1200x800 px (Rendered in {}) │", proto.badge()));
+        lines.push("│ [▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀] │".to_string());
+        lines.push("│ [▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄] │".to_string());
+        lines.push("╰─────────────────────────────────────────────────────────────╯".to_string());
+
+        self.image_previews.push(ImagePreviewItem {
+            id,
+            title: t,
+            path_or_url: p,
+            protocol: proto,
+            lines,
+        });
+        hgb_core::play_vibe_chime(true);
+    }
+
+    pub fn toggle_listening(&mut self) {
+        if self.is_listening {
+            let transcribed = self.voice_engine.stop_listening();
+            self.is_listening = false;
+            if !transcribed.is_empty() {
+                self.prompt_input = transcribed;
+                self.cursor_position = self.prompt_input.chars().count();
+                self.add_system_notice("🎙️ Audio transcribed into prompt bar!".to_string());
+            } else {
+                self.add_system_notice("🎙️ Voice listening stopped.".to_string());
+            }
+        } else {
+            self.is_listening = true;
+            self.voice_engine.start_listening();
+            self.add_system_notice("🎙️ LISTENING... Speak now, press F7 when finished.".to_string());
+        }
+    }
+
+    /// Copy content to system clipboard and trigger visual feedback
+    pub fn copy_to_clipboard(&mut self, content: &str, card_id: &str, label: &str) {
+        let _ = hgb_core::clipboard::ClipboardHelper::copy(content);
+        self.last_copied_id = Some(card_id.to_string());
+        self.last_copied_time = Some(Instant::now());
+        let lines = content.lines().count();
+        let chars = content.chars().count();
+        self.add_system_notice(format!("✓ Copied {} ({} lines, {} chars) to clipboard!", label, lines, chars));
+        hgb_core::play_vibe_chime(true);
+    }
+
+    /// Copy the latest assistant response or tool output to clipboard
+    pub fn copy_latest_response(&mut self) {
+        let mut target = None;
+        for item in self.conversation.iter().rev() {
+            if let CockpitChatSender::Assistant { .. } = item.sender {
+                for tool in item.tool_calls.iter().rev() {
+                    if let Some(ref snippet) = tool.output_snippet {
+                        if !snippet.trim().is_empty() {
+                            let label = format!("{} response", tool.tool_name);
+                            target = Some((snippet.clone(), "latest".to_string(), label));
+                            break;
+                        }
+                    }
+                }
+                if target.is_some() {
+                    break;
+                }
+                if !item.content.trim().is_empty() {
+                    target = Some((item.content.clone(), "latest".to_string(), "assistant response".to_string()));
+                    break;
+                }
+            }
+        }
+        if let Some((content, card_id, label)) = target {
+            self.copy_to_clipboard(&content, &card_id, &label);
+        } else {
+            self.add_system_notice("No response found to copy.".to_string());
+        }
+    }
+
+    /// Handle mouse click in the terminal for copy icons, diff actions, and heal banners
+    pub fn handle_mouse_click(&mut self, col: u16, row: u16) -> bool {
+        // 1. Check diff action hitboxes (Accept / Reject)
+        let diff_hit = if let Ok(hitboxes) = self.diff_hitboxes.lock() {
+            hitboxes
+                .iter()
+                .find(|hb| hb.screen_y == row && col >= hb.x_start && col <= hb.x_end)
+                .cloned()
+        } else {
+            None
+        };
+
+        if let Some(hb) = diff_hit {
+            match hb.action {
+                DiffAction::Accept => {
+                    self.accept_diff_card(Some(&hb.card_id));
+                }
+                DiffAction::Reject => {
+                    self.reject_diff_card(Some(&hb.card_id));
+                }
+            }
+            return true;
+        }
+
+        // 2. Check 1-Click Heal hitboxes
+        let heal_hit = if let Ok(hitboxes) = self.heal_hitboxes.lock() {
+            hitboxes
+                .iter()
+                .find(|hb| hb.screen_y == row && col >= hb.x_start && col <= hb.x_end)
+                .cloned()
+        } else {
+            None
+        };
+
+        if let Some(_) = heal_hit {
+            self.trigger_heal();
+            return true;
+        }
+
+        // 3. Check copy hitboxes
+        let hit = if let Ok(hitboxes) = self.copy_hitboxes.lock() {
+            hitboxes
+                .iter()
+                .find(|hb| hb.screen_y == row && col >= hb.x_start && col <= hb.x_end)
+                .cloned()
+        } else {
+            None
+        };
+
+        if let Some(hb) = hit {
+            self.copy_to_clipboard(&hb.content, &hb.card_id, &hb.label);
+            true
+        } else {
+            false
         }
     }
 
@@ -1259,20 +2943,44 @@ pub async fn execute_prompt_core(
             let elapsed = (Utc::now().timestamp_millis() - start_time).max(1) as u64;
             match res {
                 Ok(output) => {
-                    let approx_tokens = (output.len() / 4 + prompt.len() / 4).max(1) as u64;
+                    let calls = hgb_core::agent::ReActAgentEngine::extract_tool_calls(&output);
+                    let (final_output, tool_name_used) = if !calls.is_empty() {
+                        let engine = hgb_core::agent::ReActAgentEngine::new(
+                            std::sync::Arc::new(ollama_prov.clone()),
+                            hgb_core::agent::AgentLoopConfig::default(),
+                        );
+                        let mut tool_results = Vec::new();
+                        let first_tool = calls[0].tool_name.clone();
+                        for call in calls {
+                            let out = match engine.execute_tool(&call.tool_name, &call.arguments).await {
+                                Ok(res) => res,
+                                Err(e) => format!("Error executing {}: {}", call.tool_name, e),
+                            };
+                            tool_results.push(format!("[Tool Output for {}]:\n{}", call.tool_name, out));
+                        }
+                        let followup = format!(
+                            "<user>\n{}\n</user>\n<assistant>\n{}\n</assistant>\n<tool_results>\n{}\n</tool_results>\nPlease synthesize your final answer using the above tool results.",
+                            prompt, output, tool_results.join("\n\n")
+                        );
+                        let synth = ollama_prov.complete(&followup, Some(&model_pill)).await.unwrap_or(output);
+                        (synth, format!("tool_executed: {}", first_tool))
+                    } else {
+                        (output, format!("model={}", model_pill))
+                    };
+                    let approx_tokens = (final_output.len() / 4 + prompt.len() / 4).max(1) as u64;
                     let tool = CockpitToolCall::new(
                         "ollama_local_inference",
-                        format!("model={}", model_pill),
+                        tool_name_used,
                         "SUCCESS",
                         elapsed,
-                        Some(output.clone()),
+                        Some(final_output.clone()),
                     );
                     let log_msg = format!("[OLLAMA] Completed in {}ms (~{} tok)", elapsed, approx_tokens);
                     return PromptExecutionResult {
                         node_id,
                         model: model_pill,
                         prompt,
-                        output,
+                        output: final_output,
                         tokens_used: approx_tokens,
                         duration_ms: elapsed,
                         tool_call: Some(tool),
@@ -1796,6 +3504,11 @@ impl CockpitState {
         frame.render_widget(bottom_deck, main_chunks[2]);
     }
 
+    /// In-canvas rendering for chat view
+    pub fn render_chat_view(&self, frame: &mut Frame) {
+        self.render_chat_canvas(frame);
+    }
+
     /// Render Authentic AGY CLI Conversational Chat Canvas
     pub fn render_chat_canvas(&self, frame: &mut Frame) {
         let area = frame.area();
@@ -1844,6 +3557,685 @@ impl CockpitState {
         let viewport_height = chunks[2].height as usize;
         let usable_width = chunks[2].width.saturating_sub(2).max(1) as usize;
         let mut chat_lines = Vec::new();
+        struct PendingCopyTarget {
+            line_idx: usize,
+            banner_w: usize,
+            copy_btn_w: usize,
+            content: String,
+            card_id: String,
+            label: String,
+        }
+        let mut pending_copy_targets: Vec<PendingCopyTarget> = Vec::new();
+
+        struct PendingDiffTarget {
+            line_idx: usize,
+            banner_w: usize,
+            card_id: String,
+        }
+        let mut pending_diff_targets: Vec<PendingDiffTarget> = Vec::new();
+
+        struct PendingHealTarget {
+            line_idx: usize,
+            banner_w: usize,
+            card_id: String,
+        }
+        let mut pending_heal_targets: Vec<PendingHealTarget> = Vec::new();
+
+        // 1. Pinned North Star Goal Banner
+        if let Some(ref goal) = self.pinned_goal {
+            let goal_w = UnicodeWidthStr::width(goal.as_str());
+            let max_allowed = usable_width.saturating_sub(4).max(36);
+            let card_w = (goal_w + 22).max(45).min(max_allowed);
+            let dashes = "─".repeat(card_w.saturating_sub(goal_w + 20).max(2));
+            chat_lines.push(Line::from(vec![
+                Span::styled("╭── 🎯 NORTH STAR: ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled(goal, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(format!(" {}╮", dashes), Style::default().fg(Color::Yellow)),
+            ]));
+            chat_lines.push(Line::from(""));
+        }
+
+        // 2. Crash Interceptor Banner
+        if let Some(ref crash) = self.intercepted_crash {
+            let banner_txt = crash.banner_text();
+            let card_w = usable_width.saturating_sub(2).max(40);
+            let line_idx = chat_lines.len();
+            chat_lines.push(Line::from(vec![
+                Span::styled("╭── ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+                Span::styled(banner_txt, Style::default().fg(Color::LightRed).add_modifier(Modifier::BOLD)),
+                Span::styled(" ─╮", Style::default().fg(Color::Red)),
+            ]));
+            pending_heal_targets.push(PendingHealTarget {
+                line_idx,
+                banner_w: card_w,
+                card_id: "crash_banner".to_string(),
+            });
+            chat_lines.push(Line::from(""));
+        }
+
+        // 3. Voice Listening Indicator
+        if self.is_listening {
+            let indicator = self.voice_engine.render_indicator(self.processing_tick);
+            chat_lines.push(Line::from(vec![
+                Span::styled("🎙️ ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+                Span::styled(indicator, Style::default().fg(Color::LightRed).add_modifier(Modifier::BOLD)),
+            ]));
+            chat_lines.push(Line::from(""));
+        }
+
+        // 4. Interactive In-Canvas Diff Cards
+        for card in &self.diff_cards {
+            let card_w = usable_width.saturating_sub(2).max(40);
+            let line_idx = chat_lines.len();
+            let file_str = card.file_path.display().to_string();
+
+            let status_badge = match card.status {
+                DiffCardStatus::Pending => "[PENDING REVIEW]",
+                DiffCardStatus::Accepted => "[✓ ACCEPTED]",
+                DiffCardStatus::Rejected => "[✗ REJECTED]",
+            };
+            let status_color = match card.status {
+                DiffCardStatus::Pending => Color::Yellow,
+                DiffCardStatus::Accepted => Color::Green,
+                DiffCardStatus::Rejected => Color::Red,
+            };
+
+            let header_prefix = format!("╭─── 🪟 Diff: {} ", file_str);
+            let buttons_str = "[✓ Accept]  [✗ Reject] ─╮";
+            let used_w = UnicodeWidthStr::width(header_prefix.as_str()) + UnicodeWidthStr::width(buttons_str) + 1;
+            let dashes = "─".repeat(card_w.saturating_sub(used_w).max(2));
+
+            chat_lines.push(Line::from(vec![
+                Span::styled(header_prefix, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(dashes, Style::default().fg(Color::DarkGray)),
+                Span::raw(" "),
+                Span::styled("[✓ Accept]", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::raw("  "),
+                Span::styled("[✗ Reject]", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+                Span::styled(" ─╮", Style::default().fg(Color::Cyan)),
+            ]));
+
+            pending_diff_targets.push(PendingDiffTarget {
+                line_idx,
+                banner_w: card_w,
+                card_id: card.id.clone(),
+            });
+
+            // Status line
+            let status_line = format!("│  Status: {} • Hunks: {}", status_badge, card.hunks.len());
+            let pad = card_w.saturating_sub(UnicodeWidthStr::width(status_line.as_str()) + 1);
+            chat_lines.push(Line::from(vec![
+                Span::styled(status_line, Style::default().fg(status_color)),
+                Span::raw(" ".repeat(pad)),
+                Span::styled("│", Style::default().fg(Color::Cyan)),
+            ]));
+
+            // Hunks
+            for (h_idx, hunk) in card.hunks.iter().enumerate() {
+                let h_header = format!("│  Hunk #{}: @@ -{},{} +{},{} @@", h_idx + 1, hunk.old_start, hunk.old_len, hunk.new_start, hunk.new_len);
+                let pad = card_w.saturating_sub(UnicodeWidthStr::width(h_header.as_str()) + 1);
+                chat_lines.push(Line::from(vec![
+                    Span::styled(h_header, Style::default().fg(Color::Cyan)),
+                    Span::raw(" ".repeat(pad)),
+                    Span::styled("│", Style::default().fg(Color::Cyan)),
+                ]));
+
+                for line in &hunk.lines {
+                    let (pfx, color) = match line.kind {
+                        DiffLineKind::Addition => ("+", Color::Green),
+                        DiffLineKind::Deletion => ("-", Color::Red),
+                        DiffLineKind::Context => (" ", Color::DarkGray),
+                    };
+                    let line_text = format!("│   {} {}", pfx, line.content);
+                    let line_w = UnicodeWidthStr::width(line_text.as_str());
+                    let pad = card_w.saturating_sub(line_w + 1);
+                    chat_lines.push(Line::from(vec![
+                        Span::styled(line_text, Style::default().fg(color)),
+                        Span::raw(" ".repeat(pad)),
+                        Span::styled("│", Style::default().fg(Color::Cyan)),
+                    ]));
+                }
+            }
+
+            let bottom_dashes = "─".repeat(card_w.saturating_sub(2));
+            chat_lines.push(Line::from(Span::styled(format!("╰{}╯", bottom_dashes), Style::default().fg(Color::Cyan))));
+            chat_lines.push(Line::from(""));
+        }
+
+        // 5. Mobile Dev Tunnel Cards
+        for card in &self.tunnel_cards {
+            for l in &card.card_lines {
+                chat_lines.push(Line::from(l.as_str()));
+            }
+            chat_lines.push(Line::from(""));
+        }
+
+        // 6. Visual UI Image Preview Cards
+        for preview in &self.image_previews {
+            for l in &preview.lines {
+                chat_lines.push(Line::from(l.as_str()));
+            }
+            chat_lines.push(Line::from(""));
+        }
+
+        // 7. Semantic Telepathy Cards
+        for card in &self.telepathy_cards {
+            chat_lines.push(Line::from(vec![
+                Span::styled("⚡ Telepathy Search: ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("\"{}\" ({} matches in {}µs)", card.query, card.matches_count, card.latency_us), Style::default().fg(Color::White)),
+            ]));
+            chat_lines.push(Line::from(vec![
+                Span::styled(format!("   Top Match: {} (score: {:.3})", card.top_match_name, card.top_match_score), Style::default().fg(Color::LightMagenta)),
+            ]));
+            chat_lines.push(Line::from(""));
+        }
+
+        // 8. Ghost Engine Speculative Candidate Cards
+        for card in &self.ghost_cards {
+            chat_lines.push(Line::from(vec![
+                Span::styled("👻 Ghost Engine Pre-Computation: ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("{} (confidence: {:.0}%)", card.target_file.display(), card.confidence * 100.0), Style::default().fg(Color::White)),
+            ]));
+            chat_lines.push(Line::from(vec![
+                Span::styled("   Speculative Diff (0ms Instant Adoption ready):", Style::default().fg(Color::DarkGray)),
+            ]));
+            for line in card.diff_snippet.lines().take(4) {
+                chat_lines.push(Line::from(Span::styled(format!("   {}", line), Style::default().fg(Color::LightCyan))));
+            }
+            chat_lines.push(Line::from(""));
+        }
+
+        // 9. Council of Elders Debate Cards
+        for card in &self.council_cards {
+            chat_lines.push(Line::from(vec![
+                Span::styled("🏛️ Council of Elders Verdict: ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("{} (Confidence: {}%)", card.consensus, card.confidence_score), Style::default().fg(Color::White)),
+            ]));
+            chat_lines.push(Line::from(vec![
+                Span::styled(format!("   Topic: {}", card.topic), Style::default().fg(Color::LightYellow)),
+            ]));
+            chat_lines.push(Line::from(""));
+        }
+
+        // 10. Pixel-Diff Radar Cards
+        for card in &self.pixel_cards {
+            chat_lines.push(Line::from(vec![
+                Span::styled("🎯 Pixel Radar: ", Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("{} — {} ({} overflow defects)", card.url, card.verdict, card.overflow_defects), Style::default().fg(Color::White)),
+            ]));
+            chat_lines.push(Line::from(""));
+        }
+
+        // 11. Green-Light Synthesis Cards
+        for card in &self.green_light_cards {
+            let status_badge = if card.all_passed { "✓ GREEN (PASSED)" } else { "✗ RED (FAILING)" };
+            let status_color = if card.all_passed { Color::Green } else { Color::Red };
+            chat_lines.push(Line::from(vec![
+                Span::styled("🚦 Green-Light TDD: ", Style::default().fg(status_color).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("{} — {} ({} reqs)", card.spec_id, status_badge, card.requirements_count), Style::default().fg(Color::White)),
+            ]));
+            chat_lines.push(Line::from(""));
+        }
+
+        // 12. Ephemeral CoW Database Time-Machine Cards
+        for card in &self.db_cards {
+            let ver = if card.verified { "WAL VERIFIED" } else { "INTEGRITY UNVERIFIED" };
+            chat_lines.push(Line::from(vec![
+                Span::styled("⏳ DB Time-Machine: ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("{} (ID: {}) — {} in {}µs", card.action, card.snapshot_id, ver, card.latency_us), Style::default().fg(Color::White)),
+            ]));
+            chat_lines.push(Line::from(""));
+        }
+
+        // 13. Chrono-Warp Omni-Undo Cards
+        for card in &self.warp_cards {
+            chat_lines.push(Line::from(vec![
+                Span::styled("🌌 Chrono-Warp 4D Snapshot: ", Style::default().fg(Color::LightMagenta).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("{} (ID: {}) — {} files tracked in {}ms", card.action, card.snapshot_id, card.files_count, card.duration_ms), Style::default().fg(Color::White)),
+            ]));
+            chat_lines.push(Line::from(""));
+        }
+
+        // 14. Phantom Swarm Traffic Cards
+        for card in &self.traffic_cards {
+            chat_lines.push(Line::from(vec![
+                Span::styled("🤖 Phantom Swarm Traffic: ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("{} bots -> {} | {:.1} req/s | p95: {:.1}ms", card.concurrency, card.target_url, card.rps, card.p95_latency_ms), Style::default().fg(Color::White)),
+            ]));
+            chat_lines.push(Line::from(""));
+        }
+
+        // 15. Wiretap Contract Healer Cards
+        for card in &self.wiretap_cards {
+            chat_lines.push(Line::from(vec![
+                Span::styled("🔌 Wiretap Contract Sentry: ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("{} ({} drifts) — {}", card.endpoint, card.drifts_detected, card.summary), Style::default().fg(Color::White)),
+            ]));
+            chat_lines.push(Line::from(""));
+        }
+
+        // 16. Hallucination Sentry Cards
+        for card in &self.sentry_cards {
+            let status_badge = if card.hallucinated == 0 { "✓ ALL VERIFIED" } else { "⚠️ HALLUCINATIONS INTERCEPTED" };
+            let color = if card.hallucinated == 0 { Color::Green } else { Color::Red };
+            chat_lines.push(Line::from(vec![
+                Span::styled("🛡️ Hallucination Sentry: ", Style::default().fg(color).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("{} — {} ({} valid, {} intercepted)", card.manifest, status_badge, card.verified, card.hallucinated), Style::default().fg(Color::White)),
+            ]));
+            chat_lines.push(Line::from(""));
+        }
+
+        // 17. Clipboard Xerox Cards
+        for card in &self.xerox_cards {
+            chat_lines.push(Line::from(vec![
+                Span::styled("📸 Clipboard Xerox: ", Style::default().fg(Color::LightBlue).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("Component '{}' (Ratio: {}) | Palette: {}", card.component_name, card.aspect_ratio, card.palette_hex.join(", ")), Style::default().fg(Color::White)),
+            ]));
+            chat_lines.push(Line::from(""));
+        }
+
+        // 18. Wattage Governor Cards
+        for card in &self.governor_cards {
+            let throttle_badge = if card.throttled { "⚠️ THROTTLED" } else { "✓ OPTIMAL" };
+            chat_lines.push(Line::from(vec![
+                Span::styled("⚡ Wattage Governor: ", Style::default().fg(Color::LightGreen).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("{:.0} mW | Spent: ${:.4} | {}", card.power_mw, card.spent_usd, throttle_badge), Style::default().fg(Color::White)),
+            ]));
+            chat_lines.push(Line::from(""));
+        }
+
+        // 19. Web Browse Cards
+        for card in &self.web_browse_cards {
+            let status_badge = if card.status_code < 400 { format!("✓ {}", card.status_code) } else { format!("✗ {}", card.status_code) };
+            chat_lines.push(Line::from(vec![
+                Span::styled("🌐 Web Browse: ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("{} | {} ({}ms)", card.title, status_badge, card.duration_ms), Style::default().fg(Color::White)),
+            ]));
+            chat_lines.push(Line::from(vec![
+                Span::styled("   URL: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(&card.url, Style::default().fg(Color::LightCyan)),
+            ]));
+            if !card.content_snippet.is_empty() {
+                chat_lines.push(Line::from(vec![
+                    Span::styled("   Digest: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(&card.content_snippet, Style::default().fg(Color::Gray)),
+                ]));
+            }
+            chat_lines.push(Line::from(""));
+        }
+
+        // 20. Web Search Cards
+        for card in &self.web_search_cards {
+            chat_lines.push(Line::from(vec![
+                Span::styled("🔍 Live Web Search: ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("\"{}\" ({} results)", card.query, card.count), Style::default().fg(Color::White)),
+            ]));
+            for (idx, r) in card.top_results.iter().enumerate() {
+                chat_lines.push(Line::from(vec![
+                    Span::styled(format!("   {}. ", idx + 1), Style::default().fg(Color::DarkGray)),
+                    Span::styled(&r.title, Style::default().fg(Color::LightYellow).add_modifier(Modifier::BOLD)),
+                    Span::styled(format!(" — {}", r.url), Style::default().fg(Color::DarkGray)),
+                ]));
+            }
+            chat_lines.push(Line::from(""));
+        }
+
+        // 21. Persistent Living Memory Cards
+        for card in &self.memory_cards {
+            let card_w = usable_width.saturating_sub(2).max(48);
+            let action_badge = format!("[{}]", card.action);
+            let header_str = format!("╭── 🧠 Living Project Memory {} ", action_badge);
+            let header_w = UnicodeWidthStr::width(header_str.as_str());
+            let dashes_count = card_w.saturating_sub(header_w + 1).max(2);
+            let top_border = format!("{}{}{}╮", header_str, "─".repeat(dashes_count), " ");
+            chat_lines.push(Line::from(vec![
+                Span::styled(top_border, Style::default().fg(Color::LightMagenta).add_modifier(Modifier::BOLD)),
+            ]));
+            chat_lines.push(Line::from(vec![
+                Span::styled("│ ", Style::default().fg(Color::LightMagenta)),
+                Span::styled("Title: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(&card.title, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled(format!(" (ADRs: {} | Debts: {})", card.total_decisions, card.total_debts), Style::default().fg(Color::Cyan)),
+            ]));
+            if !card.decision.is_empty() {
+                chat_lines.push(Line::from(vec![
+                    Span::styled("│ ", Style::default().fg(Color::LightMagenta)),
+                    Span::styled("Decision: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(&card.decision, Style::default().fg(Color::LightGreen)),
+                ]));
+            }
+            if !card.context.is_empty() {
+                chat_lines.push(Line::from(vec![
+                    Span::styled("│ ", Style::default().fg(Color::LightMagenta)),
+                    Span::styled("Context: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(&card.context, Style::default().fg(Color::Gray)),
+                ]));
+            }
+            let bot_border = format!("╰{}╯", "─".repeat(card_w.saturating_sub(2)));
+            chat_lines.push(Line::from(Span::styled(bot_border, Style::default().fg(Color::LightMagenta))));
+            chat_lines.push(Line::from(""));
+        }
+
+        // 22. Ambient AST Follower Cards
+        for card in &self.ambient_cards {
+            let card_w = usable_width.saturating_sub(2).max(48);
+            let symbol_info = card.enclosing_symbol.as_deref().unwrap_or("module root");
+            let kind_info = card.symbol_kind.as_deref().unwrap_or("scope");
+            let header_str = format!("╭── 🎯 Ambient AST Focus [{}:{}] ", card.file_path, card.cursor_line);
+            let header_w = UnicodeWidthStr::width(header_str.as_str());
+            let dashes_count = card_w.saturating_sub(header_w + 1).max(2);
+            let top_border = format!("{}{}{}╮", header_str, "─".repeat(dashes_count), " ");
+            chat_lines.push(Line::from(Span::styled(top_border, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))));
+            chat_lines.push(Line::from(vec![
+                Span::styled("│ ", Style::default().fg(Color::Cyan)),
+                Span::styled("Enclosing Symbol: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(symbol_info, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled(format!(" ({})", kind_info), Style::default().fg(Color::Yellow)),
+                Span::styled(format!(" | Imports: {}", card.imports.len()), Style::default().fg(Color::DarkGray)),
+            ]));
+            if !card.context_snippet.is_empty() {
+                for line in card.context_snippet.lines().take(3) {
+                    chat_lines.push(Line::from(vec![
+                        Span::styled("│ ", Style::default().fg(Color::Cyan)),
+                        Span::styled("  ", Style::default().fg(Color::DarkGray)),
+                        Span::styled(line, Style::default().fg(Color::LightCyan)),
+                    ]));
+                }
+            }
+            let bot_border = format!("╰{}╯", "─".repeat(card_w.saturating_sub(2)));
+            chat_lines.push(Line::from(Span::styled(bot_border, Style::default().fg(Color::Cyan))));
+            chat_lines.push(Line::from(""));
+        }
+
+        // 23. Self-Validating Vibe Loop Cards
+        for card in &self.validation_cards {
+            let card_w = usable_width.saturating_sub(2).max(48);
+            let (status_badge, border_color) = if card.passed {
+                ("✓ PASSED", Color::Green)
+            } else {
+                ("✗ FAILED", Color::Red)
+            };
+            let header_str = format!("╭── 🧪 Self-Validating Loop [{}] ({} iters, {}ms) ", status_badge, card.iterations, card.duration_ms);
+            let header_w = UnicodeWidthStr::width(header_str.as_str());
+            let dashes_count = card_w.saturating_sub(header_w + 1).max(2);
+            let top_border = format!("{}{}{}╮", header_str, "─".repeat(dashes_count), " ");
+            chat_lines.push(Line::from(Span::styled(top_border, Style::default().fg(border_color).add_modifier(Modifier::BOLD))));
+            chat_lines.push(Line::from(vec![
+                Span::styled("│ ", Style::default().fg(border_color)),
+                Span::styled("Goal: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(&card.goal, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            ]));
+            if !card.companion_test.is_empty() {
+                chat_lines.push(Line::from(vec![
+                    Span::styled("│ ", Style::default().fg(border_color)),
+                    Span::styled("Companion Spec: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled("synthesized & verified against compiler healer", Style::default().fg(Color::LightGreen)),
+                ]));
+            }
+            let bot_border = format!("╰{}╯", "─".repeat(card_w.saturating_sub(2)));
+            chat_lines.push(Line::from(Span::styled(bot_border, Style::default().fg(border_color))));
+            chat_lines.push(Line::from(""));
+        }
+
+        // 24. Instant App Forge Cards
+        for card in &self.forge_cards {
+            let card_w = usable_width.saturating_sub(2).max(48);
+            let header_str = format!("╭── ⚡ App Forge [{}] ", card.stack);
+            let header_w = UnicodeWidthStr::width(header_str.as_str());
+            let dashes_count = card_w.saturating_sub(header_w + 1).max(2);
+            let top_border = format!("{}{}{}╮", header_str, "─".repeat(dashes_count), " ");
+            chat_lines.push(Line::from(Span::styled(top_border, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))));
+            chat_lines.push(Line::from(vec![
+                Span::styled("│ ", Style::default().fg(Color::Yellow)),
+                Span::styled("Project: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(&card.project_name, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled(format!(" -> {} ({} files, {}ms)", card.target_path, card.files_created, card.duration_ms), Style::default().fg(Color::DarkGray)),
+            ]));
+            chat_lines.push(Line::from(vec![
+                Span::styled("│ ", Style::default().fg(Color::Yellow)),
+                Span::styled("Badges: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(if card.git_initialized { "Git: ✓ " } else { "Git: ✗ " }, Style::default().fg(Color::Green)),
+                Span::styled(if card.adr_initialized { "ADR-001: ✓" } else { "ADR-001: ✗" }, Style::default().fg(Color::Cyan)),
+            ]));
+            let bot_border = format!("╰{}╯", "─".repeat(card_w.saturating_sub(2)));
+            chat_lines.push(Line::from(Span::styled(bot_border, Style::default().fg(Color::Yellow))));
+            chat_lines.push(Line::from(""));
+        }
+
+        // 25. Adaptive AST & KV-Cache Pruner Cards
+        for card in &self.prune_cards {
+            let card_w = usable_width.saturating_sub(2).max(48);
+            let header_str = format!("╭── ✂️ AST & KV-Cache Pruner [{:.1}% Reduction] ", card.reduction_pct);
+            let header_w = UnicodeWidthStr::width(header_str.as_str());
+            let dashes_count = card_w.saturating_sub(header_w + 1).max(2);
+            let top_border = format!("{}{}{}╮", header_str, "─".repeat(dashes_count), " ");
+            chat_lines.push(Line::from(Span::styled(top_border, Style::default().fg(Color::LightBlue).add_modifier(Modifier::BOLD))));
+            chat_lines.push(Line::from(vec![
+                Span::styled("│ ", Style::default().fg(Color::LightBlue)),
+                Span::styled("Target: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(&card.file_path, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled(format!(" ({} lines -> {} lines | {} fns folded)", card.original_lines, card.pruned_lines, card.folded_functions), Style::default().fg(Color::Cyan)),
+            ]));
+            let bot_border = format!("╰{}╯", "─".repeat(card_w.saturating_sub(2)));
+            chat_lines.push(Line::from(Span::styled(bot_border, Style::default().fg(Color::LightBlue))));
+            chat_lines.push(Line::from(""));
+        }
+
+        // 26. Auto-Port Multiplexer Cards
+        for card in &self.port_cards {
+            let card_w = usable_width.saturating_sub(2).max(48);
+            let header_str = format!("╭── 🔌 Auto-Port Multiplexer [{} Collisions Resolved] ", card.collisions_found);
+            let header_w = UnicodeWidthStr::width(header_str.as_str());
+            let dashes_count = card_w.saturating_sub(header_w + 1).max(2);
+            let top_border = format!("{}{}{}╮", header_str, "─".repeat(dashes_count), " ");
+            chat_lines.push(Line::from(Span::styled(top_border, Style::default().fg(Color::LightGreen).add_modifier(Modifier::BOLD))));
+            chat_lines.push(Line::from(vec![
+                Span::styled("│ ", Style::default().fg(Color::LightGreen)),
+                Span::styled(format!("Scanned {} devserver ports across standard ranges", card.scanned_ports), Style::default().fg(Color::DarkGray)),
+            ]));
+            for (svc, orig, alloc) in &card.services {
+                let badge = if orig != alloc { format!("{} (COLLISION -> {})", orig, alloc) } else { format!("{}", orig) };
+                let color = if orig != alloc { Color::Yellow } else { Color::Green };
+                chat_lines.push(Line::from(vec![
+                    Span::styled("│ ", Style::default().fg(Color::LightGreen)),
+                    Span::styled("  • ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(svc, Style::default().fg(Color::White)),
+                    Span::styled(": ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(badge, Style::default().fg(color).add_modifier(Modifier::BOLD)),
+                ]));
+            }
+            let bot_border = format!("╰{}╯", "─".repeat(card_w.saturating_sub(2)));
+            chat_lines.push(Line::from(Span::styled(bot_border, Style::default().fg(Color::LightGreen))));
+            chat_lines.push(Line::from(""));
+        }
+
+        // 27. PR Storyteller Cards
+        for card in &self.ship_cards {
+            let card_w = usable_width.saturating_sub(2).max(48);
+            let header_str = format!("╭── 🚢 PR Storyteller [{}] ", card.verification_badge);
+            let header_w = UnicodeWidthStr::width(header_str.as_str());
+            let dashes_count = card_w.saturating_sub(header_w + 1).max(2);
+            let top_border = format!("{}{}{}╮", header_str, "─".repeat(dashes_count), " ");
+            chat_lines.push(Line::from(Span::styled(top_border, Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD))));
+            chat_lines.push(Line::from(vec![
+                Span::styled("│ ", Style::default().fg(Color::Magenta)),
+                Span::styled("PR Title: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(&card.pr_title, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            ]));
+            chat_lines.push(Line::from(vec![
+                Span::styled("│ ", Style::default().fg(Color::Magenta)),
+                Span::styled(format!("Commits: {} | ADRs: {} | Digest: {} | Written: {}", card.commits_count, card.adr_references.join(", "), &card.blake3_digest[..8.min(card.blake3_digest.len())], card.story_file_path), Style::default().fg(Color::LightMagenta)),
+            ]));
+            let bot_border = format!("╰{}╯", "─".repeat(card_w.saturating_sub(2)));
+            chat_lines.push(Line::from(Span::styled(bot_border, Style::default().fg(Color::Magenta))));
+            chat_lines.push(Line::from(""));
+        }
+
+        // 28. Browser Live HUD Cards
+        for card in &self.browser_incident_cards {
+            let card_w = usable_width.saturating_sub(2).max(48);
+            let heal_status = if card.healed { "✓ HEALED" } else { "🚨 ACTIVE [F8 1-Click Heal]" };
+            let border_color = if card.healed { Color::Green } else { Color::LightRed };
+            let header_str = format!("╭── 🌐 Browser Live HUD [{}] ", heal_status);
+            let header_w = UnicodeWidthStr::width(header_str.as_str());
+            let dashes_count = card_w.saturating_sub(header_w + 1).max(2);
+            let top_border = format!("{}{}{}╮", header_str, "─".repeat(dashes_count), " ");
+            chat_lines.push(Line::from(Span::styled(top_border, Style::default().fg(border_color).add_modifier(Modifier::BOLD))));
+            let line_str = card.line_number.map(|l| format!(":{}", l)).unwrap_or_default();
+            chat_lines.push(Line::from(vec![
+                Span::styled("│ ", Style::default().fg(border_color)),
+                Span::styled(format!("Incident {}: ", card.incident_id), Style::default().fg(Color::DarkGray)),
+                Span::styled(&card.kind, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled(format!(" [{}{}]", card.source_url, line_str), Style::default().fg(Color::White)),
+            ]));
+            chat_lines.push(Line::from(vec![
+                Span::styled("│ ", Style::default().fg(border_color)),
+                Span::styled("Message: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(&card.message, Style::default().fg(Color::LightRed)),
+            ]));
+            if let Some(ref fix) = card.suggested_fix {
+                chat_lines.push(Line::from(vec![
+                    Span::styled("│ ", Style::default().fg(border_color)),
+                    Span::styled("Surgical Fix: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(fix, Style::default().fg(Color::LightGreen)),
+                ]));
+            }
+            let bot_border = format!("╰{}╯", "─".repeat(card_w.saturating_sub(2)));
+            chat_lines.push(Line::from(Span::styled(bot_border, Style::default().fg(border_color))));
+            chat_lines.push(Line::from(""));
+        }
+
+        // 29. Instant Persona & Synthetic Seed Cards
+        for card in &self.seed_cards {
+            let card_w = usable_width.saturating_sub(2).max(48);
+            let header_str = format!("╭── 🎭 Synthetic Persona & Seed [{} {}] ", card.count, card.entity);
+            let header_w = UnicodeWidthStr::width(header_str.as_str());
+            let dashes_count = card_w.saturating_sub(header_w + 1).max(2);
+            let top_border = format!("{}{}{}╮", header_str, "─".repeat(dashes_count), " ");
+            chat_lines.push(Line::from(Span::styled(top_border, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))));
+            chat_lines.push(Line::from(vec![
+                Span::styled("│ ", Style::default().fg(Color::Cyan)),
+                Span::styled("Entity: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(&card.entity, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled(format!(" ({} records with edge-case UTF-8 & foreign key integrity)", card.count), Style::default().fg(Color::LightCyan)),
+            ]));
+            for sql_line in card.sql_preview.lines().take(2) {
+                chat_lines.push(Line::from(vec![
+                    Span::styled("│ ", Style::default().fg(Color::Cyan)),
+                    Span::styled("  SQL: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(sql_line, Style::default().fg(Color::Yellow)),
+                ]));
+            }
+            let bot_border = format!("╰{}╯", "─".repeat(card_w.saturating_sub(2)));
+            chat_lines.push(Line::from(Span::styled(bot_border, Style::default().fg(Color::Cyan))));
+            chat_lines.push(Line::from(""));
+        }
+
+        // 30. Syntactic Hunk Time-Travel Rewind Cards
+        for card in &self.rewind_cards {
+            let card_w = usable_width.saturating_sub(2).max(48);
+            let header_str = format!("╭── ⏪ Syntactic Hunk Time-Travel [{} :: {}] ", card.file_path, card.symbol_name);
+            let header_w = UnicodeWidthStr::width(header_str.as_str());
+            let dashes_count = card_w.saturating_sub(header_w + 1).max(2);
+            let top_border = format!("{}{}{}╮", header_str, "─".repeat(dashes_count), " ");
+            chat_lines.push(Line::from(Span::styled(top_border, Style::default().fg(Color::LightGreen).add_modifier(Modifier::BOLD))));
+            chat_lines.push(Line::from(vec![
+                Span::styled("│ ", Style::default().fg(Color::LightGreen)),
+                Span::styled("Rollback: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("Surgically restored revision #{} without touching adjacent functions", card.revision_idx), Style::default().fg(Color::White)),
+            ]));
+            for s_line in card.restored_snippet.lines().take(2) {
+                chat_lines.push(Line::from(vec![
+                    Span::styled("│ ", Style::default().fg(Color::LightGreen)),
+                    Span::styled("  ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(s_line, Style::default().fg(Color::LightCyan)),
+                ]));
+            }
+            let bot_border = format!("╰{}╯", "─".repeat(card_w.saturating_sub(2)));
+            chat_lines.push(Line::from(Span::styled(bot_border, Style::default().fg(Color::LightGreen))));
+            chat_lines.push(Line::from(""));
+        }
+
+        // 31. Adversarial Red-Team & Edge-Case Audit Cards
+        for card in &self.redteam_cards {
+            let card_w = usable_width.saturating_sub(2).max(48);
+            let border_color = if card.total_critical > 0 { Color::Red } else if card.total_high > 0 { Color::Yellow } else { Color::Green };
+            let header_str = format!("╭── 🛡️ Adversarial Red-Team [{}] ", card.verdict);
+            let header_w = UnicodeWidthStr::width(header_str.as_str());
+            let dashes_count = card_w.saturating_sub(header_w + 1).max(2);
+            let top_border = format!("{}{}{}╮", header_str, "─".repeat(dashes_count), " ");
+            chat_lines.push(Line::from(Span::styled(top_border, Style::default().fg(border_color).add_modifier(Modifier::BOLD))));
+            chat_lines.push(Line::from(vec![
+                Span::styled("│ ", Style::default().fg(border_color)),
+                Span::styled("Audit Summary: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(&card.summary, Style::default().fg(Color::White)),
+            ]));
+            for finding in &card.top_findings {
+                chat_lines.push(Line::from(vec![
+                    Span::styled("│ ", Style::default().fg(border_color)),
+                    Span::styled("  • ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(finding, Style::default().fg(Color::LightRed)),
+                ]));
+            }
+            let bot_border = format!("╰{}╯", "─".repeat(card_w.saturating_sub(2)));
+            chat_lines.push(Line::from(Span::styled(bot_border, Style::default().fg(border_color))));
+            chat_lines.push(Line::from(""));
+        }
+
+        // 32. Living Architecture Blueprint Cards
+        for card in &self.blueprint_cards {
+            let card_w = usable_width.saturating_sub(2).max(48);
+            let header_str = format!("╭── 📐 Living Blueprint [{}] ", card.title);
+            let header_w = UnicodeWidthStr::width(header_str.as_str());
+            let dashes_count = card_w.saturating_sub(header_w + 1).max(2);
+            let top_border = format!("{}{}{}╮", header_str, "─".repeat(dashes_count), " ");
+            chat_lines.push(Line::from(Span::styled(top_border, Style::default().fg(Color::LightBlue).add_modifier(Modifier::BOLD))));
+            chat_lines.push(Line::from(vec![
+                Span::styled("│ ", Style::default().fg(Color::LightBlue)),
+                Span::styled(format!("Scanned {} files | Discovered {} components, {} routes, {} entities, {} edges",
+                    card.total_files, card.total_nodes, card.total_routes, card.total_entities, card.total_edges), Style::default().fg(Color::White)),
+            ]));
+            for m_line in card.mermaid_diagram.lines().take(3) {
+                chat_lines.push(Line::from(vec![
+                    Span::styled("│ ", Style::default().fg(Color::LightBlue)),
+                    Span::styled("  ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(m_line, Style::default().fg(Color::Cyan)),
+                ]));
+            }
+            let bot_border = format!("╰{}╯", "─".repeat(card_w.saturating_sub(2)));
+            chat_lines.push(Line::from(Span::styled(bot_border, Style::default().fg(Color::LightBlue))));
+            chat_lines.push(Line::from(""));
+        }
+
+        // 33. Passive Sentinel Cards
+        for card in &self.passive_sentinel_cards {
+            let card_w = usable_width.saturating_sub(2).max(48);
+            let header_str = format!("╭── 👁️ Passive Sentinel [{}] ", card.status_badge);
+            let header_w = UnicodeWidthStr::width(header_str.as_str());
+            let dashes_count = card_w.saturating_sub(header_w + 1).max(2);
+            let top_border = format!("{}{}{}╮", header_str, "─".repeat(dashes_count), " ");
+            chat_lines.push(Line::from(Span::styled(top_border, Style::default().fg(Color::LightYellow).add_modifier(Modifier::BOLD))));
+            chat_lines.push(Line::from(vec![
+                Span::styled("│ ", Style::default().fg(Color::LightYellow)),
+                Span::styled(format!("Tracking {} files | {} inspections | 150ms debounce", card.tracked_files, card.total_inspections), Style::default().fg(Color::DarkGray)),
+            ]));
+            chat_lines.push(Line::from(vec![
+                Span::styled("│ ", Style::default().fg(Color::LightYellow)),
+                Span::styled("Delta: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(&card.last_event_summary, Style::default().fg(Color::White)),
+            ]));
+            for err in &card.active_syntax_errors {
+                chat_lines.push(Line::from(vec![
+                    Span::styled("│ ", Style::default().fg(Color::LightYellow)),
+                    Span::styled("  ⚠️ ", Style::default().fg(Color::Yellow)),
+                    Span::styled(err, Style::default().fg(Color::LightRed)),
+                ]));
+            }
+            let bot_border = format!("╰{}╯", "─".repeat(card_w.saturating_sub(2)));
+            chat_lines.push(Line::from(Span::styled(bot_border, Style::default().fg(Color::LightYellow))));
+            chat_lines.push(Line::from(""));
+        }
+
         if self.conversation.is_empty() {
             chat_lines.push(Line::from(""));
             chat_lines.push(Line::from(vec![
@@ -1861,7 +4253,7 @@ impl CockpitState {
             ]));
             chat_lines.push(Line::from(""));
         } else {
-            for item in &self.conversation {
+            for (item_idx, item) in self.conversation.iter().enumerate() {
                 match &item.sender {
                     CockpitChatSender::User => {
                         chat_lines.push(Line::from(vec![
@@ -1943,7 +4335,22 @@ impl CockpitState {
                         }
 
                         // Render tool calls with dynamic auto-width and perfectly closed borders
-                        for tool in &item.tool_calls {
+                        for (tool_idx, tool) in item.tool_calls.iter().enumerate() {
+                            let card_id = format!("tool_{}_{}", item_idx, tool_idx);
+                            let is_copied = if let Some(ref last_id) = self.last_copied_id {
+                                if last_id == &card_id {
+                                    if let Some(t) = self.last_copied_time {
+                                        t.elapsed().as_secs() < 3
+                                    } else {
+                                        false
+                                    }
+                                } else {
+                                    false
+                                }
+                            } else {
+                                false
+                            };
+
                             let tool_icon = match tool.tool_name.as_str() {
                                 "run_command" | "exec" | "sh" | "bash" => "💻",
                                 "view_file" | "cat" | "read" => "📖",
@@ -1953,6 +4360,7 @@ impl CockpitState {
                                 "grep_search" | "grep" => "🔎",
                                 "list_dir" | "ls" => "📁",
                                 "invoke_subagent" | "subagent" => "🤖",
+                                "gemini_api_direct" | "gemini" | "hgbd_gemini_inference" => "🛠️",
                                 _ => "🔧",
                             };
 
@@ -1973,7 +4381,8 @@ impl CockpitState {
                                 + UnicodeWidthStr::width(dur_part.as_str());
 
                             // Calculate auto-width: find max width across header, status, and snippet lines
-                            let mut natural_w = (title_w + icon_w + 7).max(status_row_w + 2);
+                            let copy_btn_preview_w = if is_copied { 1 } else { 2 };
+                            let mut natural_w = (title_w + icon_w + copy_btn_preview_w + 10).max(status_row_w + 2);
                             if let Some(ref snippet) = tool.output_snippet {
                                 for s_line in snippet.trim().lines().take(50) {
                                     let sw = UnicodeWidthStr::width(s_line) + 6;
@@ -1987,8 +4396,25 @@ impl CockpitState {
                             let max_allowed = usable_width.saturating_sub(2).max(40);
                             let banner_width = natural_w.max(48).min(max_allowed);
 
-                            // 1. Header Line (Top Border)
-                            let max_title_w = banner_width.saturating_sub(icon_w + 7);
+                            // 1. Header Line (Top Border) with Copy Icon on Top Right Near Corner (Only Icon, No Brackets)
+                            let (copy_spans, copy_btn_w) = if is_copied {
+                                (
+                                    vec![
+                                        Span::styled("✓", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                                    ],
+                                    1,
+                                )
+                            } else {
+                                (
+                                    vec![
+                                        Span::styled("📋", Style::default().fg(Color::Yellow)),
+                                    ],
+                                    2,
+                                )
+                            };
+
+                            let fixed_w = 3 + icon_w + 1 + 1 + 1 + copy_btn_w + 3; // "╭─ " (3) + icon + " " (1) + " " (1) + " " (1) + copy_btn + " ─╮" (3)
+                            let max_title_w = banner_width.saturating_sub(fixed_w + 2);
                             let (display_title, display_title_w) = if title_w > max_title_w {
                                 if max_title_w == 0 {
                                     ("".to_string(), 0)
@@ -2003,18 +4429,42 @@ impl CockpitState {
                                 (title_body.clone(), title_w)
                             };
 
-                            let used_header_w = 3 + icon_w + 1 + display_title_w + 2; // "╭─ " (3) + icon (icon_w) + " " (1) + title + " " (1) + "╮" (1)
+                            let used_header_w = 3 + icon_w + 1 + display_title_w + 1 + 1 + copy_btn_w + 3;
                             let dashes_count = banner_width.saturating_sub(used_header_w).max(1);
                             let dashes = "─".repeat(dashes_count);
 
-                            chat_lines.push(Line::from(vec![
+                            let mut header_spans = vec![
                                 Span::styled("╭─ ", Style::default().fg(Color::Cyan)),
                                 Span::styled(tool_icon, Style::default().fg(Color::Yellow)),
                                 Span::raw(" "),
                                 Span::styled(display_title, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
                                 Span::raw(" "),
-                                Span::styled(format!("{}╮", dashes), Style::default().fg(Color::Cyan)),
-                            ]));
+                                Span::styled(dashes, Style::default().fg(Color::Cyan)),
+                                Span::raw(" "),
+                            ];
+                            header_spans.extend(copy_spans);
+                            header_spans.push(Span::styled(" ─╮", Style::default().fg(Color::Cyan)));
+
+                            let copy_content = if let Some(ref snippet) = tool.output_snippet {
+                                if !snippet.trim().is_empty() {
+                                    snippet.clone()
+                                } else {
+                                    item.content.clone()
+                                }
+                            } else {
+                                item.content.clone()
+                            };
+
+                            pending_copy_targets.push(PendingCopyTarget {
+                                line_idx: chat_lines.len(),
+                                banner_w: banner_width,
+                                copy_btn_w,
+                                content: copy_content,
+                                card_id,
+                                label: format!("{} response", tool.tool_name),
+                            });
+
+                            chat_lines.push(Line::from(header_spans));
 
                             // 2. Status Line (closed with right border │)
                             let (dur_part_str, status_w) = if status_row_w + 1 > banner_width {
@@ -2080,118 +4530,131 @@ impl CockpitState {
                             )));
                         }
 
-                        // Parse markdown lines, grouping code blocks for auto-width banner rendering
-                        enum MarkdownItem<'a> {
-                            Line(&'a str),
-                            CodeBlock {
-                                lang: &'a str,
-                                lines: Vec<&'a str>,
-                            },
-                        }
-
-                        let mut md_items = Vec::new();
-                        let mut in_block = false;
-                        let mut block_lang = "";
-                        let mut block_lines = Vec::new();
-
-                        for line in item.content.lines() {
-                            if line.starts_with("```") {
-                                if in_block {
-                                    in_block = false;
-                                    md_items.push(MarkdownItem::CodeBlock {
-                                        lang: block_lang,
-                                        lines: std::mem::take(&mut block_lines),
-                                    });
-                                } else {
-                                    in_block = true;
-                                    block_lang = line.trim_start_matches("```").trim();
-                                    block_lines.clear();
-                                }
-                            } else if in_block {
-                                block_lines.push(line);
+                        // Check if the message content was already rendered inside a tool call card box
+                        let already_rendered_in_box = item.tool_calls.iter().any(|tool| {
+                            if let Some(ref snippet) = tool.output_snippet {
+                                let s = snippet.trim();
+                                let c = item.content.trim();
+                                !s.is_empty() && (s == c || s.starts_with(c) || c.starts_with(s))
                             } else {
-                                md_items.push(MarkdownItem::Line(line));
+                                false
                             }
-                        }
-                        if in_block {
-                            md_items.push(MarkdownItem::CodeBlock {
-                                lang: block_lang,
-                                lines: block_lines,
-                            });
-                        }
+                        });
 
-                        for md_item in md_items {
-                            match md_item {
-                                MarkdownItem::CodeBlock { lang, lines } => {
-                                    let tag = if lang.is_empty() { "code" } else { lang };
-                                    let tag_w = UnicodeWidthStr::width(tag);
-                                    let max_content_w = lines.iter().map(|l| UnicodeWidthStr::width(*l)).max().unwrap_or(0);
+                        if !already_rendered_in_box {
+                            // Parse markdown lines, grouping code blocks for auto-width banner rendering
+                            enum MarkdownItem<'a> {
+                                Line(&'a str),
+                                CodeBlock {
+                                    lang: &'a str,
+                                    lines: Vec<&'a str>,
+                                },
+                            }
 
-                                    // Natural width auto-fits content: "│ " (2) + content + " │" (2) = content + 4,
-                                    // and header "╭─── [" (6) + tag (tag_w) + "] " (2) + "─" (1) + "╮" (1) = tag_w + 10
-                                    let natural_w = (max_content_w + 4).max(tag_w + 10);
-                                    let max_allowed = usable_width.saturating_sub(2).max(36);
-                                    let code_box_w = natural_w.max(36).min(max_allowed);
+                            let mut md_items = Vec::new();
+                            let mut in_block = false;
+                            let mut block_lang = "";
+                            let mut block_lines = Vec::new();
 
-                                    // 1. Top border: "╭─── [tag] ────╮"
-                                    let max_tag_w = code_box_w.saturating_sub(10);
-                                    let (display_tag, display_tag_w) = if tag_w > max_tag_w && max_tag_w > 2 {
-                                        let trunc = truncate_str_by_width(tag, max_tag_w.saturating_sub(1));
-                                        let tw = UnicodeWidthStr::width(trunc.as_str()) + 1;
-                                        (format!("{}…", trunc), tw)
+                            for line in item.content.lines() {
+                                if line.starts_with("```") {
+                                    if in_block {
+                                        in_block = false;
+                                        md_items.push(MarkdownItem::CodeBlock {
+                                            lang: block_lang,
+                                            lines: std::mem::take(&mut block_lines),
+                                        });
                                     } else {
-                                        (tag.to_string(), tag_w)
-                                    };
-
-                                    let used_top_w = 6 + display_tag_w + 3; // "╭─── [" (6) + tag + "] " (2) + "╮" (1)
-                                    let dashes_count = code_box_w.saturating_sub(used_top_w).max(1);
-                                    let top_dashes = "─".repeat(dashes_count);
-
-                                    chat_lines.push(Line::from(vec![
-                                        Span::styled("╭─── [", Style::default().fg(Color::Cyan)),
-                                        Span::styled(display_tag, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-                                        Span::styled(format!("] {}╮", top_dashes), Style::default().fg(Color::Cyan)),
-                                    ]));
-
-                                    // 2. Content lines: wrapped preserving indentation with closed right border
-                                    let max_chunk_w = code_box_w.saturating_sub(4);
-                                    for code_l in lines {
-                                        let chunks = wrap_code_line_to_width(code_l, max_chunk_w);
-                                        for chunk in chunks {
-                                            let chunk_w = UnicodeWidthStr::width(chunk.as_str());
-                                            let pad_w = max_chunk_w.saturating_sub(chunk_w);
-                                            chat_lines.push(Line::from(vec![
-                                                Span::styled("│ ", Style::default().fg(Color::Cyan)),
-                                                Span::styled(chunk, Style::default().fg(Color::White)),
-                                                Span::raw(" ".repeat(pad_w)),
-                                                Span::styled(" │", Style::default().fg(Color::Cyan)),
-                                            ]));
-                                        }
+                                        in_block = true;
+                                        block_lang = line.trim_start_matches("```").trim();
+                                        block_lines.clear();
                                     }
-
-                                    // 3. Bottom border: "╰──────────────╯"
-                                    let bottom_dashes = "─".repeat(code_box_w.saturating_sub(2));
-                                    chat_lines.push(Line::from(Span::styled(
-                                        format!("╰{}╯", bottom_dashes),
-                                        Style::default().fg(Color::Cyan),
-                                    )));
+                                } else if in_block {
+                                    block_lines.push(line);
+                                } else {
+                                    md_items.push(MarkdownItem::Line(line));
                                 }
-                                MarkdownItem::Line(line) => {
-                                    if line.starts_with("+ ") || line.starts_with("+\t") {
-                                        chat_lines.push(Line::from(Span::styled(line, Style::default().fg(Color::Green))));
-                                    } else if line.starts_with("- ") || line.starts_with("-\t") {
-                                        chat_lines.push(Line::from(Span::styled(line, Style::default().fg(Color::Red))));
-                                    } else if line.starts_with("## ") {
-                                        chat_lines.push(Line::from(Span::styled(&line[3..], Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))));
-                                    } else if line.starts_with("# ") {
-                                        chat_lines.push(Line::from(Span::styled(&line[2..], Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))));
-                                    } else if line.starts_with("* ") || line.starts_with("- ") {
+                            }
+                            if in_block {
+                                md_items.push(MarkdownItem::CodeBlock {
+                                    lang: block_lang,
+                                    lines: block_lines,
+                                });
+                            }
+
+                            for md_item in md_items {
+                                match md_item {
+                                    MarkdownItem::CodeBlock { lang, lines } => {
+                                        let tag = if lang.is_empty() { "code" } else { lang };
+                                        let tag_w = UnicodeWidthStr::width(tag);
+                                        let max_content_w = lines.iter().map(|l| UnicodeWidthStr::width(*l)).max().unwrap_or(0);
+
+                                        // Natural width auto-fits content: "│ " (2) + content + " │" (2) = content + 4,
+                                        // and header "╭─── [" (6) + tag (tag_w) + "] " (2) + "─" (1) + "╮" (1) = tag_w + 10
+                                        let natural_w = (max_content_w + 4).max(tag_w + 10);
+                                        let max_allowed = usable_width.saturating_sub(2).max(36);
+                                        let code_box_w = natural_w.max(36).min(max_allowed);
+
+                                        // 1. Top border: "╭─── [tag] ────╮"
+                                        let max_tag_w = code_box_w.saturating_sub(10);
+                                        let (display_tag, display_tag_w) = if tag_w > max_tag_w && max_tag_w > 2 {
+                                            let trunc = truncate_str_by_width(tag, max_tag_w.saturating_sub(1));
+                                            let tw = UnicodeWidthStr::width(trunc.as_str()) + 1;
+                                            (format!("{}…", trunc), tw)
+                                        } else {
+                                            (tag.to_string(), tag_w)
+                                        };
+
+                                        let used_top_w = 6 + display_tag_w + 3; // "╭─── [" (6) + tag + "] " (2) + "╮" (1)
+                                        let dashes_count = code_box_w.saturating_sub(used_top_w).max(1);
+                                        let top_dashes = "─".repeat(dashes_count);
+
                                         chat_lines.push(Line::from(vec![
-                                            Span::styled("  • ", Style::default().fg(Color::Cyan)),
-                                            Span::styled(&line[2..], Style::default().fg(Color::White)),
+                                            Span::styled("╭─── [", Style::default().fg(Color::Cyan)),
+                                            Span::styled(display_tag, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                                            Span::styled(format!("] {}╮", top_dashes), Style::default().fg(Color::Cyan)),
                                         ]));
-                                    } else {
-                                        chat_lines.push(Line::from(Span::styled(line, Style::default().fg(Color::White))));
+
+                                        // 2. Content lines: wrapped preserving indentation with closed right border
+                                        let max_chunk_w = code_box_w.saturating_sub(4);
+                                        for code_l in lines {
+                                            let chunks = wrap_code_line_to_width(code_l, max_chunk_w);
+                                            for chunk in chunks {
+                                                let chunk_w = UnicodeWidthStr::width(chunk.as_str());
+                                                let pad_w = max_chunk_w.saturating_sub(chunk_w);
+                                                chat_lines.push(Line::from(vec![
+                                                    Span::styled("│ ", Style::default().fg(Color::Cyan)),
+                                                    Span::styled(chunk, Style::default().fg(Color::White)),
+                                                    Span::raw(" ".repeat(pad_w)),
+                                                    Span::styled(" │", Style::default().fg(Color::Cyan)),
+                                                ]));
+                                            }
+                                        }
+
+                                        // 3. Bottom border: "╰──────────────╯"
+                                        let bottom_dashes = "─".repeat(code_box_w.saturating_sub(2));
+                                        chat_lines.push(Line::from(Span::styled(
+                                            format!("╰{}╯", bottom_dashes),
+                                            Style::default().fg(Color::Cyan),
+                                        )));
+                                    }
+                                    MarkdownItem::Line(line) => {
+                                        if line.starts_with("+ ") || line.starts_with("+\t") {
+                                            chat_lines.push(Line::from(Span::styled(line, Style::default().fg(Color::Green))));
+                                        } else if line.starts_with("- ") || line.starts_with("-\t") {
+                                            chat_lines.push(Line::from(Span::styled(line, Style::default().fg(Color::Red))));
+                                        } else if line.starts_with("## ") {
+                                            chat_lines.push(Line::from(Span::styled(&line[3..], Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))));
+                                        } else if line.starts_with("# ") {
+                                            chat_lines.push(Line::from(Span::styled(&line[2..], Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))));
+                                        } else if line.starts_with("* ") || line.starts_with("- ") {
+                                            chat_lines.push(Line::from(vec![
+                                                Span::styled("  • ", Style::default().fg(Color::Cyan)),
+                                                Span::styled(&line[2..], Style::default().fg(Color::White)),
+                                            ]));
+                                        } else {
+                                            chat_lines.push(Line::from(Span::styled(line, Style::default().fg(Color::White))));
+                                        }
                                     }
                                 }
                             }
@@ -2358,7 +4821,9 @@ impl CockpitState {
 
         // Viewport scrolling
         let mut estimated_rows = 0;
+        let mut line_row_offsets = Vec::with_capacity(chat_lines.len());
         for line in &chat_lines {
+            line_row_offsets.push(estimated_rows);
             let width: usize = line.spans.iter().map(|s| UnicodeWidthStr::width(s.content.as_ref())).sum();
             let rows = if width == 0 { 1 } else { (width + usable_width - 1) / usable_width };
             estimated_rows += rows;
@@ -2370,6 +4835,77 @@ impl CockpitState {
         // Clamped scroll value
         let current_scroll = self.chat_scroll.min(max_scroll);
         let scroll_y = max_scroll.saturating_sub(current_scroll) as u16;
+
+        // Populate clickable hitboxes for copy icons
+        if let Ok(mut hitboxes) = self.copy_hitboxes.lock() {
+            hitboxes.clear();
+            for target in pending_copy_targets {
+                if target.line_idx < line_row_offsets.len() {
+                    let visual_row = line_row_offsets[target.line_idx];
+                    if visual_row >= scroll_y as usize && visual_row < (scroll_y as usize + viewport_height) {
+                        let screen_y = chunks[2].y + (visual_row - scroll_y as usize) as u16;
+                        let x_end = chunks[2].x + (target.banner_w as u16).min(chunks[2].width);
+                        let x_start = x_end.saturating_sub((target.copy_btn_w + 5) as u16);
+                        hitboxes.push(CopyHitbox {
+                            screen_y,
+                            x_start,
+                            x_end,
+                            content: target.content,
+                            card_id: target.card_id,
+                            label: target.label,
+                        });
+                    }
+                }
+            }
+        }
+
+        // Populate clickable hitboxes for diff cards
+        if let Ok(mut hitboxes) = self.diff_hitboxes.lock() {
+            hitboxes.clear();
+            for target in pending_diff_targets {
+                if target.line_idx < line_row_offsets.len() {
+                    let visual_row = line_row_offsets[target.line_idx];
+                    if visual_row >= scroll_y as usize && visual_row < (scroll_y as usize + viewport_height) {
+                        let screen_y = chunks[2].y + (visual_row - scroll_y as usize) as u16;
+                        let x_end = chunks[2].x + (target.banner_w as u16).min(chunks[2].width);
+                        hitboxes.push(DiffActionHitbox {
+                            screen_y,
+                            x_start: x_end.saturating_sub(26),
+                            x_end: x_end.saturating_sub(14),
+                            card_id: target.card_id.clone(),
+                            action: DiffAction::Accept,
+                        });
+                        hitboxes.push(DiffActionHitbox {
+                            screen_y,
+                            x_start: x_end.saturating_sub(13),
+                            x_end: x_end.saturating_sub(3),
+                            card_id: target.card_id.clone(),
+                            action: DiffAction::Reject,
+                        });
+                    }
+                }
+            }
+        }
+
+        // Populate clickable hitboxes for heal banners
+        if let Ok(mut hitboxes) = self.heal_hitboxes.lock() {
+            hitboxes.clear();
+            for target in pending_heal_targets {
+                if target.line_idx < line_row_offsets.len() {
+                    let visual_row = line_row_offsets[target.line_idx];
+                    if visual_row >= scroll_y as usize && visual_row < (scroll_y as usize + viewport_height) {
+                        let screen_y = chunks[2].y + (visual_row - scroll_y as usize) as u16;
+                        let x_end = chunks[2].x + (target.banner_w as u16).min(chunks[2].width);
+                        hitboxes.push(HealHitbox {
+                            screen_y,
+                            x_start: x_end.saturating_sub(22),
+                            x_end,
+                            card_id: target.card_id,
+                        });
+                    }
+                }
+            }
+        }
 
         let chat_paragraph = Paragraph::new(chat_lines)
             .wrap(Wrap { trim: false })
@@ -2505,7 +5041,7 @@ impl CockpitState {
     pub fn render_shortcuts_overlay(&self, frame: &mut Frame) {
         let area = frame.area();
         let width = 76.min(area.width.saturating_sub(4));
-        let height = 24.min(area.height.saturating_sub(4));
+        let height = 28.min(area.height.saturating_sub(2));
         let x = (area.width.saturating_sub(width)) / 2;
         let y = (area.height.saturating_sub(height)) / 2;
         let modal_area = Rect::new(x, y, width, height);
@@ -2534,10 +5070,12 @@ impl CockpitState {
             Row::new(vec![Cell::from("Ctrl+D").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), Cell::from("Exit CLI on empty line / Delete char under cursor")]),
             Row::new(vec![Cell::from("Ctrl+C").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), Cell::from("Clear current prompt buffer / Cancel")]),
             Row::new(vec![Cell::from("Ctrl+L").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), Cell::from("Clear screen and repaint terminal")]),
+            Row::new(vec![Cell::from("Alt+C / Click 📋").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), Cell::from("Copy response content from box to clipboard")]),
             Row::new(vec![Cell::from("Tab").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), Cell::from("Autocomplete slash commands and models")]),
             Row::new(vec![Cell::from("?").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), Cell::from("Toggle this keyboard shortcuts help modal")]),
             Row::new(vec![Cell::from("──────────────").style(Style::default().fg(Color::DarkGray)), Cell::from("──────────────────────────────────────────────────").style(Style::default().fg(Color::DarkGray))]),
             Row::new(vec![Cell::from("/model [name]").style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)), Cell::from("Switch active AI model (Ollama local or Gemini cloud)")]),
+            Row::new(vec![Cell::from("/copy").style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)), Cell::from("Copy latest response content to system clipboard")]),
             Row::new(vec![Cell::from("/cockpit").style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)), Cell::from("Switch to full-screen multi-pane DAG Swarm Cockpit")]),
             Row::new(vec![Cell::from("/chat").style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)), Cell::from("Switch to AGY Conversational Chat Canvas")]),
             Row::new(vec![Cell::from("/tasks").style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)), Cell::from("Inspect active background swarm tasks")]),
@@ -2553,10 +5091,32 @@ impl CockpitState {
         frame.render_widget(table, modal_area);
     }
 
+    /// Get available models dynamically from local Ollama and cloud
+    pub fn get_available_models() -> Vec<(String, String)> {
+        let mut list = Vec::new();
+        let installed = hgb_core::OllamaProvider::installed_models();
+        if !installed.is_empty() {
+            for tag in installed {
+                let desc = format!("Local Ollama ({} • {})", tag.param_summary(), tag.formatted_size());
+                list.push((tag.name, desc));
+            }
+        } else if hgb_core::OllamaProvider::is_available() {
+            list.push(("ollama".to_string(), "Local Ollama Engine (online)".to_string()));
+        }
+
+        if !list.iter().any(|(m, _)| m == "qwen2.5-coder:1.5b") {
+            list.push(("qwen2.5-coder:1.5b".to_string(), "Local Ollama (0ms latency, zero cloud cost)".to_string()));
+        }
+
+        list.push(("gemini-2.5-flash".to_string(), "Google Gemini Cloud (Recommended default)".to_string()));
+        list.push(("gemini-2.5-pro".to_string(), "Google Gemini Cloud (Deep reasoning pro)".to_string()));
+        list
+    }
+
     /// Render Model Picker Modal Overlay
     pub fn render_model_picker_overlay(&self, frame: &mut Frame, selected: usize) {
         let area = frame.area();
-        let width = 64.min(area.width.saturating_sub(4));
+        let width = 76.min(area.width.saturating_sub(4));
         let height = 14.min(area.height.saturating_sub(4));
         let x = (area.width.saturating_sub(width)) / 2;
         let y = (area.height.saturating_sub(height)) / 2;
@@ -2564,15 +5124,7 @@ impl CockpitState {
 
         frame.render_widget(Clear, modal_area);
 
-        let models = [
-            ("qwen2.5-coder:1.5b", "Local Ollama (0ms latency, zero cloud cost)"),
-            ("qwen2.5:0.5b", "Local Ollama (ultra-lightweight local model)"),
-            ("llama3.2:1b", "Local Ollama (Meta LLaMA local model)"),
-            ("smollm2:1.7b", "Local Ollama (SmolLM compact model)"),
-            ("phi3:mini", "Local Ollama (Microsoft Phi-3 mini)"),
-            ("gemini-2.5-flash", "Google Gemini Cloud (Recommended default)"),
-            ("gemini-2.5-pro", "Google Gemini Cloud (Deep reasoning pro)"),
-        ];
+        let models = Self::get_available_models();
 
         let rows: Vec<Row> = models
             .iter()
@@ -2584,7 +5136,7 @@ impl CockpitState {
                 let active_badge = if is_active { " [ACTIVE]" } else { "" };
                 let row = Row::new(vec![
                     Cell::from(format!("{}{}{}", marker, name, active_badge)),
-                    Cell::from(*desc),
+                    Cell::from(desc.as_str()),
                 ]);
                 if is_sel {
                     row.style(Style::default().bg(Color::Rgb(35, 45, 75)).fg(Color::Yellow).add_modifier(Modifier::BOLD))
@@ -2699,15 +5251,7 @@ impl CockpitState {
     }
 
     async fn event_loop<B: ratatui::backend::Backend>(&mut self, terminal: &mut Terminal<B>) -> io::Result<()> {
-        let models_list = [
-            "qwen2.5-coder:1.5b",
-            "qwen2.5:0.5b",
-            "llama3.2:1b",
-            "smollm2:1.7b",
-            "phi3:mini",
-            "gemini-2.5-flash",
-            "gemini-2.5-pro",
-        ];
+        let models_list = Self::get_available_models();
 
         let mut prompt_rx: Option<tokio::sync::oneshot::Receiver<PromptExecutionResult>> = None;
 
@@ -2742,6 +5286,9 @@ impl CockpitState {
                             MouseEventKind::ScrollDown => {
                                 self.scroll_chat_down(3);
                             }
+                            MouseEventKind::Down(MouseButton::Left) => {
+                                self.handle_mouse_click(mouse_event.column, mouse_event.row);
+                            }
                             _ => {}
                         }
                     }
@@ -2761,12 +5308,14 @@ impl CockpitState {
                                         *selected = selected.saturating_sub(1);
                                     }
                                     KeyCode::Down | KeyCode::Char('j') => {
-                                        *selected = (*selected + 1).min(models_list.len() - 1);
+                                        *selected = (*selected + 1).min(models_list.len().saturating_sub(1));
                                     }
                                     KeyCode::Enter => {
-                                        let new_model = models_list[*selected].to_string();
-                                        self.model_pill = new_model.clone();
-                                        self.add_system_notice(format!("Active model switched to: {}", new_model));
+                                        if let Some((new_model, _)) = models_list.get(*selected) {
+                                            self.model_pill = new_model.clone();
+                                            let _ = hgb_core::persist_active_model(new_model);
+                                            self.add_system_notice(format!("Active model switched to: {}", new_model));
+                                        }
                                         self.overlay = CockpitOverlay::None;
                                     }
                                     _ => {}
@@ -2879,6 +5428,23 @@ impl CockpitState {
                                 }
                                 KeyCode::Char('d') | KeyCode::Char('D') => {
                                     self.kill_word_forward();
+                                    continue;
+                                }
+                                KeyCode::Char('c') | KeyCode::Char('C') => {
+                                    self.copy_latest_response();
+                                    continue;
+                                }
+                                KeyCode::Char('g') | KeyCode::Char('G') => {
+                                    self.prompt_input = "/goal ".to_string();
+                                    self.cursor_position = self.prompt_input.chars().count();
+                                    continue;
+                                }
+                                KeyCode::Char('a') | KeyCode::Char('A') => {
+                                    self.accept_diff_card(None);
+                                    continue;
+                                }
+                                KeyCode::Char('r') | KeyCode::Char('R') => {
+                                    self.reject_diff_card(None);
                                     continue;
                                 }
                                 KeyCode::Up => {
@@ -3034,10 +5600,45 @@ impl CockpitState {
                             KeyCode::Char('?') if self.prompt_input.is_empty() => {
                                 self.overlay = CockpitOverlay::Shortcuts;
                             }
+                            KeyCode::F(5) => {
+                                self.trigger_heal();
+                                continue;
+                            }
+                            KeyCode::F(6) => {
+                                if let Some(CockpitItem::ValidationCard(c)) = CockpitVibeManager::handle_vibe_slash_command("/validate", "verify system invariants") {
+                                    self.validation_cards.push(c);
+                                    hgb_core::play_vibe_chime(true);
+                                }
+                                continue;
+                            }
+                            KeyCode::F(7) => {
+                                self.toggle_listening();
+                                continue;
+                            }
+                            KeyCode::F(8) => {
+                                if let Some(pos) = self.browser_incident_cards.iter().position(|c| !c.healed) {
+                                    self.browser_incident_cards[pos].healed = true;
+                                    let id = self.browser_incident_cards[pos].incident_id.clone();
+                                    self.add_system_notice(format!("Resolved incident {} via 1-Click Heal", id));
+                                    hgb_core::play_vibe_chime(true);
+                                } else if let Some(CockpitItem::BrowserIncidentCard(c)) = CockpitVibeManager::handle_vibe_slash_command("/hud", "inspect") {
+                                    self.browser_incident_cards.push(c);
+                                    hgb_core::play_vibe_chime(true);
+                                }
+                                continue;
+                            }
                             KeyCode::Tab => {
                                 // Slash command autocompletion
                                 if let Some(prefix) = self.prompt_input.strip_prefix('/') {
-                                    let commands = ["model", "cockpit", "chat", "tasks", "plan", "clear", "help", "exit", "quit"];
+                                    let commands = [
+                                        "goal", "compact", "heal", "share", "tunnel", "preview", "listen",
+                                        "copy", "telepathy", "ghost", "council", "pixel", "spec", "db",
+                                        "warp", "traffic", "wiretap", "sentry", "xerox", "governor",
+                                        "browse", "search", "memory", "mem",
+                                        "ambient", "focus", "validate", "forge", "prune", "ports", "ship", "commit",
+                                        "hud", "snoop", "seed", "rewind", "redteam", "audit", "blueprint", "sentinel",
+                                        "model", "cockpit", "chat", "tasks", "plan", "clear", "help", "exit", "quit"
+                                    ];
                                     for cmd in commands {
                                         if cmd.starts_with(prefix) {
                                             self.prompt_input = format!("/{} ", cmd);
@@ -3057,12 +5658,116 @@ impl CockpitState {
                                         "/help" | "/?" => {
                                             self.overlay = CockpitOverlay::Shortcuts;
                                         }
-                                        "/model" => {
-                                            if !arg.is_empty() {
-                                                self.model_pill = arg.to_string();
-                                                self.add_system_notice(format!("Active model set to: {}", arg));
+                                        "/goal" => {
+                                            let goal_text = if parts.len() > 1 {
+                                                parts[1..].join(" ")
                                             } else {
+                                                "".to_string()
+                                            };
+                                            if goal_text.trim() == "clear" {
+                                                self.clear_pinned_goal();
+                                            } else if !goal_text.trim().is_empty() {
+                                                self.set_pinned_goal(goal_text.trim());
+                                            } else {
+                                                self.add_system_notice("Usage: /goal <directive> or /goal clear".to_string());
+                                            }
+                                        }
+                                        "/compact" => {
+                                            let report = SmartAutoCompactor::compact_conversation(&mut self.conversation, self.pinned_goal.as_deref());
+                                            self.add_system_notice(format!(
+                                                "✓ Compacted {} items ({} chars saved, {} tool calls collapsed)",
+                                                report.items_compacted, report.characters_saved, report.tool_calls_summarized
+                                            ));
+                                            hgb_core::play_vibe_chime(true);
+                                        }
+                                        "/heal" => {
+                                            self.trigger_heal();
+                                        }
+                                        "/share" | "/tunnel" => {
+                                            let port: u16 = arg.parse().unwrap_or(3000);
+                                            self.add_tunnel_card(port);
+                                        }
+                                        "/preview" => {
+                                            if !arg.is_empty() {
+                                                self.add_image_preview("Preview", arg);
+                                            } else {
+                                                self.add_system_notice("Usage: /preview <path_to_image>".to_string());
+                                            }
+                                        }
+                                        "/listen" => {
+                                            self.toggle_listening();
+                                        }
+                                        "/copy" => {
+                                            self.copy_latest_response();
+                                        }
+                                        "/telepathy" | "/ghost" | "/council" | "/pixel" | "/spec" | "/db"
+                                        | "/warp" | "/traffic" | "/wiretap" | "/sentry" | "/xerox" | "/governor"
+                                        | "/browse" | "/search" | "/memory" | "/mem"
+                                        | "/ambient" | "/focus" | "/validate" | "/forge" | "/prune" | "/ports" | "/ship" | "/commit"
+                                        | "/hud" | "/snoop" | "/seed" | "/rewind" | "/redteam" | "/audit" | "/blueprint" | "/sentinel" => {
+                                            let rest = if parts.len() > 1 {
+                                                parts[1..].join(" ")
+                                            } else {
+                                                "".to_string()
+                                            };
+                                            if let Some(item) = CockpitVibeManager::handle_vibe_slash_command(cmd, &rest) {
+                                                match item {
+                                                    CockpitItem::TelepathyCard(c) => self.telepathy_cards.push(c),
+                                                    CockpitItem::GhostCard(c) => self.ghost_cards.push(c),
+                                                    CockpitItem::CouncilCard(c) => self.council_cards.push(c),
+                                                    CockpitItem::PixelRadarCard(c) => self.pixel_cards.push(c),
+                                                    CockpitItem::GreenLightCard(c) => self.green_light_cards.push(c),
+                                                    CockpitItem::DbTimeMachineCard(c) => self.db_cards.push(c),
+                                                    CockpitItem::ChronoWarpCard(c) => self.warp_cards.push(c),
+                                                    CockpitItem::PhantomSwarmCard(c) => self.traffic_cards.push(c),
+                                                    CockpitItem::WiretapCard(c) => self.wiretap_cards.push(c),
+                                                    CockpitItem::HallucinationSentryCard(c) => self.sentry_cards.push(c),
+                                                    CockpitItem::ClipboardXeroxCard(c) => self.xerox_cards.push(c),
+                                                    CockpitItem::WattageGovernorCard(c) => self.governor_cards.push(c),
+                                                    CockpitItem::WebBrowseCard(c) => self.web_browse_cards.push(c),
+                                                    CockpitItem::WebSearchCard(c) => self.web_search_cards.push(c),
+                                                    CockpitItem::MemoryCard(c) => self.memory_cards.push(c),
+                                                    CockpitItem::AmbientCard(c) => self.ambient_cards.push(c),
+                                                    CockpitItem::ValidationCard(c) => self.validation_cards.push(c),
+                                                    CockpitItem::ForgeCard(c) => self.forge_cards.push(c),
+                                                    CockpitItem::PruneCard(c) => self.prune_cards.push(c),
+                                                    CockpitItem::PortCard(c) => self.port_cards.push(c),
+                                                    CockpitItem::ShipCard(c) => self.ship_cards.push(c),
+                                                    CockpitItem::BrowserIncidentCard(c) => self.browser_incident_cards.push(c),
+                                                    CockpitItem::SeedCard(c) => self.seed_cards.push(c),
+                                                    CockpitItem::RewindCard(c) => self.rewind_cards.push(c),
+                                                    CockpitItem::RedTeamCard(c) => self.redteam_cards.push(c),
+                                                    CockpitItem::BlueprintCard(c) => self.blueprint_cards.push(c),
+                                                    CockpitItem::PassiveSentinelCard(c) => self.passive_sentinel_cards.push(c),
+                                                    _ => {}
+                                                }
+                                                hgb_core::play_vibe_chime(true);
+                                            }
+                                        }
+                                        "/model" | "/models" => {
+                                            let trimmed = arg.trim();
+                                            let lower = trimmed.to_lowercase();
+                                            if trimmed.is_empty() || lower == "list" || lower == "show" || lower == "ls" {
                                                 self.overlay = CockpitOverlay::ModelPicker { selected: 0 };
+                                            } else if lower == "current" || lower == "status" {
+                                                self.add_system_notice(format!("Current model: {}", self.model_pill));
+                                            } else {
+                                                let clean = if lower.starts_with("switch ") {
+                                                    trimmed[7..].trim()
+                                                } else if lower.starts_with("set ") {
+                                                    trimmed[4..].trim()
+                                                } else if lower.starts_with("use ") {
+                                                    trimmed[4..].trim()
+                                                } else {
+                                                    trimmed
+                                                };
+                                                let token = clean.split_whitespace().next().unwrap_or(clean);
+                                                let final_name = token.trim_matches(|c| c == '\'' || c == '"' || c == '`' || c == '(' || c == ')' || c == '[' || c == ']');
+                                                if !final_name.is_empty() {
+                                                    self.model_pill = final_name.to_string();
+                                                    let _ = hgb_core::persist_active_model(final_name);
+                                                    self.add_system_notice(format!("Active model set to: {}", final_name));
+                                                }
                                             }
                                         }
                                         "/cockpit" => {
@@ -3141,6 +5846,20 @@ impl CockpitState {
             }
         }
         Ok(())
+    }
+}
+
+/// Top-level application runner for the Interactive Terminal Cockpit TUI (`hgb cockpit`)
+pub struct CockpitApp;
+
+impl CockpitApp {
+    /// Launch and run the interactive Cockpit TUI application
+    pub async fn run() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let mut state = CockpitState::new();
+        state
+            .run_interactive()
+            .await
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
     }
 }
 

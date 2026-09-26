@@ -18,3 +18,12 @@ colored = { workspace = true }
 ratatui = { workspace = true }
 crossterm = { workspace = true }
 unicode-width = { workspace = true }
+regex = { workspace = true }
+reqwest = { workspace = true }
+async-trait = { workspace = true }
+base64 = { workspace = true }
+rusqlite = { workspace = true }
+hgb-storage = { path = "../hgb-storage" }
+
+[dev-dependencies]
+hgb-daemon = { path = "../hgb-daemon" }

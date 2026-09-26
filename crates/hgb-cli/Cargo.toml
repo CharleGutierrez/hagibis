@@ -17,6 +17,7 @@ path = "src/main.rs"
 hgb-core = { path = "../hgb-core" }
 hgb-daemon = { path = "../hgb-daemon" }
 hgb-nextgen = { path = "../hgb-nextgen" }
+hgb-storage = { path = "../hgb-storage" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -30,3 +31,7 @@ ratatui = { workspace = true }
 
 [dev-dependencies]
 hgb-storage = { path = "../hgb-storage" }
+async-trait = { workspace = true }
+reqwest = { workspace = true }
+rusqlite = { workspace = true }
+chrono = { workspace = true }

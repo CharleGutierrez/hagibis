@@ -2,9 +2,75 @@ use crate::error::{HgbError, Result};
 use crate::security::AgentShieldLight;
 use regex::RegexBuilder;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+use tokio::process::Command;
+use tokio::time::timeout;
+
+/// Configuration options for sandboxed command execution
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommandOptions {
+    pub cwd: Option<PathBuf>,
+    pub timeout_ms: Option<u64>,
+    pub env: HashMap<String, String>,
+    pub max_output_bytes: Option<usize>,
+    pub wait_ms_before_async: Option<u64>,
+}
+
+impl Default for CommandOptions {
+    fn default() -> Self {
+        Self {
+            cwd: None,
+            timeout_ms: Some(30_000),
+            env: HashMap::new(),
+            max_output_bytes: Some(512 * 1024),
+            wait_ms_before_async: None,
+        }
+    }
+}
+
+impl CommandOptions {
+    pub fn from_json(args: &serde_json::Value) -> Self {
+        let cwd = args.get("cwd")
+            .or_else(|| args.get("Cwd"))
+            .and_then(|v| v.as_str())
+            .map(PathBuf::from);
+        let timeout_ms = args.get("timeout_ms")
+            .or_else(|| args.get("timeout"))
+            .or_else(|| args.get("TimeoutMs"))
+            .and_then(|v| v.as_u64())
+            .or(Some(30_000));
+        let max_output_bytes = args.get("max_output_bytes")
+            .and_then(|v| v.as_u64())
+            .map(|u| u as usize)
+            .or(Some(512 * 1024));
+        let wait_ms_before_async = args.get("WaitMsBeforeAsync")
+            .or_else(|| args.get("wait_ms_before_async"))
+            .and_then(|v| v.as_u64());
+
+        Self {
+            cwd,
+            timeout_ms,
+            env: HashMap::new(),
+            max_output_bytes,
+            wait_ms_before_async,
+        }
+    }
+}
+
+/// Execution output from a completed or terminated command
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CommandResult {
+    pub exit_code: i32,
+    pub stdout: String,
+    pub stderr: String,
+    pub combined_output: String,
+    pub duration_ms: u64,
+    pub timed_out: bool,
+}
 
 /// AGY-Compatible File View Options
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -193,6 +259,132 @@ impl AgyCrud {
         None
     }
 
+    /// Execute a sandboxed command with AgentShieldLight validation and timeout guards
+    pub async fn run_command<P: AsRef<Path>>(
+        cmd: &str,
+        cwd: Option<P>,
+        options: CommandOptions,
+    ) -> Result<CommandResult> {
+        let trimmed_cmd = cmd.trim();
+        if trimmed_cmd.is_empty() {
+            return Err(HgbError::Execution("Command string cannot be empty".to_string()));
+        }
+
+        // 1. Audit command string against destructive commands and fork bombs
+        AgentShieldLight::audit_command(trimmed_cmd)?;
+
+        // 2. Audit and validate target working directory
+        let target_cwd = match cwd {
+            Some(ref p) => {
+                let path = p.as_ref();
+                let path_str = path.to_string_lossy();
+                AgentShieldLight::audit_path(&path_str)?;
+                if !path.exists() || !path.is_dir() {
+                    return Err(HgbError::NotFound(format!(
+                        "Working directory '{}' does not exist",
+                        path.display()
+                    )));
+                }
+                path.to_path_buf()
+            }
+            None => std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        };
+
+        let timeout_duration = Duration::from_millis(options.timeout_ms.unwrap_or(30_000));
+        let max_bytes = options.max_output_bytes.unwrap_or(512 * 1024);
+        let start_time = Instant::now();
+
+        // 3. Build Tokio asynchronous process with kill_on_drop enabled
+        let mut process = Command::new("bash");
+        process
+            .arg("-c")
+            .arg(trimmed_cmd)
+            .current_dir(&target_cwd)
+            .kill_on_drop(true)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+
+        for (k, v) in &options.env {
+            process.env(k, v);
+        }
+
+        let child = process.spawn().map_err(|e| {
+            HgbError::Execution(format!(
+                "Failed to spawn child process for command '{}': {}",
+                trimmed_cmd, e
+            ))
+        })?;
+
+        // 4. Execute with timeout
+        let status_res = timeout(timeout_duration, child.wait_with_output()).await;
+
+        match status_res {
+            Ok(Ok(output)) => {
+                let duration_ms = start_time.elapsed().as_millis() as u64;
+                let exit_code = output.status.code().unwrap_or(-1);
+
+                let stdout_raw = String::from_utf8_lossy(&output.stdout);
+                let stderr_raw = String::from_utf8_lossy(&output.stderr);
+
+                let stdout = if stdout_raw.len() > max_bytes {
+                    format!(
+                        "{}\n[...stdout truncated at {} bytes...]",
+                        &stdout_raw[..max_bytes],
+                        max_bytes
+                    )
+                } else {
+                    stdout_raw.to_string()
+                };
+
+                let stderr = if stderr_raw.len() > max_bytes {
+                    format!(
+                        "{}\n[...stderr truncated at {} bytes...]",
+                        &stderr_raw[..max_bytes],
+                        max_bytes
+                    )
+                } else {
+                    stderr_raw.to_string()
+                };
+
+                let combined_output = if stdout.is_empty() {
+                    stderr.clone()
+                } else if stderr.is_empty() {
+                    stdout.clone()
+                } else {
+                    format!("{}\n{}", stdout, stderr)
+                };
+
+                Ok(CommandResult {
+                    exit_code,
+                    stdout,
+                    stderr,
+                    combined_output,
+                    duration_ms,
+                    timed_out: false,
+                })
+            }
+            Ok(Err(e)) => Err(HgbError::Execution(format!("Error during process wait: {}", e))),
+            Err(_) => {
+                // Process timed out: child is killed automatically via kill_on_drop
+                let duration_ms = start_time.elapsed().as_millis() as u64;
+                Ok(CommandResult {
+                    exit_code: -1,
+                    stdout: String::new(),
+                    stderr: format!(
+                        "Process timed out after {}ms and was killed.",
+                        timeout_duration.as_millis()
+                    ),
+                    combined_output: format!(
+                        "Execution timed out after {}ms.",
+                        timeout_duration.as_millis()
+                    ),
+                    duration_ms,
+                    timed_out: true,
+                })
+            }
+        }
+    }
+
     /// Paged, 1-indexed windowed file reader with binary safety and content offset
     pub fn view_file<P: AsRef<Path>>(path: P, options: ViewFileOptions) -> Result<ViewFileResult> {
         let path = path.as_ref();
@@ -348,7 +540,10 @@ impl AgyCrud {
             let req_start = options.start_line.map(|s| s.saturating_sub(1)).unwrap_or(0);
             let req_end = options.end_line.map(|e| e.min(total_lines)).unwrap_or(total_lines);
 
-            let window = lines[req_start..req_end].join("\n");
+            let mut window = lines[req_start..req_end].join("\n");
+            if req_end == total_lines && original.ends_with('\n') {
+                window.push('\n');
+            }
             if window.contains(target_content) {
                 actual_start = req_start;
                 actual_end = req_end;
@@ -361,7 +556,10 @@ impl AgyCrud {
                 let mut found = false;
                 for i in min_bound..max_bound {
                     for j in (i + 1)..=max_bound {
-                        let candidate = lines[i..j].join("\n");
+                        let mut candidate = lines[i..j].join("\n");
+                        if j == total_lines && original.ends_with('\n') {
+                            candidate.push('\n');
+                        }
                         if candidate.contains(target_content) {
                             actual_start = i;
                             actual_end = j;
@@ -386,8 +584,20 @@ impl AgyCrud {
         }
 
         let prefix = if actual_start > 0 { lines[..actual_start].join("\n") + "\n" } else { String::new() };
-        let middle = lines[actual_start..actual_end].join("\n");
-        let suffix = if actual_end < total_lines { "\n".to_string() + &lines[actual_end..].join("\n") } else { String::new() };
+        let mut middle = lines[actual_start..actual_end].join("\n");
+        if actual_end == total_lines && original.ends_with('\n') {
+            middle.push('\n');
+        }
+        let suffix = if actual_end < total_lines {
+            let rest = lines[actual_end..].join("\n");
+            if original.ends_with('\n') {
+                format!("\n{}\n", rest)
+            } else {
+                format!("\n{}", rest)
+            }
+        } else {
+            String::new()
+        };
 
         let occurrences = middle.matches(target_content).count();
         if occurrences == 0 {

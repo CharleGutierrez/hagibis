@@ -28,6 +28,24 @@ pub enum HgbError {
 
     #[error("Provider error: {0}")]
     Provider(String),
+
+    #[error("Storage error: {0}")]
+    Storage(String),
+}
+
+impl HgbError {
+    pub fn validation(msg: impl Into<String>) -> Self {
+        Self::Execution(msg.into())
+    }
+
+    pub fn syntax(msg: impl Into<String>) -> Self {
+        Self::Execution(msg.into())
+    }
+
+    pub fn serialization(msg: impl Into<String>) -> Self {
+        Self::Serialization(msg.into())
+    }
 }
 
 pub type Result<T> = std::result::Result<T, HgbError>;
+

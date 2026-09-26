@@ -1,5 +1,5 @@
 pub mod server;
-pub use server::HagibisDaemon;
+pub use server::{DaemonState, HagibisDaemon};
 
 use colored::Colorize;
 use std::path::Path;

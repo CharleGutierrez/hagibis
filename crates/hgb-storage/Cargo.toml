@@ -14,3 +14,5 @@ rusqlite = { workspace = true }
 thiserror = { workspace = true }
 blake3 = { workspace = true }
 memmap2 = { workspace = true }
+chrono = { workspace = true }
+regex = { workspace = true }

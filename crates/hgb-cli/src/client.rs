@@ -18,6 +18,13 @@ impl HgbClient {
         Self { socket_path }
     }
 
+    #[allow(dead_code)]
+    pub fn with_socket<P: AsRef<Path>>(socket_path: P) -> Self {
+        Self {
+            socket_path: socket_path.as_ref().to_path_buf(),
+        }
+    }
+
     pub fn socket_path(&self) -> &Path {
         &self.socket_path
     }

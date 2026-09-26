@@ -666,7 +666,9 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 name = "hgb-cli"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "bincode",
+ "chrono",
  "clap",
  "colored",
  "crossterm",
@@ -675,6 +677,8 @@ dependencies = [
  "hgb-nextgen",
  "hgb-storage",
  "ratatui",
+ "reqwest",
+ "rusqlite",
  "serde",
  "serde_json",
  "thiserror",
@@ -694,6 +698,7 @@ dependencies = [
  "colored",
  "regex",
  "reqwest",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha2",
@@ -722,13 +727,20 @@ dependencies = [
 name = "hgb-nextgen"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "base64",
  "bincode",
  "blake3",
  "chrono",
  "colored",
  "crossterm",
  "hgb-core",
+ "hgb-daemon",
+ "hgb-storage",
  "ratatui",
+ "regex",
+ "reqwest",
+ "rusqlite",
  "serde",
  "serde_json",
  "thiserror",
@@ -741,8 +753,10 @@ name = "hgb-storage"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "chrono",
  "hgb-core",
  "memmap2",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",

@@ -86,6 +86,7 @@ impl ToolCallCard {
             "grep_search" | "grep" => "🔎",
             "list_dir" | "ls" => "📁",
             "invoke_subagent" | "subagent" => "🤖",
+            "gemini_api_direct" | "gemini" | "hgbd_gemini_inference" => "🛠️",
             _ => "🔧",
         };
 
@@ -119,7 +120,7 @@ impl ToolCallCard {
             + UnicodeWidthStr::width(dur_raw.as_str())
             + UnicodeWidthStr::width(target_raw.as_str());
 
-        let mut natural_w = (prefix_len + 6).max(status_raw_len + 4);
+        let mut natural_w = (prefix_len + 16).max(status_raw_len + 4);
 
         if let ToolCardStatus::Failed { ref error, .. } = self.status {
             let err_w = UnicodeWidthStr::width(error.as_str()) + 14;
@@ -148,15 +149,23 @@ impl ToolCallCard {
         let width = natural_w.max(50).min(max_bound);
         let mut out = String::new();
 
-        // 1. Header line: ╭─── 🔧 tool_name ───────────────────────╮
+        // 1. Header line: ╭─── 🔧 tool_name ────────────────── 📋 ─╮
         let header_prefix = format!("╭─── {} {} ", tool_icon, self.tool_name.bold().cyan());
-        let remaining = if width > prefix_len + 1 {
+        let copy_badge_w = 2; // "📋"
+        let dashes_len = if width > prefix_len + copy_badge_w + 4 {
+            width - prefix_len - copy_badge_w - 4
+        } else if width > prefix_len + 1 {
             width - prefix_len - 1
         } else {
             1
         };
-        let dashes = "─".repeat(remaining);
-        out.push_str(&format!("{}{}{}\n", header_prefix, dashes.dimmed(), "╮".dimmed()));
+        let dashes = "─".repeat(dashes_len);
+        if width > prefix_len + copy_badge_w + 4 {
+            let copy_badge = "📋".yellow();
+            out.push_str(&format!("{}{} {} ─{}\n", header_prefix, dashes.dimmed(), copy_badge, "╮".dimmed()));
+        } else {
+            out.push_str(&format!("{}{}{}\n", header_prefix, dashes.dimmed(), "╮".dimmed()));
+        }
 
         // 2. Status & Details Line: │  Status: [DONE]  Duration: 14ms  Target: file.rs  │
         let badge = self.status.badge();
@@ -642,10 +651,162 @@ impl ChatCanvas {
         out
     }
 
+    /// Render Interactive Diff HUD for selective patch inspection
+    pub fn render_diff_hud(hunks: &[hgb_nextgen::DiffHunk], width: usize) -> String {
+        let mut out = String::new();
+        if hunks.is_empty() {
+            return format!("{}\n", "  [•] Zero diff hunks detected.".dimmed());
+        }
+
+        let max_bound = if width < 50 { 80 } else { width };
+
+        for (idx, hunk) in hunks.iter().enumerate() {
+            let status_badge = match hunk.accepted {
+                Some(true) => "[ACCEPTED]".green().bold(),
+                Some(false) => "[REJECTED]".red().bold(),
+                None => "[PENDING]".yellow().bold(),
+            };
+
+            let title = format!(
+                "Hunk #{} ({}:{}) {}",
+                idx + 1,
+                hunk.file_path.display(),
+                hunk.old_start,
+                status_badge
+            );
+            let header = format!("╭─── 🪟 {} ", title);
+            let header_raw = format!("╭─── 🪟 Hunk #{} ({}:{}) [PENDING] ", idx + 1, hunk.file_path.display(), hunk.old_start);
+            let prefix_len = UnicodeWidthStr::width(header_raw.as_str());
+
+            let box_w = (prefix_len + 8).max(60).min(max_bound);
+            let remaining = if box_w > prefix_len + 1 { box_w - prefix_len - 1 } else { 2 };
+            out.push_str(&format!("{}{}{}\n", header, "─".repeat(remaining).dimmed(), "╮".dimmed()));
+
+            let max_inner = box_w.saturating_sub(6);
+            for line in &hunk.lines {
+                let (prefix, clr_line) = match line.kind {
+                    hgb_nextgen::DiffLineKind::Addition => ("+ ", format!("+ {}", line.content).green()),
+                    hgb_nextgen::DiffLineKind::Deletion => ("- ", format!("- {}", line.content).red()),
+                    hgb_nextgen::DiffLineKind::Context => ("  ", format!("  {}", line.content).dimmed()),
+                };
+                let raw_str = format!("{}{}", prefix, line.content);
+                let w = UnicodeWidthStr::width(raw_str.as_str());
+                let pad = max_inner.saturating_sub(w);
+                out.push_str(&format!("│ {}{}{}\n", clr_line, " ".repeat(pad), "│".dimmed()));
+            }
+
+            let footer = format!("╰{}╯", "─".repeat(box_w.saturating_sub(2)));
+            out.push_str(&footer.dimmed().to_string());
+            out.push('\n');
+        }
+
+        out
+    }
+
+    /// Print Diff HUD directly to terminal stdout
+    pub fn print_diff_hud(hunks: &[hgb_nextgen::DiffHunk]) {
+        let width = match crossterm::terminal::size() {
+            Ok((w, _)) => w as usize,
+            Err(_) => 80,
+        };
+        print!("{}", Self::render_diff_hud(hunks, width));
+    }
+
     /// Render Markdown directly to stdout
     pub fn print_markdown(text: &str) {
         let rendered = Self::render_markdown(text);
         print!("{}", rendered);
+    }
+}
+
+/// An inline unified diff card displayed in the Chat Canvas
+#[derive(Debug, Clone, PartialEq)]
+pub struct DiffCard {
+    pub file_path: String,
+    pub hunks: Vec<hgb_nextgen::DiffHunk>,
+    pub status: String,
+}
+
+impl DiffCard {
+    pub fn new(file_path: impl Into<String>, hunks: Vec<hgb_nextgen::DiffHunk>) -> Self {
+        Self {
+            file_path: file_path.into(),
+            hunks,
+            status: "PENDING REVIEW".to_string(),
+        }
+    }
+
+    /// Render into an authentic AGY boxed diff card with action buttons
+    pub fn render_box(&self, max_width: usize) -> String {
+        let width = max_width.max(60);
+        let mut out = String::new();
+
+        // 1. Header with [✓ Accept] and [✗ Reject] buttons
+        let prefix = format!("╭─── 🪟 Diff: {} ", self.file_path.bold().cyan());
+        let buttons = format!("{}  {}", "[✓ Accept]".green().bold(), "[✗ Reject]".red().bold());
+        let buttons_raw_w = 21; // "[✓ Accept]  [✗ Reject]"
+        let prefix_raw_w = 11 + UnicodeWidthStr::width(self.file_path.as_str());
+
+        let dashes_len = width.saturating_sub(prefix_raw_w + buttons_raw_w + 5).max(1);
+        out.push_str(&format!(
+            "{}{}{}{} ─╮\n",
+            prefix,
+            "─".repeat(dashes_len).dimmed(),
+            " ",
+            buttons
+        ));
+
+        // 2. Status line
+        let status_str = format!("│  Status: [{}] • Hunks: {}", self.status.yellow().bold(), self.hunks.len());
+        let pad = width.saturating_sub(13 + self.status.len() + 12);
+        out.push_str(&format!("{}{}{}\n", status_str, " ".repeat(pad), "│".dimmed()));
+
+        // Divider
+        out.push_str(&format!("├{}┤\n", "─".repeat(width.saturating_sub(2)).dimmed()));
+
+        // 3. Diff Lines
+        for (idx, hunk) in self.hunks.iter().enumerate() {
+            let hunk_header = format!("│  Hunk #{}: @@ -{},{} +{},{} @@", idx + 1, hunk.old_start, hunk.old_len, hunk.new_start, hunk.new_len);
+            let pad = width.saturating_sub(UnicodeWidthStr::width(hunk_header.as_str()) + 1);
+            out.push_str(&format!("{}{}{}\n", hunk_header.cyan().bold(), " ".repeat(pad), "│".dimmed()));
+
+            for line in &hunk.lines {
+                let (prefix_char, colorized) = match line.kind {
+                    hgb_nextgen::DiffLineKind::Addition => ("+", line.content.green()),
+                    hgb_nextgen::DiffLineKind::Deletion => ("-", line.content.red()),
+                    hgb_nextgen::DiffLineKind::Context => (" ", line.content.dimmed()),
+                };
+                let line_w = 6 + UnicodeWidthStr::width(line.content.as_str());
+                let pad = width.saturating_sub(line_w + 1);
+                out.push_str(&format!("│   {} {}{}{}\n", prefix_char, colorized, " ".repeat(pad), "│".dimmed()));
+            }
+        }
+
+        // 4. Footer
+        out.push_str(&format!("╰{}╯\n", "─".repeat(width.saturating_sub(2)).dimmed()));
+        out
+    }
+}
+
+/// AGY Canvas rendering additions
+pub struct CanvasVibeHelper;
+
+impl CanvasVibeHelper {
+    pub fn render_diff_card(card: &DiffCard, max_width: usize) -> String {
+        card.render_box(max_width)
+    }
+
+    pub fn render_crash_banner(crash: &hgb_nextgen::InterceptedCrash, max_width: usize) -> String {
+        let width = max_width.max(60);
+        let banner_text = crash.banner_text();
+        let mut out = String::new();
+
+        out.push_str(&format!("╭{}╮\n", "─".repeat(width.saturating_sub(2)).red()));
+        let content = format!("│  {}", banner_text.red().bold());
+        let pad = width.saturating_sub(UnicodeWidthStr::width(banner_text.as_str()) + 5);
+        out.push_str(&format!("{}{}{}\n", content, " ".repeat(pad), "│".red()));
+        out.push_str(&format!("╰{}╯\n", "─".repeat(width.saturating_sub(2)).red()));
+        out
     }
 }
 
@@ -752,5 +913,26 @@ Evaluating invariant boundaries across subagents...
         assert!(rendered.contains("Gemini"));
         assert!(rendered.contains("┌"));
         assert!(rendered.contains("┘"));
+    }
+
+    #[test]
+    fn test_chat_canvas_diff_hud() {
+        let diff = r#"
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -1,3 +1,3 @@
+ fn main() {
+-    println!("old");
++    println!("new");
+ }
+"#;
+        let hunks = hgb_nextgen::SelectivePatcher::parse_unified_diff(diff);
+        let hud = ChatCanvas::render_diff_hud(&hunks, 80);
+        assert!(hud.contains("Hunk #1"));
+        assert!(hud.contains("src/main.rs"));
+        assert!(hud.contains("+     println!(\"new\");"));
+        assert!(hud.contains("-     println!(\"old\");"));
+        assert!(hud.contains("╭─── 🪟"));
+        assert!(hud.contains("╰"));
     }
 }

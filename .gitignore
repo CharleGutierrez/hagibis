@@ -5,3 +5,8 @@
 .DS_Store
 /run/
 *.sock
+*.db
+.hagibis/
+.hgb/
+test_app/
+**/test_app/

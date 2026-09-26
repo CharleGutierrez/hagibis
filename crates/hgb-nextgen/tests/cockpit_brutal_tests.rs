@@ -976,4 +976,80 @@ async fn test_brutal_prompt_processing_animation_and_cancel() {
     assert_eq!(state.conversation.len(), 3); // cancelled + user + new assistant
 }
 
+#[test]
+fn test_brutal_response_box_copy_icon_and_mouse_click() {
+    let mut state = CockpitState::new();
+
+    let response_text = "• The ultimate chicken-and-egg question! Scientifically and historically speaking, the answer is **the egg**.\nHere is why:\n1. Evolutionary Biology: Animals that lay eggs existed hundreds of millions of years before pigs.";
+
+    let tool_call = CockpitToolCall::new(
+        "gemini_api_direct",
+        "model=wizardlm-uncensored:latest",
+        "SUCCESS",
+        56348,
+        Some(response_text.to_string()),
+    );
+
+    state.add_assistant_message(
+        response_text.to_string(),
+        "wizardlm-uncensored:latest",
+        120,
+        56348,
+        None,
+        vec![tool_call],
+    );
+
+    // 1. Render in 120-column terminal
+    let backend = ratatui::backend::TestBackend::new(120, 25);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    terminal.draw(|f| state.render_ui(f)).unwrap();
+
+    let rendered_text = state.render_headless_to_string(120, 25);
+    println!("\n--- RENDERED BOX WITH COPY ICON ---");
+    for line in rendered_text.lines() {
+        if line.contains('╭') || line.contains('│') || line.contains('╰') {
+            println!("{}", line);
+        }
+    }
+
+    // 2. Verify top border contains tool icon 🛠️, title, and only copy icon near the top right corner
+    assert!(rendered_text.contains("gemini_api_direct"), "Must contain tool name");
+    assert!(rendered_text.contains("model=wizardlm-uncensored:latest"), "Must contain model tag");
+    assert!(rendered_text.contains("🛠️"), "Must contain tool icon 🛠️ for gemini_api_direct");
+    assert!(rendered_text.contains("📋"), "Must contain copy icon 📋");
+    assert!(!rendered_text.contains("Copy"), "Must omit the word 'Copy'");
+    assert!(!rendered_text.contains("[📋]"), "Must omit brackets around copy icon");
+    assert!(rendered_text.contains("📋") && rendered_text.contains("─╮"), "Must contain only copy icon 📋 near corner");
+
+    // 3. Verify hitboxes populated in state
+    let hitboxes = state.copy_hitboxes.lock().unwrap().clone();
+    assert_eq!(hitboxes.len(), 1, "Exactly one copy hitbox must be registered for the response box");
+    let hb = &hitboxes[0];
+    assert_eq!(hb.content, response_text, "Hitbox must contain the full response content");
+    assert_eq!(hb.label, "gemini_api_direct response");
+
+    // 4. Simulate mouse click on the copy icon coordinates
+    let click_x = (hb.x_start + hb.x_end) / 2;
+    let click_y = hb.screen_y;
+    let handled = state.handle_mouse_click(click_x, click_y);
+    assert!(handled, "Mouse click on copy icon must be handled");
+    assert_eq!(state.last_copied_id, Some(hb.card_id.clone()));
+
+    // 5. Re-render and verify feedback changes to ✓
+    let rendered_after_copy = state.render_headless_to_string(120, 25);
+    println!("\n--- RENDERED BOX AFTER COPY (FEEDBACK) ---");
+    for line in rendered_after_copy.lines() {
+        if line.contains('╭') || line.contains('│') || line.contains('╰') {
+            println!("{}", line);
+        }
+    }
+    assert!(rendered_after_copy.contains("✓"), "Button must show ✓ after clicking");
+    assert!(!rendered_after_copy.contains("[✓]"), "Must omit brackets around checkmark");
+
+    // 6. Test copy_latest_response helper
+    state.last_copied_id = None;
+    state.copy_latest_response();
+    assert!(state.last_copied_id.is_some(), "copy_latest_response must successfully copy the response");
+}
+
 
