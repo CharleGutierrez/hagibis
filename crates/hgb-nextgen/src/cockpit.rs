@@ -3106,7 +3106,7 @@ impl CockpitState {
         // --- 1. Top HUD ---
         let hud_block = Block::default()
             .borders(Borders::ALL)
-            .title(" ⚡ HAGIBIS AGY COCKPIT ⚡ ");
+            .title(" 🪽 HAGIBIS AGY COCKPIT 🪽 ");
 
         let temp_color = if self.telemetry.peak_temperature_celsius > 75.0 { Color::Red } else { Color::Green };
         let mut hud_row1 = vec![
@@ -3123,7 +3123,7 @@ impl CockpitState {
             let spinner = SPINNER_FRAMES[self.processing_tick % SPINNER_FRAMES.len()];
             hud_row1.push(Span::raw(" "));
             hud_row1.push(Span::styled(
-                format!(" [⚡ THINKING {}] ", spinner),
+                format!(" [🪽 THINKING {}] ", spinner),
                 Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD),
             ));
         }
@@ -3133,7 +3133,7 @@ impl CockpitState {
             Line::from(vec![
                 Span::styled("🔥 Thermal: ", Style::default().fg(Color::Yellow)),
                 Span::styled(format!("{:.1}°C  ", self.telemetry.peak_temperature_celsius), Style::default().fg(temp_color).add_modifier(Modifier::BOLD)),
-                Span::styled("⚡ Throughput: ", Style::default().fg(Color::Yellow)),
+                Span::styled("🪽 Throughput: ", Style::default().fg(Color::Yellow)),
                 Span::styled(format!("{:.1} tok/s  ", self.telemetry.tokens_per_sec), Style::default().fg(Color::Cyan)),
                 Span::styled("📊 Tokens: ", Style::default().fg(Color::Yellow)),
                 Span::styled(format!("{}  ", self.telemetry.total_tokens), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
@@ -3538,7 +3538,7 @@ impl CockpitState {
         let cwd_span = Span::styled(format!(" 📁 {} ", self.workspace_path), Style::default().fg(Color::DarkGray));
 
         let header_line = Line::from(vec![
-            Span::styled("⚡ HAGIBIS (hgb)", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled("🪽 HAGIBIS (hgb)", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
             Span::raw(" "),
             cwd_span,
             Span::raw(" "),
@@ -3721,7 +3721,7 @@ impl CockpitState {
         // 7. Semantic Telepathy Cards
         for card in &self.telepathy_cards {
             chat_lines.push(Line::from(vec![
-                Span::styled("⚡ Telepathy Search: ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+                Span::styled("🪽 Telepathy Search: ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
                 Span::styled(format!("\"{}\" ({} matches in {}µs)", card.query, card.matches_count, card.latency_us), Style::default().fg(Color::White)),
             ]));
             chat_lines.push(Line::from(vec![
@@ -3838,7 +3838,7 @@ impl CockpitState {
         for card in &self.governor_cards {
             let throttle_badge = if card.throttled { "⚠️ THROTTLED" } else { "✓ OPTIMAL" };
             chat_lines.push(Line::from(vec![
-                Span::styled("⚡ Wattage Governor: ", Style::default().fg(Color::LightGreen).add_modifier(Modifier::BOLD)),
+                Span::styled("🪽 Wattage Governor: ", Style::default().fg(Color::LightGreen).add_modifier(Modifier::BOLD)),
                 Span::styled(format!("{:.0} mW | Spent: ${:.4} | {}", card.power_mw, card.spent_usd, throttle_badge), Style::default().fg(Color::White)),
             ]));
             chat_lines.push(Line::from(""));
@@ -3980,7 +3980,7 @@ impl CockpitState {
         // 24. Instant App Forge Cards
         for card in &self.forge_cards {
             let card_w = usable_width.saturating_sub(2).max(48);
-            let header_str = format!("╭── ⚡ App Forge [{}] ", card.stack);
+            let header_str = format!("╭── 🪽 App Forge [{}] ", card.stack);
             let header_w = UnicodeWidthStr::width(header_str.as_str());
             let dashes_count = card_w.saturating_sub(header_w + 1).max(2);
             let top_border = format!("{}{}{}╮", header_str, "─".repeat(dashes_count), " ");
@@ -5001,7 +5001,7 @@ impl CockpitState {
 
         // 5. Statusline Footer
         let bg_tasks_info = if !self.background_tasks.is_empty() {
-            format!("⚡ {} tasks ", self.background_tasks.len())
+            format!("🪽 {} tasks ", self.background_tasks.len())
         } else {
             String::new()
         };

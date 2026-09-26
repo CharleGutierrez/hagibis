@@ -300,7 +300,7 @@ impl HagibisDaemon {
                     "Offline"
                 };
                 let output = format!(
-                    "⚡ Hagibis Microkernel: No active model connection for '{}'.\n• Google Gemini: {}\n• Local Ollama: {}\n\nTo connect:\n  - Gemini: run 'hgb login' or export GEMINI_API_KEY=...\n  - Ollama: run 'ollama serve' and specify '-m qwen2.5-coder:1.5b' or any installed model.",
+                    "🪽 Hagibis Microkernel: No active model connection for '{}'.\n• Google Gemini: {}\n• Local Ollama: {}\n\nTo connect:\n  - Gemini: run 'hgb login' or export GEMINI_API_KEY=...\n  - Ollama: run 'ollama serve' and specify '-m qwen2.5-coder:1.5b' or any installed model.",
                     req_model,
                     cred_status,
                     ollama_status

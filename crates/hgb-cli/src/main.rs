@@ -14,8 +14,8 @@ use repl::HagibisRepl;
     name = "hgb",
     bin_name = "hgb",
     version,
-    about = "⚡ Hagibis (hgb): Sub-Millisecond Microkernel & Swarm Engine in Systems-Grade Rust",
-    long_about = "⚡ Hagibis (hgb) — The Sub-Millisecond Microkernel Swarm Engine in Systems-Grade Rust.\nRunning without arguments launches the AGY Chat Canvas & Interactive Cockpit."
+    about = "🪽 Hagibis (hgb): Sub-Millisecond Microkernel & Swarm Engine in Systems-Grade Rust",
+    long_about = "🪽 Hagibis (hgb) — The Sub-Millisecond Microkernel Swarm Engine in Systems-Grade Rust.\nRunning without arguments launches the AGY Chat Canvas & Interactive Cockpit."
 )]
 struct Cli {
     /// Launch classic line-by-line scrolling terminal REPL instead of AGY Chat Canvas
@@ -756,9 +756,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let active_model = active_model_str.as_str();
             let is_local = hgb_core::OllamaProvider::is_ollama_model(active_model);
             if is_local {
-                println!("{}", format!("  ⚡ Local Ollama Reasoning (model: {})...", active_model).magenta().bold());
+                println!("{}", format!("  🪽 Local Ollama Reasoning (model: {})...", active_model).magenta().bold());
             } else {
-                println!("{}", format!("  ⚡ AGY Reasoning (model: {})...", active_model).cyan().bold());
+                println!("{}", format!("  🪽 AGY Reasoning (model: {})...", active_model).cyan().bold());
             }
             let t0 = std::time::Instant::now();
             let req = HgbRequest::Prompt {
@@ -1074,14 +1074,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 Some(ModelSubcommand::Current) => {
                     if let Some(persisted) = hgb_core::load_active_model() {
-                        println!("⚡ Currently Active Model: {}", persisted.bold().green());
+                        println!("🪽 Currently Active Model: {}", persisted.bold().green());
                         hgb_core::play_vibe_chime(true);
                     } else {
                         let resp = repl_helper.dispatch(HgbRequest::Status).await;
                         match resp {
                             HgbResponse::Status(s) => {
                                 let cur = s.active_models.first().cloned().unwrap_or_else(|| "auto".to_string());
-                                println!("⚡ Currently Active Model: {}", cur.bold().green());
+                                println!("🪽 Currently Active Model: {}", cur.bold().green());
                                 hgb_core::play_vibe_chime(true);
                             }
                             other => repl_helper.render_response(other),
@@ -1205,7 +1205,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Forge { stack, name } => {
             let project_name = name.as_deref().unwrap_or("my_vibe_app");
-            println!("{}", format!("⚡ Instant App Forge: Scaffolding '{}' with stack '{}'...", project_name, stack).bold().cyan());
+            println!("{}", format!("🪽 Instant App Forge: Scaffolding '{}' with stack '{}'...", project_name, stack).bold().cyan());
             let current_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             match hgb_core::forge::ForgeEngine::scaffold(stack.as_str(), project_name, &current_dir) {
                 Ok(rep) => {
@@ -1434,7 +1434,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Ghost { apply } => {
             let repl_helper = HagibisRepl::new(client);
             let resp = if let Some(fix_id) = apply {
-                println!("{}", format!("⚡ Applying Ghost-Fix '{}'...", fix_id).cyan().bold());
+                println!("{}", format!("🪽 Applying Ghost-Fix '{}'...", fix_id).cyan().bold());
                 repl_helper.dispatch(HgbRequest::GuardianApplyFix { fix_id }).await
             } else {
                 repl_helper.dispatch(HgbRequest::GuardianStatus).await

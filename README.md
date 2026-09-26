@@ -2,7 +2,7 @@
   <img src="assets/hagibis-winged-sandal.png" alt="Hagibis — The Winged Sandal of Mercury" width="280" style="border-radius: 24px; box-shadow: 0 12px 36px rgba(0, 240, 255, 0.25);" />
 </p>
 
-<h1 align="center">⚡ HAGIBIS (<code>hgb</code>) ⚡</h1>
+<h1 align="center">🪽 HAGIBIS (<code>hgb</code>) 🪽</h1>
 
 <p align="center">
   <strong>The Sub-Millisecond Microkernel & Swarm Engine for Vibe Code Developers</strong><br>
@@ -13,7 +13,7 @@
   <a href="https://github.com/CharleGutierrez/hagibis/actions"><img src="https://img.shields.io/badge/build-passing-brightgreen?style=for-the-badge&logo=rust" alt="Build Status" /></a>
   <a href="https://github.com/CharleGutierrez/hagibis"><img src="https://img.shields.io/badge/IPC%20Latency-12_%C2%B5s-cyan?style=for-the-badge&logo=speedtest" alt="IPC Latency" /></a>
   <a href="https://github.com/CharleGutierrez/hagibis"><img src="https://img.shields.io/badge/Daemon%20RSS-8.4_MB-blueviolet?style=for-the-badge" alt="Memory RSS" /></a>
-  <a href="https://github.com/CharleGutierrez/hagibis"><img src="https://img.shields.io/badge/Vibe%20Superpowers-1000x%20Real-orange?style=for-the-badge&logo=lightning" alt="Vibe Superpowers" /></a>
+  <a href="https://github.com/CharleGutierrez/hagibis"><img src="https://img.shields.io/badge/Vibe%20Superpowers-1000x%20Real-orange?style=for-the-badge&logo=feather" alt="Vibe Superpowers" /></a>
   <a href="https://github.com/CharleGutierrez/hagibis/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue?style=for-the-badge" alt="License" /></a>
 </p>
 
@@ -23,16 +23,16 @@
 
 In ancient mythology, **Hermes / Mercury**—the messenger of the gods—traversed the cosmos at lightning speed not by walking or straining, but by wearing **Talaria**, the legendary **winged golden sandals**. With them, distance vanished, gravity lost its grip, and the messenger arrived at his destination before ordinary mortals took their first stride.
 
-In the Philippines, **Hagibis** signifies *supreme velocity with unstoppable force*—the sudden, roaring rush of wind and lightning.
+In the Philippines, **Hagibis** signifies *supreme velocity with unstoppable force*—the sudden, roaring rush of wind and speed.
 
 > **Hagibis is the Winged Sandal for the Vibe Coder.**  
 > It strips away boilerplate, eliminates 40MB binary bloat, cuts compile-and-wait friction to zero, and lifts you into pure creative flow. When you put on Hagibis, you don't wait for your tools—your tools run ahead of your imagination.
 
 ---
 
-## ⚡ What Makes Hagibis the Ultimate Vibe Coding Engine?
+## 🪽 What Makes Hagibis the Ultimate Vibe Coding Engine?
 
-| Traditional AI Tooling | ⚡ Hagibis (`hgb`) Vibe Engine |
+| Traditional AI Tooling | 🪽 Hagibis (`hgb`) Vibe Engine |
 | :--- | :--- |
 | **Heavy bloat:** 40MB–100MB Node/Python runtimes, high CPU & battery drain | **Systems-Grade Rust:** Sub-1MB binaries (`hgb` is 939 KB), 8.4 MB daemon RSS |
 | **Sluggish responses:** 1–3 second local latency before token streaming begins | **Sub-Millisecond Microkernel:** 12 µs Unix Domain Socket IPC, instant responsiveness |
@@ -206,5 +206,5 @@ at your option.
 ---
 
 <p align="center">
-  <strong>Put on the winged sandals. Join the velocity revolution with Hagibis. ⚡</strong>
+  <strong>Put on the winged sandals. Join the velocity revolution with Hagibis. 🪽</strong>
 </p>

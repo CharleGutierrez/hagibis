@@ -1336,7 +1336,7 @@ impl HagibisRepl {
                 } else if lower == "current" || lower == "status" || lower == "get" {
                     let current = self.model.as_deref().unwrap_or("auto");
                     let is_local = hgb_core::OllamaProvider::is_ollama_model(current);
-                    println!("  ⚡ Current active model: {}", current.bold().green());
+                    println!("  🪽 Current active model: {}", current.bold().green());
                     if is_local {
                         let ollama_status = if hgb_core::OllamaProvider::is_available() {
                             "Local Ollama Engine (online, 0ms latency, zero cloud cost)".magenta()
@@ -2094,7 +2094,7 @@ impl HagibisRepl {
             "Offline".dimmed().to_string()
         };
 
-        println!("\n{}", "⚡ HAGIBIS MODEL REGISTRY ⚡".bold().cyan());
+        println!("\n{}", "🪽 HAGIBIS MODEL REGISTRY 🪽".bold().cyan());
         println!("  [•] Active Model: {}", current.yellow().bold());
         println!("  [•] Google Gemini Cloud: {}", cred.cyan());
         println!("  [•] Local Ollama Engine: {}", ollama_status);
@@ -2143,7 +2143,7 @@ impl HagibisRepl {
                 println!("{} Daemon pong received in {} µs", "✔ PONG:".green().bold(), latency_us);
             }
             HgbResponse::Status(status) => {
-                println!("{}", "⚡ HAGIBIS RESIDENT DAEMON STATUS ⚡".bold().cyan());
+                println!("{}", "🪽 HAGIBIS RESIDENT DAEMON STATUS 🪽".bold().cyan());
                 println!("  [•] Version: {}", status.version.yellow());
                 println!("  [•] Uptime: {} secs", status.uptime_secs);
                 println!("  [•] Memory RSS: {:.1} MB", status.memory_rss_mb);
@@ -2183,7 +2183,7 @@ impl HagibisRepl {
                 println!("{} {} ➔ {} (in {} ms)", "✔ Model Switched:".green().bold(), previous.dimmed(), current.bold().cyan(), duration_ms);
             }
             HgbResponse::ModelList(models) => {
-                println!("{}", "⚡ AVAILABLE AI MODELS ⚡".bold().cyan());
+                println!("{}", "🪽 AVAILABLE AI MODELS 🪽".bold().cyan());
                 let current = self.model.as_deref().unwrap_or("auto");
                 let mut local_models = Vec::new();
                 let mut cloud_models = Vec::new();
@@ -2307,7 +2307,7 @@ impl HagibisRepl {
                 }
             }
             HgbResponse::GhostFixApplied { report } => {
-                println!("{} {}", "⚡ Ghost-Fix Applied:".green().bold(), report);
+                println!("{} {}", "🪽 Ghost-Fix Applied:".green().bold(), report);
             }
             HgbResponse::DevServerEndpoints(endpoints) => {
                 println!("{}", "🌐 DEVSERVER SENTINEL: ACTIVE ENDPOINTS 🌐".bold().cyan());
@@ -2626,7 +2626,7 @@ impl HagibisRepl {
     }
 
     fn print_help(&self) {
-        println!("{}", "⚡ Hagibis Interactive REPL Commands ⚡".bold().cyan());
+        println!("{}", "🪽 Hagibis Interactive REPL Commands 🪽".bold().cyan());
         println!("  {}", "--- Core Commands ---".dimmed());
         println!("  {:<25} {}", "/help, /?".green(), "Show this help table");
         println!("  {:<25} {}", "/clear, /cls".green(), "Clear terminal screen");
