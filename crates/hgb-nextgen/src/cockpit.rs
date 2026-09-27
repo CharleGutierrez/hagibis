@@ -5830,7 +5830,7 @@ impl CockpitState {
                                         "browse", "search", "memory", "mem",
                                         "ambient", "focus", "validate", "forge", "prune", "ports", "ship", "commit",
                                         "hud", "snoop", "seed", "rewind", "redteam", "audit", "blueprint", "sentinel",
-                                        "model", "cockpit", "chat", "tasks", "plan", "clear", "help", "exit", "quit"
+                                        "model", "cockpit", "chat", "tasks", "plan", "mcp", "clear", "help", "exit", "quit"
                                     ];
                                     for cmd in commands {
                                         if cmd.starts_with(prefix) {

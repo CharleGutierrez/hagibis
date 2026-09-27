@@ -514,11 +514,26 @@ impl ReplEditor {
                 ("/pod", "Specialist Swarm Pod: 4-role consensus pipeline"),
                 ("/fix", "Terminal Rescue: mind-reader command diagnosis"),
                 ("/memory", "Project Memory Ledger: context anchor & ADRs"),
+                ("/mcp", "Universal MCP: list tools or call tool on server"),
             ];
 
             for (cmd, _) in slash_cmds {
                 if cmd.starts_with(trimmed_prefix) {
                     let completed = format!("{cmd} ");
+                    let len = completed.chars().count();
+                    results.push((completed, len));
+                }
+            }
+            return results;
+        }
+
+        // Subcommand completions for /mcp [list|call]
+        if let Some(rest) = trimmed_prefix.strip_prefix("/mcp ") {
+            let arg = rest.trim_start();
+            let subcmds = ["list", "call"];
+            for sub in subcmds {
+                if sub.starts_with(arg) {
+                    let completed = format!("/mcp {} ", sub);
                     let len = completed.chars().count();
                     results.push((completed, len));
                 }
@@ -2023,6 +2038,86 @@ impl HagibisRepl {
                     self.render_response(resp);
                 }
             }
+            "/mcp" => {
+                let parts: Vec<&str> = args.split_whitespace().collect();
+                let sub = if !parts.is_empty() { parts[0] } else { "list" };
+                match sub {
+                    "list" | "ls" => {
+                        let config_path = if parts.len() > 1 {
+                            if (parts[1] == "-c" || parts[1] == "--config") && parts.len() > 2 {
+                                Some(parts[2].to_string())
+                            } else if !parts[1].starts_with('-') {
+                                Some(parts[1].to_string())
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        };
+                        let resp = self.dispatch(HgbRequest::McpListTools { config_path }).await;
+                        self.render_response(resp);
+                    }
+                    "call" => {
+                        let mut server_name = String::new();
+                        let mut tool_name = String::new();
+                        let mut config_path = None;
+                        let mut arg_tokens = Vec::new();
+
+                        let mut idx = 1;
+                        while idx < parts.len() {
+                            if (parts[idx] == "-c" || parts[idx] == "--config") && idx + 1 < parts.len() {
+                                config_path = Some(parts[idx + 1].to_string());
+                                idx += 2;
+                            } else if server_name.is_empty() {
+                                server_name = parts[idx].to_string();
+                                idx += 1;
+                            } else if tool_name.is_empty() {
+                                tool_name = parts[idx].to_string();
+                                idx += 1;
+                            } else {
+                                arg_tokens.push(parts[idx]);
+                                idx += 1;
+                            }
+                        }
+
+                        if server_name.is_empty() || tool_name.is_empty() {
+                            println!("{} Usage: /mcp call [-c <config>] <server> <tool> [args_json]", "⚠".yellow());
+                            return Ok(true);
+                        }
+
+                        let args_str = if arg_tokens.is_empty() {
+                            "{}".to_string()
+                        } else {
+                            arg_tokens.join(" ")
+                        };
+
+                        let parsed_args = match serde_json::from_str::<serde_json::Value>(&args_str) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                println!("{} Invalid JSON arguments: {}", "✖".red().bold(), e);
+                                return Ok(true);
+                            }
+                        };
+
+                        let resp = self.dispatch(HgbRequest::McpCallTool {
+                            server_name,
+                            tool_name,
+                            arguments: parsed_args,
+                            config_path,
+                        }).await;
+                        self.render_response(resp);
+                    }
+                    "help" | "-h" | "--help" => {
+                        println!("\n{}", "🔌 Universal MCP (Model Context Protocol) Usage:".bold().cyan());
+                        println!("  /mcp list [config_path]             List all tools across configured MCP servers");
+                        println!("  /mcp call <server> <tool> [args]    Call tool on server with JSON arguments");
+                        println!("  /mcp call -c <cfg> <srv> <tool>     Call tool using explicit config file\n");
+                    }
+                    _ => {
+                        println!("{} Unknown MCP subcommand '{}'. Usage: /mcp list [config] | /mcp call <server> <tool> [args]", "⚠".yellow(), sub);
+                    }
+                }
+            }
             _ => {
                 println!("{} Unknown slash command '{}'. Type '/help' for available commands.", "⚠".yellow(), cmd);
             }
@@ -2798,6 +2893,7 @@ impl HagibisRepl {
         println!("  {:<25} {}", "/verify <target>".cyan(), "Formally verify invariants with SMT-LIB2");
         println!("  {:<25} {}", "/mesh".cyan(), "Display P2P swarm mesh status");
         println!("  {:<25} {}", "/cockpit".cyan(), "Launch full-screen Interactive Cockpit dashboard");
+        println!("  {:<25} {}", "/mcp [list|call]".cyan(), "Universal MCP: list tools or call tool on server");
         println!();
         println!("  {}", "--- Vibe Coding Capabilities ---".dimmed());
         println!("  {:<25} {}", "/vibe <prompt>".magenta(), "Speculative dual-draft race (first green wins)");
@@ -2919,6 +3015,12 @@ mod tests {
         let names: Vec<String> = comp_m.into_iter().map(|(s, _)| s).collect();
         assert!(names.contains(&"/model ".to_string()));
         assert!(names.contains(&"/mesh ".to_string()));
+        assert!(names.contains(&"/mcp ".to_string()));
+
+        let comp_mcp = ReplEditor::get_completions("/mcp ");
+        let mcp_subs: Vec<String> = comp_mcp.into_iter().map(|(s, _)| s).collect();
+        assert!(mcp_subs.contains(&"/mcp list ".to_string()));
+        assert!(mcp_subs.contains(&"/mcp call ".to_string()));
     }
 
     #[test]

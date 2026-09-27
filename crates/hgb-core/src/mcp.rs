@@ -99,6 +99,43 @@ impl McpConfigFile {
         Ok(None)
     }
 
+    /// Load MCP configuration from a specific file path or workspace directory
+    pub fn load_from_path<P: AsRef<Path>>(path: P) -> Result<Self> {
+        let p = path.as_ref();
+        if p.is_file() {
+            let data = std::fs::read_to_string(p)?;
+            let cfg: McpConfigFile = serde_json::from_str(&data).map_err(|e| {
+                HgbError::Serialization(format!(
+                    "Failed to parse MCP config at {}: {}",
+                    p.display(),
+                    e
+                ))
+            })?;
+            Ok(cfg)
+        } else if p.is_dir() {
+            match Self::load_from_dir(p)? {
+                Some(cfg) => Ok(cfg),
+                None => Err(HgbError::Execution(format!(
+                    "No MCP config file (hagibis.mcp.json, .hgb/mcp.json, .mcp.json) found in directory '{}'",
+                    p.display()
+                ))),
+            }
+        } else {
+            Err(HgbError::Execution(format!(
+                "MCP config path '{}' does not exist",
+                p.display()
+            )))
+        }
+    }
+
+    /// Load default MCP configuration from directory, or return empty config if none found
+    pub fn load_default_or_empty<P: AsRef<Path>>(workspace_root: P) -> Result<Self> {
+        match Self::load_from_dir(workspace_root)? {
+            Some(cfg) => Ok(cfg),
+            None => Ok(Self::new()),
+        }
+    }
+
     /// Persist MCP configuration to specified path
     pub fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         let path = path.as_ref();
@@ -230,6 +267,16 @@ impl McpClient {
             }
         });
 
+        // Drain stderr worker to prevent pipe buffer deadlock
+        if let Some(stderr) = child.stderr.take() {
+            tokio::spawn(async move {
+                let mut reader = BufReader::new(stderr).lines();
+                while let Ok(Some(_line)) = reader.next_line().await {
+                    // Stderr drained
+                }
+            });
+        }
+
         // Stdout reader worker
         let pending_clone = Arc::clone(&pending_responses);
         let s_name = server_name.clone();
@@ -258,6 +305,14 @@ impl McpClient {
                         }
                     }
                 }
+            }
+            // Child process closed stdout (terminated or crashed)
+            let mut map = pending_clone.lock().await;
+            for (_id, sender) in map.drain() {
+                let _ = sender.send(Err(HgbError::Execution(format!(
+                    "MCP server '{}' process terminated or closed connection",
+                    s_name
+                ))));
             }
         });
 

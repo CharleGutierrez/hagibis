@@ -1153,18 +1153,13 @@ impl HagibisDaemon {
             // --- Superpowers Vibe Coding Handlers ---
             // 1. Universal MCP Client
             HgbRequest::McpListTools { config_path } => {
-                let cfg = if let Some(ref p) = config_path {
-                    let path = Path::new(p);
-                    if path.is_file() {
-                        match std::fs::read_to_string(path) {
-                            Ok(data) => serde_json::from_str(&data).unwrap_or_else(|_| McpConfigFile::new()),
-                            Err(_) => McpConfigFile::new(),
-                        }
-                    } else {
-                        McpConfigFile::load_from_dir(path).unwrap_or(None).unwrap_or_else(McpConfigFile::new)
-                    }
+                let cfg = match if let Some(ref p) = config_path {
+                    McpConfigFile::load_from_path(p)
                 } else {
-                    McpConfigFile::load_from_dir(".").unwrap_or(None).unwrap_or_else(McpConfigFile::new)
+                    McpConfigFile::load_default_or_empty(".")
+                } {
+                    Ok(c) => c,
+                    Err(e) => return HgbResponse::Error(format!("Failed to load MCP config: {}", e)),
                 };
 
                 let mut all_tools = Vec::new();
@@ -1176,34 +1171,37 @@ impl HagibisDaemon {
                         if let Ok(tools) = client.list_tools().await {
                             all_tools.extend(tools);
                         }
+                        client.close().await;
                     }
                 }
                 HgbResponse::McpToolsList(all_tools)
             }
             HgbRequest::McpCallTool { server_name, tool_name, arguments, config_path } => {
-                let cfg = if let Some(ref p) = config_path {
-                    let path = Path::new(p);
-                    if path.is_file() {
-                        match std::fs::read_to_string(path) {
-                            Ok(data) => serde_json::from_str(&data).unwrap_or_else(|_| McpConfigFile::new()),
-                            Err(_) => McpConfigFile::new(),
-                        }
-                    } else {
-                        McpConfigFile::load_from_dir(path).unwrap_or(None).unwrap_or_else(McpConfigFile::new)
-                    }
+                let cfg = match if let Some(ref p) = config_path {
+                    McpConfigFile::load_from_path(p)
                 } else {
-                    McpConfigFile::load_from_dir(".").unwrap_or(None).unwrap_or_else(McpConfigFile::new)
+                    McpConfigFile::load_default_or_empty(".")
+                } {
+                    Ok(c) => c,
+                    Err(e) => return HgbResponse::Error(format!("Failed to load MCP config: {}", e)),
                 };
 
                 let server_cfg = match cfg.mcp_servers.get(&server_name) {
                     Some(s) => s,
                     None => return HgbResponse::Error(format!("MCP Server '{}' not found in configuration", server_name)),
                 };
+                if server_cfg.disabled {
+                    return HgbResponse::Error(format!("MCP Server '{}' is disabled in configuration", server_name));
+                }
                 match McpClient::spawn_and_handshake(&server_name, server_cfg, None).await {
-                    Ok(client) => match client.call_tool(&tool_name, arguments).await {
-                        Ok(val) => HgbResponse::McpToolCallResult(val),
-                        Err(e) => HgbResponse::Error(format!("MCP tool execution failed: {}", e)),
-                    },
+                    Ok(client) => {
+                        let res = client.call_tool(&tool_name, arguments).await;
+                        client.close().await;
+                        match res {
+                            Ok(val) => HgbResponse::McpToolCallResult(val),
+                            Err(e) => HgbResponse::Error(format!("MCP tool execution failed: {}", e)),
+                        }
+                    }
                     Err(e) => HgbResponse::Error(format!("Failed to connect to MCP server '{}': {}", server_name, e)),
                 }
             }

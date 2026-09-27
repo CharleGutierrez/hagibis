@@ -1879,18 +1879,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             match action {
                 McpSubcommand::List { config } => {
                     let resp = repl_helper.dispatch(HgbRequest::McpListTools { config_path: config }).await;
+                    let is_err = matches!(resp, HgbResponse::Error(_));
                     repl_helper.render_response(resp);
+                    if is_err {
+                        std::process::exit(1);
+                    }
                 }
                 McpSubcommand::Call { server, tool, args, config } => {
-                    let parsed_args: serde_json::Value = serde_json::from_str(&args)
-                        .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+                    let parsed_args: serde_json::Value = match serde_json::from_str(&args) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            eprintln!("{} Invalid JSON arguments: {}", "✖".red().bold(), e);
+                            std::process::exit(1);
+                        }
+                    };
                     let resp = repl_helper.dispatch(HgbRequest::McpCallTool {
                         server_name: server,
                         tool_name: tool,
                         arguments: parsed_args,
                         config_path: config,
                     }).await;
+                    let is_err = matches!(resp, HgbResponse::Error(_));
                     repl_helper.render_response(resp);
+                    if is_err {
+                        std::process::exit(1);
+                    }
                 }
             }
             Ok(())
