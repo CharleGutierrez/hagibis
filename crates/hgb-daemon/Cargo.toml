@@ -20,4 +20,5 @@ bincode = { workspace = true }
 chrono = { workspace = true }
 colored = { workspace = true }
 unicode-width = { workspace = true }
+clap = { workspace = true }
 thiserror = { workspace = true }
