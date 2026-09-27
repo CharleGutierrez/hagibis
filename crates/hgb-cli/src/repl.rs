@@ -1260,6 +1260,14 @@ impl HagibisRepl {
             }
         }
 
+        if let Some(ref m) = self.model {
+            if hgb_core::OllamaProvider::is_ollama_model(m) && !hgb_core::OllamaProvider::is_installed_model(m) {
+                if let Some(resolved) = hgb_core::validate_and_resolve_active_model(Some(m)) {
+                    self.model = Some(resolved);
+                }
+            }
+        }
+
         Self::print_banner_with_model(self.model.as_deref());
 
         let mut editor = ReplEditor::new();

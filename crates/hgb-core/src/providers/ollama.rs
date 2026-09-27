@@ -143,7 +143,7 @@ pub struct OllamaTagsResponse {
     pub models: Vec<OllamaModelTag>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 struct OllamaChatRequest<'a> {
     model: &'a str,
     messages: Vec<OllamaChatMessage>,
@@ -283,19 +283,24 @@ impl OllamaProvider {
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
 
-        let model = default_model
-            .or_else(|| std::env::var("OLLAMA_MODEL").ok())
-            .unwrap_or_else(|| {
-                // Check currently installed models in Ollama dynamically
-                let installed = Self::installed_model_names();
-                if let Some(coder) = installed.iter().find(|m| m.contains("coder")) {
-                    coder.clone()
-                } else if let Some(first) = installed.first() {
-                    first.clone()
-                } else {
-                    "qwen2.5-coder:1.5b".to_string()
-                }
-            });
+        let model = if let Some(ref explicit) = default_model {
+            explicit
+                .strip_prefix("ollama/")
+                .or_else(|| explicit.strip_prefix("local/"))
+                .unwrap_or(explicit)
+                .to_string()
+        } else if let Ok(env_m) = std::env::var("OLLAMA_MODEL") {
+            env_m
+        } else {
+            let installed = Self::installed_model_names();
+            if let Some(coder) = installed.iter().find(|m| m.contains("coder")) {
+                coder.clone()
+            } else if let Some(first) = installed.first() {
+                first.clone()
+            } else {
+                "qwen2.5-coder:7b".to_string()
+            }
+        };
 
         Self {
             base_url: clean_base,
@@ -343,7 +348,7 @@ impl OllamaProvider {
                 } else if let Some(first) = models.first() {
                     first.clone()
                 } else {
-                    "qwen2.5-coder:1.5b".to_string()
+                    "qwen2.5-coder:7b".to_string()
                 }
             };
             Some(Self::new(Some(host), Some(default_model)))
@@ -369,10 +374,10 @@ impl OllamaProvider {
             } else if let Some(first) = models.first() {
                 first.clone()
             } else {
-                "qwen2.5-coder:1.5b".to_string()
+                "qwen2.5-coder:7b".to_string()
             }
         } else {
-            "qwen2.5-coder:1.5b".to_string()
+            "qwen2.5-coder:7b".to_string()
         };
 
         prov.default_model = default_model;
@@ -521,6 +526,41 @@ impl OllamaProvider {
         }
     }
 
+    /// Resolve requested model name into an actually installed local model or clean requested name.
+    /// If the requested model is not installed in Ollama, automatically finds the closest installed
+    /// local model (e.g. `qwen2.5-coder:7b` when `qwen2.5-coder:1.5b` was requested) to prevent 404 crashes!
+    pub fn resolve_target_model(&self, requested: Option<&str>) -> String {
+        let requested_raw = requested.unwrap_or(&self.default_model);
+        let requested_clean = self.sanitize_model_name(Some(requested_raw)).to_string();
+
+        if Self::is_installed_model(&requested_clean) || Self::is_installed_model(requested_raw) {
+            return requested_clean;
+        }
+
+        let installed = Self::installed_model_names();
+        if installed.is_empty() {
+            return requested_clean;
+        }
+
+        // Try to find closest match in same family (e.g. qwen2.5-coder)
+        let family_prefix = requested_clean.split(':').next().unwrap_or(&requested_clean);
+        if let Some(m) = installed.iter().find(|m| m.contains(family_prefix)) {
+            return m.clone();
+        }
+
+        // Try to find a coder model
+        if let Some(m) = installed.iter().find(|m| m.contains("coder")) {
+            return m.clone();
+        }
+
+        // Fallback to default_model or first installed
+        if Self::is_installed_model(&self.default_model) {
+            self.default_model.clone()
+        } else {
+            installed[0].clone()
+        }
+    }
+
     /// Dynamically construct Ollama inference options from environment variables or host defaults:
     /// - `OLLAMA_NUM_CTX`: Context window length (default: 4096+ or model default)
     /// - `OLLAMA_NUM_THREAD`: Hardware threads for CPU inference (default: all available physical threads)
@@ -663,7 +703,8 @@ impl OllamaProvider {
 
     /// Execute completion query against Ollama /api/chat (with /api/generate fallback)
     pub async fn complete_prompt(&self, prompt: &str, model: Option<&str>) -> Result<String> {
-        let effective_model = self.sanitize_model_name(model);
+        let resolved_model_str = self.resolve_target_model(model);
+        let effective_model = resolved_model_str.as_str();
         let endpoint = format!("{}/api/chat", self.base_url);
 
         let mut headers = HeaderMap::new();
@@ -704,13 +745,37 @@ impl OllamaProvider {
                     }
                 }
 
-                // If chat returned 404 or bad request, fallback to /api/generate
                 let status_code = resp.status();
+                let error_text = resp.text().await.unwrap_or_default();
+
+                // If model not found (404), trigger smart auto-recovery with installed models
                 if status_code.as_u16() == 404 {
+                    if error_text.contains("not found") {
+                        let installed = Self::installed_model_names();
+                        if let Some(fallback_model) = installed.iter().find(|m| m.as_str() != effective_model) {
+                            let mut retry_payload = payload.clone();
+                            retry_payload.model = fallback_model.as_str();
+                            if let Ok(retry_resp) = self.client.post(&endpoint).headers(headers.clone()).json(&retry_payload).send().await {
+                                if retry_resp.status().is_success() {
+                                    if let Ok(chat_resp) = retry_resp.json::<OllamaChatResponse>().await {
+                                        if let Some(msg) = chat_resp.message {
+                                            let _ = crate::persist_active_model(fallback_model);
+                                            return Ok(msg.content);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        return Err(HgbError::Provider(format!(
+                            "Local Ollama model '{}' is not installed.\nInstalled models: {:?}\nRun 'ollama pull {}' in your terminal or switch models with '/model <name>'.",
+                            effective_model, installed, effective_model
+                        )));
+                    }
+
+                    // If /api/chat not supported, fallback to /api/generate
                     return self.generate_fallback(prompt, effective_model).await;
                 }
 
-                let error_text = resp.text().await.unwrap_or_default();
                 Err(HgbError::Provider(format!(
                     "Ollama API error (HTTP {}): {}",
                     status_code, error_text
@@ -751,6 +816,13 @@ impl OllamaProvider {
         if !resp.status().is_success() {
             let status = resp.status();
             let err = resp.text().await.unwrap_or_default();
+            if status.as_u16() == 404 && err.contains("not found") {
+                let installed = Self::installed_model_names();
+                return Err(HgbError::Provider(format!(
+                    "Local Ollama model '{}' is not installed.\nInstalled models: {:?}\nRun 'ollama pull {}' in your terminal or switch models with '/model <name>'.",
+                    model, installed, model
+                )));
+            }
             return Err(HgbError::Provider(format!("Ollama generate error {}: {}", status, err)));
         }
 
@@ -922,4 +994,33 @@ mod tests {
         assert!(OllamaProvider::is_ollama_model("gguf/finetuned.gguf"));
         assert!(OllamaProvider::is_ollama_model("hf/meta-llama/Llama-3.2-1B-Instruct"));
     }
+
+    #[test]
+    fn test_resolve_target_model_with_uninstalled_model() {
+        if OllamaProvider::is_available() {
+            let prov = OllamaProvider::new(None, None);
+            let installed = OllamaProvider::installed_model_names();
+            if !installed.is_empty() {
+                // Requesting an uninstalled model must resolve to an installed model!
+                let resolved = prov.resolve_target_model(Some("qwen2.5-coder:1.5b"));
+                assert!(installed.contains(&resolved), "Resolved model '{}' must be one of installed {:?}", resolved, installed);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_uninstalled_model_query_auto_recovery() {
+        if OllamaProvider::is_available() {
+            let prov = OllamaProvider::new(None, None);
+            let installed = OllamaProvider::installed_model_names();
+            if !installed.is_empty() {
+                // Explicitly send query with the model from the user's error screenshot!
+                let result = prov.complete_prompt("respond with exactly PONG", Some("qwen2.5-coder:1.5b")).await;
+                assert!(result.is_ok(), "Expected query with uninstalled model to auto-resolve or recover, but got: {:?}", result.err());
+                let resp = result.unwrap();
+                assert!(!resp.trim().is_empty());
+            }
+        }
+    }
 }
+

@@ -164,4 +164,101 @@ pub fn clear_persisted_active_model() {
     let _ = std::fs::remove_file(std::path::PathBuf::from(".hgb").join("active_model"));
 }
 
+/// Validate and dynamically resolve an active model preference against actual installed and available providers.
+/// - If a local Ollama model is requested but not installed, auto-resolves to the best available installed Ollama model
+///   (prioritizing coder models like `qwen2.5-coder:7b`).
+/// - If Ollama has no models or is offline, seamlessly resolves to `gemini-2.5-flash` if Google credentials are ready.
+/// - Automatically repairs `.hgb/active_model` to prevent subsequent failures.
+pub fn validate_and_resolve_active_model(raw_model: Option<&str>) -> Option<String> {
+    let raw = match raw_model {
+        Some(m) if !m.trim().is_empty() => m.trim(),
+        _ => return None,
+    };
 
+    // If it's a cloud model (Gemini), it's valid
+    if raw.contains("gemini") || raw.contains("flash") || raw.contains("pro") {
+        return Some(raw.to_string());
+    }
+
+    // If it's a local / Ollama model
+    if crate::providers::OllamaProvider::is_ollama_model(raw) {
+        if crate::providers::OllamaProvider::is_available() {
+            let installed = crate::providers::OllamaProvider::installed_model_names();
+            if !installed.is_empty() {
+                // If the exact model is installed, use it
+                if crate::providers::OllamaProvider::is_installed_model(raw) {
+                    return Some(raw.to_string());
+                }
+                // If not installed, look for best installed alternative
+                let clean = raw
+                    .strip_prefix("ollama/")
+                    .or_else(|| raw.strip_prefix("local/"))
+                    .unwrap_or(raw);
+
+                // Check for match in same family (e.g. qwen2.5-coder)
+                let base_family = clean.split(':').next().unwrap_or(clean);
+                let fallback = installed.iter()
+                    .find(|m| m.contains(base_family))
+                    .or_else(|| installed.iter().find(|m| m.contains("coder")))
+                    .or_else(|| installed.first())
+                    .cloned();
+
+                if let Some(ref alt) = fallback {
+                    let resolved = if raw.starts_with("ollama/") {
+                        format!("ollama/{}", alt)
+                    } else {
+                        alt.clone()
+                    };
+                    let _ = persist_active_model(&resolved);
+                    return Some(resolved);
+                }
+            }
+        }
+        // If Ollama is offline or has no models, check if Gemini is available
+        if crate::providers::GeminiProvider::is_available() {
+            let _ = persist_active_model("gemini-2.5-flash");
+            return Some("gemini-2.5-flash".to_string());
+        }
+    }
+
+    Some(raw.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_and_resolve_cloud_models() {
+        assert_eq!(
+            validate_and_resolve_active_model(Some("gemini-2.5-flash")),
+            Some("gemini-2.5-flash".to_string())
+        );
+        assert_eq!(
+            validate_and_resolve_active_model(Some("gemini-2.5-pro")),
+            Some("gemini-2.5-pro".to_string())
+        );
+        assert_eq!(validate_and_resolve_active_model(None), None);
+        assert_eq!(validate_and_resolve_active_model(Some("   ")), None);
+    }
+
+    #[test]
+    fn test_validate_and_resolve_uninstalled_ollama_model() {
+        if providers::OllamaProvider::is_available() {
+            let installed = providers::OllamaProvider::installed_model_names();
+            if !installed.is_empty() {
+                // Request a model that definitely does NOT exist on the machine
+                let resolved = validate_and_resolve_active_model(Some("qwen2.5-coder:1.5b"));
+                assert!(resolved.is_some());
+                let res_str = resolved.unwrap();
+                // Must resolve to one of the actually installed models!
+                assert!(
+                    installed.contains(&res_str),
+                    "Expected resolved model '{}' to be one of installed: {:?}",
+                    res_str,
+                    installed
+                );
+            }
+        }
+    }
+}

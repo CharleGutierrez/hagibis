@@ -209,15 +209,24 @@ impl HagibisDaemon {
                 let start = std::time::Instant::now();
                 let active = state.active_model.read().await.clone();
                 let chosen = model.as_deref().unwrap_or(&active);
-                let req_model = if chosen == "auto" || chosen == "default" {
+                let raw_req_model = if chosen == "auto" || chosen == "default" {
                     &active
                 } else {
                     chosen
                 };
+                let req_model = hgb_core::validate_and_resolve_active_model(Some(raw_req_model))
+                    .unwrap_or_else(|| raw_req_model.to_string());
+
+                // If resolved model differs from active, heal state and persisted model
+                if req_model != active {
+                    let mut w = state.active_model.write().await;
+                    *w = req_model.clone();
+                    let _ = hgb_core::persist_active_model(&req_model);
+                }
 
                 // Dual-Brain Check:
                 // 1. Explicit local Ollama model OR fallback if Gemini is unconfigured
-                let is_ollama_explicit = hgb_core::OllamaProvider::is_ollama_model(req_model);
+                let is_ollama_explicit = hgb_core::OllamaProvider::is_ollama_model(&req_model);
                 let fallback_to_ollama = (req_model == "auto" || req_model == "default" || req_model == "gemini-2.5-flash") && !hgb_core::GeminiProvider::is_available();
 
                 if (is_ollama_explicit || fallback_to_ollama) && hgb_core::OllamaProvider::is_available() {
@@ -225,7 +234,7 @@ impl HagibisDaemon {
                         let model_arg = if req_model == "auto" || req_model == "default" || (req_model == "gemini-2.5-flash" && fallback_to_ollama) {
                             None
                         } else {
-                            Some(req_model)
+                            Some(req_model.as_str())
                         };
                         match prov.complete(&prompt, model_arg).await {
                             Ok(text) => {
@@ -259,6 +268,19 @@ impl HagibisDaemon {
                                 };
                             }
                             Err(e) => {
+                                // Automatic Dual-Brain failover: If Local Ollama fails (e.g. 404, uninstalled model, offline) and Gemini is available, failover to Gemini!
+                                if hgb_core::GeminiProvider::is_available() {
+                                    if let Some(gemini_prov) = hgb_core::GeminiProvider::auto_discover() {
+                                        if let Ok(text) = gemini_prov.complete(&prompt, None).await {
+                                            let duration_ms = start.elapsed().as_millis() as u64;
+                                            return HgbResponse::Complete {
+                                                output: format!("⚠️ [Local Ollama Error: {} -> Failover to Cloud Gemini]\n\n{}", e, text),
+                                                tokens_used: prompt.len() / 4,
+                                                duration_ms,
+                                            };
+                                        }
+                                    }
+                                }
                                 return HgbResponse::Error(format!("Local Ollama API Error: {}", e));
                             }
                         }
@@ -269,7 +291,7 @@ impl HagibisDaemon {
                 let is_gemini = req_model.contains("gemini") || req_model.contains("flash") || req_model.contains("pro") || req_model == "auto";
                 if is_gemini && hgb_core::GeminiProvider::is_available() {
                     if let Some(prov) = hgb_core::GeminiProvider::auto_discover() {
-                        match prov.complete(&prompt, Some(req_model)).await {
+                        match prov.complete(&prompt, Some(req_model.as_str())).await {
                             Ok(text) => {
                                 let duration_ms = start.elapsed().as_millis() as u64;
                                 return HgbResponse::Complete {

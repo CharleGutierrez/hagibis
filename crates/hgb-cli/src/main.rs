@@ -826,8 +826,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Classic | Commands::Chat => unreachable!(),
         Commands::Cockpit { .. } => unreachable!(),
         Commands::Run { text, model, provider } => {
-            let active_model_str = if let Some(ref m) = model {
+            let raw_model = if let Some(ref m) = model {
                 m.clone()
+            } else if let Some(persisted) = hgb_core::load_active_model() {
+                persisted
             } else if !hgb_core::GeminiProvider::is_available() && hgb_core::OllamaProvider::is_available() {
                 if let Some(prov) = hgb_core::OllamaProvider::auto_discover() {
                     prov.default_model().to_string()
@@ -837,6 +839,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 "gemini-2.5-flash".to_string()
             };
+            let active_model_str = hgb_core::validate_and_resolve_active_model(Some(&raw_model)).unwrap_or(raw_model);
             let active_model = active_model_str.as_str();
             let is_local = hgb_core::OllamaProvider::is_ollama_model(active_model);
             if is_local {
@@ -847,7 +850,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let t0 = std::time::Instant::now();
             let req = HgbRequest::Prompt {
                 prompt: text,
-                model: model.clone(),
+                model: Some(active_model_str.clone()),
                 provider,
                 stream: false,
             };
