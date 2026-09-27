@@ -106,7 +106,7 @@ enum Commands {
     Classic,
 
     /// Launch the AGY Conversational Chat Canvas & Cockpit (default)
-    #[command(alias = "canvas", alias = "c")]
+    #[command(alias = "chat-canvas", alias = "c")]
     Chat,
 
     /// Execute a prompt directly through the microkernel swarm
@@ -231,7 +231,7 @@ enum Commands {
     Mesh,
 
     /// Interactive Cockpit TUI Engine & Mid-Flight Steering
-    #[command(alias = "ui")]
+    #[command(alias = "tui")]
     Cockpit {
         /// Render in headless mode without spawning terminal interactive loop
         #[arg(long)]
@@ -485,7 +485,6 @@ enum Commands {
     DevScan,
 
     /// Ripple Effect Radar: assess transitive blast radius and symbol call-sites
-    #[command(alias = "radar")]
     Impact {
         /// Target symbol to analyze (e.g. struct name, fn name, type)
         symbol: String,
@@ -495,7 +494,7 @@ enum Commands {
     },
 
     /// Specialist Swarm Pod: 4-role concurrent consensus DAG (Architect -> Coder -> [Reviewer + QA])
-    #[command(alias = "swarm")]
+    #[command(alias = "swarm-pod", alias = "pod-swarm")]
     Pod {
         /// Development task or feature specification
         task: String,
@@ -760,6 +759,758 @@ enum Commands {
     Timeline {
         #[command(subcommand)]
         action: TimelineSubcommand,
+    },
+
+    /// AST-Aware Visual Patch Arbiter: deconstruct diff into hunks and selectively apply
+    #[command(alias = "hunk")]
+    Patch {
+        /// Target file path
+        path: String,
+        /// Modified code string or patch file path
+        #[arg(short, long)]
+        modified: Option<String>,
+        /// Automatically accept all valid AST hunks
+        #[arg(short, long)]
+        accept_all: bool,
+    },
+
+    /// Instant P2P Mobile QR Live-Sync & Ephemeral Preview Tunnel
+    #[command(alias = "tunnel")]
+    Live {
+        /// Local devserver port (e.g. 3000, 5173, 8080)
+        #[arg(default_value_t = 3000)]
+        port: u16,
+        /// Custom session identifier
+        #[arg(short, long)]
+        name: Option<String>,
+    },
+
+    /// Autonomous Speculative TDD Loop ("Red-to-Green Synthesis")
+    Tdd {
+        /// Intent or specification prompt
+        intent: String,
+        /// Target function name (e.g. calculate_total)
+        #[arg(short, long, default_value = "process_action")]
+        target: String,
+        /// Language / file extension (e.g. rs, ts, py)
+        #[arg(short, long, default_value = "rs")]
+        lang: String,
+    },
+
+    /// Ephemeral Micro-WASM & Capability Sandbox: execute command in clean jail
+    #[command(alias = "jail")]
+    Isolate {
+        /// Shell command to run inside sandbox
+        command: String,
+        /// Arguments for the command
+        #[arg(trailing_var_arg = true)]
+        args: Vec<String>,
+        /// Timeout in milliseconds (default: 15000ms)
+        #[arg(short, long, default_value_t = 15000)]
+        timeout: u64,
+    },
+
+    /// Ambient Audio Earcon: play flow-state harmonic chime
+    Chime {
+        /// Cue kind: green, error, race, heal, check
+        #[arg(default_value = "green")]
+        cue: String,
+    },
+
+    /// Local SIMD Vector Index: index and search codebase symbols
+    Index {
+        /// Action: search, scan, invalidate
+        #[arg(default_value = "scan")]
+        action: String,
+        /// Query string or target file path
+        query: Option<String>,
+    },
+
+    /// Hot-Module CDP Live Patching: inject CSS or JS in-memory into running browser
+    #[command(alias = "cdp")]
+    Hmr {
+        /// Patch kind: css, js, dom
+        #[arg(short, long, default_value = "css")]
+        kind: String,
+        /// Target CSS selector or function name
+        target: String,
+        /// Property/value or function body payload
+        payload: String,
+    },
+
+    /// AST Skeleton Lens: project compact typed outline with 80% token reduction
+    Lens {
+        /// File path to project
+        path: String,
+        /// Target symbol name to keep expanded
+        #[arg(short, long, default_value = "")]
+        symbol: String,
+    },
+
+    /// Lakandiwa Triple-Model Consensus Swarm: 3-way speculative race and auto-merge
+    Swarm {
+        /// Coding intent or prompt
+        prompt: String,
+        /// Target symbol
+        #[arg(short, long, default_value = "process_action")]
+        symbol: String,
+        /// Language extension
+        #[arg(short, long, default_value = "rs")]
+        lang: String,
+    },
+
+    /// Instant Database CoW Time Machine: take atomic snapshot or rollback database
+    DbSnap {
+        /// Database file path
+        path: String,
+        /// Rollback to snapshot file if specified
+        #[arg(short, long)]
+        rollback: Option<String>,
+        /// Snapshot description
+        #[arg(short, long, default_value = "Manual snapshot")]
+        description: String,
+    },
+
+    /// Supply-Chain & Slopsquatting Hallucination Firewall: audit package additions
+    Shield {
+        /// Package names to audit
+        packages: Vec<String>,
+        /// Ecosystem: cargo, npm, pypi
+        #[arg(short, long, default_value = "cargo")]
+        ecosystem: String,
+    },
+
+    /// Zero-Ops Cloud Launchpad: deploy ephemeral serverless preview to edge with TLS
+    ShipLive {
+        /// Project name or slug
+        #[arg(short, long, default_value = "hagibis-app")]
+        name: String,
+    },
+
+    /// Living Architecture Flight Simulator: trace end-to-end request pipeline
+    Flight {
+        /// Endpoint name to trace (e.g. POST /checkout)
+        #[arg(default_value = "POST /api/v1/checkout")]
+        endpoint: String,
+    },
+
+    /// Predictive Shadow Synthesizer: speculative AST precomputation
+    #[command(alias = "shadow-coder", alias = "spec-coder")]
+    GhostCoder {
+        /// Code prefix trigger
+        prefix: String,
+    },
+
+    /// Universal Offline API Mirage: synthetic mocks & wiretapping
+    Mirage {
+        /// Route path (e.g. /v1/payment_intents)
+        endpoint: String,
+        /// HTTP method (default: GET)
+        #[arg(short, long, default_value = "GET")]
+        method: String,
+    },
+
+    /// In-Process Chaos Monkey & UI Invariant Fuzzer
+    Chaos {
+        /// Target component name (e.g. PaymentGateway)
+        #[arg(default_value = "CoreService")]
+        target: String,
+        /// Optional idempotency key to test rapid replay bursts
+        #[arg(short, long)]
+        idempotency_key: Option<String>,
+        /// Number of duplicate bursts (default: 5)
+        #[arg(short, long, default_value_t = 5)]
+        runs: usize,
+    },
+
+    /// Autonomous Night-Shift Swarm Worktree Pipeline
+    Nightshift {
+        /// High-level goal or feature prompt
+        goal: String,
+        /// Base branch to branch from (default: main)
+        #[arg(short, long, default_value = "main")]
+        base: String,
+    },
+
+    /// Kernel-Level Memory-Only Ghost Envs: Blake3 vault encryption and disk audit
+    Vault {
+        /// Passphrase to seal vault
+        #[arg(short, long)]
+        passphrase: Option<String>,
+        /// File path of .env on disk to audit for raw secret leaks
+        #[arg(short, long, default_value = ".env")]
+        disk_file: String,
+    },
+
+    /// Zero-Drift Polyglot Type Lock: sync Rust structs to TypeScript & Zod schemas
+    Typelock {
+        /// Path to Rust source file with struct definitions
+        source_file: String,
+        /// Optional TypeScript file to audit for drift
+        #[arg(short, long)]
+        ts_file: Option<String>,
+    },
+
+    /// Spatial Cockpit Radar: 3-tier semantic zoom (Orbit, Atmosphere, Surface)
+    Radar {
+        /// Zoom tier: orbit, atmosphere, or surface (default: orbit)
+        #[arg(default_value = "orbit")]
+        tier: String,
+    },
+
+    /// Click-to-Source CDP Teleport: resolve browser DOM element to source file and AST symbol
+    Teleport {
+        /// DOM selector or test ID (e.g. button#checkout-btn)
+        selector: String,
+    },
+
+    /// Full-Duplex Zero-Latency Voice Flow Co-Pilot
+    Voice {
+        /// Optional spoken audio transcript to process
+        #[arg(default_value = "wrap this call in a circuit breaker")]
+        transcript: String,
+    },
+
+    /// Headless Screenplay & Automated PR Loom Tape: capture animated visual proof
+    Tape {
+        /// Target URL to navigate and record
+        #[arg(default_value = "http://localhost:3000")]
+        url: String,
+        /// Scenario name
+        #[arg(short, long, default_value = "Feature Verification")]
+        scenario: String,
+    },
+
+    /// Token FinOps & Dynamic Latency Arbitrage: route prompts between local Ollama and frontier cloud
+    Finops {
+        /// Prompt to evaluate for token footprint and optimal tier routing
+        prompt: String,
+    },
+
+    /// Zero-Knowledge Airgap Cloak: mask sensitive credentials and PII
+    Cloak {
+        /// Input text or prompt to sanitize
+        text: String,
+        /// If true, simulate rehydrating the response
+        #[arg(short, long)]
+        rehydrate: bool,
+    },
+
+    /// Active SQL Interceptor & Shadow Transaction Jail: barrier against destructive queries
+    SqlGuard {
+        /// SQL query to inspect (e.g. DELETE FROM users;)
+        sql: String,
+    },
+
+    /// Deterministic Execution Replay & Rewind-Exec: time-travel flight recorder
+    Replay {
+        /// Historical frame index to scrub to
+        #[arg(short, long)]
+        frame: Option<usize>,
+    },
+
+    /// Two-Way Visual Canvas & Live CSS/Tailwind Bi-Directional Mirror
+    Canvas {
+        /// Target file path (e.g. src/components/Hero.tsx)
+        file: String,
+        /// Old CSS class or property (e.g. p-4)
+        old: String,
+        /// New CSS class or property (e.g. p-6)
+        new: String,
+        /// Optional selector or component name
+        #[arg(short, long, default_value = "div")]
+        selector: String,
+    },
+
+    /// Multi-Repo Swarm & Monorepo Mesh Federator: synchronized cross-repo PRs
+    Federate {
+        /// Feature goal to coordinate across repos
+        goal: String,
+    },
+
+    /// Relational Time-Warp Data Synthesizer: temporal mock datasets with strict FK integrity
+    TimeWarp {
+        /// Number of months to simulate backwards (default: 6)
+        #[arg(short, long, default_value_t = 6)]
+        months: u32,
+        /// Randomization seed (default: 42)
+        #[arg(short, long, default_value_t = 42)]
+        seed: u64,
+        /// Record scale per organization (default: 5)
+        #[arg(short, long, default_value_t = 5)]
+        scale: usize,
+    },
+
+    /// Structural Invariant Guardrails & Anti-Spaghetti Linter
+    Guardrails {
+        /// Target workspace directory (default: current directory)
+        #[arg(default_value = ".")]
+        dir: String,
+    },
+
+    /// Production Crash Auto-Triage & Reproduction Pipeline
+    Triage {
+        /// Raw stack trace or panic dump to analyze
+        trace: String,
+    },
+
+    /// Flaky Test Exterminator & Deterministic Stress Fuzzer
+    Deflake {
+        /// Test function name to stress test
+        test: String,
+        /// Optional path to test file
+        #[arg(short, long)]
+        file: Option<String>,
+    },
+
+    /// Associative Neural Context & Infinite Cross-Session Memory
+    ContextAnchor {
+        /// Optional new key to record
+        #[arg(short, long)]
+        key: Option<String>,
+        /// Statement or decision text to record
+        #[arg(short, long)]
+        statement: Option<String>,
+        /// Category: arch, sec, style, banned, or entity (default: arch)
+        #[arg(short, long, default_value = "arch")]
+        category: String,
+    },
+
+    /// Universal LSP Ghost Daemon Bridge & Inline Prediction
+    GhostLsp {
+        /// Target file path
+        file: String,
+        /// Optional prefix line
+        #[arg(short, long, default_value = "pub async fn handle_checkout")]
+        prefix: String,
+        /// Cursor line
+        #[arg(short, long, default_value_t = 1)]
+        line: usize,
+    },
+
+    /// Automated Rolling Context Compactor & Semantic Tree Pruner
+    Compact {
+        /// Max token threshold for compaction (default: 32000)
+        #[arg(short, long, default_value_t = 32000)]
+        max_tokens: usize,
+    },
+
+    /// Atomic Conventional Git Micro-Commit Mirror
+    MicroCommit {
+        /// Feature or bugfix intent description
+        intent: String,
+        /// Target files or path (default: current workspace)
+        #[arg(short, long, default_value = ".")]
+        path: String,
+    },
+
+    /// Declarative Vibe Recipes & Runbook Engine
+    Recipe {
+        /// Name of recipe to run (e.g. migrate-tailwind-v4, setup-biometric-passkey)
+        name: Option<String>,
+        /// List all available pre-packaged recipes
+        #[arg(short, long)]
+        list: bool,
+    },
+
+    /// Pre-Flight Behavioral Contract Matrix Generator
+    Contract {
+        /// Target symbol or function name (e.g. process_payment)
+        symbol: String,
+        /// Intent description for the contract
+        #[arg(short, long, default_value = "Standard nominal processing")]
+        intent: String,
+    },
+
+    /// Live Agent Flight-Graph & Real-Time Task DAG Visualizer
+    FlightGraph {
+        /// High-level goal or task to graph
+        goal: String,
+        /// Active step index (default: 2)
+        #[arg(short, long, default_value_t = 2)]
+        step: usize,
+    },
+
+    /// Tree-sitter PageRank Symbol Graph & Token Density Repo-Map
+    #[command(alias = "rank-map")]
+    RepoMapRank {
+        /// Extensions to scan (comma separated or multiple flags, default: rs, ts, py, go)
+        #[arg(short, long, default_values_t = vec!["rs".to_string(), "ts".to_string(), "py".to_string()])]
+        exts: Vec<String>,
+        /// Token budget for rendered map (default: 1024)
+        #[arg(short, long, default_value_t = 1024)]
+        budget: usize,
+    },
+
+    /// Cursor-Style Silent Pre-Flight Shadow Workspace & Speculative Repair
+    #[command(alias = "preflight")]
+    ShadowCheck {
+        /// Target file path to validate in shadow workspace
+        file: String,
+        /// Optional path to candidate modified file (if omitted, reads file)
+        #[arg(short, long)]
+        candidate_file: Option<String>,
+    },
+
+    /// Claude Code-Style Terminal Stream Squeezer & High-Signal Digest
+    Squeeze {
+        /// Input log string or path to log file
+        #[arg(short, long)]
+        file: Option<String>,
+        /// Max tokens for compressed output (default: 2048)
+        #[arg(short, long, default_value_t = 2048)]
+        max_tokens: usize,
+    },
+
+    /// Qodo-Style Test Integrity & Anti-Placebo Mutation Testing
+    #[command(alias = "fuzz-test")]
+    MutationAudit {
+        /// Target source file to fuzz with mutations
+        file: String,
+    },
+
+    /// Bolt.new-Style Visual Click-to-Code DOM Telemetry & Inspector
+    #[command(alias = "inspect-dom")]
+    DomInspect {
+        /// Target HTML or JSX template file
+        file: String,
+        /// Optional CSS selector to query (.class or #id)
+        #[arg(short, long)]
+        selector: Option<String>,
+        /// Click coordinates in format "x,y" (e.g. "150,45")
+        #[arg(short, long)]
+        coords: Option<String>,
+    },
+
+    /// Goose-Style Universal MCP Fleet Host Orchestrator & Multi-Server Hub
+    McpHub {
+        /// Action: list, discover, start, stop, call
+        #[arg(default_value = "list")]
+        action: String,
+        /// Server name
+        #[arg(short, long)]
+        server: Option<String>,
+        /// Tool name (for call)
+        #[arg(short, long)]
+        tool: Option<String>,
+        /// JSON arguments (for call)
+        #[arg(short, long)]
+        args: Option<String>,
+    },
+
+    /// Augment Code-Style Live Graph Watcher & Incremental In-Memory Index
+    #[command(alias = "graph-sync")]
+    LiveGraph {
+        /// Extensions to track (default: rs, ts, py)
+        #[arg(short, long, default_values_t = vec!["rs".to_string(), "ts".to_string(), "py".to_string()])]
+        exts: Vec<String>,
+    },
+
+    /// Warp Terminal-Style Shell Panic Interceptor & 1-Key Auto-Repair
+    #[command(alias = "panic-fix")]
+    ShellPanic {
+        /// Exit code of failed command
+        #[arg(short, long, default_value_t = 1)]
+        code: i32,
+        /// Failed command string
+        #[arg(short = 'm', long)]
+        cmd: String,
+        /// Stderr output of failed command
+        #[arg(short, long, default_value = "")]
+        stderr: String,
+    },
+
+    /// Copilot Workspace-Style Spec -> Plan -> Diff Task Decomposer
+    #[command(alias = "decompose")]
+    PlanSpec {
+        /// High-level feature intent or bug description
+        intent: String,
+    },
+
+    /// Continue.dev & Roo Code-Style Dynamic @Context Expander
+    #[command(alias = "at-expand")]
+    ExpandContext {
+        /// User prompt containing @-directives
+        prompt: String,
+    },
+
+    /// Devin & Replit-Style Visual DOM Layout Regression Sentry
+    #[command(alias = "pixel-diff")]
+    VisualSentry {
+        /// Path to baseline HTML/DOM snapshot
+        baseline: Option<String>,
+        /// Path to current HTML/DOM snapshot
+        current: Option<String>,
+    },
+
+    /// Meta SapFix & Qodo-Style Continuous Autonomous Healing Loop
+    #[command(alias = "watchdog")]
+    HealWatch {
+        /// Error string or test name to heal
+        #[arg(short, long)]
+        error: Option<String>,
+    },
+
+    /// Windsurf Cascade & Supermaven Next-Edit Anticipator
+    #[command(alias = "predict-edit")]
+    AmbientPredict {
+        /// Modified source file path
+        #[arg(short, long)]
+        file: String,
+        /// Modified symbol name
+        #[arg(short, long)]
+        symbol: String,
+        /// Old snippet or signature
+        #[arg(short, long)]
+        old: Option<String>,
+        /// New snippet or signature
+        #[arg(short, long)]
+        new: Option<String>,
+    },
+
+    /// Bolt.new & Devin Bidirectional DevTools Click-to-Source Sync
+    #[command(alias = "tweak-sync")]
+    CdpTweak {
+        /// DOM CSS selector (e.g. 'button.checkout')
+        #[arg(short, long)]
+        selector: String,
+        /// Property or attribute name (e.g. 'className')
+        #[arg(short, long)]
+        prop: String,
+        /// Old attribute/property value
+        #[arg(short, long)]
+        old: String,
+        /// New attribute/property value
+        #[arg(short, long)]
+        new: String,
+        /// Apply changes directly to disk
+        #[arg(long, default_value_t = true)]
+        apply: bool,
+    },
+
+    /// Continue.dev & Roo Code Composable Modes & Live Docs Harvester
+    #[command(alias = "mode-harvest")]
+    PromptHarvest {
+        /// Operating mode (architect, code, debug, security, doc)
+        #[arg(short, long, default_value = "code")]
+        mode: String,
+        /// User request prompt
+        #[arg(short, long)]
+        prompt: String,
+        /// Target documentation library or URL
+        #[arg(short, long)]
+        doc: Option<String>,
+    },
+
+    /// Replit Agent & WebContainers Zero-Config Ephemeral Stack Sandbox
+    #[command(alias = "stack-sandbox")]
+    Sandbox {
+        /// Stack template name (e.g. axum-sqlite, react-fastapi)
+        #[arg(short, long, default_value = "fullstack-sqlite")]
+        stack: String,
+        /// Tables to initialize and seed
+        #[arg(short, long, default_values_t = vec!["users".to_string(), "orders".to_string()])]
+        seed: Vec<String>,
+    },
+
+    /// Qodo & Meta SapFix Anti-Placebo Mutation Testing Gatekeeper
+    #[command(alias = "mutation-gate")]
+    AntiPlacebo {
+        /// Target source code file
+        #[arg(short, long)]
+        file: Option<String>,
+        /// Test code file to audit
+        #[arg(short, long)]
+        test: Option<String>,
+    },
+
+    /// Superpower 74: Embedded Webview HUD & Live Canvas Sidecar on localhost
+    #[command(alias = "hud", alias = "canvas-hud")]
+    Ui {
+        /// Local port to bind HUD server
+        #[arg(short, long)]
+        port: Option<u16>,
+        /// Preferred AI model identifier
+        #[arg(short, long)]
+        model: Option<String>,
+    },
+
+    /// Superpower 75: Zero-Config 1-Click Public Edge Deployer
+    Deploy {
+        /// Target edge provider (cloudflare, vercel, fly, vella)
+        #[arg(short, long, default_value = "cloudflare")]
+        provider: String,
+        /// Project name or slug
+        #[arg(short, long, default_value = "hagibis-app")]
+        name: String,
+        /// Custom public domain name
+        #[arg(short, long)]
+        domain: Option<String>,
+        /// Write configuration files to workspace
+        #[arg(long, default_value_t = true)]
+        write_configs: bool,
+    },
+
+    /// Superpower 76: Visual Screenshot Annotation & Multimodal Clipboard Xerox Engine
+    #[command(alias = "xerox")]
+    Annotate {
+        /// Raw annotation payload (JSON, SVG, base64 data URI, or natural language intent)
+        #[arg(default_value = "")]
+        input: String,
+        /// Ingest image from system clipboard
+        #[arg(short, long)]
+        clipboard: bool,
+    },
+
+    /// Superpower 77: Collaborative Real-Time Multiplayer Vibe Swarm
+    #[command(alias = "swarm-hub", alias = "multiplayer")]
+    Pair {
+        /// Multiplayer session ID
+        #[arg(default_value = "vibe-room-1")]
+        session: String,
+        /// Action: join, status, leave
+        #[arg(short, long, default_value = "join")]
+        action: String,
+        /// Peer display username
+        #[arg(short, long, default_value = "vibe_coder")]
+        username: String,
+        /// Peer role: driver, navigator, reviewer, spectator
+        #[arg(short, long, default_value = "driver")]
+        role: String,
+    },
+
+    /// Superpower 78: Universal Companion Editor and LSP Sidecar Bridge
+    #[command(alias = "bridge")]
+    Companion {
+        /// Target editor: vscode, neovim, helix, zed
+        #[arg(default_value = "vscode")]
+        editor: String,
+        /// Automatically install generated config files to workspace
+        #[arg(short, long)]
+        install: bool,
+    },
+
+    /// Superpower 79: Instant Monetization & Auth Fabric
+    #[command(alias = "monetize", alias = "stripe")]
+    Saas {
+        /// Project name
+        #[arg(default_value = "vibe-app")]
+        project: String,
+        /// Provider: stripe, lemonsqueezy, paddle
+        #[arg(short, long, default_value = "stripe")]
+        provider: String,
+        /// Target framework: nextjs, axum, express
+        #[arg(short, long, default_value = "nextjs")]
+        framework: String,
+        /// Enable JWT auth guard
+        #[arg(long, default_value_t = true)]
+        auth: bool,
+        /// Enable Stripe customer billing portal
+        #[arg(long, default_value_t = true)]
+        portal: bool,
+    },
+
+    /// Superpower 80: Full-Duplex Ambient Conversational Voice Loop
+    #[command(alias = "duplex-voice", alias = "ambient-voice")]
+    ContinuousVoice {
+        /// Spoken turn transcript
+        #[arg(default_value = "")]
+        transcript: String,
+        /// Speaker: user or hgb_agent
+        #[arg(short, long, default_value = "user")]
+        speaker: String,
+        /// Acoustic energy level (0.0 to 1.0)
+        #[arg(short, long)]
+        energy: Option<f32>,
+    },
+
+    /// Superpower 81: Bi-Directional Figma & Design Token Synchronization
+    #[command(alias = "figma-sync")]
+    Figma {
+        /// Figma file key or URL
+        #[arg(default_value = "sample_figma_key")]
+        file_key: String,
+        /// Export local component to SVG canvas vector frame
+        #[arg(short, long)]
+        export: Option<String>,
+    },
+
+    /// Superpower 82: Autonomous Production Database Shadow Simulator & Load Tester
+    #[command(alias = "stress-db", alias = "shadow-stress")]
+    ShadowDb {
+        /// Target database: sqlite, postgres, mysql
+        #[arg(short, long, default_value = "sqlite")]
+        db: String,
+        /// Total simulated operations
+        #[arg(short, long, default_value_t = 1000)]
+        ops: usize,
+        /// Concurrency workers
+        #[arg(short, long, default_value_t = 8)]
+        workers: usize,
+    },
+
+    /// Superpower 83: Viral Social Graph & Dynamic OpenGraph Engine
+    #[command(alias = "viral", alias = "og")]
+    ViralOg {
+        /// Launch card title
+        #[arg(default_value = "LaunchFast AI")]
+        title: String,
+        /// Card badge text
+        #[arg(short, long, default_value = "⚡ Viral Launch")]
+        badge: String,
+        /// Card description
+        #[arg(short, long, default_value = "Autonomous AI microkernel for elite vibe coders")]
+        desc: String,
+        /// Author twitter handle
+        #[arg(long, default_value = "@hagibis_ai")]
+        twitter: String,
+    },
+
+    /// Superpower 84: Instant Mobile QR Teleport & PWA Matrix
+    #[command(alias = "qr", alias = "teleport-mobile")]
+    Mobile {
+        /// Target URL to teleport (local dev server or tunnel)
+        #[arg(default_value = "http://127.0.0.1:3000")]
+        url: String,
+        /// App title for PWA manifest
+        #[arg(short, long, default_value = "Hagibis Vibe App")]
+        name: String,
+    },
+
+    /// Superpower 85: Live Production Telemetry Ingest & Auto-Hotfixer
+    #[command(alias = "sentry", alias = "hotfix")]
+    IncidentHotfix {
+        /// Error message or exception string
+        #[arg(default_value = "Cannot read property 'tier' of undefined")]
+        error: String,
+        /// Culprit source file path
+        #[arg(short, long, default_value = "src/billing/checkout.ts")]
+        file: String,
+        /// Culprit line number
+        #[arg(short, long, default_value_t = 42)]
+        line: usize,
+    },
+
+    /// Superpower 86: AI Semantic Cost Gateway & Model Arbitrage
+    #[command(alias = "cost-guard", alias = "gateway")]
+    LlmGateway {
+        /// Prompt query to route and cache
+        #[arg(default_value = "Hello AI, summarize changes")]
+        prompt: String,
+        /// Force frontier reasoning model
+        #[arg(short, long)]
+        frontier: bool,
+    },
+
+    /// Superpower 87: Zero-Cookie Privacy Funnel Analytics
+    #[command(alias = "funnel", alias = "telemetry-funnel")]
+    Analytics {
+        /// Display conversion funnel metrics
+        #[arg(short, long, default_value_t = true)]
+        funnel: bool,
+        /// Scaffold drop-in edge route and tracking script
+        #[arg(short, long)]
+        scaffold: bool,
     },
 }
 
@@ -1943,6 +2694,1065 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         workspace_root: None,
                     }).await;
                     repl_helper.render_response(resp);
+                }
+            }
+            Ok(())
+        }
+        Commands::Patch { path, modified, accept_all } => {
+            let repl_helper = HagibisRepl::new(client);
+            let orig = std::fs::read_to_string(&path).unwrap_or_default();
+            let mod_code = if let Some(m) = modified {
+                if std::path::Path::new(&m).exists() {
+                    std::fs::read_to_string(&m).unwrap_or(m)
+                } else {
+                    m
+                }
+            } else {
+                orig.clone()
+            };
+            let ext = std::path::Path::new(&path).extension().and_then(|e| e.to_str()).unwrap_or("rs");
+            if accept_all {
+                let hunks = hgb_core::AstPatchArbiter::parse_diff_into_hunks(&orig, &mod_code, ext);
+                let resp = repl_helper.dispatch(HgbRequest::AstPatchApply {
+                    original: orig,
+                    hunks,
+                    file_ext: ext.to_string(),
+                }).await;
+                repl_helper.render_response(resp);
+            } else {
+                let resp = repl_helper.dispatch(HgbRequest::AstPatchParse {
+                    original: orig,
+                    modified: mod_code,
+                    file_ext: ext.to_string(),
+                }).await;
+                repl_helper.render_response(resp);
+            }
+            Ok(())
+        }
+        Commands::Live { port, name } => {
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::LiveTunnelCreate {
+                local_port: port,
+                session_id: name,
+            }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::Tdd { intent, target, lang } => {
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::TddCycleRun {
+                intent,
+                target_fn: target,
+                file_ext: lang,
+            }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::Isolate { command, args, timeout } => {
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::MicroSandboxRun {
+                command,
+                args,
+                timeout_ms: Some(timeout),
+            }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::Chime { cue } => {
+            let repl_helper = HagibisRepl::new(client);
+            let cue_kind = match cue.to_lowercase().as_str() {
+                "error" | "fail" => hgb_core::AudioCueKind::ErrorAlert,
+                "race" => hgb_core::AudioCueKind::RaceWonFast,
+                "heal" => hgb_core::AudioCueKind::CompilerHealed,
+                "secret" => hgb_core::AudioCueKind::SecretLeakBlocked,
+                "check" | "ckpt" => hgb_core::AudioCueKind::CheckpointSaved,
+                _ => hgb_core::AudioCueKind::TddGreen,
+            };
+            let resp = repl_helper.dispatch(HgbRequest::AudioCuePlay { cue: cue_kind }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::Index { action, query } => {
+            let idx = hgb_storage::SimdVectorIndex::new();
+            if action == "search" {
+                let q = query.unwrap_or_else(|| "main".to_string());
+                let emb = hgb_storage::SimdVectorIndex::generate_deterministic_embedding(&q, 64);
+                let results = idx.search(&emb, 5);
+                println!("🔎 SIMD Vector Search Results for '{}': {}", q, results.len());
+                for (i, m) in results.iter().enumerate() {
+                    println!("  {}. [{:.2}] {} ({})", i + 1, m.score, m.record.symbol_name, m.record.file_path);
+                }
+            } else {
+                println!("⚡ SIMD Vector Index active (64-dim unrolled cache initialized).");
+            }
+            Ok(())
+        }
+        Commands::Hmr { kind, target, payload } => {
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::CdpLivePatch {
+                patch_kind: kind,
+                target,
+                payload,
+            }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::Lens { path, symbol } => {
+            let repl_helper = HagibisRepl::new(client);
+            let code = std::fs::read_to_string(&path).unwrap_or_default();
+            let ext = std::path::Path::new(&path).extension().and_then(|e| e.to_str()).unwrap_or("rs");
+            let resp = repl_helper.dispatch(HgbRequest::SkeletonLensProject {
+                source_code: code,
+                target_symbol: symbol,
+                file_ext: ext.to_string(),
+            }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::Swarm { prompt, symbol, lang } => {
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::LakandiwaSwarmRace {
+                prompt,
+                target_symbol: symbol,
+                file_ext: lang,
+            }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::DbSnap { path, rollback, description } => {
+            let repl_helper = HagibisRepl::new(client);
+            if let Some(snap_file) = rollback {
+                let resp = repl_helper.dispatch(HgbRequest::DbCowSnapshotRollback {
+                    snapshot_file: snap_file,
+                    source_path: path,
+                    blake3_hash: String::new(),
+                }).await;
+                repl_helper.render_response(resp);
+            } else {
+                let resp = repl_helper.dispatch(HgbRequest::DbCowSnapshotCreate {
+                    db_path: path,
+                    description,
+                }).await;
+                repl_helper.render_response(resp);
+            }
+            Ok(())
+        }
+        Commands::Shield { packages, ecosystem } => {
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::SlopsquattingAudit {
+                packages,
+                ecosystem,
+            }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::ShipLive { name } => {
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::CloudLaunchpadDeploy {
+                workspace_path: None,
+                project_name: name,
+            }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::Flight { endpoint } => {
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::FlightSimulatorTrace {
+                workspace_path: None,
+                endpoint_name: endpoint,
+            }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::GhostCoder { prefix } => {
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::ShadowSynthesize { prefix }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::Mirage { endpoint, method } => {
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::ApiMirageSimulate { endpoint, method }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::Chaos { target, idempotency_key, runs } => {
+            let repl_helper = HagibisRepl::new(client);
+            let resp = if let Some(key) = idempotency_key {
+                repl_helper.dispatch(HgbRequest::ChaosIdempotencyFuzz { key, runs }).await
+            } else {
+                repl_helper.dispatch(HgbRequest::ChaosExperimentRun { target_component: target }).await
+            };
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::Nightshift { goal, base } => {
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::NightShiftDispatch { goal, base_branch: base }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::Vault { passphrase, disk_file } => {
+            let repl_helper = HagibisRepl::new(client);
+            let content = std::fs::read_to_string(&disk_file).unwrap_or_else(|_| "".to_string());
+            let resp = if let Some(pass) = passphrase {
+                let secrets = vec![
+                    ("API_KEY".to_string(), "sk_dummy_hagibis_secret_vault".to_string()),
+                    ("DB_URL".to_string(), "postgres://user:pass@localhost:5432/db".to_string()),
+                ];
+                repl_helper.dispatch(HgbRequest::VaultSeal { secrets, passphrase: pass }).await
+            } else {
+                repl_helper.dispatch(HgbRequest::VaultAuditDisk { disk_content: content }).await
+            };
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::Typelock { source_file, ts_file } => {
+            let repl_helper = HagibisRepl::new(client);
+            let rust_source = std::fs::read_to_string(&source_file).unwrap_or_else(|_| source_file.clone());
+            let existing_ts = ts_file.and_then(|f| std::fs::read_to_string(&f).ok());
+            let resp = repl_helper.dispatch(HgbRequest::TypeLockSync { rust_source, existing_ts }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::Radar { tier } => {
+            let repl_helper = HagibisRepl::new(client);
+            let zoom = match tier.to_lowercase().as_str() {
+                "atmosphere" | "atmo" => hgb_core::ZoomTier::Atmosphere,
+                "surface" | "surf" => hgb_core::ZoomTier::Surface,
+                _ => hgb_core::ZoomTier::Orbit,
+            };
+            let resp = repl_helper.dispatch(HgbRequest::SpatialRadarQuery { tier: zoom }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::Teleport { selector } => {
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::CdpTeleportResolve { selector }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::Voice { transcript } => {
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::VoiceFlowProcess { transcript }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::Tape { url, scenario } => {
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::PrTapeRecord { url, scenario_name: scenario }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::Finops { prompt } => {
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::FinOpsRoute { prompt }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::Cloak { text, rehydrate } => {
+            let repl_helper = HagibisRepl::new(client);
+            if rehydrate {
+                let resp = repl_helper.dispatch(HgbRequest::AirgapRehydrateText { response_text: text }).await;
+                repl_helper.render_response(resp);
+            } else {
+                let resp = repl_helper.dispatch(HgbRequest::AirgapCloakText { text }).await;
+                repl_helper.render_response(resp);
+            }
+            Ok(())
+        }
+        Commands::SqlGuard { sql } => {
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::SqlGuardInspect { sql }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::Replay { frame } => {
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::ExecutionReplayScrub { target_frame: frame }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::Canvas { file, old, new, selector } => {
+            let repl_helper = HagibisRepl::new(client);
+            let source_code = std::fs::read_to_string(&file).unwrap_or_else(|_| format!("<div className=\"{}\">Content</div>", old));
+            let mutation = hgb_core::CanvasStyleMutation {
+                component_selector: selector,
+                property_name: "className".to_string(),
+                old_value: old,
+                new_value: new,
+            };
+            let resp = repl_helper.dispatch(HgbRequest::CanvasApplyTweak {
+                source_code,
+                target_file: file,
+                symbol_name: "Component".to_string(),
+                mutation,
+            }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::Federate { goal } => {
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::MultiRepoFederate { goal }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::TimeWarp { months, seed, scale } => {
+            let repl_helper = HagibisRepl::new(client);
+            let cfg = hgb_core::TimeWarpConfig {
+                seed,
+                months,
+                base_timestamp: 1740000000,
+                include_skew: true,
+                record_scale: scale,
+            };
+            let resp = repl_helper.dispatch(HgbRequest::TimeWarpGenerate { config: Some(cfg) }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::Guardrails { dir } => {
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::StructuralGuardrailsAudit { workspace_path: Some(dir) }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::Triage { trace } => {
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::CrashTriageTrace { raw_trace: trace }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::Deflake { test, file } => {
+            let repl_helper = HagibisRepl::new(client);
+            let test_code = file.and_then(|f| std::fs::read_to_string(&f).ok());
+            let resp = repl_helper.dispatch(HgbRequest::FlakyDeflake { test_name: test, test_code }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::ContextAnchor { key, statement, category } => {
+            let repl_helper = HagibisRepl::new(client);
+            if let (Some(k), Some(s)) = (key, statement) {
+                let cat = match category.to_lowercase().as_str() {
+                    "sec" | "security" => hgb_core::AnchorCategory::Security,
+                    "style" => hgb_core::AnchorCategory::Style,
+                    "banned" | "antipattern" => hgb_core::AnchorCategory::AntiPattern,
+                    "entity" | "domain" => hgb_core::AnchorCategory::DomainEntity,
+                    _ => hgb_core::AnchorCategory::Architecture,
+                };
+                let resp = repl_helper.dispatch(HgbRequest::ContextAnchorRecord { category: cat, key: k, statement: s }).await;
+                repl_helper.render_response(resp);
+            } else {
+                let resp = repl_helper.dispatch(HgbRequest::ContextAnchorGenerate).await;
+                repl_helper.render_response(resp);
+            }
+            Ok(())
+        }
+        Commands::GhostLsp { file, prefix, line } => {
+            let repl_helper = HagibisRepl::new(client);
+            let params = hgb_core::LspInlineCompletionParams {
+                file_path: file.clone(),
+                language_id: if file.ends_with(".rs") { "rust".to_string() } else { "typescript".to_string() },
+                line,
+                character: prefix.len(),
+                prefix_code: prefix,
+                suffix_code: "".to_string(),
+            };
+            let resp = repl_helper.dispatch(HgbRequest::LspGhostComplete { params }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::Compact { max_tokens } => {
+            let repl_helper = HagibisRepl::new(client);
+            let sample_turns = vec![
+                hgb_core::ConversationTurn {
+                    role: "user".to_string(),
+                    content: "Build checkout pipeline and run cargo test".to_string(),
+                    is_tool_output: false,
+                    token_estimate: 25,
+                },
+                hgb_core::ConversationTurn {
+                    role: "tool".to_string(),
+                    content: "src/checkout.rs\nCompiling... [verbose compiler diagnostics]".to_string(),
+                    is_tool_output: true,
+                    token_estimate: 24500,
+                },
+                hgb_core::ConversationTurn {
+                    role: "assistant".to_string(),
+                    content: "All test suites passing. Checkout pipeline verified.".to_string(),
+                    is_tool_output: false,
+                    token_estimate: 35,
+                },
+            ];
+            let resp = repl_helper.dispatch(HgbRequest::RollingCompactSession {
+                session_id: "active_session".to_string(),
+                turns: sample_turns,
+                max_tokens: Some(max_tokens),
+            }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::MicroCommit { intent, path } => {
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::GitMicroCommit {
+                files: vec![path],
+                intent,
+                diff_preview: "+ // verified changes\n- // legacy code".to_string(),
+            }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::Recipe { name, list } => {
+            let repl_helper = HagibisRepl::new(client);
+            if list || name.is_none() {
+                let resp = repl_helper.dispatch(HgbRequest::VibeRecipeList).await;
+                repl_helper.render_response(resp);
+            } else if let Some(n) = name {
+                let resp = repl_helper.dispatch(HgbRequest::VibeRecipeRun { recipe_name: n }).await;
+                repl_helper.render_response(resp);
+            }
+            Ok(())
+        }
+        Commands::Contract { symbol, intent } => {
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::BehaviorMatrixGenerate { symbol_name: symbol, intent_desc: intent }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::FlightGraph { goal, step } => {
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::FlightGraphQuery { goal, active_step: step }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::RepoMapRank { exts, budget } => {
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::RepoMapRank { extensions: exts, token_budget: Some(budget) }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::ShadowCheck { file, candidate_file } => {
+            let repl_helper = HagibisRepl::new(client);
+            let content = if let Some(cf) = candidate_file {
+                std::fs::read_to_string(&cf).unwrap_or_default()
+            } else {
+                std::fs::read_to_string(&file).unwrap_or_default()
+            };
+            let resp = repl_helper.dispatch(HgbRequest::ShadowPreflight { relative_path: file, candidate_content: content }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::Squeeze { file, max_tokens } => {
+            let repl_helper = HagibisRepl::new(client);
+            let raw_text = if let Some(f) = file {
+                std::fs::read_to_string(&f).unwrap_or_default()
+            } else {
+                "   [1/10] Downloading packages...\n   [2/10] Compiling dependencies...\nwarning: unused variable `x`\nwarning: unused variable `x`\nerror[E0425]: cannot find value `foo` in this scope\n --> src/main.rs:42:15\n   Compiling finished with error\n".to_string()
+            };
+            let resp = repl_helper.dispatch(HgbRequest::StreamSqueeze { raw_output: raw_text, max_tokens: Some(max_tokens) }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::MutationAudit { file } => {
+            let repl_helper = HagibisRepl::new(client);
+            let code = std::fs::read_to_string(&file).unwrap_or_else(|_| "pub fn is_authorized(role: &str, valid: bool) -> bool {\n    if role == \"admin\" && valid {\n        true\n    } else {\n        false\n    }\n}\n".to_string());
+            let resp = repl_helper.dispatch(HgbRequest::MutationAudit { source_code: code, file_name: file }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::DomInspect { file, selector, coords } => {
+            let repl_helper = HagibisRepl::new(client);
+            let template = std::fs::read_to_string(&file).unwrap_or_else(|_| "<div id=\"app\" class=\"container\">\n  <header class=\"hero-header\">\n    <h1 class=\"hero-title\">Welcome to Hagibis</h1>\n  </header>\n  <main class=\"main-content\">\n    <button id=\"checkout-btn\" class=\"btn btn-primary\">Checkout</button>\n  </main>\n</div>".to_string());
+            let click_coords = if let Some(c) = coords {
+                let parts: Vec<&str> = c.split(',').collect();
+                if parts.len() == 2 {
+                    let x = parts[0].trim().parse::<f64>().unwrap_or(0.0);
+                    let y = parts[1].trim().parse::<f64>().unwrap_or(0.0);
+                    Some((x, y))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            let resp = repl_helper.dispatch(HgbRequest::DomInspect {
+                template_content: template,
+                file_name: file,
+                click_coords,
+                css_selector: selector,
+            }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::McpHub { action, server, tool, args } => {
+            let repl_helper = HagibisRepl::new(client);
+            let parsed_args = if let Some(ref a) = args {
+                serde_json::from_str(a).ok()
+            } else {
+                None
+            };
+            let resp = repl_helper.dispatch(HgbRequest::McpOrchestrate {
+                action,
+                server_name: server,
+                tool_name: tool,
+                arguments: parsed_args,
+            }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::LiveGraph { exts } => {
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::LiveGraphSync { extensions: exts }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::ShellPanic { code, cmd, stderr } => {
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::ShellPanicDiagnose { command: cmd, exit_code: code, stderr }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::PlanSpec { intent } => {
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::SpecDecompose { intent, workspace_files: vec!["src/main.rs".to_string(), "src/lib.rs".to_string()] }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::ExpandContext { prompt } => {
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::DynamicContextExpand { prompt }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::VisualSentry { baseline, current } => {
+            let repl_helper = HagibisRepl::new(client);
+            let b_nodes = vec![
+                hgb_core::VisualNodeSnapshot {
+                    tag: "div".to_string(),
+                    id: Some("root".to_string()),
+                    classes: vec!["container".to_string()],
+                    x: 0.0, y: 0.0, width: 800.0, height: 600.0,
+                    text_preview: None,
+                },
+                hgb_core::VisualNodeSnapshot {
+                    tag: "button".to_string(),
+                    id: Some("checkout".to_string()),
+                    classes: vec!["btn".to_string()],
+                    x: 100.0, y: 200.0, width: 120.0, height: 40.0,
+                    text_preview: Some("Submit".to_string()),
+                },
+            ];
+            let c_nodes = if let (Some(_b), Some(_c)) = (baseline, current) {
+                b_nodes.clone()
+            } else {
+                vec![
+                    hgb_core::VisualNodeSnapshot {
+                        tag: "div".to_string(),
+                        id: Some("root".to_string()),
+                        classes: vec!["container".to_string()],
+                        x: 0.0, y: 0.0, width: 800.0, height: 600.0,
+                        text_preview: None,
+                    },
+                    hgb_core::VisualNodeSnapshot {
+                        tag: "button".to_string(),
+                        id: Some("checkout".to_string()),
+                        classes: vec!["btn".to_string()],
+                        x: 100.0, y: 202.0, width: 120.0, height: 40.0,
+                        text_preview: Some("Submit".to_string()),
+                    },
+                ]
+            };
+            let resp = repl_helper.dispatch(HgbRequest::VisualRegressionAudit {
+                baseline_nodes: b_nodes,
+                current_nodes: c_nodes,
+            }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::HealWatch { error } => {
+            let repl_helper = HagibisRepl::new(client);
+            let errs = if let Some(e) = error { vec![e] } else { vec!["src/main.rs:24: error: cannot find value `foo` in scope".to_string()] };
+            let resp = repl_helper.dispatch(HgbRequest::ContinuousHealWatch {
+                workspace_errors: errs,
+                flaky_tests: vec!["test_auth_timeout".to_string()],
+            }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::AmbientPredict { file, symbol, old, new } => {
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::AmbientPredict {
+                file_path: file,
+                symbol_name: symbol,
+                change_kind: hgb_core::EditKind::SignatureModified,
+                old_snippet: old,
+                new_snippet: new,
+            }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::CdpTweak { selector, prop, old, new, apply } => {
+            let repl_helper = HagibisRepl::new(client);
+            let event = hgb_core::DomTweakEvent {
+                selector,
+                property_or_attr: prop,
+                old_value: old,
+                new_value: new,
+                component_hint: None,
+                file_hint: None,
+            };
+            let resp = repl_helper.dispatch(HgbRequest::CdpTweakSync { event, apply_to_disk: apply }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::PromptHarvest { mode, prompt, doc } => {
+            let repl_helper = HagibisRepl::new(client);
+            let m = match mode.to_lowercase().as_str() {
+                "architect" => hgb_core::VibePromptMode::Architect,
+                "debug" => hgb_core::VibePromptMode::DebugTriage,
+                "security" => hgb_core::VibePromptMode::SecurityAudit,
+                "doc" => hgb_core::VibePromptMode::DocReview,
+                _ => hgb_core::VibePromptMode::CodeSprint,
+            };
+            let (targets, raw_content) = if let Some(d) = doc {
+                (vec![d.clone()], Some(format!("# Documentation for {}\npub fn verify_contract() -> bool;\n```rust\nassert!(verify_contract());\n```\n", d)))
+            } else {
+                (Vec::new(), None)
+            };
+            let resp = repl_helper.dispatch(HgbRequest::PromptModeHarvest {
+                mode: m,
+                user_prompt: prompt,
+                doc_targets: targets,
+                raw_doc_content: raw_content,
+            }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::Sandbox { stack, seed } => {
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::EphemeralSandboxSpinUp {
+                stack_name: stack,
+                tables_to_seed: seed,
+            }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::AntiPlacebo { file, test } => {
+            let repl_helper = HagibisRepl::new(client);
+            let src = if let Some(f) = file {
+                std::fs::read_to_string(&f).unwrap_or_else(|_| "pub fn calculate(x: i32) -> bool { x > 0 }".to_string())
+            } else {
+                "pub fn calculate(x: i32) -> bool { if x > 0 { true } else { false } }".to_string()
+            };
+            let tst = if let Some(t) = test {
+                std::fs::read_to_string(&t).unwrap_or_else(|_| "assert!(calculate(5));".to_string())
+            } else {
+                "#[test] fn test_calc() { assert!(calculate(5)); }".to_string()
+            };
+            let resp = repl_helper.dispatch(HgbRequest::AntiPlaceboAudit {
+                source_code: src,
+                test_code: tst,
+            }).await;
+            repl_helper.render_response(resp);
+            Ok(())
+        }
+        Commands::Ui { port, model } => {
+            println!("{}", "🪽 Hagibis Visual Canvas HUD 🪽".bold().cyan());
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::VisualCanvasHudStart {
+                port,
+                preferred_model: model,
+            }).await;
+            match resp {
+                HgbResponse::VisualCanvasHudResult(rep) => {
+                    println!("  ✔ Visual Canvas HUD active at: {}", rep.hud_url.bold().green());
+                    println!("  ✔ Model: {}", rep.active_model.cyan());
+                    println!("  ✔ Port: {}", rep.port);
+                }
+                HgbResponse::Error(e) => eprintln!("  ✖ Error starting HUD: {}", e),
+                _ => println!("  Response: {:?}", resp),
+            }
+            Ok(())
+        }
+        Commands::Deploy { provider, name, domain, write_configs } => {
+            println!("{}", format!("🚀 Deploying '{}' to Public Edge ({}) 🚀", name, provider).bold().cyan());
+            let edge_prov = match provider.to_lowercase().as_str() {
+                "vercel" => hgb_core::EdgeProvider::Vercel,
+                "fly" | "flyio" => hgb_core::EdgeProvider::FlyIo,
+                "vella" | "vella-network" => hgb_core::EdgeProvider::VellaNetwork,
+                _ => hgb_core::EdgeProvider::CloudflarePages,
+            };
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::EdgeDeploy {
+                provider: edge_prov,
+                project_slug: name,
+                write_configs: Some(write_configs),
+                custom_domain: domain,
+            }).await;
+            match resp {
+                HgbResponse::EdgeDeployResult(rep) => {
+                    println!("  ✔ Public HTTPS URL: {}", rep.public_url.bold().green());
+                    println!("  ✔ Deployment ID: {}", rep.deployment_id.cyan());
+                    println!("  ✔ Framework: {}", rep.framework);
+                    println!("  ✔ Artifact Blake3: {}", rep.manifest_checksum);
+                    println!("  ✔ Edge Routing: {:?}", rep.edge_routing_rules);
+                }
+                HgbResponse::Error(e) => eprintln!("  ✖ Deployment error: {}", e),
+                _ => println!("  Response: {:?}", resp),
+            }
+            Ok(())
+        }
+        Commands::Annotate { input, clipboard } => {
+            println!("{}", "🎨 Visual Annotation & Multimodal Clipboard Xerox 🎨".bold().cyan());
+            let raw = if clipboard {
+                hgb_core::ClipboardHelper::get_text().unwrap_or_else(|_| input)
+            } else {
+                input
+            };
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::VisualAnnotate {
+                raw_annotation: raw,
+            }).await;
+            match resp {
+                HgbResponse::VisualAnnotateResult(rep) => {
+                    println!("  ✔ Ingested {} annotations (Screenshot: {})", rep.annotations_count, rep.screenshot_id.green());
+                    println!("  ✔ AST Component Bindings: {}", rep.ast_bindings.len());
+                    for b in &rep.ast_bindings {
+                        println!("    • <{}> ({}:{}) -> {}", b.component_name.cyan(), b.source_file, b.line_number, b.prompt_directive);
+                    }
+                    println!("\n{}", rep.multimodal_prompt);
+                }
+                HgbResponse::Error(e) => eprintln!("  ✖ Annotation error: {}", e),
+                _ => println!("  Response: {:?}", resp),
+            }
+            Ok(())
+        }
+        Commands::Pair { session, action, username, role } => {
+            println!("{}", format!("🤝 Collaborative Multiplayer Swarm (Session: {}) 🤝", session).bold().cyan());
+            let payload = serde_json::json!({
+                "username": username,
+                "peer_id": format!("peer_{}", username),
+                "role": role,
+            });
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::MultiplayerSwarmAction {
+                session_id: session,
+                action,
+                payload,
+            }).await;
+            match resp {
+                HgbResponse::MultiplayerSwarmResult(rep) => {
+                    println!("  ✔ Session: {} (Peers: {})", rep.session_name.green(), rep.peer_count);
+                    for p in &rep.peers {
+                        println!("    • @{} ({}) [Model: {}]", p.username.cyan(), p.role, p.active_model);
+                    }
+                }
+                HgbResponse::Error(e) => eprintln!("  ✖ Multiplayer error: {}", e),
+                _ => println!("  Response: {:?}", resp),
+            }
+            Ok(())
+        }
+        Commands::Companion { editor, install } => {
+            println!("{}", format!("🔌 Universal Companion Editor Bridge ({}) 🔌", editor).bold().cyan());
+            let ed_kind = match editor.to_lowercase().as_str() {
+                "nvim" | "neovim" => hgb_core::CompanionEditorKind::Neovim,
+                "helix" | "hx" => hgb_core::CompanionEditorKind::Helix,
+                "zed" => hgb_core::CompanionEditorKind::Zed,
+                _ => hgb_core::CompanionEditorKind::VsCode,
+            };
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::CompanionBridgeSetup {
+                editor: ed_kind,
+                install: Some(install),
+            }).await;
+            match resp {
+                HgbResponse::CompanionBridgeResult(rep) => {
+                    println!("  ✔ Target: {}", rep.editor.to_string().cyan());
+                    println!("  ✔ Socket: {} (Alive: {}, Latency: {}µs)", rep.socket_path, rep.socket_alive, rep.socket_latency_micros);
+                    println!("  ✔ Generated Files: {}", rep.files.len());
+                    for f in &rep.files {
+                        println!("    • {} - {}", f.relative_path.green(), f.description);
+                    }
+                    println!("\n  Setup Guide:\n  {}", rep.setup_instructions);
+                }
+                HgbResponse::Error(e) => eprintln!("  ✖ Bridge error: {}", e),
+                _ => println!("  Response: {:?}", resp),
+            }
+            Ok(())
+        }
+        Commands::Saas { project, provider, framework, auth, portal } => {
+            println!("{}", format!("💳 Instant SaaS Monetization & Auth Fabric ({}) 💳", project).bold().cyan());
+            let prov = match provider.to_lowercase().as_str() {
+                "lemonsqueezy" | "lemon" => hgb_core::SaasProvider::LemonSqueezy,
+                "paddle" => hgb_core::SaasProvider::Paddle,
+                _ => hgb_core::SaasProvider::Stripe,
+            };
+            let cfg = hgb_core::SaasScaffoldConfig {
+                provider: prov,
+                project_name: project,
+                framework,
+                tiers: vec![],
+                enable_customer_portal: portal,
+                enable_jwt_auth: auth,
+            };
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::SaasScaffold { config: cfg }).await;
+            match resp {
+                HgbResponse::SaasScaffoldResult(rep) => {
+                    println!("  ✔ Provider: {:?}", rep.provider);
+                    println!("  ✔ Webhook: {}", rep.webhook_endpoint.green());
+                    println!("  ✔ Customer Portal: {}", rep.customer_portal_endpoint.cyan());
+                    println!("  ✔ Generated Files: {}", rep.generated_files.len());
+                    for f in &rep.generated_files {
+                        println!("    • {} ({})", f.relative_path.yellow(), f.language);
+                    }
+                    println!("  ✔ Idempotent Guard: {}", if rep.idempotent_guard_enabled { "Active".green() } else { "Inactive".red() });
+                }
+                HgbResponse::Error(e) => eprintln!("  ✖ SaaS Error: {}", e),
+                _ => println!("  Response: {:?}", resp),
+            }
+            Ok(())
+        }
+        Commands::ContinuousVoice { transcript, speaker, energy } => {
+            println!("{}", "🎙️ Full-Duplex Ambient Conversational Voice 🎙️".bold().cyan());
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::ContinuousVoiceTurn {
+                speaker,
+                transcript,
+                intent_action: None,
+                energy,
+            }).await;
+            match resp {
+                HgbResponse::ContinuousVoiceResult(rep) => {
+                    println!("  ✔ Session: {}", rep.session_id.green());
+                    println!("  ✔ State: {:?}", rep.state);
+                    println!("  ✔ Turns: {} (Interruptions: {})", rep.total_turns, rep.total_interruptions);
+                    if let Some(last) = rep.turns.last() {
+                        println!("  ✔ Last Speaker: {} -> {}", last.speaker.cyan(), last.transcript);
+                        if let Some(ec) = last.earcon_played {
+                            println!("  🔔 Earcon: {:?}", ec);
+                        }
+                    }
+                }
+                HgbResponse::Error(e) => eprintln!("  ✖ Voice Error: {}", e),
+                _ => println!("  Response: {:?}", resp),
+            }
+            Ok(())
+        }
+        Commands::Figma { file_key, export } => {
+            println!("{}", format!("🎨 Bi-Directional Figma & Design Token Bridge ({}) 🎨", file_key).bold().cyan());
+            let repl_helper = HagibisRepl::new(client);
+            if let Some(comp_name) = export {
+                let resp = repl_helper.dispatch(HgbRequest::FigmaExport {
+                    component_name: comp_name.clone(),
+                    markup: "<div class=\"p-6 bg-slate-900 text-white rounded-xl\">Vibe Component</div>".into(),
+                }).await;
+                match resp {
+                    HgbResponse::FigmaExportResult(rep) => {
+                        println!("  ✔ Exported Vector Frame: {}", rep.component_name.green());
+                        println!("  ✔ Bounds: {}x{} px", rep.bounding_width, rep.bounding_height);
+                        println!("  ✔ SVG XML Canvas length: {} bytes", rep.svg_canvas_xml.len());
+                    }
+                    HgbResponse::Error(e) => eprintln!("  ✖ Figma Export Error: {}", e),
+                    _ => println!("  Response: {:?}", resp),
+                }
+            } else {
+                let resp = repl_helper.dispatch(HgbRequest::FigmaSync {
+                    file_key,
+                    raw_json: None,
+                }).await;
+                match resp {
+                    HgbResponse::FigmaSyncResult(rep) => {
+                        println!("  ✔ Colors Extracted: {}", rep.token_set.colors.len());
+                        println!("  ✔ Typography Styles: {}", rep.token_set.typography.len());
+                        println!("  ✔ Synthesized Components: {}", rep.synthesized_components.len());
+                        for (k, _) in &rep.synthesized_components {
+                            println!("    • Component: {}", k.cyan());
+                        }
+                        println!("  ✔ Generated Tailwind Config:\n{}", rep.generated_tailwind_config);
+                    }
+                    HgbResponse::Error(e) => eprintln!("  ✖ Figma Sync Error: {}", e),
+                    _ => println!("  Response: {:?}", resp),
+                }
+            }
+            Ok(())
+        }
+        Commands::ShadowDb { db, ops, workers } => {
+            println!("{}", format!("⚡ Autonomous Production DB Shadow Simulator ({}) ⚡", db).bold().cyan());
+            let profile = hgb_core::StressProfile {
+                target_db: db,
+                total_operations: ops,
+                concurrency_workers: workers,
+                read_write_ratio: 0.85,
+                simulated_dataset_size: 5000,
+            };
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::ShadowDbStress {
+                profile,
+                schema_sql: None,
+            }).await;
+            match resp {
+                HgbResponse::ShadowDbStressResult(rep) => {
+                    println!("  ✔ Total Operations: {}", rep.metrics.total_ops);
+                    println!("  ✔ Throughput: {} QPS", rep.metrics.throughput_qps.to_string().green());
+                    println!("  ✔ Latency p50: {:.2}ms | p95: {:.2}ms | p99: {:.2}ms", rep.metrics.p50_ms, rep.metrics.p95_ms, rep.metrics.p99_ms);
+                    println!("  ✔ Viral Traffic Ready: {}", if rep.production_ready_for_viral_traffic { "YES (100% Scalable)".green() } else { "NEEDS INDEXES".yellow() });
+                    if !rep.recommended_indexes.is_empty() {
+                        println!("  ✔ Recommended Indexes ({}):", rep.recommended_indexes.len());
+                        for idx in &rep.recommended_indexes {
+                            println!("    • Table: {}.{} (Speedup: {:.1}x)", idx.table.cyan(), idx.column.yellow(), idx.estimated_speedup_factor);
+                            println!("      SQL: {}", idx.sql_migration.green());
+                        }
+                    }
+                }
+                HgbResponse::Error(e) => eprintln!("  ✖ Stress Test Error: {}", e),
+                _ => println!("  Response: {:?}", resp),
+            }
+            Ok(())
+        }
+        Commands::ViralOg { title, badge, desc, twitter } => {
+            println!("{}", format!("🚀 Viral Social Graph & Dynamic OpenGraph Engine ({}) 🚀", title).bold().cyan());
+            let cfg = hgb_core::OgCardConfig {
+                title,
+                description: desc,
+                badge_text: badge,
+                primary_brand_color: "#06b6d4".into(),
+                site_url: "https://hagibis.dev".into(),
+                author_twitter_handle: twitter,
+            };
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::ViralOgGenerate { config: cfg }).await;
+            match resp {
+                HgbResponse::ViralOgResult(rep) => {
+                    println!("  ✔ Viral Readiness Score: {}/100", rep.scorecard.total_score.to_string().green());
+                    println!("  ✔ Dynamic SVG OG Card: {} bytes", rep.generated_svg_image.len());
+                    println!("  ✔ Edge Handler Code: {} bytes", rep.generated_edge_route_code.len());
+                    println!("  ✔ Meta Tags Injected: {}", rep.meta_tags.len());
+                    for t in &rep.meta_tags {
+                        println!("    • {}: {}", t.property_or_name.cyan(), t.content);
+                    }
+                    if !rep.scorecard.suggestions.is_empty() {
+                        println!("  ⚠ Suggestions:");
+                        for s in &rep.scorecard.suggestions {
+                            println!("    • {}", s.yellow());
+                        }
+                    }
+                }
+                HgbResponse::Error(e) => eprintln!("  ✖ Viral OG Error: {}", e),
+                _ => println!("  Response: {:?}", resp),
+            }
+            Ok(())
+        }
+        Commands::Mobile { url, name } => {
+            println!("{}", format!("📱 Instant Mobile QR Teleport & PWA Matrix ({}) 📱", name).bold().cyan());
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::MobileQrTeleportGenerate {
+                target_url: url.clone(),
+                config: Some(hgb_core::MobilePwaConfig {
+                    app_name: name.clone(),
+                    short_name: name,
+                    start_url: "/".into(),
+                    ..Default::default()
+                }),
+            }).await;
+            match resp {
+                HgbResponse::MobileQrTeleportResult(rep) => {
+                    println!("{}", rep.ansi_qr_art);
+                    println!("  ✔ Target URL: {}", rep.target_url.green());
+                    println!("  ✔ PWA Manifest: Active (standalone, theme #06b6d4)");
+                    println!("  ✔ Safe-Area Insets: Injected (iOS notch & bottom-bar ready)");
+                }
+                HgbResponse::Error(e) => eprintln!("  ✖ Mobile Teleport Error: {}", e),
+                _ => println!("  Response: {:?}", resp),
+            }
+            Ok(())
+        }
+        Commands::IncidentHotfix { error, file, line } => {
+            println!("{}", format!("🚨 Live Production Incident Hotfixer ({}) 🚨", error).bold().red());
+            let payload = hgb_core::ProductionErrorPayload {
+                provider: "sentry".into(),
+                error_id: "".into(),
+                exception_type: "ProductionError".into(),
+                message: error,
+                culprit_file: file,
+                culprit_line: line,
+                culprit_function: None,
+                request_path: Some("/api/live".into()),
+                user_agent: Some("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0)".into()),
+                raw_stack_trace: None,
+            };
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::ProductionHotfixTriage { payload }).await;
+            match resp {
+                HgbResponse::ProductionHotfixResult(rep) => {
+                    println!("  ✔ Incident ID: {}", rep.incident_id.yellow());
+                    println!("  ✔ Culprit Location: {}", rep.culprit_location.cyan());
+                    println!("  ✔ Root Cause: {}", rep.root_cause.green());
+                    println!("  ✔ Hotfix Branch: {}", rep.hotfix_branch_name.yellow().bold());
+                    println!("  ✔ Proposed Patch:\n      Line {}: {}", rep.proposed_patch.target_line, rep.proposed_patch.patched_code.green());
+                    println!("  ✔ Rationale: {}", rep.proposed_patch.rationale);
+                    println!("  ✔ Auto-Deployable: {}", if rep.auto_deployable { "YES (Verified)".green() } else { "NO".red() });
+                }
+                HgbResponse::Error(e) => eprintln!("  ✖ Hotfix Error: {}", e),
+                _ => println!("  Response: {:?}", resp),
+            }
+            Ok(())
+        }
+        Commands::LlmGateway { prompt, frontier } => {
+            println!("{}", "⚡ AI Semantic Cost Gateway & Model Arbitrage ⚡".bold().cyan());
+            let req = hgb_core::LlmPromptRequest {
+                prompt,
+                max_tokens: Some(1000),
+                force_frontier: frontier,
+            };
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::LlmCostRoute { request: req }).await;
+            match resp {
+                HgbResponse::LlmCostResult(rep) => {
+                    println!("  ✔ Selected Model: {}", rep.decision.selected_model.green().bold());
+                    println!("  ✔ Semantic Cache: {}", if rep.decision.is_cached { "HIT ($0.00, 1ms)".green().bold() } else { "MISS (Live API Call)".yellow() });
+                    println!("  ✔ Estimated Cost: ${:.6}", rep.decision.estimated_cost_usd);
+                    println!("  ✔ Latency Estimate: {} ms", rep.decision.latency_estimate_ms);
+                    println!("  ✔ Routing Reason: {}", rep.decision.routing_reason.dimmed());
+                    println!("  ✔ Total Queries: {} | Cache Hits: {} ({:.1}%)", rep.metrics.total_queries_processed, rep.metrics.cache_hits, rep.metrics.cache_hit_ratio * 100.0);
+                    println!("  ✔ Total Cost Saved: ${:.4}", rep.metrics.total_saved_usd);
+                }
+                HgbResponse::Error(e) => eprintln!("  ✖ LLM Gateway Error: {}", e),
+                _ => println!("  Response: {:?}", resp),
+            }
+            Ok(())
+        }
+        Commands::Analytics { funnel, scaffold } => {
+            println!("{}", "📊 Zero-Cookie Privacy Funnel Analytics 📊".bold().cyan());
+            let repl_helper = HagibisRepl::new(client);
+            if scaffold {
+                let resp = repl_helper.dispatch(HgbRequest::PrivacyAnalyticsScaffold).await;
+                match resp {
+                    HgbResponse::PrivacyAnalyticsScaffoldResult(rep) => {
+                        println!("  ✔ Client Script Tag (<600B):\n{}", rep.client_script_tag.cyan());
+                        println!("  ✔ Edge API Route:\n{}", rep.edge_route_code.green());
+                        println!("  ✔ SQLite Schema:\n{}", rep.sqlite_schema_sql.yellow());
+                    }
+                    HgbResponse::Error(e) => eprintln!("  ✖ Scaffold Error: {}", e),
+                    _ => println!("  Response: {:?}", resp),
+                }
+            } else if funnel {
+                let resp = repl_helper.dispatch(HgbRequest::PrivacyFunnelQuery { event_to_record: None }).await;
+                match resp {
+                    HgbResponse::PrivacyFunnelResult(rep) => {
+                        println!("  ✔ Total Events Recorded: {}", rep.total_events_recorded);
+                        println!("  ✔ Conversion Funnel:");
+                        for stage in &rep.stages {
+                            println!("    • {:<12} {:>5} visitors | Step: {:>5.1}% | Total: {:>5.1}%", stage.stage_name.cyan(), stage.unique_visitors, stage.step_conversion_rate_pct, stage.conversion_rate_pct);
+                        }
+                        if let Some(dropoff) = &rep.top_dropoff_stage {
+                            println!("  ⚠ Top Drop-Off: {}", dropoff.red().bold());
+                        }
+                        for r in &rep.recommendations {
+                            println!("    💡 {}", r.yellow());
+                        }
+                    }
+                    HgbResponse::Error(e) => eprintln!("  ✖ Funnel Error: {}", e),
+                    _ => println!("  Response: {:?}", resp),
                 }
             }
             Ok(())

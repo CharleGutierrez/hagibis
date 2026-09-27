@@ -515,6 +515,16 @@ impl ReplEditor {
                 ("/fix", "Terminal Rescue: mind-reader command diagnosis"),
                 ("/memory", "Project Memory Ledger: context anchor & ADRs"),
                 ("/mcp", "Universal MCP: list tools or call tool on server"),
+                ("/predict", "Cascade next-edit anticipator across AST call-sites"),
+                ("/ambient", "Alias for /predict"),
+                ("/tweak", "Bidirectional DevTools CDP tweak to source mirror"),
+                ("/cdp-sync", "Alias for /tweak"),
+                ("/mode", "Composable prompt mode switch & docs harvester"),
+                ("/harvest", "Alias for /mode"),
+                ("/sandbox", "Zero-config in-memory stack sandbox & ephemeral port"),
+                ("/box", "Alias for /sandbox"),
+                ("/anti-placebo", "Behavioral mutation gatekeeper for test suite"),
+                ("/gatekeeper", "Alias for /anti-placebo"),
             ];
 
             for (cmd, _) in slash_cmds {
@@ -1332,6 +1342,49 @@ impl HagibisRepl {
         let args = if parts.len() > 1 { parts[1..].join(" ") } else { String::new() };
 
         match cmd.as_str() {
+            "/exit" | "/quit" | "/q" | "/help" | "/?" | "/h" | "/clear" | "/cls" | "/ping"
+            | "/status" | "/doctor" | "/doc" | "/model" | "/models" | "/login" | "/auth"
+            | "/provenance" | "/prov" | "/checkpoint" | "/ckpt" | "/fuzz" | "/verify"
+            | "/mesh" | "/cockpit" => {
+                self.handle_core_command(&cmd, &args, &parts).await
+            }
+            "/view" | "/cat" | "/write" | "/edit" | "/ls" | "/dir" | "/grep" | "/find" | "/search" => {
+                self.handle_crud_command(&cmd, &args, &parts).await
+            }
+            "/vibe" | "/race" | "/undo" | "/diff" | "/heal" | "/rules" | "/repomap" | "/map"
+            | "/cmd" | "/sh" | "/exec" | "/run-cmd" | "/agent" | "/act" | "/style" | "/ship"
+            | "/watch" | "/guardian" | "/ghost" | "/devs" | "/devscan" | "/sentinel" | "/impact"
+            | "/pod" | "/fix" | "/rescue" | "/memory" | "/mem" | "/glance" | "/pkg" | "/guard"
+            | "/env" | "/mock" | "/trace" | "/worktree" | "/wt" | "/stash" | "/snoop" | "/browser"
+            | "/race3" | "/variant-race" | "/dbsync" | "/db" | "/slice" | "/spec" | "/dna"
+            | "/mcp" | "/patch" | "/live" | "/tdd" | "/isolate" | "/chime" | "/hmr" | "/lens"
+            | "/swarm" | "/dbsnap" | "/dbrewind" | "/shield" | "/launch" | "/flight" => {
+                self.handle_vibe_command(&cmd, &args, &parts).await
+            }
+            "/ghostcoder" | "/mirage" | "/chaos" | "/nightshift" | "/vault" | "/typelock"
+            | "/radar" | "/teleport" | "/voice" | "/tape" | "/finops" | "/cloak" | "/sqlguard"
+            | "/sql" | "/replay" | "/canvas" | "/federate" | "/timewarp" | "/guardrails"
+            | "/triage" | "/deflake" | "/anchor" => {
+                self.handle_superpowers_command(&cmd, &args).await
+            }
+            "/lsp" | "/ghost-lsp" | "/compact" | "/commit" | "/recipe" | "/contract" | "/graph"
+            | "/shadow" | "/mutation" | "/mutation-audit" | "/resilience" | "/cost" | "/security"
+            | "/compliance" | "/live-graph" | "/panic-fix" | "/plan-spec" | "/at-expand"
+            | "/visual-sentry" | "/heal-watch"
+            | "/predict" | "/ambient" | "/tweak" | "/cdp-sync" | "/mode" | "/harvest"
+            | "/sandbox" | "/box" | "/anti-placebo" | "/gatekeeper"
+            | "/preview" | "/vision" | "/share" | "/graduate" | "/expand" | "/auto-heal" => {
+                self.handle_frontier_command(&cmd, &args).await
+            }
+            _ => {
+                println!("{} Unknown slash command '{}'. Type '/help' for available commands.", "⚠".yellow(), cmd);
+                Ok(true)
+            }
+        }
+    }
+
+    async fn handle_core_command(&mut self, cmd: &str, args: &str, _parts: &[&str]) -> Result<bool, Box<dyn std::error::Error>> {
+        match cmd {
             "/exit" | "/quit" | "/q" => return Ok(false),
             "/help" | "/?" | "/h" => self.print_help(),
             "/clear" | "/cls" => {
@@ -1428,22 +1481,22 @@ impl HagibisRepl {
                 self.render_response(resp);
             }
             "/provenance" | "/prov" => {
-                let action = if args.is_empty() { "append".to_string() } else { args };
+                let action = if args.is_empty() { "append".to_string() } else { args.to_string() };
                 let resp = self.dispatch(HgbRequest::Provenance { action }).await;
                 self.render_response(resp);
             }
             "/checkpoint" | "/ckpt" => {
-                let label = if args.is_empty() { None } else { Some(args) };
+                let label = if args.is_empty() { None } else { Some(args.to_string()) };
                 let resp = self.dispatch(HgbRequest::Checkpoint { action: "create".to_string(), label }).await;
                 self.render_response(resp);
             }
             "/fuzz" => {
-                let target = if args.is_empty() { "sample_target".to_string() } else { args };
+                let target = if args.is_empty() { "sample_target".to_string() } else { args.to_string() };
                 let resp = self.dispatch(HgbRequest::Fuzz { target, iterations: 100 }).await;
                 self.render_response(resp);
             }
             "/verify" => {
-                let target = if args.is_empty() { "x > 0".to_string() } else { args };
+                let target = if args.is_empty() { "x > 0".to_string() } else { args.to_string() };
                 let resp = self.dispatch(HgbRequest::Verify { target, invariant: "division".to_string() }).await;
                 self.render_response(resp);
             }
@@ -1481,6 +1534,13 @@ impl HagibisRepl {
                 let _ = io::stdout().flush();
                 Self::print_banner_with_model(self.model.as_deref());
             }
+            _ => {}
+        }
+        Ok(true)
+    }
+
+    async fn handle_crud_command(&mut self, cmd: &str, _args: &str, parts: &[&str]) -> Result<bool, Box<dyn std::error::Error>> {
+        match cmd {
             // --- AGY Surgical CRUD Slash Commands ---
             "/view" | "/cat" => {
                 if parts.len() < 2 {
@@ -1646,6 +1706,13 @@ impl HagibisRepl {
                     }
                 }
             }
+            _ => {}
+        }
+        Ok(true)
+    }
+
+    async fn handle_vibe_command(&mut self, cmd: &str, args: &str, _parts: &[&str]) -> Result<bool, Box<dyn std::error::Error>> {
+        match cmd {
             // --- Vibe Coding Capabilities ---
             "/vibe" | "/race" => {
                 if args.is_empty() {
@@ -1653,7 +1720,7 @@ impl HagibisRepl {
                 } else {
                     println!("{}", "🏁 Spawning Speculative Dual-Draft Race (Fast Local Draft vs Frontier)...".cyan().bold());
                     let req = HgbRequest::VibeRace {
-                        prompt: args,
+                        prompt: args.to_string(),
                         target_dir: None,
                     };
                     let resp = self.dispatch(req).await;
@@ -1786,7 +1853,7 @@ impl HagibisRepl {
                 let resp = self.dispatch(HgbRequest::DevServerScan).await;
                 self.render_response(resp);
             }
-            "/impact" | "/radar" => {
+            "/impact" => {
                 let parts: Vec<&str> = args.split_whitespace().collect();
                 if parts.len() < 2 {
                     println!("{} Usage: /impact <symbol> <originating_file>", "⚠".yellow());
@@ -1799,7 +1866,7 @@ impl HagibisRepl {
                     self.render_response(resp);
                 }
             }
-            "/pod" | "/swarm" => {
+            "/pod" => {
                 if args.is_empty() {
                     println!("{} Usage: /pod <task specification>", "⚠".yellow());
                 } else {
@@ -2118,9 +2185,673 @@ impl HagibisRepl {
                     }
                 }
             }
-            _ => {
-                println!("{} Unknown slash command '{}'. Type '/help' for available commands.", "⚠".yellow(), cmd);
+            "/patch" => {
+                let parts: Vec<&str> = args.split_whitespace().collect();
+                if parts.is_empty() {
+                    println!("{} Usage: /patch <file_path> [modified_content_or_file]", "⚠".yellow());
+                } else {
+                    let path = parts[0];
+                    let orig = std::fs::read_to_string(path).unwrap_or_default();
+                    let mod_code = if parts.len() > 1 {
+                        let m = parts[1..].join(" ");
+                        if std::path::Path::new(&m).exists() {
+                            std::fs::read_to_string(&m).unwrap_or(m)
+                        } else {
+                            m
+                        }
+                    } else {
+                        orig.clone()
+                    };
+                    let ext = std::path::Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or("rs");
+                    let resp = self.dispatch(HgbRequest::AstPatchParse {
+                        original: orig,
+                        modified: mod_code,
+                        file_ext: ext.to_string(),
+                    }).await;
+                    self.render_response(resp);
+                }
             }
+            "/live" => {
+                let port: u16 = args.trim().parse().unwrap_or(3000);
+                let resp = self.dispatch(HgbRequest::LiveTunnelCreate { local_port: port, session_id: None }).await;
+                self.render_response(resp);
+            }
+            "/tdd" => {
+                let intent = if args.is_empty() { "implement validated calculation".to_string() } else { args.to_string() };
+                let resp = self.dispatch(HgbRequest::TddCycleRun {
+                    intent,
+                    target_fn: "process_data".to_string(),
+                    file_ext: "rs".to_string(),
+                }).await;
+                self.render_response(resp);
+            }
+            "/isolate" => {
+                let parts: Vec<&str> = args.split_whitespace().collect();
+                if parts.is_empty() {
+                    println!("{} Usage: /isolate <command> [args...]", "⚠".yellow());
+                } else {
+                    let cmd = parts[0].to_string();
+                    let cmd_args: Vec<String> = parts[1..].iter().map(|s| s.to_string()).collect();
+                    let resp = self.dispatch(HgbRequest::MicroSandboxRun {
+                        command: cmd,
+                        args: cmd_args,
+                        timeout_ms: Some(15000),
+                    }).await;
+                    self.render_response(resp);
+                }
+            }
+            "/chime" => {
+                let cue = match args.trim().to_lowercase().as_str() {
+                    "error" | "fail" => hgb_core::AudioCueKind::ErrorAlert,
+                    "race" => hgb_core::AudioCueKind::RaceWonFast,
+                    "heal" => hgb_core::AudioCueKind::CompilerHealed,
+                    "secret" => hgb_core::AudioCueKind::SecretLeakBlocked,
+                    _ => hgb_core::AudioCueKind::TddGreen,
+                };
+                let resp = self.dispatch(HgbRequest::AudioCuePlay { cue }).await;
+                self.render_response(resp);
+            }
+            "/hmr" => {
+                let parts: Vec<&str> = args.split_whitespace().collect();
+                if parts.len() < 3 {
+                    println!("{} Usage: /hmr <css|js|dom> <target_selector_or_fn> <payload>", "⚠".yellow());
+                } else {
+                    let kind = parts[0].to_string();
+                    let target = parts[1].to_string();
+                    let payload = parts[2..].join(" ");
+                    let resp = self.dispatch(HgbRequest::CdpLivePatch { patch_kind: kind, target, payload }).await;
+                    self.render_response(resp);
+                }
+            }
+            "/lens" => {
+                let parts: Vec<&str> = args.split_whitespace().collect();
+                if parts.is_empty() {
+                    println!("{} Usage: /lens <file_path> [target_symbol]", "⚠".yellow());
+                } else {
+                    let path = parts[0];
+                    let sym = parts.get(1).copied().unwrap_or("");
+                    let code = std::fs::read_to_string(path).unwrap_or_default();
+                    let ext = std::path::Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or("rs");
+                    let resp = self.dispatch(HgbRequest::SkeletonLensProject {
+                        source_code: code,
+                        target_symbol: sym.to_string(),
+                        file_ext: ext.to_string(),
+                    }).await;
+                    self.render_response(resp);
+                }
+            }
+            "/swarm" => {
+                let prompt = if args.is_empty() { "implement safe calculate".to_string() } else { args.to_string() };
+                let resp = self.dispatch(HgbRequest::LakandiwaSwarmRace {
+                    prompt,
+                    target_symbol: "calculate_action".to_string(),
+                    file_ext: "rs".to_string(),
+                }).await;
+                self.render_response(resp);
+            }
+            "/dbsnap" => {
+                let parts: Vec<&str> = args.split_whitespace().collect();
+                let path = parts.first().copied().unwrap_or("app.db");
+                let desc = if parts.len() > 1 { parts[1..].join(" ") } else { "Manual snapshot".to_string() };
+                let resp = self.dispatch(HgbRequest::DbCowSnapshotCreate {
+                    db_path: path.to_string(),
+                    description: desc,
+                }).await;
+                self.render_response(resp);
+            }
+            "/dbrewind" => {
+                let parts: Vec<&str> = args.split_whitespace().collect();
+                if parts.len() < 2 {
+                    println!("{} Usage: /dbrewind <db_path> <snapshot_file>", "⚠".yellow());
+                } else {
+                    let path = parts[0].to_string();
+                    let snap_file = parts[1].to_string();
+                    let resp = self.dispatch(HgbRequest::DbCowSnapshotRollback {
+                        snapshot_file: snap_file,
+                        source_path: path,
+                        blake3_hash: String::new(),
+                    }).await;
+                    self.render_response(resp);
+                }
+            }
+            "/shield" => {
+                let pkgs: Vec<String> = args.split_whitespace().map(|s| s.to_string()).collect();
+                let pkgs = if pkgs.is_empty() { vec!["react".into(), "reqwests".into()] } else { pkgs };
+                let resp = self.dispatch(HgbRequest::SlopsquattingAudit {
+                    packages: pkgs,
+                    ecosystem: "cargo".to_string(),
+                }).await;
+                self.render_response(resp);
+            }
+            "/launch" => {
+                let name = if args.is_empty() { "hagibis-app".to_string() } else { args.trim().to_string() };
+                let resp = self.dispatch(HgbRequest::CloudLaunchpadDeploy {
+                    workspace_path: None,
+                    project_name: name,
+                }).await;
+                self.render_response(resp);
+            }
+            "/flight" => {
+                let ep = if args.is_empty() { "POST /api/v1/checkout".to_string() } else { args.trim().to_string() };
+                let resp = self.dispatch(HgbRequest::FlightSimulatorTrace {
+                    workspace_path: None,
+                    endpoint_name: ep,
+                }).await;
+                self.render_response(resp);
+            }
+            _ => {}
+        }
+        Ok(true)
+    }
+
+    async fn handle_superpowers_command(&mut self, cmd: &str, args: &str) -> Result<bool, Box<dyn std::error::Error>> {
+        match cmd {
+            "/ghostcoder" => {
+                let prefix = if args.is_empty() { "pub async fn get".to_string() } else { args.trim().to_string() };
+                let resp = self.dispatch(HgbRequest::ShadowSynthesize { prefix }).await;
+                self.render_response(resp);
+            }
+            "/mirage" => {
+                let parts: Vec<&str> = args.split_whitespace().collect();
+                let endpoint = parts.first().copied().unwrap_or("/v1/payment_intents").to_string();
+                let method = parts.get(1).copied().unwrap_or("POST").to_string();
+                let resp = self.dispatch(HgbRequest::ApiMirageSimulate { endpoint, method }).await;
+                self.render_response(resp);
+            }
+            "/chaos" => {
+                let target = if args.is_empty() { "PaymentGateway".to_string() } else { args.trim().to_string() };
+                let resp = self.dispatch(HgbRequest::ChaosExperimentRun { target_component: target }).await;
+                self.render_response(resp);
+            }
+            "/nightshift" => {
+                let goal = if args.is_empty() { "Implement resilient webhook retry worker".to_string() } else { args.trim().to_string() };
+                let resp = self.dispatch(HgbRequest::NightShiftDispatch { goal, base_branch: "main".to_string() }).await;
+                self.render_response(resp);
+            }
+            "/vault" => {
+                let resp = if args.trim() == "seal" {
+                    let secrets = vec![
+                        ("STRIPE_KEY".to_string(), "sk_dummy_master_98172931".to_string()),
+                        ("DB_PASSWORD".to_string(), "vault_secured_superpass".to_string()),
+                    ];
+                    self.dispatch(HgbRequest::VaultSeal { secrets, passphrase: "hagibis-dev-key".to_string() }).await
+                } else {
+                    let content = std::fs::read_to_string(".env").unwrap_or_else(|_| "API_KEY=<GHOST_ENCRYPTED_VAULT_ENABLED>".to_string());
+                    self.dispatch(HgbRequest::VaultAuditDisk { disk_content: content }).await
+                };
+                self.render_response(resp);
+            }
+            "/typelock" => {
+                let rust_code = if args.is_empty() {
+                    "pub struct UserProfile {\n    pub id: Uuid,\n    pub email: String,\n    pub is_active: bool,\n    pub tags: Vec<String>,\n}".to_string()
+                } else if std::path::Path::new(args.trim()).exists() {
+                    std::fs::read_to_string(args.trim()).unwrap_or_default()
+                } else {
+                    args.trim().to_string()
+                };
+                let resp = self.dispatch(HgbRequest::TypeLockSync { rust_source: rust_code, existing_ts: None }).await;
+                self.render_response(resp);
+            }
+            "/radar" => {
+                let tier = match args.trim().to_lowercase().as_str() {
+                    "atmosphere" | "atmo" => hgb_core::ZoomTier::Atmosphere,
+                    "surface" | "surf" => hgb_core::ZoomTier::Surface,
+                    _ => hgb_core::ZoomTier::Orbit,
+                };
+                let resp = self.dispatch(HgbRequest::SpatialRadarQuery { tier }).await;
+                self.render_response(resp);
+            }
+            "/teleport" | "/inspect" => {
+                let sel = if args.is_empty() { "button#checkout-btn".to_string() } else { args.trim().to_string() };
+                let resp = self.dispatch(HgbRequest::CdpTeleportResolve { selector: sel }).await;
+                self.render_response(resp);
+            }
+            "/voice" => {
+                let phrase = if args.is_empty() { "wrap this call in a circuit breaker".to_string() } else { args.trim().to_string() };
+                let resp = self.dispatch(HgbRequest::VoiceFlowProcess { transcript: phrase }).await;
+                self.render_response(resp);
+            }
+            "/tape" => {
+                let parts: Vec<&str> = args.split_whitespace().collect();
+                let url = parts.first().copied().unwrap_or("http://localhost:3000").to_string();
+                let scenario = if parts.len() > 1 { parts[1..].join(" ") } else { "Feature Verification".to_string() };
+                let resp = self.dispatch(HgbRequest::PrTapeRecord { url, scenario_name: scenario }).await;
+                self.render_response(resp);
+            }
+            "/finops" => {
+                let prompt = if args.is_empty() { "formally prove invariant safety and architect multi-crate boundary".to_string() } else { args.trim().to_string() };
+                let resp = self.dispatch(HgbRequest::FinOpsRoute { prompt }).await;
+                self.render_response(resp);
+            }
+            "/cloak" => {
+                let text = if args.is_empty() { "Connect to 192.168.1.1 using sk_dummy_998127391 for dev@corp.io".to_string() } else { args.trim().to_string() };
+                let resp = self.dispatch(HgbRequest::AirgapCloakText { text }).await;
+                self.render_response(resp);
+            }
+            "/sqlguard" | "/sql" => {
+                let sql = if args.is_empty() { "DELETE FROM orders;".to_string() } else { args.trim().to_string() };
+                let resp = self.dispatch(HgbRequest::SqlGuardInspect { sql }).await;
+                self.render_response(resp);
+            }
+            "/replay" => {
+                let frame = args.trim().parse::<usize>().ok();
+                let resp = self.dispatch(HgbRequest::ExecutionReplayScrub { target_frame: frame }).await;
+                self.render_response(resp);
+            }
+            "/canvas" => {
+                let parts: Vec<&str> = args.split_whitespace().collect();
+                let (old, new) = if parts.len() >= 2 {
+                    (parts[0].to_string(), parts[1].to_string())
+                } else {
+                    ("p-4".to_string(), "p-6".to_string())
+                };
+                let mutation = hgb_core::CanvasStyleMutation {
+                    component_selector: "div".to_string(),
+                    property_name: "className".to_string(),
+                    old_value: old.clone(),
+                    new_value: new,
+                };
+                let resp = self.dispatch(HgbRequest::CanvasApplyTweak {
+                    source_code: format!("<div className=\"{}\">Canvas Component</div>", old),
+                    target_file: "src/components/Canvas.tsx".to_string(),
+                    symbol_name: "CanvasComponent".to_string(),
+                    mutation,
+                }).await;
+                self.render_response(resp);
+            }
+            "/federate" => {
+                let goal = if args.is_empty() { "Implement Apple Pay Checkout across Backend and Web".to_string() } else { args.trim().to_string() };
+                let resp = self.dispatch(HgbRequest::MultiRepoFederate { goal }).await;
+                self.render_response(resp);
+            }
+            "/timewarp" => {
+                let months = args.trim().parse::<u32>().unwrap_or(6);
+                let cfg = hgb_core::TimeWarpConfig {
+                    seed: 42,
+                    months,
+                    base_timestamp: 1740000000,
+                    include_skew: true,
+                    record_scale: 5,
+                };
+                let resp = self.dispatch(HgbRequest::TimeWarpGenerate { config: Some(cfg) }).await;
+                self.render_response(resp);
+            }
+            "/guardrails" => {
+                let path = if args.is_empty() { ".".to_string() } else { args.trim().to_string() };
+                let resp = self.dispatch(HgbRequest::StructuralGuardrailsAudit { workspace_path: Some(path) }).await;
+                self.render_response(resp);
+            }
+            "/triage" => {
+                let trace = if args.is_empty() {
+                    "thread 'tokio-worker' panicked at 'index out of bounds: the len is 3 but the index is 3', src/routes/cart.rs:42:15".to_string()
+                } else {
+                    args.trim().to_string()
+                };
+                let resp = self.dispatch(HgbRequest::CrashTriageTrace { raw_trace: trace }).await;
+                self.render_response(resp);
+            }
+            "/deflake" => {
+                let test_name = if args.is_empty() { "test_event_delivery_async" } else { args.trim() };
+                let resp = self.dispatch(HgbRequest::FlakyDeflake {
+                    test_name: test_name.to_string(),
+                    test_code: Some("tokio::time::sleep(std::time::Duration::from_millis(10)).await;".to_string()),
+                }).await;
+                self.render_response(resp);
+            }
+            "/anchor" => {
+                let resp = self.dispatch(HgbRequest::ContextAnchorGenerate).await;
+                self.render_response(resp);
+            }
+            _ => {}
+        }
+        Ok(true)
+    }
+
+    async fn handle_frontier_command(&mut self, cmd: &str, args: &str) -> Result<bool, Box<dyn std::error::Error>> {
+        match cmd {
+            "/lsp" | "/ghost-lsp" => {
+                let prefix = if args.is_empty() { "pub async fn handle_checkout".to_string() } else { args.trim().to_string() };
+                let params = hgb_core::LspInlineCompletionParams {
+                    file_path: "src/main.rs".to_string(),
+                    language_id: "rust".to_string(),
+                    line: 1,
+                    character: prefix.len(),
+                    prefix_code: prefix,
+                    suffix_code: "".to_string(),
+                };
+                let resp = self.dispatch(HgbRequest::LspGhostComplete { params }).await;
+                self.render_response(resp);
+            }
+            "/compact" => {
+                let sample_turns = vec![
+                    hgb_core::ConversationTurn {
+                        role: "user".to_string(),
+                        content: "Execute build and run test harness".to_string(),
+                        is_tool_output: false,
+                        token_estimate: 25,
+                    },
+                    hgb_core::ConversationTurn {
+                        role: "tool".to_string(),
+                        content: "src/main.rs\nBuilding... [20,000 lines of compiler spew]".to_string(),
+                        is_tool_output: true,
+                        token_estimate: 20000,
+                    },
+                    hgb_core::ConversationTurn {
+                        role: "assistant".to_string(),
+                        content: "Compilation and tests succeeded.".to_string(),
+                        is_tool_output: false,
+                        token_estimate: 30,
+                    },
+                ];
+                let resp = self.dispatch(HgbRequest::RollingCompactSession {
+                    session_id: "current_session".to_string(),
+                    turns: sample_turns,
+                    max_tokens: Some(32000),
+                }).await;
+                self.render_response(resp);
+            }
+            "/commit" => {
+                let intent = if args.is_empty() { "add biometric authentication gate".to_string() } else { args.trim().to_string() };
+                let resp = self.dispatch(HgbRequest::GitMicroCommit {
+                    files: vec!["crates/core/src/auth.rs".to_string()],
+                    intent,
+                    diff_preview: "+ pub fn verify_passkey() -> bool { true }\n- pub fn legacy() {}".to_string(),
+                }).await;
+                self.render_response(resp);
+            }
+            "/recipe" => {
+                if args.trim().is_empty() || args.trim() == "list" {
+                    let resp = self.dispatch(HgbRequest::VibeRecipeList).await;
+                    self.render_response(resp);
+                } else {
+                    let resp = self.dispatch(HgbRequest::VibeRecipeRun { recipe_name: args.trim().to_string() }).await;
+                    self.render_response(resp);
+                }
+            }
+            "/contract" => {
+                let symbol = if args.is_empty() { "process_payment".to_string() } else { args.trim().to_string() };
+                let resp = self.dispatch(HgbRequest::BehaviorMatrixGenerate {
+                    symbol_name: symbol,
+                    intent_desc: "Production payment processing pipeline".to_string(),
+                }).await;
+                self.render_response(resp);
+            }
+            "/graph" => {
+                let goal = if args.is_empty() { "Synchronize Cross-Repo Biometrics".to_string() } else { args.trim().to_string() };
+                let resp = self.dispatch(HgbRequest::FlightGraphQuery { goal, active_step: 2 }).await;
+                self.render_response(resp);
+            }
+            "/rank-map" | "/pagerank-map" => {
+                let resp = self.dispatch(HgbRequest::RepoMapRank {
+                    extensions: vec!["rs".to_string(), "ts".to_string(), "py".to_string()],
+                    token_budget: Some(1024),
+                }).await;
+                self.render_response(resp);
+            }
+            "/shadow" => {
+                let file = if args.is_empty() { "src/main.rs".to_string() } else { args.trim().to_string() };
+                let candidate = "pub fn new_feature() -> bool { true }\n".to_string();
+                let resp = self.dispatch(HgbRequest::ShadowPreflight {
+                    relative_path: file,
+                    candidate_content: candidate,
+                }).await;
+                self.render_response(resp);
+            }
+            "/squeeze" => {
+                let input = if args.is_empty() {
+                    "   [1/10] Compiling dependencies...\nwarning: unused variable `x`\nwarning: unused variable `x`\nerror[E0425]: cannot find value `foo`\n --> src/main.rs:12:5\n".to_string()
+                } else {
+                    args.to_string()
+                };
+                let resp = self.dispatch(HgbRequest::StreamSqueeze {
+                    raw_output: input,
+                    max_tokens: Some(2048),
+                }).await;
+                self.render_response(resp);
+            }
+            "/mutation" | "/mutation-audit" => {
+                let file = if args.is_empty() { "src/lib.rs".to_string() } else { args.trim().to_string() };
+                let sample_code = "pub fn verify(token: &str, active: bool) -> bool {\n    if token == \"auth\" && active {\n        true\n    } else {\n        false\n    }\n}\n".to_string();
+                let resp = self.dispatch(HgbRequest::MutationAudit {
+                    source_code: sample_code,
+                    file_name: file,
+                }).await;
+                self.render_response(resp);
+            }
+            "/dom" => {
+                let template = "<div id=\"root\"><header class=\"app-bar\"><h1>Hagibis Vibe Cockpit</h1></header><button id=\"launch-btn\" class=\"btn btn-primary\">Launch</button></div>".to_string();
+                let resp = self.dispatch(HgbRequest::DomInspect {
+                    template_content: template,
+                    file_name: "src/App.tsx".to_string(),
+                    click_coords: Some((150.0, 45.0)),
+                    css_selector: None,
+                }).await;
+                self.render_response(resp);
+            }
+            "/mcp-hub" => {
+                let action = if args.is_empty() { "list".to_string() } else { args.trim().to_string() };
+                let resp = self.dispatch(HgbRequest::McpOrchestrate {
+                    action,
+                    server_name: None,
+                    tool_name: None,
+                    arguments: None,
+                }).await;
+                self.render_response(resp);
+            }
+            "/live-graph" | "/sync-graph" => {
+                let resp = self.dispatch(HgbRequest::LiveGraphSync {
+                    extensions: vec!["rs".to_string(), "ts".to_string(), "py".to_string()],
+                }).await;
+                self.render_response(resp);
+            }
+            "/panic-fix" | "/shell-panic" => {
+                let resp = self.dispatch(HgbRequest::ShellPanicDiagnose {
+                    command: if args.is_empty() { "cargo test --bin checkout".to_string() } else { args.trim().to_string() },
+                    exit_code: 101,
+                    stderr: "error[E0425]: cannot find value `token` in this scope\n --> src/auth/jwt.rs:45:12".to_string(),
+                }).await;
+                self.render_response(resp);
+            }
+            "/plan-spec" | "/decompose" => {
+                let intent = if args.is_empty() { "Implement biometric passkey authentication gate".to_string() } else { args.trim().to_string() };
+                let resp = self.dispatch(HgbRequest::SpecDecompose {
+                    intent,
+                    workspace_files: vec!["src/auth.rs".to_string(), "src/main.rs".to_string()],
+                }).await;
+                self.render_response(resp);
+            }
+            "/at-expand" | "/expand-context" => {
+                let prompt = if args.is_empty() { "Review @git:staged changes and check @err:latest".to_string() } else { args.trim().to_string() };
+                let resp = self.dispatch(HgbRequest::DynamicContextExpand { prompt }).await;
+                self.render_response(resp);
+            }
+            "/visual-sentry" | "/pixel-diff" => {
+                let b_nodes = vec![
+                    hgb_core::VisualNodeSnapshot {
+                        tag: "div".to_string(),
+                        id: Some("root".to_string()),
+                        classes: vec!["container".to_string()],
+                        x: 0.0, y: 0.0, width: 800.0, height: 600.0,
+                        text_preview: None,
+                    },
+                    hgb_core::VisualNodeSnapshot {
+                        tag: "button".to_string(),
+                        id: Some("checkout".to_string()),
+                        classes: vec!["btn".to_string()],
+                        x: 100.0, y: 200.0, width: 120.0, height: 40.0,
+                        text_preview: Some("Submit".to_string()),
+                    },
+                ];
+                let c_nodes = vec![
+                    hgb_core::VisualNodeSnapshot {
+                        tag: "div".to_string(),
+                        id: Some("root".to_string()),
+                        classes: vec!["container".to_string()],
+                        x: 0.0, y: 0.0, width: 800.0, height: 600.0,
+                        text_preview: None,
+                    },
+                    hgb_core::VisualNodeSnapshot {
+                        tag: "button".to_string(),
+                        id: Some("checkout".to_string()),
+                        classes: vec!["btn".to_string()],
+                        x: 100.0, y: 202.0, width: 120.0, height: 40.0,
+                        text_preview: Some("Submit".to_string()),
+                    },
+                ];
+                let resp = self.dispatch(HgbRequest::VisualRegressionAudit {
+                    baseline_nodes: b_nodes,
+                    current_nodes: c_nodes,
+                }).await;
+                self.render_response(resp);
+            }
+            "/heal-watch" | "/watchdog-loop" => {
+                let resp = self.dispatch(HgbRequest::ContinuousHealWatch {
+                    workspace_errors: vec!["src/main.rs:42: error: cannot find value `foo` in scope".to_string()],
+                    flaky_tests: vec!["test_auth_timeout".to_string()],
+                }).await;
+                self.render_response(resp);
+            }
+            "/predict" | "/ambient" => {
+                let (file, sym) = if args.is_empty() {
+                    ("src/main.rs".to_string(), "handle_checkout".to_string())
+                } else {
+                    let parts: Vec<&str> = args.split_whitespace().collect();
+                    if parts.len() >= 2 {
+                        (parts[0].to_string(), parts[1].to_string())
+                    } else {
+                        ("src/main.rs".to_string(), parts[0].to_string())
+                    }
+                };
+                let resp = self.dispatch(HgbRequest::AmbientPredict {
+                    file_path: file,
+                    symbol_name: sym,
+                    change_kind: hgb_core::EditKind::SignatureModified,
+                    old_snippet: None,
+                    new_snippet: None,
+                }).await;
+                self.render_response(resp);
+            }
+            "/tweak" | "/cdp-sync" => {
+                let (file, selector, prop, val) = if args.is_empty() {
+                    ("src/App.tsx".to_string(), "button.btn-primary".to_string(), "backgroundColor".to_string(), "#4F46E5".to_string())
+                } else {
+                    let parts: Vec<&str> = args.split_whitespace().collect();
+                    if parts.len() >= 4 {
+                        (parts[0].to_string(), parts[1].to_string(), parts[2].to_string(), parts[3].to_string())
+                    } else {
+                        ("src/App.tsx".to_string(), "button".to_string(), "color".to_string(), args.trim().to_string())
+                    }
+                };
+                let event = hgb_core::DomTweakEvent {
+                    selector,
+                    property_or_attr: prop,
+                    old_value: "".to_string(),
+                    new_value: val,
+                    component_hint: None,
+                    file_hint: Some(file),
+                };
+                let resp = self.dispatch(HgbRequest::CdpTweakSync {
+                    event,
+                    apply_to_disk: false,
+                }).await;
+                self.render_response(resp);
+            }
+            "/mode" | "/harvest" => {
+                let (mode, query) = if args.is_empty() {
+                    ("debug".to_string(), "tokio task panicked".to_string())
+                } else {
+                    let parts: Vec<&str> = args.split_whitespace().collect();
+                    if parts.len() >= 2 {
+                        (parts[0].to_string(), parts[1..].join(" "))
+                    } else {
+                        (parts[0].to_string(), "general".to_string())
+                    }
+                };
+                let m = match mode.to_lowercase().as_str() {
+                    "architect" => hgb_core::VibePromptMode::Architect,
+                    "debug" => hgb_core::VibePromptMode::DebugTriage,
+                    "security" => hgb_core::VibePromptMode::SecurityAudit,
+                    "doc" => hgb_core::VibePromptMode::DocReview,
+                    _ => hgb_core::VibePromptMode::CodeSprint,
+                };
+                let resp = self.dispatch(HgbRequest::PromptModeHarvest {
+                    mode: m,
+                    user_prompt: query,
+                    doc_targets: vec![],
+                    raw_doc_content: None,
+                }).await;
+                self.render_response(resp);
+            }
+            "/sandbox" | "/box" => {
+                let stack = if args.is_empty() { "rust_tokio".to_string() } else { args.trim().to_string() };
+                let resp = self.dispatch(HgbRequest::EphemeralSandboxSpinUp {
+                    stack_name: stack,
+                    tables_to_seed: vec!["users".to_string(), "orders".to_string()],
+                }).await;
+                self.render_response(resp);
+            }
+            "/anti-placebo" | "/gatekeeper" => {
+                let test_code = if args.is_empty() {
+                    "#[test]\nfn test_auth() {\n    let valid = verify_token(\"secret\", true);\n    assert!(valid);\n}".to_string()
+                } else {
+                    args.to_string()
+                };
+                let resp = self.dispatch(HgbRequest::AntiPlaceboAudit {
+                    source_code: "pub fn verify_token(s: &str, active: bool) -> bool { s == \"secret\" && active }".to_string(),
+                    test_code,
+                }).await;
+                self.render_response(resp);
+            }
+            "/preview" => {
+                let port = args.trim().parse::<u16>().ok();
+                let resp = self.dispatch(HgbRequest::LivePreviewStart { port, proxy_devserver_port: None }).await;
+                self.render_response(resp);
+            }
+            "/vision" => {
+                let prompt = if args.is_empty() { "Analyze UI layout and convert to Tailwind CSS".to_string() } else { args.trim().to_string() };
+                let resp = self.dispatch(HgbRequest::MultimodalVisionCapture { prompt, base64_image: None }).await;
+                self.render_response(resp);
+            }
+            "/share" => {
+                let port = args.trim().parse::<u16>().unwrap_or(3000);
+                let resp = self.dispatch(HgbRequest::ShareTunnelCreate { local_port: port, custom_slug: None }).await;
+                self.render_response(resp);
+            }
+            "/graduate" => {
+                let parts: Vec<&str> = args.split_whitespace().collect();
+                let target = if parts.first().map(|s| *s == "firebase").unwrap_or(false) {
+                    hgb_core::BaasTarget::Firebase
+                } else if parts.first().map(|s| *s == "neon").unwrap_or(false) {
+                    hgb_core::BaasTarget::Neon
+                } else {
+                    hgb_core::BaasTarget::Supabase
+                };
+                let resource = parts.get(1).unwrap_or(&"habits").to_string();
+                let sample = serde_json::json!({
+                    "id": "h_101",
+                    "title": "Morning Vibe Coding",
+                    "streak_count": 14,
+                    "is_completed": true,
+                    "user_email": "vibe@example.com"
+                });
+                let resp = self.dispatch(HgbRequest::BaasGraduate { resource_name: resource, sample_json: sample, target }).await;
+                self.render_response(resp);
+            }
+            "/expand" => {
+                let prompt = if args.is_empty() { "dark mode habit tracker with neon glowing streaks and celebratory confetti".to_string() } else { args.trim().to_string() };
+                let resp = self.dispatch(HgbRequest::VibeIntentExpand { prompt }).await;
+                self.render_response(resp);
+            }
+            "/auto-heal" => {
+                let log = if args.is_empty() {
+                    "error[E0433]: cannot find module or crate `uuid` in this scope\nCannot find module 'lucide-react'".to_string()
+                } else {
+                    args.to_string()
+                };
+                let resp = self.dispatch(HgbRequest::AutoDependencyHeal { compiler_log: log }).await;
+                self.render_response(resp);
+            }
+            _ => {}
         }
 
         Ok(true)
@@ -2860,6 +3591,825 @@ impl HagibisRepl {
                 }
                 println!("\n{}", code);
             }
+            HgbResponse::AstPatchReport(report) => {
+                println!("{}", "🌳 AST PATCH ARBITER: DISCOVERED SEMANTIC HUNKS 🌳".bold().cyan());
+                println!("  Total Hunks: {} (Accepted: {}, Staged: {}, Rejected: {})",
+                    report.total_hunks, report.accepted_count, report.staged_count, report.rejected_count);
+                println!("  Syntax Integrity Valid: {}", if report.syntax_valid { "✔ PASSED".green() } else { "✖ FAILED".red() });
+                for hunk in &report.hunks {
+                    println!("    [{}] {} (Lines {}-{}): {}", hunk.id.cyan(), hunk.kind.badge().yellow(), hunk.start_line, hunk.end_line, hunk.symbol_name.bold());
+                }
+            }
+            HgbResponse::AstPatchApplied { code } => {
+                println!("{}", "✔ AST PATCH SUCCESSFULLY APPLIED & VERIFIED".bold().green());
+                let preview: Vec<&str> = code.lines().take(6).collect();
+                println!("{}\n  ... ({} lines total)", preview.join("\n"), code.lines().count());
+            }
+            HgbResponse::LiveTunnelSessionReport(session) => {
+                println!("{}", "📱 P2P MOBILE PREVIEW TUNNEL READY 📱".bold().cyan());
+                println!("  URL:         {}", session.public_url.green().bold());
+                println!("  Local Port:  {}", session.local_port);
+                println!("  Session ID:  {}", session.session_id);
+                println!("\n{}\n", session.qr_matrix_terminal);
+                println!("  {} Scan QR with your smartphone to inspect preview on mobile device", "💡".cyan());
+            }
+            HgbResponse::MobileTelemetryReport(ev) => {
+                println!("{}", format!("📱 MOBILE TELEMETRY [{}]: {}", ev.event_type, ev.message).bold().yellow());
+                println!("  Device: {} | Viewport: {}", ev.user_agent, ev.viewport);
+            }
+            HgbResponse::TddCycleReport(rep) => {
+                println!("{}", "🔴🟢 AUTONOMOUS SPECULATIVE TDD CYCLE REPORT 🟢🔴".bold().green());
+                println!("  Intent:            {}", rep.intent.cyan());
+                println!("  Target Function:   {}", rep.spec.target_function.bold());
+                println!("  Phase 1 (RED):     {}", if rep.red_verified { "✔ Verified (Test Fails on Blank State)".green() } else { "✖ Failed".red() });
+                println!("  Phase 2 (GREEN):   {}", if rep.green_verified { "✔ Verified (Implementation Passes Invariants)".green() } else { "✖ Failed".red() });
+                println!("  Phase 3 (REFACTOR):{}", if rep.refactor_clean { "✔ Cleaned & Verified Zero Regressions".green() } else { "✖ Failed".red() });
+                println!("  Duration:          {}ms ({} iterations)", rep.duration_ms, rep.iterations);
+                println!("\n{}", "--- Synthesized Implementation ---".dimmed());
+                println!("{}", rep.synthesized_code.green());
+            }
+            HgbResponse::MicroSandboxExecutionReport(rep) => {
+                let status_str = if rep.exit_code == 0 { "✔ CLEAN (Exit 0)".green().bold() } else { format!("✖ FAILED (Exit {})", rep.exit_code).red().bold() };
+                println!("{}", format!("🛡️ MICRO-SANDBOX EXECUTION: {}", status_str));
+                println!("  Command:          {}", rep.command.cyan());
+                println!("  Shielded Secrets: {}", rep.secrets_shielded);
+                println!("  Duration:         {}ms", rep.execution_time_ms);
+                if !rep.stdout.trim().is_empty() {
+                    println!("\n  Stdout:\n{}", rep.stdout.trim());
+                }
+                if !rep.stderr.trim().is_empty() {
+                    println!("\n  Stderr:\n{}", rep.stderr.trim().red());
+                }
+            }
+            HgbResponse::AudioCuePlayed { cue } => {
+                println!("  {} {}", "🔔".cyan(), cue.description().italic());
+            }
+            HgbResponse::VoiceIntentReport(maybe_intent) => {
+                if let Some(intent) = maybe_intent {
+                    println!("{}", format!("🎙️ VOICE INTENT [{:.0}%]: {} -> {:?}", intent.confidence * 100.0, intent.action, intent.target_symbol).bold().cyan());
+                } else {
+                    println!("  {}", "No recognized voice intent in transcript".dimmed());
+                }
+            }
+            HgbResponse::CdpPatchResult(rep) => {
+                println!("{}", "⚡ CDP LIVE IN-MEMORY PATCH REPORT ⚡".bold().cyan());
+                println!("  Target:                 {}", rep.target.yellow());
+                println!("  Patch Kind:             {}", rep.patch_kind.green());
+                println!("  Client State Preserved: {}", if rep.client_state_preserved { "✔ Form/Auth/DOM Intact".green() } else { "✖ Reset".red() });
+                println!("  Latency:                {}µs", rep.latency_us);
+            }
+            HgbResponse::SkeletonLensResult(rep) => {
+                println!("{}", format!("🧬 AST SKELETON LENS: '{}' 🧬", rep.target_symbol).bold().cyan());
+                println!("  Original Lines:     {} (~{} tokens)", rep.original_lines, rep.original_tokens_est);
+                println!("  Compacted Lines:    {} (~{} tokens)", rep.compacted_lines, rep.compacted_tokens_est);
+                println!("  Token Savings:      {:.1}%", rep.token_savings_pct.to_string().green().bold());
+                println!("  Folded Signatures:  {}", rep.folded_symbols_count);
+                println!("\n{}", rep.projected_code);
+            }
+            HgbResponse::LakandiwaSwarmResult(rep) => {
+                println!("{}", "🏛️ LAKANDIWA TRIPLE-MODEL CONSENSUS SWARM 🏛️".bold().cyan());
+                println!("  Prompt:             {}", rep.prompt.yellow());
+                println!("  Winner Model:       {}", rep.winner_model.green().bold());
+                println!("  Contest Duration:   {}ms", rep.duration_ms);
+                println!("\n  Evaluated Candidates ({}):", rep.candidate_count);
+                for c in &rep.candidates {
+                    println!("    • [{:.1}/10] {:<28} ({}ms) | Syntax: {} | Tests: {}",
+                        c.total_score, c.candidate_name.cyan(), c.latency_ms,
+                        if c.syntax_valid { "✔".green() } else { "✖".red() },
+                        if c.tests_passed { "✔".green() } else { "✖".red() });
+                }
+                println!("\n--- Winning Patch ---\n{}", rep.winning_patch.green());
+            }
+            HgbResponse::DbCowSnapshotCreated(rec) => {
+                println!("{}", "💾 DATABASE COPY-ON-WRITE SNAPSHOT CREATED 💾".bold().green());
+                println!("  Source:      {}", rec.source_path.yellow());
+                println!("  Snapshot:    {}", rec.snapshot_id.cyan());
+                println!("  Size:        {} bytes", rec.byte_size);
+                let short = if rec.blake3_hash.len() > 16 { &rec.blake3_hash[..16] } else { &rec.blake3_hash };
+                println!("  Blake3:      {}", short);
+            }
+            HgbResponse::DbCowSnapshotRestored { bytes_restored } => {
+                println!("{} Database restored to exact binary byte-state ({} bytes).", "✔ DB ROLLBACK COMPLETE:".green().bold(), bytes_restored);
+            }
+            HgbResponse::SlopsquattingReport(rep) => {
+                println!("{}", "🛡️ SUPPLY-CHAIN & SLOPSQUATTING FIREWALL AUDIT 🛡️".bold().cyan());
+                println!("  Inspected: {} | Safe: {} | Blocked: {}",
+                    rep.total_inspected, rep.safe_count.to_string().green(), rep.blocked_count.to_string().red().bold());
+                for item in &rep.items {
+                    let badge = match item.risk_level {
+                        hgb_core::slopsquatting_firewall::PackageRiskLevel::Safe => "[SAFE]".green(),
+                        hgb_core::slopsquatting_firewall::PackageRiskLevel::Suspicious => "[SUSPICIOUS]".yellow(),
+                        hgb_core::slopsquatting_firewall::PackageRiskLevel::Quarantined => "[QUARANTINED]".red().bold(),
+                    };
+                    println!("    {} {:<25} ➔ {}", badge, item.package_name.cyan(), item.reason.dimmed());
+                }
+            }
+            HgbResponse::CloudLaunchpadReport(rep) => {
+                println!("{}", "🌐 ZERO-OPS CLOUD LAUNCHPAD: DEPLOYED TO EDGE 🌐".bold().green());
+                println!("  Public URL:       {}", rep.public_url.green().bold());
+                println!("  Project Slug:     {}", rep.deployment_id.cyan());
+                println!("  Framework:        {}", rep.framework.yellow());
+                println!("  TLS Certificate:  {}", rep.tls_certificate);
+                println!("  Deploy Duration:  {}ms", rep.duration_ms);
+                print!("{}", rep.osc52_clipboard_code); // Copy link to OS clipboard via OSC 52
+                println!("  {} Link copied to OS clipboard via OSC 52", "📋".cyan());
+            }
+            HgbResponse::FlightSimulatorResult(rep) => {
+                println!("{}", rep.ascii_flight_trace);
+            }
+            HgbResponse::ShadowSynthesizerResult(rep) => {
+                println!("{}", "👻 SUB-MILLISECOND PREDICTIVE SHADOW SYNTHESIZER 👻".bold().cyan());
+                println!("  Resident Cache Size:  {} speculative continuations", rep.active_cache_size);
+                println!("  Cache Hit Status:     {}", if rep.hit { "HIT (sub-50µs)".bold().green() } else { "DYNAMIC SYNTHESIS".yellow() });
+                if let Some(top) = rep.top_prediction {
+                    println!("  Top Prediction Symbol: {}", top.symbol_name.bold().green());
+                    println!("  Confidence Score:      {:.1}%", top.confidence * 100.0);
+                    println!("  Precomputation Time:   {}µs", top.latency_us);
+                    println!("  Synthesized AST:\n{}", top.continuation_code.cyan());
+                }
+            }
+            HgbResponse::ApiMirageResult(rep) => {
+                println!("{}", "🔮 UNIVERSAL OFFLINE API MIRAGE & WIRETAPPER 🔮".bold().magenta());
+                println!("  Endpoint:        {} {}", rep.method.bold().yellow(), rep.endpoint.cyan());
+                println!("  Simulated HTTP:  {}", rep.status);
+                println!("  Synthetic Mode:  {}", rep.is_synthetic);
+                println!("  Response Time:   {}ms (deterministic offline mock)", rep.duration_ms);
+                println!("  Payload Preview:\n{}", rep.payload_snippet);
+            }
+            HgbResponse::ChaosMonkeyResult(rep) => {
+                println!("{}", "🐒 IN-PROCESS CHAOS MONKEY & INVARIANT FUZZER 🐒".bold().red());
+                println!("  Target Component:     {}", rep.target_component.bold());
+                println!("  Trials Executed:      {}", rep.trials_run);
+                println!("  Invariants Preserved: {} / {}", rep.invariants_passed, rep.trials_run);
+                println!("  Survival Rate:        {:.1}%", rep.survival_rate);
+                for trial in &rep.details {
+                    let mark = if trial.passed { "✅".green() } else { "❌".red() };
+                    println!("    {} [{:<22}] - {}ms | {}", mark, trial.vector_id, trial.simulated_latency_ms, trial.error_caught.as_deref().unwrap_or("Invariant Verified"));
+                }
+            }
+            HgbResponse::ChaosTrialResult(trial) => {
+                println!("{}", "🐒 CHAOS MONKEY IDEMPOTENCY BURST RESULT 🐒".bold().red());
+                println!("  Vector:    {}", trial.vector_id);
+                println!("  Status:    {}", if trial.passed { "PASSED (No state race)".bold().green() } else { "FAILED".bold().red() });
+                println!("  Detail:    {}", trial.error_caught.as_deref().unwrap_or(""));
+            }
+            HgbResponse::NightShiftResult(rep) => {
+                println!("{}", "🌙 AUTONOMOUS NIGHT-SHIFT SWARM WORKTREE PIPELINE 🌙".bold().purple());
+                println!("  Task ID:          {}", rep.task_id.bold().yellow());
+                println!("  Goal:             {}", rep.goal_description);
+                println!("  Worktree Branch:  {}", rep.worktree_branch.green());
+                println!("  Tests Passed:     {} / {}", rep.tests_passed, rep.tests_passed);
+                println!("  Lines Changed:    +{} lines", rep.loc_changed);
+                println!("  Review Ready:     {}", rep.ready_for_review);
+                println!("\n{}", rep.pr_summary);
+            }
+            HgbResponse::VaultSealResult(seal) => {
+                println!("{}", "🔒 KERNEL-LEVEL MEMORY-ONLY GHOST ENVS: SEALED 🔒".bold().green());
+                println!("  Entries Sealed:   {}", seal.entries_count);
+                println!("  Cipher Hash:      {}", seal.cipher_hash.cyan());
+                println!("  Payload Size:     {} bytes (Encrypted with Blake3 XOF Stream)", seal.encrypted_payload.len());
+                println!("  Disk Safety:      100% Guaranteed. Real secrets never touch disk.");
+            }
+            HgbResponse::VaultAuditResult(rep) => {
+                println!("{}", "🛡️ GHOST ENVS DISK SANITIZATION AUDIT 🛡️".bold().cyan());
+                println!("  Vault Status:     {}", if rep.vault_intact { "INTACT (Blake3 Sealed)".green() } else { "UNSEALED".red() });
+                println!("  Disk Sanitized:   {}", if rep.disk_sanitized { "CLEAN (Zero Plaintext Leaks)".bold().green() } else { "CRITICAL LEAKS DETECTED".bold().red() });
+                println!("  Injected Vars:    {} variables memory-only", rep.injected_variables_count);
+                if !rep.leaked_keys_detected.is_empty() {
+                    println!("  Leaked Keys:      {:?}", rep.leaked_keys_detected);
+                }
+                println!("  Summary:          {}", rep.status_message);
+            }
+            HgbResponse::TypeLockResult(rep) => {
+                println!("{}", "🔒 ZERO-DRIFT POLYGLOT TYPE LOCK 🔒".bold().yellow());
+                println!("  Models Synced:    {}", rep.models_synced);
+                println!("  Zero-Drift:       {}", if rep.zero_drift_achieved { "ACHIEVED (100% Parity)".bold().green() } else { "DRIFT DETECTED".bold().red() });
+                if !rep.drifts_detected.is_empty() {
+                    println!("  Discrepancies:");
+                    for d in &rep.drifts_detected {
+                        println!("    ⚠ {}.{}: {}", d.model.red(), d.field.yellow(), d.discrepancy);
+                    }
+                }
+                println!("\n--- Generated TypeScript ---\n{}", rep.generated_ts_interfaces);
+                println!("--- Generated Zod Validation ---\n{}", rep.generated_zod_schemas);
+            }
+            HgbResponse::SpatialRadarResult(rep) => {
+                println!("{}", rep.ascii_radar);
+                println!("  Visible Nodes:    {}", rep.nodes_visible);
+                println!("  System Health:    {:.1}%", rep.system_health);
+                for rec in &rep.recommendations {
+                    println!("  💡 {}", rec.cyan());
+                }
+            }
+            HgbResponse::CdpTeleportResult(rep) => {
+                println!("{}", "🎯 CLICK-TO-SOURCE CDP TELEPORT 🎯".bold().cyan());
+                println!("  Query Selector:   {}", rep.query_selector.yellow());
+                println!("  Matched:          {}", if rep.matched { "EXACT MATCH".bold().green() } else { "HEURISTIC SYNTHESIS".yellow() });
+                println!("  Confidence:       {:.1}%", rep.confidence * 100.0);
+                if let Some(t) = rep.target {
+                    println!("  Target File:      {}:{}:{}", t.source_file.green().bold(), t.line_number, t.column_number);
+                    println!("  Symbol Name:      {} ({})", t.symbol_name.bold(), t.component_type);
+                    println!("  Source Excerpt:\n{}", t.code_snippet.cyan());
+                }
+                println!("  💡 {}", rep.ghost_patch_hint.dimmed());
+            }
+            HgbResponse::VoiceFlowResult(rep) => {
+                println!("{}", "🎙️ FULL-DUPLEX ZERO-LATENCY VOICE FLOW CO-PILOT 🎙️".bold().magenta());
+                println!("  Session ID:       {}", rep.session_id.yellow());
+                println!("  Spoken Transcript:\"{}\"", rep.dispatch.transcript.bold().white());
+                println!("  Recognized Intent:{:?}", rep.dispatch.kind);
+                println!("  Target AST Node:  {}", rep.dispatch.ast_target_symbol.cyan());
+                println!("  Processing Delay: {}ms (Sub-100ms real-time audio SLA)", rep.processing_latency_ms);
+                println!("  Spoken Response:  🔊 \"{}\"", rep.dispatch.spoken_acknowledgment.bold().green());
+            }
+            HgbResponse::PrTapeResult(rep) => {
+                println!("{}", "🎥 HEADLESS SCREENPLAY & AUTOMATED PR LOOM TAPE 🎥".bold().purple());
+                println!("  Tape ID:          {}", rep.tape_id.yellow());
+                println!("  Target Route:     {}", rep.url.cyan());
+                println!("  Scenario Name:    {}", rep.scenario_name.bold());
+                println!("  Steps Executed:   {}", rep.steps_executed.len());
+                println!("  Duration:         {}ms ({} frames)", rep.duration_ms, rep.frame_count);
+                println!("  Compressed Size:  {} bytes (Animated WebP)", rep.file_size_bytes);
+                println!("\n{}", rep.markdown_embed_snippet);
+            }
+            HgbResponse::FinOpsResult(rep) => {
+                println!("{}", "💰 TOKEN FINOPS & DYNAMIC LATENCY ARBITRAGE 💰".bold().green());
+                println!("  Selected Tier:    {:?}", rep.decision.selected_tier);
+                println!("  Target Model:     {}", rep.decision.target_model.bold().yellow());
+                println!("  Estimated Tokens: {} tokens", rep.decision.estimated_tokens);
+                println!("  Cost Per Prompt:  ${:.6} USD", rep.decision.estimated_cost_usd);
+                println!("  Projected Latency:{}ms", rep.decision.projected_latency_ms);
+                println!("  Routing Rationale:{}", rep.decision.reasoning.cyan());
+                println!("  Lifetime Savings: {} tokens (${:.2} USD preserved)", rep.lifetime_tokens_saved, rep.lifetime_dollars_saved_usd);
+                println!("  Local Model Ratio:{:.1}% on resident Ollama", rep.local_execution_ratio);
+            }
+            HgbResponse::AirgapCloakResult(rep) => {
+                println!("{}", "🥷 ZERO-KNOWLEDGE AIRGAP CLOAK & PII SANITIZER 🥷".bold().yellow());
+                println!("  Original Length:  {} bytes", rep.original_length);
+                println!("  Entities Masked:  {}", rep.entities_masked.len());
+                for e in &rep.entities_masked {
+                    println!("    🔒 [{:<12}] {} -> {}", e.entity_type.cyan(), e.original_masked, e.placeholder.yellow());
+                }
+                println!("  Cloaked Prompt:\n{}", rep.cloaked_text.green());
+            }
+            HgbResponse::AirgapRehydrateResult { rehydrated_text } => {
+                println!("{}", "🥷 AIRGAP CLOAK: RESPONSE REHYDRATED 🥷".bold().green());
+                println!("  Rehydrated Text:\n{}", rehydrated_text);
+            }
+            HgbResponse::SqlGuardResult(rep) => {
+                println!("{}", "🛡️ ACTIVE SQL INTERCEPTOR & SHADOW TRANSACTION JAIL 🛡️".bold().red());
+                println!("  Raw Statement:    {}", rep.raw_query.bold().white());
+                println!("  Safety Verdict:   {:?}", rep.verdict);
+                println!("  Destructive:      {}", if rep.is_destructive { "YES (CRITICAL)".bold().red() } else { "NO (Verified Safe)".green() });
+                println!("  WHERE Clause:     {}", if rep.has_where_clause { "DETECTED".green() } else { "MISSING".red().bold() });
+                println!("  Rows Impacted:    ~{} rows", rep.simulated_rows_impacted);
+                if let Some(snap) = rep.shadow_snapshot_id {
+                    println!("  Shadow Snapshot:  {}", snap.yellow());
+                }
+                println!("  Audit Verdict:    {}", rep.explanation);
+            }
+            HgbResponse::ExecutionReplayResult(rep) => {
+                println!("{}", "⏱️ DETERMINISTIC EXECUTION REPLAY & REWIND-EXEC ⏱️".bold().cyan());
+                println!("  Flight Trace ID:  {}", rep.trace_id.yellow());
+                println!("  Total Frames:     {}", rep.total_frames);
+                println!("  Scrubbed Frame:   #{}", rep.scrubbed_frame_index);
+                for frame in &rep.frames {
+                    let mark = if frame.is_anomaly { "🚨".red() } else { "🔹".blue() };
+                    println!("    {} Frame #{}: [{:<24}] @ {} (+{}ms) | {}", mark, frame.frame_index, frame.event_kind, frame.symbol_location, frame.timestamp_ms, frame.state_snapshot_snippet.dimmed());
+                }
+                println!("  Diagnosis:        {}", rep.diagnosis.bold());
+            }
+            HgbResponse::CanvasMutationResult(rep) => {
+                println!("{}", "🎨 TWO-WAY VISUAL CANVAS & LIVE CSS MIRROR 🎨".bold().cyan());
+                println!("  Target File:     {}", rep.target_file.yellow());
+                println!("  Symbol Name:     {}", rep.symbol_name.green());
+                println!("  Applied Classes: {:?}", rep.applied_classes);
+                println!("  Patched JSX:     {}", rep.patched_jsx.bold());
+                println!("  Latency:         {} µs (Zero Token Waste: {})", rep.latency_us, rep.zero_token_waste);
+            }
+            HgbResponse::MultiRepoFederateResult(rep) => {
+                println!("{}", "🌐 MULTI-REPO SWARM & MONOREPO MESH FEDERATOR 🌐".bold().cyan());
+                println!("  Feature Goal:    {}", rep.feature_goal.yellow());
+                println!("  Sync Session ID: {}", rep.sync_id.green());
+                println!("  Unified Branch:  {}", rep.unified_branch.cyan());
+                println!("  Repos Mesh:      {} repositories synchronized", rep.repos_coordinated);
+                for task in &rep.tasks {
+                    println!("    📦 [{:<18}] ({}) -> {}", task.repo_name.bold(), task.stack_type.dimmed(), task.status.green());
+                }
+                println!("  Contract Valid:  {}", if rep.contract_compatibility { "YES (100% Type-Safe)".green() } else { "DRIFT DETECTED".red() });
+                println!("  PR Bundle:       {}", rep.pr_sync_bundle.dimmed());
+            }
+            HgbResponse::TimeWarpResult(rep) => {
+                println!("{}", "⏳ RELATIONAL TIME-WARP DATA SYNTHESIZER ⏳".bold().cyan());
+                println!("  Time Horizon:    {} months simulated ({})", rep.timespan_months, rep.temporal_range.0);
+                println!("  Total Records:   {} entities", rep.total_records);
+                println!("  FK Integrity:    {}", if rep.fk_integrity_verified { "100% VALIDATED (0 Violations)".green() } else { "BROKEN FK".red() });
+                println!("  Clock Skew Runs: {} edge cases (DST/leap simulated)", rep.clock_skew_events_simulated);
+                for s in &rep.table_summaries {
+                    println!("    📊 Table {:<15}: {:>4} rows {}", s.table_name.bold(), s.count, s.fk_column.as_deref().unwrap_or(""));
+                }
+                println!("  JSON Bytes:      {} bytes", rep.json_fixture_bytes);
+            }
+            HgbResponse::StructuralGuardrailsResult(rep) => {
+                println!("{}", "🏛️ STRUCTURAL INVARIANT GUARDRAILS & ANTI-SPAGHETTI 🏛️".bold().cyan());
+                println!("  Clean Score:     {}/100 | Status: {}", rep.clean_architecture_score, if rep.healthy { "CLEAN & SOLID".green() } else { "ACTION NEEDED".red() });
+                println!("  Scanned Files:   {} | Invariant Checks: {}", rep.scanned_files, rep.passed_rules);
+                if rep.violations.is_empty() {
+                    println!("  Violations:      None! Zero architecture leaks.");
+                } else {
+                    for v in &rep.violations {
+                        println!("    🚨 [{:?}] {} @ {}:{}", v.severity, v.rule_name.bold(), v.file_path, v.line);
+                        println!("       Message: {}", v.message.yellow());
+                        println!("       Fix:     {}", v.suggested_fix.green());
+                    }
+                }
+            }
+            HgbResponse::CrashTriageResult(rep) => {
+                println!("{}", "🚑 PRODUCTION CRASH AUTO-TRIAGE & REPRODUCTION 🚑".bold().cyan());
+                println!("  Crash ID:        {}", rep.crash_id.yellow());
+                println!("  Culprit Frame:   {}:{} ({})", rep.culprit_file.bold(), rep.culprit_line, rep.language.green());
+                println!("  Root Cause:      {}", rep.root_cause_analysis.bold());
+                println!("  Repro Test:      \n{}", rep.reproduction_test_code.dimmed());
+                println!("  Defensive Patch: \n{}", rep.defensive_patch.green());
+            }
+            HgbResponse::FlakyDeflakeResult(rep) => {
+                println!("{}", "🎯 FLAKY TEST EXTERMINATOR & STRESS FUZZER 🎯".bold().cyan());
+                println!("  Target Test:     {}", rep.test_name.bold());
+                println!("  Stress Runs:     {}/{} passed ({:.1}% pass rate)", rep.passed_runs, rep.total_runs, (1.0 - rep.flakiness_ratio) * 100.0);
+                println!("  Flaky Verdict:   {}", if rep.is_flaky { "FLAKY RACE CONDITION DETECTED".red().bold() } else { "ROCK SOLID DETERMINISTIC".green() });
+                if rep.is_flaky {
+                    println!("  Root Cause:      {}", rep.detected_race_condition.yellow());
+                    println!("  Suggested Fix:   {}", rep.suggested_synchronization_fix.green());
+                    println!("  Remediation Code:\n{}", rep.remediation_code.dimmed());
+                }
+            }
+            HgbResponse::ContextAnchorResult(rep) => {
+                println!("{}", "🧠 ASSOCIATIVE NEURAL CONTEXT & INFINITE MEMORY 🧠".bold().cyan());
+                println!("  Continuity Score: {}/100 | Categories: {}", rep.continuity_score, rep.categories_covered);
+                println!("  Anchor Tokens:    ~{} tokens (Ultra-dense prompt prefix)", rep.estimated_tokens);
+                println!("  Anchor Snapshot:  \n{}", rep.compressed_anchor.green());
+            }
+            HgbResponse::ContextAnchorRecorded { id } => {
+                println!("{} Context anchor decision recorded: {}", "✅".green(), id.yellow());
+            }
+            HgbResponse::LspGhostResult(rep) => {
+                println!("{}", "👻 UNIVERSAL LSP GHOST DAEMON PREDICTOR 👻".bold().cyan());
+                println!("  Target File:     {}", rep.file_path.yellow());
+                println!("  Candidates:      {} items (duration: {} µs)", rep.total_candidates, rep.duration_us);
+                for (i, c) in rep.completions.iter().enumerate() {
+                    println!("    🔹 Candidate #{}: [{}] (confidence: {:.2})", i + 1, c.source_engine.bold(), c.confidence);
+                    println!("       Insert: \n{}", c.insert_text.green());
+                }
+            }
+            HgbResponse::RollingCompactResult(rep) => {
+                println!("{}", "🗜️ AUTOMATED ROLLING CONTEXT COMPACTOR 🗜️".bold().cyan());
+                println!("  Session ID:      {}", rep.session_id.yellow());
+                println!("  Token Redux:     {} -> {} tokens ({:.1}% reduction)", rep.original_tokens, rep.compacted_tokens, rep.compression_ratio * 100.0);
+                println!("  Turns Pruned:    {} tool blocks stripped", rep.pruned_tool_outputs);
+                println!("  Merkle Anchor:   {}", rep.merkle_anchor_hash.green());
+                println!("  Snapshot:        \n{}", rep.summary_snapshot.dimmed());
+            }
+            HgbResponse::GitMicroCommitResult(rep) => {
+                println!("{}", "📦 ATOMIC CONVENTIONAL GIT MICRO-COMMIT 📦".bold().cyan());
+                println!("  Commit Hash:     {}", rep.commit_hash.yellow().bold());
+                println!("  Message:         {}", rep.conventional_message.green().bold());
+                println!("  Diff Stats:      +{} lines, -{} lines across {:?} files", rep.lines_added, rep.lines_removed, rep.staged_files);
+                println!("  Verified Syntax: {}", if rep.verified_syntax { "YES (Clean AST)".green() } else { "FAILED".red() });
+                println!("  Undo Command:    {}", rep.undo_command.dimmed());
+            }
+            HgbResponse::VibeRecipeListResult(list) => {
+                println!("{}", "📜 DECLARATIVE VIBE RECIPES CATALOG 📜".bold().cyan());
+                println!("  Available Standard Recipes: {}", list.len());
+                for r in &list {
+                    println!("    📖 [{:<24}] {} ({} steps)", r.name.green().bold(), r.description.dimmed(), r.steps.len());
+                }
+            }
+            HgbResponse::VibeRecipeRunResult(rep) => {
+                println!("{}", "🚀 EXECUTING DECLARATIVE VIBE RECIPE 🚀".bold().cyan());
+                println!("  Recipe:          {}", rep.recipe_name.yellow().bold());
+                println!("  Progress:        {}/{} steps completed (+{} lines synthesized)", rep.steps_completed, rep.steps_total, rep.total_lines_synthesized);
+                for log in &rep.logs {
+                    println!("    ✓ Step #{}: {:<32} -> {} ({}ms)", log.step_number, log.name.bold(), log.status.green(), log.duration_ms);
+                }
+                println!("  Summary:         {}", rep.summary.green());
+            }
+            HgbResponse::BehaviorMatrixResult(rep) => {
+                println!("{}", "🧪 PRE-FLIGHT BEHAVIORAL CONTRACT MATRIX 🧪".bold().cyan());
+                println!("  Target Symbol:   {}", rep.target_symbol.yellow().bold());
+                println!("  Dimensions:      {}/5 dimensions verified (Score: {}/100)", rep.dimensions_covered, rep.behavioral_coverage_score);
+                for c in &rep.contracts {
+                    println!("    🛡️ [{:<18}] {}", c.dimension.as_str().bold(), c.title.green());
+                    println!("       Scenario: {}", c.scenario.dimmed());
+                    println!("       Expected: {}", c.expected_behavior.yellow());
+                }
+                println!("  Scaffolded Suite:\n{}", rep.generated_test_suite.dimmed());
+            }
+            HgbResponse::FlightGraphResult(rep) => {
+                println!("{}", "🗺️ LIVE AGENT FLIGHT-GRAPH & REAL-TIME TASK DAG 🗺️".bold().cyan());
+                println!("  Goal:            {}", rep.task_goal.yellow().bold());
+                println!("  Progress:        {}% ({} of {} nodes) | Burn: ~{} tokens | Elapsed: {}ms",
+                    rep.progress_percent, rep.completed_nodes, rep.total_nodes, rep.total_tokens_burned, rep.total_duration_ms
+                );
+                println!("{}", rep.ascii_dag.green());
+            }
+            HgbResponse::RepoMapRankResult(rep) => {
+                println!("{}", rep.cyan());
+            }
+            HgbResponse::ShadowPreflightResult(rep) => {
+                println!("{}", "🛡️ CURSOR-STYLE SHADOW WORKSPACE VALIDATOR 🛡️".bold().cyan());
+                println!("  Pre-flight Valid: {}", if rep.is_valid { "CLEAN (Compilation Sound)".green().bold() } else { "FAILED (Errors Detected)".red().bold() });
+                println!("  Diff Statistics:  {}", rep.diff_stats.yellow());
+                if !rep.diagnostics.is_empty() {
+                    println!("  Diagnostics ({} found):", rep.diagnostics.len());
+                    for d in &rep.diagnostics {
+                        println!("    ❌ {}:{}:{} - {}", d.file_path, d.line_number, d.column, d.message.red());
+                    }
+                }
+                if let Some(ref _fixed) = rep.repaired_content {
+                    println!("  ✨ Speculative Auto-Repair Applied! Repaired diff ready for staging.");
+                }
+                println!("  Compiler Output:\n{}", rep.compiler_output.dimmed());
+            }
+            HgbResponse::StreamSqueezeResult(rep) => {
+                println!("{}", "🗜️ CLAUDE CODE-STYLE TERMINAL STREAM SQUEEZER 🗜️".bold().cyan());
+                println!("  Raw vs Squeezed: {} lines -> {} lines ({:.1}% compression)",
+                    rep.total_raw_lines, rep.squeezed_lines, rep.compression_ratio_pct
+                );
+                println!("  Critical Errors: {} found | Unique Warnings: {}", rep.errors.len(), rep.deduplicated_warnings.len());
+                if !rep.file_locations.is_empty() {
+                    println!("  Direct Code Locations: {:?}", rep.file_locations);
+                }
+                println!("{}", rep.compressed_view.yellow());
+            }
+            HgbResponse::MutationAuditResult(rep) => {
+                println!("{}", "🧬 QODO-STYLE TEST INTEGRITY MUTATION AUDIT 🧬".bold().cyan());
+                println!("  Integrity Grade: {}", rep.integrity_grade.bold().green());
+                println!("  Mutation Score:  {:.1}% ({}/{} mutants killed)",
+                    rep.mutation_score_pct, rep.killed_mutants, rep.total_mutants - rep.compile_errors
+                );
+                println!("  Placebo Mutants: {} survived", rep.survived_mutants);
+                for rec in &rep.recommendations {
+                    println!("    💡 {}", rec.yellow());
+                }
+            }
+            HgbResponse::DomInspectResult { elements, hierarchy_map, target_element } => {
+                println!("{}", "👁️ BOLT.NEW-STYLE CLICK-TO-CODE DOM TELEMETRY 👁️".bold().cyan());
+                println!("  Parsed Elements: {} nodes", elements.len());
+                if let Some(target) = target_element {
+                    println!("  🎯 Selected Node: <{} id=\"{:?}\" class=\"{:?}\"> -> {}:{}",
+                        target.tag.green().bold(), target.id, target.classes, target.source_file.yellow(), target.source_line
+                    );
+                }
+                println!("{}", hierarchy_map.dimmed());
+            }
+            HgbResponse::McpOrchestrateResult { active_servers, tools, tool_output } => {
+                println!("{}", "🌐 GOOSE-STYLE UNIVERSAL MCP FLEET ORCHESTRATOR 🌐".bold().cyan());
+                println!("  Active Servers:  {} connected", active_servers.len());
+                for (s, st) in active_servers {
+                    println!("    🖥️  {:<20} -> {:?}", s.bold(), st);
+                }
+                println!("  Aggregated Tools: {} available", tools.len());
+                for t in tools.iter().take(10) {
+                    println!("    🔧 {:<32} - {}", t.namespaced_name.green().bold(), t.description.dimmed());
+                }
+                if let Some(out) = tool_output {
+                    println!("  Tool Call Result:\n{}", serde_json::to_string_pretty(&out).unwrap_or_default().green());
+                }
+            }
+            HgbResponse::LiveGraphSyncResult(rep) => {
+                println!("{}", "⚡ AUGMENT CODE-STYLE LIVE IN-MEMORY CODEBASE GRAPH ⚡".bold().cyan());
+                println!("  Files Tracked:   {} files (sync time: {} µs)", rep.total_files_tracked, rep.sync_duration_us);
+                println!("  Symbols Indexed: {} symbols (dependencies: {} links)", rep.total_symbols_indexed, rep.total_dependency_links);
+                if !rep.hot_symbols.is_empty() {
+                    println!("  Hot Architectural Symbols:");
+                    for (sym, cnt) in &rep.hot_symbols {
+                        println!("    🔥 {:<24} -> referenced by {} modules", sym.green().bold(), cnt);
+                    }
+                }
+            }
+            HgbResponse::ShellPanicDiagnosisResult(diag) => {
+                println!("{}", "🚨 WARP TERMINAL-STYLE SHELL PANIC INTERCEPTOR 🚨".bold().red());
+                println!("  Category:        {}", diag.category.label().yellow().bold());
+                println!("  Root Cause:      {}", diag.root_cause.white());
+                println!("  Explanation:     {}", diag.explanation.dimmed());
+                println!("  🛠️ Suggested 1-Key Auto-Repair:\n    {}", diag.suggested_fix_command.green().bold());
+            }
+            HgbResponse::SpecDecomposeResult(rep) => {
+                println!("{}", "📋 COPILOT WORKSPACE-STYLE SPEC -> PLAN -> DIFF 📋".bold().cyan());
+                println!("  Intent:          {}", rep.intent.yellow().bold());
+                println!("  Progress:        {}% ({}/{} steps completed)", rep.progress_percent, rep.completed_steps, rep.total_steps);
+                println!("  Spec:\n{}", rep.architecture_spec.dimmed());
+                for s in &rep.steps {
+                    println!("    {} Step #{}: {:<32} (targets: {:?})", s.status.badge(), s.step_number, s.title.bold(), s.target_files);
+                    println!("       Action: {}", s.action_description.dimmed());
+                    println!("       Verify: {}", s.verification_command.yellow());
+                }
+            }
+            HgbResponse::DynamicContextExpandResult(res) => {
+                println!("{}", "📎 CONTINUE.DEV-STYLE DYNAMIC @CONTEXT EXPANDER 📎".bold().cyan());
+                println!("  Injected:        {} dynamic context attachments ({} tokens)", res.attachments.len(), res.total_injected_tokens);
+                for att in &res.attachments {
+                    println!("    🏷️ Attached {:<16} (~{} tokens)", att.directive.green().bold(), att.token_estimate);
+                }
+                println!("  Augmented Prompt Preview:\n{}", res.expanded_prompt.dimmed());
+            }
+            HgbResponse::VisualRegressionResult(rep) => {
+                println!("{}", "👁️ DEVIN & REPLIT-STYLE VISUAL LAYOUT SENTRY 👁️".bold().cyan());
+                println!("  Visual Stability: {:.1}% {}", rep.visual_stability_score, if rep.is_visually_stable { "(CLEAN)".green() } else { "(REGRESSIONS FOUND)".red() });
+                println!("  Baseline/Current: {} -> {} elements (breaking shifts: {})", rep.baseline_elements, rep.current_elements, rep.breaking_shifts);
+                for d in &rep.deltas {
+                    println!("    {} [{:<16}] - {}", if d.is_breaking { "💥".red() } else { "ℹ️".blue() }, d.selector.bold(), d.description);
+                }
+                println!("  Summary:         {}", rep.summary.yellow());
+            }
+            HgbResponse::ContinuousHealResult(rep) => {
+                println!("{}", "🩺 META SAPFIX & QODO-STYLE CONTINUOUS HEALING WATCHDOG 🩺".bold().cyan());
+                println!("  Workspace Health: {}", rep.workspace_health_status.bold().green());
+                println!("  Health Score:    {:.1}% ({} regressions detected, {} autonomous fixes ready)", rep.health_score_pct, rep.regressions_detected, rep.autonomous_fixes_ready);
+                for act in &rep.actions {
+                    println!("    🩹 [{:<24}] Target: {} ({})", act.issue_type.yellow().bold(), act.target_file.cyan(), if act.verified_in_shadow { "Shadow Verified".green() } else { "Pending".dimmed() });
+                }
+                for rec in &rep.recommendations {
+                    println!("    💡 {}", rec.dimmed());
+                }
+            }
+            HgbResponse::AmbientPredictResult(rep) => {
+                println!("{}", "🔮 WINDSURF CASCADE & SUPERMAVEN AMBIENT NEXT-EDIT PREDICTOR 🔮".bold().cyan());
+                println!("  Trigger:         {} in {}", rep.trigger_symbol.bold(), rep.trigger_file.dimmed());
+                println!("  Call Sites:      {} analyzed in {} µs", rep.call_sites_analyzed, rep.elapsed_us);
+                println!("  Predicted Edits: {} anticipations", rep.predictions.len());
+                for (i, p) in rep.predictions.iter().enumerate() {
+                    println!("    [{}] {} (Confidence: {}%)", i + 1, p.target_file.cyan().bold(), p.confidence_score);
+                    println!("        Symbol:      {}", p.affected_symbol.yellow());
+                    println!("        Action:      {}", p.suggested_action);
+                    println!("        Rationale:   {}", p.rationale.dimmed());
+                    if !p.suggested_diff.is_empty() {
+                        println!("        Diff:\n{}", p.suggested_diff.green());
+                    }
+                }
+            }
+            HgbResponse::CdpTweakSyncResult(rep) => {
+                println!("{}", "🎨 BOLT.NEW & DEVIN BIDIRECTIONAL DEVTOOLS TWEAK MIRROR 🎨".bold().cyan());
+                println!("  Target File:     {}", rep.target_file.cyan().bold());
+                println!("  Line Matched:    Line {}", rep.matched_line);
+                println!("  Diff Applied:    {}", rep.diff_applied.yellow());
+                println!("  Blake3 Ledger:   {}", rep.blake3_hash.dimmed());
+                println!("  Status:          {} (Written to disk: {})", if rep.success { "SYNCED".green().bold() } else { "FAILED".red().bold() }, rep.file_written);
+                println!("  Message:         {}", rep.message);
+            }
+            HgbResponse::PromptModeHarvestResult(rep) => {
+                println!("{}", "📚 CONTINUE.DEV & ROO CODE COMPOSABLE MODES & DOCS HARVESTER 📚".bold().cyan());
+                println!("  Active Mode:     {:?}", rep.active_mode);
+                println!("  Directive:       {}", rep.system_prompt_directive.dimmed());
+                println!("  Harvested Docs:  {} sources sliced", rep.harvested_docs.len());
+                for doc in &rep.harvested_docs {
+                    println!("    📄 {} ({:.1}x compression, {} -> {} tokens)", doc.extracted_title.green().bold(), doc.compression_ratio, doc.raw_tokens_estimate, doc.condensed_tokens_estimate);
+                    if !doc.signatures.is_empty() {
+                        println!("       Signatures:   {}", doc.signatures.join(", ").dimmed());
+                    }
+                }
+            }
+            HgbResponse::EphemeralSandboxResult(rep) => {
+                println!("{}", "📦 REPLIT AGENT & WEBCONTAINERS EPHEMERAL STACK SANDBOX 📦".bold().cyan());
+                println!("  Session ID:      {}", rep.session.session_id.bold().yellow());
+                println!("  Stack:           {}", rep.session.stack_name.bold().green());
+                println!("  Primary Port:    http://127.0.0.1:{}", rep.session.primary_port);
+                if let Some(sec) = rep.session.secondary_port {
+                    println!("  Secondary Port:  http://127.0.0.1:{}", sec);
+                }
+                println!("  Database URI:    {}", rep.session.db_uri.cyan());
+                println!("  Seeded Records:  {}", rep.session.seeded_records_count);
+                println!("  Health Check:    {}", rep.health_url.dimmed());
+                println!("  Status:          {}", rep.status.bold());
+            }
+            HgbResponse::AntiPlaceboAuditResult(rep) => {
+                println!("{}", "🛡️ QODO & META SAPFIX ANTI-PLACEBO TEST GATEKEEPER 🛡️".bold().cyan());
+                println!("  Mutants Created: {} (Killed: {}, Survived: {})", rep.total_mutants_generated, rep.mutants_killed.to_string().green(), rep.mutants_survived.to_string().red());
+                println!("  Mutation Score:  {:.1}% {}", rep.mutation_score_pct, if rep.is_production_ready { "(PRODUCTION READY)".green().bold() } else { "(TAUTOLOGICAL/PLACEBO HAZARD)".red().bold() });
+                if !rep.placebo_tests_detected.is_empty() {
+                    println!("  Placebo Tests:");
+                    for t in &rep.placebo_tests_detected {
+                        println!("    ⚠️ {}", t.yellow());
+                    }
+                }
+                for rec in &rep.recommendations {
+                    println!("    💡 {}", rec.dimmed());
+                }
+            }
+            HgbResponse::CircuitBreakerResult(rep) => {
+                println!("{}", "🔄 CIRCULAR CIRCUIT BREAKER & ANTI-THRASHING GATE 🔄".bold().cyan());
+                println!("  Status:          {}", if rep.is_tripped { "TRIPPED".red().bold() } else { "PASSING".green().bold() });
+                println!("  Pattern:         {:?}", rep.detected_pattern);
+                println!("  Description:     {}", rep.loop_description);
+                println!("  Prescription:    {}", rep.pivot_prescription.yellow());
+            }
+            HgbResponse::AppSecAuditResult(rep) => {
+                println!("{}", "🛡️ APPSEC SENTINEL & PRE-APPLY SECURITY GATE 🛡️".bold().cyan());
+                println!("  Target:          {}", rep.target_file.cyan());
+                println!("  Safe to Apply:   {}", if rep.is_safe_to_apply { "SAFE".green().bold() } else { "BLOCKED".red().bold() });
+                println!("  Criticals:       {}", rep.critical_count.to_string().red());
+                for f in &rep.findings {
+                    println!("    [{:?}] line {}: {}", f.severity, f.line_number, f.description.yellow());
+                }
+            }
+            HgbResponse::CognitiveWalkthroughResult(rep) => {
+                println!("{}", "🧠 COGNITIVE WALKTHROUGH & INVARIANT DIFF EXPLAINER 🧠".bold().cyan());
+                println!("  Intent:          {}", rep.overall_architectural_intent.cyan());
+                println!("  Summary:         {}", rep.executive_summary);
+                for card in &rep.cards {
+                    println!("    Card: {} (+{}/-{})", card.file_path.cyan(), card.lines_added, card.lines_removed);
+                }
+            }
+            HgbResponse::LogicTeleportResult(rep) => {
+                println!("{}", "⚡ CLICK-TO-LOGIC DEVTOOLS TELEPORT ⚡".bold().cyan());
+                println!("  Matched:         {}", rep.matched);
+                if let Some(ref target) = rep.target {
+                    println!("  Target File:     {}", target.source_file.cyan());
+                    println!("  Target Line:     {}", target.start_line);
+                    println!("  Component:       {}", target.function_or_handler_name);
+                }
+                println!("  Message:         {}", rep.message);
+            }
+            HgbResponse::MockApiReplayResult(rep) => {
+                println!("{}", "🎭 INSTANT RELATIONAL MOCK API & WEBHOOK REPLAY 🎭".bold().cyan());
+                println!("  Service:         {:?}", rep.service);
+                println!("  Endpoint:        {}", rep.endpoint.cyan());
+                println!("  Status:          {}", rep.status_code);
+                println!("  Latency:         {}ms", rep.latency_ms);
+            }
+            HgbResponse::LivePreviewResult { port, base_url, status } => {
+                println!("{}", "🌐 HAGIBIS VISUAL LIVE-PREVIEW SIDECAR 🌐".bold().cyan());
+                println!("  Status:          {}", status.green().bold());
+                println!("  URL:             {}", base_url.cyan().bold());
+                println!("  Port:            {}", port);
+                println!("  Teleport Hook:   {}", "Alt + Click DOM elements to jump to code".dimmed());
+            }
+            HgbResponse::MultimodalVisionResult(payload) => {
+                println!("{}", "👁️ MULTIMODAL VISION INGESTION ENGINE 👁️".bold().cyan());
+                println!("  Intent:          {}", payload.auto_detected_intent.cyan());
+                println!("  Images Captured: {}", payload.images.len().to_string().green());
+                for (idx, img) in payload.images.iter().enumerate() {
+                    println!("    [{}] Format: {:?}, Size: {} KB, Origin: {}", idx + 1, img.format, img.byte_size / 1024, img.source_origin.yellow());
+                }
+                println!("  Prompt:          {}", payload.text_prompt.dimmed());
+            }
+            HgbResponse::ShareTunnelResult(session) => {
+                println!("{}", "🚀 ONE-CLICK PUBLIC SHARE TUNNEL 🚀".bold().cyan());
+                println!("  Public URL:      {}", session.public_url.green().bold());
+                println!("  Local Port:      {}", session.local_port);
+                println!("  Provider:        {}", session.provider.dimmed());
+                println!("  Mobile Quick-Scan QR:");
+                println!("{}", session.qr_terminal_art.cyan());
+            }
+            HgbResponse::BaasGraduationResult(rep) => {
+                println!("{}", "🎓 BAAS AUTO-GRADUATION ENGINE ('MOCK-TO-REAL') 🎓".bold().cyan());
+                println!("  Target:          {}", rep.target.name().green().bold());
+                println!("  Resource:        {}", rep.resource_name.cyan());
+                println!("  Inferred Cols:   {}", rep.columns_inferred.len());
+                println!("  Security:        {}", rep.security_rules.dimmed());
+                println!("  Client SDK Snippet:\n{}", rep.client_sdk_snippet.dimmed());
+            }
+            HgbResponse::VibeIntentExpandResult(spec) => {
+                println!("{}", "✨ VIBE-TO-SPEC INTENT EXPANDER ✨".bold().cyan());
+                println!("  Theme:           {}", spec.design.theme_name.cyan().bold());
+                println!("  Background:      {}", spec.design.background);
+                println!("  Accent:          {}", spec.design.primary_accent.yellow());
+                println!("  Motion:          {}", spec.motion.enter_animation.dimmed());
+                println!("  Components:      {}", spec.inferred_components.join(", ").green());
+                println!("  Packages:        {}", spec.recommended_packages.join(", ").magenta());
+            }
+            HgbResponse::AutoDependencyHealResult(rep) => {
+                println!("{}", "🩹 INVISIBLE DEPENDENCY & PACKAGE AUTO-HEALER 🩹".bold().cyan());
+                println!("  Status:          {}", if rep.is_fully_healed { "HEALED".green().bold() } else { "PENDING".yellow() });
+                println!("  Detected:        {}", rep.missing_detected.len());
+                for act in &rep.actions_taken {
+                    println!("    ✔ Package '{}' injected into {}", act.package_name.green(), act.manifest_file.dimmed());
+                }
+                println!("  Summary:         {}", rep.summary);
+            }
+            HgbResponse::VisualCanvasHudResult(rep) => {
+                println!("{}", "🎨 VISUAL CANVAS HUD & WEBVIEW SIDECAR 🎨".bold().cyan());
+                println!("  URL:             {}", rep.hud_url.green().bold());
+                println!("  Port:            {}", rep.port);
+                println!("  Status:          {}", rep.status.cyan());
+                println!("  Active Model:    {}", rep.active_model.yellow());
+                println!("  Selections:      {}", rep.selections_count);
+                println!("  Tweaks Applied:  {}", rep.tweaks_count);
+            }
+            HgbResponse::EdgeDeployResult(rep) => {
+                println!("{}", "🚀 ZERO-CONFIG 1-CLICK PUBLIC EDGE DEPLOYER 🚀".bold().cyan());
+                println!("  Status:          {}", rep.status.green().bold());
+                println!("  Public URL:      {}", rep.public_url.cyan().bold());
+                println!("  Provider:        {}", rep.provider.to_string().yellow());
+                println!("  Framework:       {}", rep.framework.to_string().dimmed());
+                println!("  Deployment ID:   {}", rep.deployment_id.dimmed());
+            }
+            HgbResponse::VisualAnnotateResult(rep) => {
+                println!("{}", "👁️ VISUAL SCREENSHOT & CLIPBOARD XEROX ANNOTATOR 👁️".bold().cyan());
+                println!("  Annotations:     {}", rep.annotations_count.to_string().green().bold());
+                println!("  Bound AST Nodes: {}", rep.ast_bindings.len());
+                for b in &rep.ast_bindings {
+                    println!("    ✔ Bound to {} in {}:{}", b.component_name.yellow(), b.source_file.cyan(), b.line_number);
+                }
+            }
+            HgbResponse::MultiplayerSwarmResult(rep) => {
+                println!("{}", "👥 COLLABORATIVE MULTIPLAYER VIBE SWARM 👥".bold().cyan());
+                println!("  Session ID:      {}", rep.session_id.cyan().bold());
+                println!("  Session Name:    {}", rep.session_name.dimmed());
+                println!("  Host Peer:       {}", rep.host_peer_id.green().bold());
+                println!("  Active Peers:    {}", rep.peers.len());
+                for p in &rep.peers {
+                    println!("    • {} ({}) - Model: {}", p.username.yellow(), p.role.to_string().dimmed(), p.active_model.cyan());
+                }
+                println!("  Status:          {}", rep.status.yellow());
+            }
+            HgbResponse::CompanionBridgeResult(rep) => {
+                println!("{}", "🔌 UNIVERSAL COMPANION EDITOR & LSP SIDECAR BRIDGE 🔌".bold().cyan());
+                println!("  Editor:          {}", rep.editor.to_string().green().bold());
+                println!("  Socket Path:     {}", rep.socket_path.dimmed());
+                println!("  Socket Alive:    {}", if rep.socket_alive { "YES".green().bold() } else { "NO".yellow() });
+                println!("  Config Files:    {}", rep.files.len());
+                println!("  Instructions:    {}", rep.setup_instructions.dimmed());
+            }
+            HgbResponse::SaasScaffoldResult(rep) => {
+                println!("{}", "💳 INSTANT SAAS MONETIZATION & AUTH FABRIC 💳".bold().cyan());
+                println!("  Provider:        {:?}", rep.provider);
+                println!("  Project Name:    {}", rep.project_name.green());
+                println!("  Webhook Route:   {}", rep.webhook_endpoint.yellow());
+                println!("  Billing Portal:  {}", rep.customer_portal_endpoint.cyan());
+                println!("  Files Generated: {}", rep.generated_files.len());
+                println!("  Idempotent Guard:{}", if rep.idempotent_guard_enabled { "ACTIVE".green() } else { "INACTIVE".red() });
+            }
+            HgbResponse::SaasWebhookVerifyResult(res) => {
+                println!("{}", "🔒 SAAS WEBHOOK SIGNATURE VERIFICATION 🔒".bold().cyan());
+                println!("  Valid Signature: {}", if res.valid { "VALID".green().bold() } else { "INVALID".red().bold() });
+                println!("  Event ID:        {}", res.event_id.yellow());
+                println!("  Event Type:      {}", res.event_type.cyan());
+                println!("  Idempotent Skip: {}", if res.is_duplicate { "YES (Skipped replay)".yellow() } else { "NO (First time)".green() });
+            }
+            HgbResponse::ContinuousVoiceResult(rep) => {
+                println!("{}", "🎙️ FULL-DUPLEX AMBIENT VOICE LOOP 🎙️".bold().cyan());
+                println!("  Session:         {}", rep.session_id.green());
+                println!("  Duplex State:    {:?}", rep.state);
+                println!("  Turns:           {} (Barge-in Interruptions: {})", rep.total_turns, rep.total_interruptions);
+            }
+            HgbResponse::FigmaSyncResult(rep) => {
+                println!("{}", "🎨 BI-DIRECTIONAL FIGMA & DESIGN TOKEN BRIDGE 🎨".bold().cyan());
+                println!("  File Key:        {}", rep.file_key.green());
+                println!("  Tokens Parsed:   {} colors, {} typography", rep.token_set.colors.len(), rep.token_set.typography.len());
+                println!("  Components:      {}", rep.components_parsed);
+            }
+            HgbResponse::FigmaExportResult(rep) => {
+                println!("{}", "🎨 FIGMA VECTOR CANVAS EXPORT 🎨".bold().cyan());
+                println!("  Component:       {}", rep.component_name.green());
+                println!("  Canvas Size:     {}x{} px", rep.bounding_width, rep.bounding_height);
+            }
+            HgbResponse::ShadowDbStressResult(rep) => {
+                println!("{}", "⚡ AUTONOMOUS PRODUCTION DB SHADOW STRESS FUZZER ⚡".bold().cyan());
+                println!("  Operations:      {}", rep.metrics.total_ops);
+                println!("  Throughput:      {} QPS", rep.metrics.throughput_qps.to_string().green());
+                println!("  Latency (p50):   {:.2} ms", rep.metrics.p50_ms);
+                println!("  Latency (p95):   {:.2} ms", rep.metrics.p95_ms);
+                println!("  Viral Ready:     {}", if rep.production_ready_for_viral_traffic { "YES (100% Scalable)".green() } else { "REQUIRES INDEXES".yellow() });
+            }
+            HgbResponse::ViralOgResult(rep) => {
+                println!("{}", "🚀 VIRAL SOCIAL GRAPH & DYNAMIC OPENGRAPH ENGINE 🚀".bold().cyan());
+                println!("  Scorecard:       {}/100", rep.scorecard.total_score.to_string().green());
+                println!("  SVG Card Size:   {} bytes", rep.generated_svg_image.len());
+                println!("  Meta Tags:       {}", rep.meta_tags.len());
+            }
+            HgbResponse::MobileQrTeleportResult(rep) => {
+                println!("{}", "📱 INSTANT MOBILE QR TELEPORT & PWA MATRIX 📱".bold().cyan());
+                println!("{}", rep.ansi_qr_art);
+                println!("  Target URL:      {}", rep.target_url.green());
+                println!("  Safe-Area:       Injected");
+            }
+            HgbResponse::ProductionHotfixResult(rep) => {
+                println!("{}", "🚨 LIVE PRODUCTION INCIDENT AUTO-HOTFIXER 🚨".bold().red());
+                println!("  Incident ID:     {}", rep.incident_id.yellow());
+                println!("  Location:        {}", rep.culprit_location.cyan());
+                println!("  Root Cause:      {}", rep.root_cause.green());
+                println!("  Hotfix Branch:   {}", rep.hotfix_branch_name.yellow().bold());
+                println!("  Patched Code:    {}", rep.proposed_patch.patched_code.green());
+            }
+            HgbResponse::LlmCostResult(rep) => {
+                println!("{}", "⚡ AI SEMANTIC COST GATEWAY & MODEL ARBITRAGE ⚡".bold().cyan());
+                println!("  Model Selected:  {}", rep.decision.selected_model.green().bold());
+                println!("  Is Cached:       {}", if rep.decision.is_cached { "YES ($0.00)".green() } else { "NO".yellow() });
+                println!("  Cost:            ${:.6}", rep.decision.estimated_cost_usd);
+                println!("  Cache Hit Rate:  {:.1}%", rep.metrics.cache_hit_ratio * 100.0);
+            }
+            HgbResponse::PrivacyFunnelResult(rep) => {
+                println!("{}", "📊 ZERO-COOKIE PRIVACY FUNNEL ANALYTICS 📊".bold().cyan());
+                println!("  Total Events:    {}", rep.total_events_recorded);
+                for stage in &rep.stages {
+                    println!("    • {:<12} {:>5} | Step: {:>5.1}%", stage.stage_name.cyan(), stage.unique_visitors, stage.step_conversion_rate_pct);
+                }
+            }
+            HgbResponse::PrivacyAnalyticsScaffoldResult(rep) => {
+                println!("{}", "📊 PRIVACY ANALYTICS SCAFFOLD 📊".bold().cyan());
+                println!("  Script Tag:\n{}", rep.client_script_tag.cyan());
+            }
         }
     }
 
@@ -2922,6 +4472,48 @@ impl HagibisRepl {
         println!("  {:<25} {}", "/slice <file> <sym>".cyan(), "SyntaxSlicer: surgical AST context projection");
         println!("  {:<25} {}", "/spec [synth|run]".cyan(), "AutoSpec: property invariant fuzzer & regression blocker");
         println!("  {:<25} {}", "/dna [scan|audit]".cyan(), "DriftLock: architectural DNA compliance auditor");
+        println!();
+        println!("  {}", "--- Transcendent Superpowers (Tier 3) ---".dimmed());
+        println!("  {:<25} {}", "/ghostcoder [prefix]".cyan(), "Predictive Shadow Synthesizer: sub-50µs AST in RAM");
+        println!("  {:<25} {}", "/mirage [route] [method]".cyan(), "Universal Offline API Mirage & deterministic wiretapper");
+        println!("  {:<25} {}", "/chaos [target]".cyan(), "In-Process Chaos Monkey & adversarial invariant fuzzer");
+        println!("  {:<25} {}", "/nightshift [goal]".cyan(), "Autonomous Night-Shift Swarm isolated worktree pipeline");
+        println!("  {:<25} {}", "/vault [audit|seal]".cyan(), "Kernel-Level Ghost Envs: Blake3 vault & disk zero-leak");
+        println!("  {:<25} {}", "/typelock [file]".cyan(), "Zero-Drift Polyglot Type Lock: Rust to TS & Zod");
+        println!("  {:<25} {}", "/radar [orbit|atmo|surf]".cyan(), "Spatial Cockpit Radar & 3-tier semantic zoom");
+        println!();
+        println!("  {}", "--- Apex Vibe Superpowers (Tier 4) ---".dimmed());
+        println!("  {:<25} {}", "/teleport [selector]".magenta(), "Click-to-Source CDP Teleport: resolve DOM element to AST");
+        println!("  {:<25} {}", "/voice [phrase]".magenta(), "Full-Duplex Zero-Latency Voice Flow Co-Pilot");
+        println!("  {:<25} {}", "/tape [url] [name]".magenta(), "Headless Screenplay & Animated PR Loom Tape");
+        println!("  {:<25} {}", "/finops [prompt]".magenta(), "Token FinOps & Dynamic Latency Arbitrage");
+        println!("  {:<25} {}", "/cloak [text]".magenta(), "Zero-Knowledge Airgap Cloak & PII Sanitizer");
+        println!("  {:<25} {}", "/sqlguard [query]".magenta(), "Active SQL Interceptor & Shadow Transaction Jail");
+        println!("  {:<25} {}", "/replay [frame]".magenta(), "Deterministic Execution Replay & Rewind-Exec");
+        println!();
+        println!("  {}", "--- Sovereign Godspeed Superpowers (Tier 5) ---".dimmed());
+        println!("  {:<25} {}", "/canvas [old] [new]".magenta(), "Two-Way Visual Canvas & Live CSS/Tailwind Mirror");
+        println!("  {:<25} {}", "/federate [goal]".magenta(), "Multi-Repo Swarm & Monorepo Mesh Federator");
+        println!("  {:<25} {}", "/timewarp [months]".magenta(), "Relational Time-Warp Data Synthesizer (FK & Clock Skew)");
+        println!("  {:<25} {}", "/guardrails [dir]".magenta(), "Structural Invariant Guardrails & Anti-Spaghetti Linter");
+        println!("  {:<25} {}", "/triage [trace]".magenta(), "Production Crash Auto-Triage & Reproduction Pipeline");
+        println!("  {:<25} {}", "/deflake [test]".magenta(), "Flaky Test Exterminator & Deterministic Stress Fuzzer");
+        println!("  {:<25} {}", "/anchor".magenta(), "Associative Neural Context & Infinite Cross-Session Memory");
+        println!();
+        println!("  {}", "--- Competitor Hegemony & Next-Gen Ergonomics (Tier 6) ---".dimmed());
+        println!("  {:<25} {}", "/lsp [prefix]".magenta(), "LSP Ghost Daemon Bridge & Sub-15ms Inline Completion");
+        println!("  {:<25} {}", "/compact".magenta(), "Rolling Context Compactor & 85% Token Reducer");
+        println!("  {:<25} {}", "/commit [intent]".magenta(), "Atomic Conventional Git Micro-Commit Mirror");
+        println!("  {:<25} {}", "/recipe [name|list]".magenta(), "Declarative Vibe Recipes & Runbook Engine");
+        println!("  {:<25} {}", "/contract [symbol]".magenta(), "Pre-Flight 5-Dimension Behavioral Contract Matrix");
+        println!("  {:<25} {}", "/graph [goal]".magenta(), "Live Agent Flight-Graph & Real-Time Task DAG");
+        println!();
+        println!("  {}", "--- Vibe Sovereign Apex Frontier (Tier 9) ---".dimmed());
+        println!("  {:<25} {}", "/predict [file] [sym]".yellow(), "Cascade Next-Edit Anticipator & Call-Site Graph");
+        println!("  {:<25} {}", "/tweak [sel] [prop] [val]".yellow(), "Bidirectional DevTools CDP Tweak to Source Sync");
+        println!("  {:<25} {}", "/mode [name] [query]".yellow(), "Composable Prompt Modes & High-Density Docs Harvester");
+        println!("  {:<25} {}", "/sandbox [profile]".yellow(), "Zero-Config Ephemeral Stack & In-Memory Relational DB");
+        println!("  {:<25} {}", "/anti-placebo [test]".yellow(), "Anti-Placebo Behavioral Mutation Gatekeeper");
         println!();
         println!("  {}", "Keybindings (Tagisan Parity):".cyan().bold());
         println!("    Ctrl+A / Home     : Move cursor to start of line");

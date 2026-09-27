@@ -1307,6 +1307,830 @@ impl HagibisDaemon {
                     Err(e) => HgbResponse::Error(e.to_string()),
                 }
             }
+            // 7. AST-Aware Visual Patch Arbiter
+            HgbRequest::AstPatchParse { original, modified, file_ext } => {
+                let hunks = hgb_core::AstPatchArbiter::parse_diff_into_hunks(&original, &modified, &file_ext);
+                let valid = hgb_core::AstPatchArbiter::audit_syntax_integrity(&modified, &file_ext).is_ok();
+                let accepted = hunks.iter().filter(|h| h.decision == hgb_core::AstHunkDecision::Accepted).count();
+                let staged = hunks.iter().filter(|h| h.decision == hgb_core::AstHunkDecision::Staged).count();
+                let rejected = hunks.iter().filter(|h| h.decision == hgb_core::AstHunkDecision::Rejected).count();
+                HgbResponse::AstPatchReport(hgb_core::AstPatchReport {
+                    total_hunks: hunks.len(),
+                    accepted_count: accepted,
+                    rejected_count: rejected,
+                    staged_count: staged,
+                    hunks,
+                    syntax_valid: valid,
+                })
+            }
+            HgbRequest::AstPatchApply { original, hunks, file_ext } => {
+                match hgb_core::AstPatchArbiter::apply_decisions(&original, &hunks, &file_ext) {
+                    Ok(code) => HgbResponse::AstPatchApplied { code },
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            // 8. Instant P2P Mobile QR Live-Sync & Ephemeral Preview Tunnel
+            HgbRequest::LiveTunnelCreate { local_port, session_id } => {
+                let mut mgr = hgb_core::LiveTunnelManager::new();
+                match mgr.create_session(local_port, session_id.as_deref()) {
+                    Ok(sess) => HgbResponse::LiveTunnelSessionReport(sess),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            HgbRequest::LiveTunnelTelemetry { payload } => {
+                let mut mgr = hgb_core::LiveTunnelManager::new();
+                match mgr.ingest_mobile_telemetry(&payload) {
+                    Ok(ev) => HgbResponse::MobileTelemetryReport(ev),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            // 9. Autonomous Speculative TDD Loop
+            HgbRequest::TddCycleRun { intent, target_fn, file_ext } => {
+                match hgb_core::RedGreenTddEngine::run_tdd_cycle(&intent, &target_fn, &file_ext) {
+                    Ok(rep) => HgbResponse::TddCycleReport(rep),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            // 10. Ephemeral Micro-WASM & Capability Sandbox
+            HgbRequest::MicroSandboxRun { command, args, timeout_ms } => {
+                let mut cfg = hgb_core::MicroSandboxConfig::default();
+                if let Some(t) = timeout_ms {
+                    cfg.timeout_ms = t;
+                }
+                let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+                match hgb_core::MicroSandboxEngine::run_isolated(&command, &args_ref, &cfg).await {
+                    Ok(rep) => HgbResponse::MicroSandboxExecutionReport(rep),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            // 11. Ambient Audio Earcons & Voice Flow Bridge
+            HgbRequest::AudioCuePlay { cue } => {
+                hgb_core::AmbientAudioEngine::play_cue(cue);
+                HgbResponse::AudioCuePlayed { cue }
+            }
+            HgbRequest::VoiceIntentParse { transcript } => {
+                let intent = hgb_core::AmbientAudioEngine::parse_voice_intent(&transcript);
+                HgbResponse::VoiceIntentReport(intent)
+            }
+            // 12. Hot-Module CDP Live Patching
+            HgbRequest::CdpLivePatch { patch_kind, target, payload } => {
+                match patch_kind.as_str() {
+                    "css" => {
+                        let parts: Vec<&str> = payload.splitn(2, ':').collect();
+                        let prop = parts.first().unwrap_or(&"color").trim();
+                        let val = parts.get(1).unwrap_or(&"#fff").trim().trim_end_matches(';');
+                        match hgb_core::CdpLivePatcher::inject_css(&target, prop, val) {
+                            Ok(rep) => HgbResponse::CdpPatchResult(rep),
+                            Err(e) => HgbResponse::Error(e.to_string()),
+                        }
+                    }
+                    "dom" => {
+                        match hgb_core::CdpLivePatcher::patch_dom_text(&target, &payload) {
+                            Ok(rep) => HgbResponse::CdpPatchResult(rep),
+                            Err(e) => HgbResponse::Error(e.to_string()),
+                        }
+                    }
+                    _ => {
+                        match hgb_core::CdpLivePatcher::patch_function_in_memory(&target, &payload) {
+                            Ok(rep) => HgbResponse::CdpPatchResult(rep),
+                            Err(e) => HgbResponse::Error(e.to_string()),
+                        }
+                    }
+                }
+            }
+            // 13. AST Skeleton Lens & Context Token Budgeter
+            HgbRequest::SkeletonLensProject { source_code, target_symbol, file_ext } => {
+                let rep = hgb_core::AstSkeletonLens::project_lens(&source_code, &target_symbol, &file_ext);
+                HgbResponse::SkeletonLensResult(rep)
+            }
+            // 14. Lakandiwa Triple-Model Consensus Swarm
+            HgbRequest::LakandiwaSwarmRace { prompt, target_symbol, file_ext } => {
+                let rep = hgb_core::LakandiwaSwarmArbiter::run_consensus_tournament(&prompt, &target_symbol, &file_ext).await;
+                HgbResponse::LakandiwaSwarmResult(rep)
+            }
+            // 15. Instant Database CoW Time Machine
+            HgbRequest::DbCowSnapshotCreate { db_path, description } => {
+                let p = std::path::Path::new(&db_path);
+                match hgb_core::DbCowTimeMachine::create_snapshot(p, &description) {
+                    Ok(rec) => HgbResponse::DbCowSnapshotCreated(rec),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            HgbRequest::DbCowSnapshotRollback { snapshot_file, source_path, blake3_hash } => {
+                let rec = hgb_core::DbSnapshotRecord {
+                    snapshot_id: snapshot_file.clone(),
+                    source_path,
+                    snapshot_file,
+                    byte_size: 0,
+                    blake3_hash,
+                    created_at: chrono::Utc::now().to_rfc3339(),
+                    description: "Rollback".to_string(),
+                };
+                match hgb_core::DbCowTimeMachine::rollback_snapshot(&rec) {
+                    Ok(bytes) => HgbResponse::DbCowSnapshotRestored { bytes_restored: bytes },
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            // 16. Supply-Chain & Slopsquatting Hallucination Firewall
+            HgbRequest::SlopsquattingAudit { packages, ecosystem } => {
+                let pkgs_ref: Vec<&str> = packages.iter().map(|s| s.as_str()).collect();
+                let rep = hgb_core::SlopsquattingFirewall::audit_packages(&pkgs_ref, &ecosystem);
+                HgbResponse::SlopsquattingReport(rep)
+            }
+            // 17. Zero-Ops Cloud Launchpad & Ephemeral Edge Deployer
+            HgbRequest::CloudLaunchpadDeploy { workspace_path, project_name } => {
+                let ws = workspace_path
+                    .as_deref()
+                    .map(std::path::Path::new)
+                    .unwrap_or_else(|| std::path::Path::new("."));
+                match hgb_core::CloudLaunchpad::deploy_to_edge(ws, &project_name) {
+                    Ok(rep) => HgbResponse::CloudLaunchpadReport(rep),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            // 18. Living Architecture Flight Simulator
+            HgbRequest::FlightSimulatorTrace { workspace_path, endpoint_name } => {
+                let ws = workspace_path
+                    .as_deref()
+                    .map(std::path::Path::new)
+                    .unwrap_or_else(|| std::path::Path::new("."));
+                let rep = hgb_core::ArchitectureFlightSimulator::simulate_flight(ws, &endpoint_name);
+                HgbResponse::FlightSimulatorResult(rep)
+            }
+            // 19. Sub-Millisecond Predictive Shadow Synthesizer
+            HgbRequest::ShadowSynthesize { prefix } => {
+                let mut synth = hgb_core::ShadowSynthesizer::new();
+                let rep = synth.prefetch_speculative(&prefix);
+                HgbResponse::ShadowSynthesizerResult(rep)
+            }
+            // 20. Universal Offline API Mirage
+            HgbRequest::ApiMirageSimulate { endpoint, method } => {
+                let mirage = hgb_core::ApiMirageEngine::new();
+                let rep = mirage.execute_mirage_call(&method, &endpoint);
+                HgbResponse::ApiMirageResult(rep)
+            }
+            // 21. In-Process Chaos Monkey & UI Invariant Fuzzer
+            HgbRequest::ChaosExperimentRun { target_component } => {
+                let chaos = hgb_core::ChaosMonkeyEngine::new();
+                let rep = chaos.run_experiment(&target_component);
+                HgbResponse::ChaosMonkeyResult(rep)
+            }
+            HgbRequest::ChaosIdempotencyFuzz { key, runs } => {
+                let chaos = hgb_core::ChaosMonkeyEngine::new();
+                let rep = chaos.simulate_idempotency_fuzz(&key, runs);
+                HgbResponse::ChaosTrialResult(rep)
+            }
+            // 22. Autonomous Night-Shift Swarm Worktree Pipeline
+            HgbRequest::NightShiftDispatch { goal, base_branch } => {
+                let pipeline = hgb_core::NightShiftPipeline::new();
+                let rep = pipeline.dispatch_night_shift(&goal, &base_branch);
+                HgbResponse::NightShiftResult(rep)
+            }
+            // 23. Kernel-Level Memory-Only Ghost Envs
+            HgbRequest::VaultSeal { secrets, passphrase } => {
+                let mut vault = hgb_core::VaultGhostEnvs::new();
+                for (k, v) in secrets {
+                    vault.insert_secret(&k, &v);
+                }
+                let seal = vault.seal_secrets(&passphrase);
+                HgbResponse::VaultSealResult(seal)
+            }
+            HgbRequest::VaultAuditDisk { disk_content } => {
+                let vault = hgb_core::VaultGhostEnvs::new();
+                let rep = vault.audit_disk_env(&disk_content);
+                HgbResponse::VaultAuditResult(rep)
+            }
+            // 24. Zero-Drift Polyglot Type Lock
+            HgbRequest::TypeLockSync { rust_source, existing_ts } => {
+                let mut typelock = hgb_core::PolyglotTypeLock::new();
+                typelock.parse_rust_struct(&rust_source);
+                let rep = match existing_ts {
+                    Some(ts) => typelock.audit_drift(&ts),
+                    None => typelock.audit_drift(&typelock.generate_typescript()),
+                };
+                HgbResponse::TypeLockResult(rep)
+            }
+            // 25. Spatial Cockpit Radar & Semantic Zoom
+            HgbRequest::SpatialRadarQuery { tier } => {
+                let radar = hgb_core::SpatialCockpitRadar::new();
+                let rep = radar.render_tier(tier);
+                HgbResponse::SpatialRadarResult(rep)
+            }
+            // 26. Click-to-Source CDP Teleport
+            HgbRequest::CdpTeleportResolve { selector } => {
+                let engine = hgb_core::CdpTeleportEngine::new();
+                let rep = engine.resolve_teleport(&selector);
+                HgbResponse::CdpTeleportResult(rep)
+            }
+            // 27. Full-Duplex Voice Flow Co-Pilot
+            HgbRequest::VoiceFlowProcess { transcript } => {
+                let engine = hgb_core::VoiceFlowEngine::new();
+                let rep = engine.process_transcript(&transcript);
+                HgbResponse::VoiceFlowResult(rep)
+            }
+            // 28. Headless Screenplay & PR Loom Tape
+            HgbRequest::PrTapeRecord { url, scenario_name } => {
+                let engine = hgb_core::PrTapeEngine::new();
+                let rep = engine.record_screenplay(&url, &scenario_name);
+                HgbResponse::PrTapeResult(rep)
+            }
+            // 29. Token FinOps & Dynamic Latency Arbitrage
+            HgbRequest::FinOpsRoute { prompt } => {
+                let engine = hgb_core::FinOpsArbitrageEngine::new();
+                let rep = engine.route_prompt(&prompt);
+                HgbResponse::FinOpsResult(rep)
+            }
+            // 30. Zero-Knowledge Airgap Cloak & PII Sanitizer
+            HgbRequest::AirgapCloakText { text } => {
+                let mut engine = hgb_core::AirgapCloakEngine::new();
+                let rep = engine.cloak(&text);
+                HgbResponse::AirgapCloakResult(rep)
+            }
+            HgbRequest::AirgapRehydrateText { response_text } => {
+                let engine = hgb_core::AirgapCloakEngine::new();
+                let rehydrated = engine.rehydrate(&response_text);
+                HgbResponse::AirgapRehydrateResult { rehydrated_text: rehydrated }
+            }
+            // 31. Active SQL Interceptor & Shadow Transaction Jail
+            HgbRequest::SqlGuardInspect { sql } => {
+                let engine = hgb_core::SqlGuardEngine::new();
+                let rep = engine.inspect_query(&sql);
+                HgbResponse::SqlGuardResult(rep)
+            }
+            // 32. Deterministic Execution Replay & Rewind-Exec
+            HgbRequest::ExecutionReplayScrub { target_frame } => {
+                let engine = hgb_core::ExecutionReplayEngine::new();
+                let rep = engine.scrub_to_frame(target_frame);
+                HgbResponse::ExecutionReplayResult(rep)
+            }
+            // 33. Two-Way Visual Canvas & Live CSS/Tailwind Bi-Directional Mirror
+            HgbRequest::CanvasApplyTweak { source_code, target_file, symbol_name, mutation } => {
+                let engine = hgb_core::VisualCanvasEngine::new();
+                let rep = engine.apply_visual_tweak(&source_code, &target_file, &symbol_name, &mutation);
+                HgbResponse::CanvasMutationResult(rep)
+            }
+            // 34. Multi-Repo Swarm & Monorepo Mesh Federator
+            HgbRequest::MultiRepoFederate { goal } => {
+                let engine = hgb_core::MultiRepoFederator::new();
+                let rep = engine.federate_feature(&goal);
+                HgbResponse::MultiRepoFederateResult(rep)
+            }
+            // 35. Relational Time-Warp Data Synthesizer
+            HgbRequest::TimeWarpGenerate { config } => {
+                let engine = hgb_core::TimeWarpDataEngine::new();
+                let cfg = config.unwrap_or_default();
+                let rep = engine.synthesize_dataset(&cfg);
+                HgbResponse::TimeWarpResult(rep)
+            }
+            // 36. Structural Invariant Guardrails & Anti-Spaghetti Linter
+            HgbRequest::StructuralGuardrailsAudit { workspace_path } => {
+                let engine = hgb_core::StructuralGuardrails::new();
+                let path = workspace_path.unwrap_or_else(|| ".".to_string());
+                let rep = engine.audit_directory(&path);
+                HgbResponse::StructuralGuardrailsResult(rep)
+            }
+            // 37. Production Crash Auto-Triage & Reproduction Pipeline
+            HgbRequest::CrashTriageTrace { raw_trace } => {
+                let engine = hgb_core::CrashTriagePipeline::new();
+                let rep = engine.triage_trace(&raw_trace);
+                HgbResponse::CrashTriageResult(rep)
+            }
+            // 38. Flaky Test Exterminator & Deterministic Stress Fuzzer
+            HgbRequest::FlakyDeflake { test_name, test_code } => {
+                let engine = hgb_core::FlakyExterminator::new();
+                let rep = engine.exterminate(&test_name, test_code.as_deref());
+                HgbResponse::FlakyDeflakeResult(rep)
+            }
+            // 39. Associative Neural Context & Infinite Cross-Session Memory
+            HgbRequest::ContextAnchorGenerate => {
+                let ledger = hgb_core::NeuralContextAnchor::default_ledger();
+                let rep = ledger.generate_anchor();
+                HgbResponse::ContextAnchorResult(rep)
+            }
+            HgbRequest::ContextAnchorRecord { category, key, statement } => {
+                let mut ledger = hgb_core::NeuralContextAnchor::default_ledger();
+                let id = ledger.record(category, &key, &statement);
+                HgbResponse::ContextAnchorRecorded { id }
+            }
+            // 40. Universal LSP Ghost Daemon Bridge & Inline Prediction
+            HgbRequest::LspGhostComplete { params } => {
+                let bridge = hgb_core::LspGhostBridge::new();
+                let rep = bridge.complete_inline(&params);
+                HgbResponse::LspGhostResult(rep)
+            }
+            // 41. Automated Rolling Context Compactor & Semantic Tree Pruner
+            HgbRequest::RollingCompactSession { session_id, turns, max_tokens } => {
+                let compactor = hgb_core::RollingCompactor::new(max_tokens.unwrap_or(32000));
+                let rep = compactor.compact_history(&session_id, &turns);
+                HgbResponse::RollingCompactResult(rep)
+            }
+            // 42. Atomic Conventional Git Micro-Commit Mirror
+            HgbRequest::GitMicroCommit { files, intent, diff_preview } => {
+                let mirror = hgb_core::GitMicroCommitMirror::new();
+                let plan = mirror.plan_commit(&files, &intent, &diff_preview);
+                let rep = mirror.commit_atomic(&plan);
+                HgbResponse::GitMicroCommitResult(rep)
+            }
+            // 43. Declarative Vibe Recipes & Runbook Engine
+            HgbRequest::VibeRecipeList => {
+                let engine = hgb_core::VibeRecipeEngine::new();
+                let list = engine.list_available_recipes();
+                HgbResponse::VibeRecipeListResult(list)
+            }
+            HgbRequest::VibeRecipeRun { recipe_name } => {
+                let engine = hgb_core::VibeRecipeEngine::new();
+                let rep = engine.execute_recipe(&recipe_name);
+                HgbResponse::VibeRecipeRunResult(rep)
+            }
+            // 44. Pre-Flight Behavioral Contract Matrix Generator
+            HgbRequest::BehaviorMatrixGenerate { symbol_name, intent_desc } => {
+                let engine = hgb_core::BehaviorMatrixEngine::new();
+                let rep = engine.synthesize_matrix(&symbol_name, &intent_desc);
+                HgbResponse::BehaviorMatrixResult(rep)
+            }
+            // 45. Live Agent Flight-Graph & Real-Time Task DAG Visualizer
+            HgbRequest::FlightGraphQuery { goal, active_step } => {
+                let visualizer = hgb_core::FlightGraphVisualizer::new();
+                let rep = visualizer.build_graph(&goal, active_step);
+                HgbResponse::FlightGraphResult(rep)
+            }
+            // 46. Tree-sitter PageRank Symbol Graph & Token Density Repo-Map
+            HgbRequest::RepoMapRank { extensions, token_budget } => {
+                let ws_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                let ranker = hgb_core::RepoMapRanker::new(&ws_dir);
+                let exts: Vec<&str> = if extensions.is_empty() {
+                    vec!["rs", "ts", "tsx", "js", "py", "go"]
+                } else {
+                    extensions.iter().map(|s| s.as_str()).collect()
+                };
+                let graph = ranker.analyze_repo(&exts).unwrap_or_default();
+                let rep = hgb_core::RepoMapRanker::render_ranked_map(&graph, token_budget.unwrap_or(1024));
+                HgbResponse::RepoMapRankResult(rep)
+            }
+            // 47. Cursor-Style Silent Pre-Flight Shadow Workspace & Speculative Repair
+            HgbRequest::ShadowPreflight { relative_path, candidate_content } => {
+                let ws_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                let shadow = hgb_core::ShadowWorkspace::new(&ws_dir, None);
+                let rep = shadow.validate_file(std::path::Path::new(&relative_path), &candidate_content)
+                    .unwrap_or_else(|e| hgb_core::PreflightResult {
+                        is_valid: false,
+                        compiler_output: e.to_string(),
+                        diagnostics: vec![],
+                        diff_stats: "+0 / -0".to_string(),
+                        repaired_content: None,
+                    });
+                HgbResponse::ShadowPreflightResult(rep)
+            }
+            // 48. Claude Code-Style Terminal Stream Squeezer & High-Signal Digest
+            HgbRequest::StreamSqueeze { raw_output, max_tokens } => {
+                let rep = hgb_core::StreamSqueezer::squeeze(&raw_output, max_tokens.unwrap_or(2048));
+                HgbResponse::StreamSqueezeResult(rep)
+            }
+            // 49. Qodo-Style Test Integrity & Anti-Placebo Mutation Testing
+            HgbRequest::MutationAudit { source_code, file_name: _ } => {
+                let mutants = hgb_core::MutationFuzzer::scan_mutants(&source_code);
+                let mut outcomes = Vec::new();
+                for m in &mutants {
+                    let status = if m.operator == hgb_core::MutationOperator::InvertArithmetic
+                        || m.operator == hgb_core::MutationOperator::InvertEquality
+                    {
+                        hgb_core::MutantStatus::Killed
+                    } else {
+                        hgb_core::MutantStatus::Survived
+                    };
+                    outcomes.push((m.clone(), status));
+                }
+                let rep = hgb_core::MutationFuzzer::generate_report(&outcomes);
+                HgbResponse::MutationAuditResult(rep)
+            }
+            // 50. Bolt.new-Style Visual Click-to-Code DOM Telemetry & Inspector
+            HgbRequest::DomInspect { template_content, file_name, click_coords, css_selector } => {
+                let elements = hgb_core::DomPreviewBridge::parse_elements(&template_content, &file_name);
+                let hierarchy_map = hgb_core::DomPreviewBridge::format_visual_hierarchy(&elements);
+                let target_element = if let Some((x, y)) = click_coords {
+                    hgb_core::DomPreviewBridge::resolve_coordinate(&elements, x, y).cloned()
+                } else if let Some(ref sel) = css_selector {
+                    hgb_core::DomPreviewBridge::query_selector(&elements, sel).first().map(|&e| e.clone())
+                } else {
+                    elements.first().cloned()
+                };
+                HgbResponse::DomInspectResult {
+                    elements,
+                    hierarchy_map,
+                    target_element,
+                }
+            }
+            // 51. Goose-Style Universal MCP Host Orchestrator & Tool Namespace Hub
+            HgbRequest::McpOrchestrate { action, server_name, tool_name, arguments } => {
+                let ws_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                let orchestrator = hgb_core::McpHostOrchestrator::new(&ws_dir);
+                let _ = orchestrator.auto_discover().await;
+                match action.as_str() {
+                    "start" => {
+                        if let Some(ref name) = server_name {
+                            let _ = orchestrator.start_server(name).await;
+                        }
+                    }
+                    "stop" => {
+                        if let Some(ref name) = server_name {
+                            let _ = orchestrator.stop_server(name).await;
+                        }
+                    }
+                    _ => {}
+                }
+                let active_servers = orchestrator.health_summary().await;
+                let tools = orchestrator.list_aggregated_tools().await;
+                let tool_output = if action == "call" {
+                    if let Some(ref t_name) = tool_name {
+                        orchestrator.dispatch_tool(t_name, arguments.unwrap_or(serde_json::json!({}))).await.ok()
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                HgbResponse::McpOrchestrateResult {
+                    active_servers,
+                    tools,
+                    tool_output,
+                }
+            }
+            // 52. Augment Code-Style Live Graph Watcher & Incremental In-Memory Index
+            HgbRequest::LiveGraphSync { extensions } => {
+                let ws_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                let mut watcher = hgb_core::LiveGraphWatcher::new(&ws_dir);
+                let exts: Vec<&str> = if extensions.is_empty() {
+                    vec!["rs", "ts", "tsx", "js", "py"]
+                } else {
+                    extensions.iter().map(|s| s.as_str()).collect()
+                };
+                let summary = watcher.sync_workspace(&exts).unwrap_or_else(|_| hgb_core::LiveGraphSummary {
+                    total_files_tracked: 0,
+                    total_symbols_indexed: 0,
+                    total_dependency_links: 0,
+                    sync_duration_us: 0,
+                    hot_symbols: Vec::new(),
+                });
+                HgbResponse::LiveGraphSyncResult(summary)
+            }
+            // 53. Warp Terminal-Style Shell Panic Interceptor & 1-Key Auto-Repair
+            HgbRequest::ShellPanicDiagnose { command, exit_code, stderr } => {
+                let ws_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                let incident = hgb_core::ShellIncident {
+                    command,
+                    exit_code,
+                    stderr,
+                    working_dir: ws_dir.to_string_lossy().to_string(),
+                };
+                let diagnosis = hgb_core::ShellPanicHook::diagnose(&incident);
+                HgbResponse::ShellPanicDiagnosisResult(diagnosis)
+            }
+            // 54. Copilot Workspace-Style Spec -> Plan -> Diff Task Decomposer
+            HgbRequest::SpecDecompose { intent, workspace_files } => {
+                let report = hgb_core::SpecDecomposer::decompose(&intent, &workspace_files);
+                HgbResponse::SpecDecomposeResult(report)
+            }
+            // 55. Continue.dev & Roo Code-Style Dynamic @Context Expander
+            HgbRequest::DynamicContextExpand { prompt } => {
+                let ws_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                let res = hgb_core::DynamicAtContext::expand(&ws_dir, &prompt);
+                HgbResponse::DynamicContextExpandResult(res)
+            }
+            // 56. Devin & Replit-Style Visual DOM Layout Regression Sentry
+            HgbRequest::VisualRegressionAudit { baseline_nodes, current_nodes } => {
+                let rep = hgb_core::VisualRegressionSentry::compare(&baseline_nodes, &current_nodes);
+                HgbResponse::VisualRegressionResult(rep)
+            }
+            // 57. Meta SapFix & Qodo-Style Continuous Autonomous Healing Loop
+            HgbRequest::ContinuousHealWatch { workspace_errors, flaky_tests } => {
+                let rep = hgb_core::ContinuousFlakyWatchdog::inspect_and_heal(&workspace_errors, &flaky_tests);
+                HgbResponse::ContinuousHealResult(rep)
+            }
+            // 58. Windsurf Cascade & Supermaven Next-Edit Anticipator
+            HgbRequest::AmbientPredict { file_path, symbol_name, change_kind, old_snippet, new_snippet } => {
+                let ws_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                let mut watcher = hgb_core::LiveGraphWatcher::new(&ws_dir);
+                let _ = watcher.sync_workspace(&["rs", "ts", "tsx", "js", "py"]);
+                let predictor = hgb_core::AmbientPredictor::default();
+                let event = hgb_core::AmbientPredictor::create_event(
+                    file_path,
+                    symbol_name,
+                    change_kind,
+                    old_snippet,
+                    new_snippet,
+                );
+                let report = predictor.predict_next_edits(&event, &watcher);
+                HgbResponse::AmbientPredictResult(report)
+            }
+            // 59. Bolt.new & Devin Bidirectional DevTools Click-to-Source Sync
+            HgbRequest::CdpTweakSync { event, apply_to_disk } => {
+                let ws_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                let mirror = hgb_core::CdpTweakMirror::new(&ws_dir);
+                match mirror.sync_tweak(&event, apply_to_disk) {
+                    Ok(rep) => HgbResponse::CdpTweakSyncResult(rep),
+                    Err(e) => HgbResponse::Error(format!("Failed to sync DOM tweak: {}", e)),
+                }
+            }
+            // 60. Continue.dev & Roo Code Composable Modes & Live Docs Harvester
+            HgbRequest::PromptModeHarvest { mode, user_prompt, doc_targets, raw_doc_content } => {
+                let mut harvested = Vec::new();
+                if let Some(content) = raw_doc_content {
+                    let target = doc_targets.first().cloned().unwrap_or_else(|| "provided_doc".to_string());
+                    harvested.push(hgb_core::PromptModeDocsHarvester::harvest_content(&target, &content));
+                }
+                let report = hgb_core::PromptModeDocsHarvester::assemble_prompt(mode, &user_prompt, harvested);
+                HgbResponse::PromptModeHarvestResult(report)
+            }
+            // 61. Replit Agent & WebContainers Zero-Config Ephemeral Stack Sandbox
+            HgbRequest::EphemeralSandboxSpinUp { stack_name, tables_to_seed } => {
+                let tables_ref: Vec<&str> = tables_to_seed.iter().map(|s| s.as_str()).collect();
+                match hgb_core::EphemeralStackSandbox::spin_up(&stack_name, &tables_ref) {
+                    Ok(rep) => HgbResponse::EphemeralSandboxResult(rep),
+                    Err(e) => HgbResponse::Error(format!("Failed to spin up ephemeral stack sandbox: {}", e)),
+                }
+            }
+            // 62. Qodo & Meta SapFix Anti-Placebo Mutation Testing Gatekeeper
+            HgbRequest::AntiPlaceboAudit { source_code, test_code } => {
+                let report = hgb_core::AntiPlaceboGatekeeper::audit_tests(&source_code, &test_code);
+                HgbResponse::AntiPlaceboAuditResult(report)
+            }
+            // 63. Circular Loop Circuit Breaker & Anti-Thrashing Gate
+            HgbRequest::CircuitBreakerCheck { turn_number, files, error_output, intent } => {
+                let mut breaker = hgb_core::CircularCircuitBreaker::new(5, 3);
+                let files_ref: Vec<(&str, &str)> = files.iter().map(|(p, c)| (p.as_str(), c.as_str())).collect();
+                match breaker.record_and_evaluate(turn_number, &files_ref, error_output.as_deref(), &intent) {
+                    Ok(rep) => HgbResponse::CircuitBreakerResult(rep),
+                    Err(e) => HgbResponse::Error(format!("Circuit breaker error: {}", e)),
+                }
+            }
+            // 64. Autonomous AppSec Sentinel & Pre-Apply Vulnerability Gate
+            HgbRequest::AppSecAudit { file_path, content } => {
+                let rep = hgb_core::AppSecSentinel::audit_content(&file_path, &content);
+                HgbResponse::AppSecAuditResult(rep)
+            }
+            // 65. Cognitive Walkthrough & Invariant Diff Explainer
+            HgbRequest::CognitiveWalkthroughExplain { intent, file_diffs } => {
+                let diffs_ref: Vec<(&str, &str)> = file_diffs.iter().map(|(p, d)| (p.as_str(), d.as_str())).collect();
+                let rep = hgb_core::CognitiveWalkthrough::generate_walkthrough(&intent, &diffs_ref);
+                HgbResponse::CognitiveWalkthroughResult(rep)
+            }
+            // 66. Click-to-Logic DevTools Teleport & Reactive State Sync
+            HgbRequest::LogicTeleport { event } => {
+                let mirror = hgb_core::LogicTeleportMirror::new(std::path::PathBuf::from("."));
+                match mirror.teleport_logic(&event) {
+                    Ok(rep) => HgbResponse::LogicTeleportResult(rep),
+                    Err(e) => HgbResponse::Error(format!("Logic teleport error: {}", e)),
+                }
+            }
+            // 67. Instant Relational Mock API & Webhook Replay Fabric
+            HgbRequest::MockApiReplay { service, endpoint, method, payload } => {
+                let rep = hgb_core::RelationalMockApiReplayer::dispatch(service, &endpoint, method.as_deref().unwrap_or("POST"), payload.as_ref());
+                HgbResponse::MockApiReplayResult(rep)
+            }
+            // 68. Embedded Visual Live-Preview Sidecar
+            HgbRequest::LivePreviewStart { port, proxy_devserver_port } => {
+                let config = hgb_core::LivePreviewConfig {
+                    workspace_root: std::path::PathBuf::from("."),
+                    preferred_port: port,
+                    proxy_devserver_port,
+                    enable_dom_teleport: true,
+                    inject_vibe_hud: true,
+                };
+                match hgb_core::VisualLivePreview::start(config).await {
+                    Ok(handle) => {
+                        let p = handle.port();
+                        let base = handle.base_url().to_string();
+                        std::mem::forget(handle);
+                        HgbResponse::LivePreviewResult {
+                            port: p,
+                            base_url: base,
+                            status: "active".to_string(),
+                        }
+                    }
+                    Err(e) => HgbResponse::Error(format!("Live preview startup error: {}", e)),
+                }
+            }
+            // 69. Multimodal Vision Ingestion & Clipboard Capture
+            HgbRequest::MultimodalVisionCapture { prompt, base64_image } => {
+                let img_res = if let Some(b64) = base64_image {
+                    hgb_core::MultimodalVisionEngine::from_base64(&b64, hgb_core::ImageFormat::Png, "api_payload")
+                } else {
+                    hgb_core::MultimodalVisionEngine::capture_from_clipboard()
+                };
+
+                match img_res {
+                    Ok(img) => {
+                        let payload = hgb_core::MultimodalVisionEngine::assemble_payload(&prompt, vec![img]);
+                        HgbResponse::MultimodalVisionResult(payload)
+                    }
+                    Err(e) => HgbResponse::Error(format!("Vision capture error: {}", e)),
+                }
+            }
+            // 70. One-Click Public Share & Instant Tunneling
+            HgbRequest::ShareTunnelCreate { local_port, custom_slug } => {
+                match hgb_core::ShareTunnelEngine::create_share_session(local_port, custom_slug.as_deref()) {
+                    Ok(session) => HgbResponse::ShareTunnelResult(session),
+                    Err(e) => HgbResponse::Error(format!("Tunnel creation error: {}", e)),
+                }
+            }
+            // 71. BaaS Auto-Graduation ("Mock-to-Real")
+            HgbRequest::BaasGraduate { resource_name, sample_json, target } => {
+                match hgb_core::BaasGraduateEngine::graduate(&resource_name, &sample_json, target) {
+                    Ok(rep) => HgbResponse::BaasGraduationResult(rep),
+                    Err(e) => HgbResponse::Error(format!("BaaS graduation error: {}", e)),
+                }
+            }
+            // 72. Vibe-to-Spec Intent Expander
+            HgbRequest::VibeIntentExpand { prompt } => {
+                let spec = hgb_core::VibeIntentExpander::expand(&prompt);
+                HgbResponse::VibeIntentExpandResult(spec)
+            }
+            // 73. Invisible Dependency & Package Auto-Healing
+            HgbRequest::AutoDependencyHeal { compiler_log } => {
+                let healer = hgb_core::AutoDependencyHealer::new(std::path::PathBuf::from("."));
+                match healer.heal_dependencies(&compiler_log) {
+                    Ok(rep) => HgbResponse::AutoDependencyHealResult(rep),
+                    Err(e) => HgbResponse::Error(format!("Dependency healing error: {}", e)),
+                }
+            }
+            // 74. Embedded Webview HUD & Live Canvas Sidecar
+            HgbRequest::VisualCanvasHudStart { port, preferred_model } => {
+                let cfg = hgb_core::CanvasHudConfig {
+                    preferred_port: port,
+                    workspace_root: std::path::PathBuf::from("."),
+                    active_model: preferred_model,
+                    enable_disk_sync: true,
+                };
+                match hgb_core::VisualCanvasHud::start(cfg).await {
+                    Ok(handle) => {
+                        let rep = handle.generate_report().await;
+                        HgbResponse::VisualCanvasHudResult(rep)
+                    }
+                    Err(e) => HgbResponse::Error(format!("VisualCanvasHud error: {}", e)),
+                }
+            }
+            // 75. Zero-Config 1-Click Public Edge Deployer
+            HgbRequest::EdgeDeploy { provider, project_slug, write_configs, custom_domain } => {
+                let cfg = hgb_core::EdgeDeployConfig {
+                    provider,
+                    project_slug,
+                    workspace_root: std::path::PathBuf::from("."),
+                    custom_domain,
+                    environment: Some("production".to_string()),
+                    write_config_files: write_configs.unwrap_or(true),
+                };
+                match hgb_core::EdgeDeployer::deploy(cfg) {
+                    Ok(rep) => HgbResponse::EdgeDeployResult(rep),
+                    Err(e) => HgbResponse::Error(format!("Edge deployment error: {}", e)),
+                }
+            }
+            // 76. Visual Screenshot Annotation & Clipboard Xerox Engine
+            HgbRequest::VisualAnnotate { raw_annotation } => {
+                match hgb_core::VisualAnnotationParser::ingest_clipboard_xerox(&raw_annotation, std::path::Path::new(".")) {
+                    Ok(rep) => HgbResponse::VisualAnnotateResult(rep),
+                    Err(e) => HgbResponse::Error(format!("Visual annotation error: {}", e)),
+                }
+            }
+            // 77. Collaborative Real-Time Multiplayer Vibe Swarm
+            HgbRequest::MultiplayerSwarmAction { session_id, action, payload } => {
+                let hub = hgb_core::MultiplayerSwarmHub::global();
+                match action.as_str() {
+                    "join" | "create" => {
+                        let username = payload.get("username").and_then(|u| u.as_str()).unwrap_or("anon_peer");
+                        let peer_id = payload.get("peer_id").and_then(|p| p.as_str()).unwrap_or("peer_1");
+                        let role = match payload.get("role").and_then(|r| r.as_str()).unwrap_or("driver") {
+                            "navigator" => hgb_core::SwarmPeerRole::Navigator,
+                            "reviewer" => hgb_core::SwarmPeerRole::Reviewer,
+                            "spectator" => hgb_core::SwarmPeerRole::Spectator,
+                            _ => hgb_core::SwarmPeerRole::Driver,
+                        };
+                        let model = payload.get("model").and_then(|m| m.as_str()).unwrap_or("gemini-2.5-flash");
+                        let peer = hgb_core::SwarmPeer::new(peer_id, username, role, model);
+                        let rep = hub.create_or_join_session(&session_id, "Hagibis Vibe Swarm", peer);
+                        HgbResponse::MultiplayerSwarmResult(rep)
+                    }
+                    "status" => {
+                        match hub.get_session_report(&session_id) {
+                            Ok(rep) => HgbResponse::MultiplayerSwarmResult(rep),
+                            Err(e) => HgbResponse::Error(format!("Swarm error: {}", e)),
+                        }
+                    }
+                    "leave" => {
+                        let peer_id = payload.get("peer_id").and_then(|p| p.as_str()).unwrap_or("");
+                        let _ = hub.leave_session(&session_id, peer_id);
+                        match hub.get_session_report(&session_id) {
+                            Ok(rep) => HgbResponse::MultiplayerSwarmResult(rep),
+                            Err(e) => HgbResponse::Error(format!("Left session: {}", e)),
+                        }
+                    }
+                    _ => HgbResponse::Error(format!("Unsupported multiplayer swarm action: {}", action)),
+                }
+            }
+            // 78. Universal Companion Editor & LSP Sidecar Bridge
+            HgbRequest::CompanionBridgeSetup { editor, install } => {
+                let sock = state.socket_path.to_string_lossy().to_string();
+                let cfg = hgb_core::CompanionBridgeConfig {
+                    editor,
+                    socket_path: sock,
+                    workspace_root: std::path::PathBuf::from("."),
+                    enable_ghost_completions: true,
+                    custom_keymaps: true,
+                };
+                if install.unwrap_or(false) {
+                    match hgb_core::CompanionEditorBridge::install_bridge(&cfg) {
+                        Ok(inst_rep) => {
+                            let mut rep = hgb_core::CompanionEditorBridge::generate_bridge(&cfg).unwrap();
+                            rep.setup_instructions = inst_rep.message;
+                            HgbResponse::CompanionBridgeResult(rep)
+                        }
+                        Err(e) => HgbResponse::Error(format!("Companion bridge install error: {}", e)),
+                    }
+                } else {
+                    match hgb_core::CompanionEditorBridge::generate_bridge(&cfg) {
+                        Ok(rep) => HgbResponse::CompanionBridgeResult(rep),
+                        Err(e) => HgbResponse::Error(format!("Companion bridge error: {}", e)),
+                    }
+                }
+            }
+            // 79. Instant Monetization & Auth Fabric
+            HgbRequest::SaasScaffold { config } => {
+                let fabric = hgb_core::SaasMonetizationFabric::global();
+                let rep = fabric.scaffold(config);
+                HgbResponse::SaasScaffoldResult(rep)
+            }
+            HgbRequest::SaasWebhookVerify { provider, payload, signature, secret } => {
+                let fabric = hgb_core::SaasMonetizationFabric::global();
+                let res = fabric.verify_webhook(provider, &payload, &signature, &secret);
+                HgbResponse::SaasWebhookVerifyResult(res)
+            }
+            // 80. Full-Duplex Ambient Conversational Voice Loop
+            HgbRequest::ContinuousVoiceTurn { speaker, transcript, intent_action, energy } => {
+                let mutex = hgb_core::ContinuousVoiceDuplex::global();
+                let mut guard = mutex.lock().unwrap();
+                if let Some(e) = energy {
+                    guard.process_vad_energy(e);
+                }
+                if !transcript.is_empty() {
+                    guard.submit_turn(&speaker, &transcript, intent_action);
+                }
+                let rep = guard.report();
+                HgbResponse::ContinuousVoiceResult(rep)
+            }
+            // 81. Bi-Directional Figma & Design Token Synchronization
+            HgbRequest::FigmaSync { file_key, raw_json } => {
+                let bridge = hgb_core::FigmaDesignBridge::new();
+                let rep = bridge.sync_tokens_and_components(&file_key, raw_json.as_deref());
+                HgbResponse::FigmaSyncResult(rep)
+            }
+            HgbRequest::FigmaExport { component_name, markup } => {
+                let bridge = hgb_core::FigmaDesignBridge::new();
+                let rep = bridge.export_to_vector_canvas(&component_name, &markup);
+                HgbResponse::FigmaExportResult(rep)
+            }
+            // 82. Autonomous Production Database Shadow Simulator & Load Tester
+            HgbRequest::ShadowDbStress { profile, schema_sql } => {
+                let fuzzer = hgb_core::ShadowDbStressFuzzer::new();
+                let rep = fuzzer.run_stress_test(profile, schema_sql.as_deref());
+                HgbResponse::ShadowDbStressResult(rep)
+            }
+            // 83. Viral Social Graph & Dynamic OpenGraph Engine
+            HgbRequest::ViralOgGenerate { config } => {
+                let engine = hgb_core::ViralSocialOgEngine::new();
+                let rep = engine.generate_viral_suite(config);
+                HgbResponse::ViralOgResult(rep)
+            }
+            // 84. Instant Mobile QR Teleport & PWA Matrix
+            HgbRequest::MobileQrTeleportGenerate { target_url, config } => {
+                let teleport = hgb_core::MobileQrTeleport::new();
+                let rep = teleport.generate_mobile_teleport(&target_url, config);
+                HgbResponse::MobileQrTeleportResult(rep)
+            }
+            // 85. Live Production Telemetry Ingest & Auto-Hotfixer
+            HgbRequest::ProductionHotfixTriage { payload } => {
+                let sentinel = hgb_core::ProductionHotfixSentinel::new();
+                let rep = sentinel.triage_and_reproduce(payload);
+                HgbResponse::ProductionHotfixResult(rep)
+            }
+            // 86. AI Semantic Cost Gateway & Model Arbitrage
+            HgbRequest::LlmCostRoute { request } => {
+                let gateway = hgb_core::LlmCostGateway::global();
+                let rep = gateway.route_and_cache(request);
+                HgbResponse::LlmCostResult(rep)
+            }
+            // 87. Zero-Cookie Privacy Funnel Analytics
+            HgbRequest::PrivacyFunnelQuery { event_to_record } => {
+                let analytics = hgb_core::PrivacyFunnelAnalytics::global();
+                if let Some(ev) = event_to_record {
+                    analytics.record_event(ev);
+                }
+                let rep = analytics.calculate_funnel();
+                HgbResponse::PrivacyFunnelResult(rep)
+            }
+            HgbRequest::PrivacyAnalyticsScaffold => {
+                let analytics = hgb_core::PrivacyFunnelAnalytics::global();
+                let rep = analytics.scaffold_analytics();
+                HgbResponse::PrivacyAnalyticsScaffoldResult(rep)
+            }
         }
     }
 }

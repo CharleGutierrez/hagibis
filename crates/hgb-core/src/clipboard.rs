@@ -62,6 +62,43 @@ impl ClipboardHelper {
         Ok(())
     }
 
+    /// Read text from the system clipboard via native OS toolchain.
+    pub fn get_text() -> std::result::Result<String, String> {
+        // 1. Try wl-paste (Wayland)
+        if let Ok(out) = Command::new("wl-paste").output() {
+            if out.status.success() && !out.stdout.is_empty() {
+                if let Ok(s) = String::from_utf8(out.stdout) {
+                    return Ok(s);
+                }
+            }
+        }
+        // 2. Try xclip (X11)
+        if let Ok(out) = Command::new("xclip").args(&["-selection", "clipboard", "-o"]).output() {
+            if out.status.success() && !out.stdout.is_empty() {
+                if let Ok(s) = String::from_utf8(out.stdout) {
+                    return Ok(s);
+                }
+            }
+        }
+        // 3. Try xsel (X11)
+        if let Ok(out) = Command::new("xsel").args(&["-b", "-o"]).output() {
+            if out.status.success() && !out.stdout.is_empty() {
+                if let Ok(s) = String::from_utf8(out.stdout) {
+                    return Ok(s);
+                }
+            }
+        }
+        // 4. Try pbpaste (macOS)
+        if let Ok(out) = Command::new("pbpaste").output() {
+            if out.status.success() && !out.stdout.is_empty() {
+                if let Ok(s) = String::from_utf8(out.stdout) {
+                    return Ok(s);
+                }
+            }
+        }
+        Err("Clipboard empty or not accessible".to_string())
+    }
+
     fn pipe_to_command(cmd: &str, args: &[&str], input: &str) -> bool {
         match Command::new(cmd)
             .args(args)

@@ -31,6 +31,9 @@ pub enum HgbError {
 
     #[error("Storage error: {0}")]
     Storage(String),
+
+    #[error("Invalid input: {0}")]
+    InvalidInput(String),
 }
 
 impl HgbError {

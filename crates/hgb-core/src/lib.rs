@@ -37,6 +37,214 @@ pub mod timeline;
 pub mod verification_gate;
 pub mod shell_hook;
 pub mod ambient_vibe;
+pub mod ast_arbiter;
+pub mod live_tunnel;
+pub mod tdd_loop;
+pub mod micro_sandbox;
+pub mod ambient_audio;
+pub mod cdp_patcher;
+pub mod skeleton_lens;
+pub mod lakandiwa_swarm;
+pub mod db_cow_time_machine;
+pub mod slopsquatting_firewall;
+pub mod cloud_launchpad;
+pub mod flight_simulator;
+pub mod shadow_synthesizer;
+pub mod api_mirage;
+pub mod chaos_monkey;
+pub mod nightshift_pipeline;
+pub mod vault_ghost_envs;
+pub mod polyglot_typelock;
+pub mod spatial_radar;
+pub mod cdp_teleport;
+pub mod voice_flow;
+pub mod pr_tape;
+pub mod finops_arbitrage;
+pub mod airgap_cloak;
+pub mod sql_guard;
+pub mod execution_replay;
+pub mod visual_canvas;
+pub mod multi_repo_federator;
+pub mod time_warp_data;
+pub mod structural_guardrails;
+pub mod crash_triage;
+pub mod flaky_exterminator;
+pub mod neural_context_anchor;
+pub mod lsp_ghost_bridge;
+pub mod rolling_compactor;
+pub mod git_micro_commit;
+pub mod vibe_recipe;
+pub mod behavior_matrix;
+pub mod flight_graph;
+pub mod repo_map_ranker;
+pub mod shadow_workspace;
+pub mod stream_squeezer;
+pub mod mutation_fuzzer;
+pub mod dom_preview_bridge;
+pub mod mcp_host_orchestrator;
+pub mod live_graph_watcher;
+pub mod shell_panic_hook;
+pub mod spec_decomposer;
+pub mod dynamic_at_context;
+pub mod visual_regression_sentry;
+pub mod continuous_flaky_watchdog;
+pub mod ambient_predictor;
+pub mod cdp_tweak_mirror;
+pub mod prompt_mode_docs_harvester;
+pub mod ephemeral_stack_sandbox;
+pub mod anti_placebo_gatekeeper;
+pub mod circular_circuit_breaker;
+pub mod appsec_sentinel;
+pub mod cognitive_walkthrough;
+pub mod logic_teleport_mirror;
+pub mod relational_mock_api_replayer;
+pub mod visual_live_preview;
+pub mod multimodal_vision;
+pub mod share_tunnel;
+pub mod baas_graduate;
+pub mod vibe_intent_expander;
+pub mod auto_dependency_healer;
+pub mod visual_canvas_hud;
+pub mod edge_deployer;
+pub mod visual_annotation;
+pub mod multiplayer_swarm;
+pub mod companion_bridge;
+pub mod saas_monetization;
+pub mod continuous_voice;
+pub mod figma_bridge;
+pub mod shadow_db_stress;
+pub mod viral_social_og;
+pub mod mobile_qr_teleport;
+pub mod production_hotfix_sentinel;
+pub mod llm_cost_gateway;
+pub mod privacy_funnel_analytics;
+
+pub use saas_monetization::{
+    PricingTier, SaasMonetizationFabric, SaasProvider, SaasScaffoldConfig, SaasScaffoldReport,
+    WebhookVerificationResult,
+};
+pub use continuous_voice::{
+    AcousticEarcon, ContinuousVoiceConfig, ContinuousVoiceDuplex, VoiceDuplexState,
+    VoiceSessionReport, VoiceTurnEvent,
+};
+pub use figma_bridge::{
+    ColorToken, FigmaComponentNode, FigmaDesignBridge, FigmaSyncReport, FigmaTokenSet,
+    SpacingToken, TypographyToken, VectorCanvasExportReport,
+};
+pub use shadow_db_stress::{
+    DbWorkloadMetrics, IndexRecommendation, ShadowDbStressFuzzer, ShadowDbStressReport,
+    StressProfile,
+};
+pub use viral_social_og::{
+    OgCardConfig, SocialMetaTag, ViralAuditScorecard, ViralOgReport, ViralSocialOgEngine,
+};
+pub use mobile_qr_teleport::{
+    MobilePwaConfig, MobileQrTeleport, PwaScaffoldReport, QrDisplayReport,
+};
+pub use production_hotfix_sentinel::{
+    HotfixPatch, HotfixReproductionReport, ProductionErrorPayload, ProductionHotfixSentinel,
+};
+pub use llm_cost_gateway::{
+    GatewaySpendMetrics, LlmCostGateway, LlmCostReport, LlmGatewayRoutingDecision,
+    LlmPromptRequest,
+};
+pub use privacy_funnel_analytics::{
+    AnalyticsEvent, AnalyticsScaffoldReport, FunnelReport, FunnelStageMetric,
+    PrivacyFunnelAnalytics,
+};
+
+pub use visual_canvas_hud::{
+    AstComponentMapping, CanvasHudConfig, CanvasHudHandle, CanvasHudReport,
+    CssLiveTweak, HudBoundingBox, HudElementSelection, VisualCanvasHud,
+};
+pub use edge_deployer::{
+    DetectedFramework, EdgeDeployConfig, EdgeDeployReport, EdgeDeployer, EdgeProvider,
+};
+pub use visual_annotation::{
+    AnnotationKind, ComponentSpatialBinding, SpatialCoords, VisualAnnotationItem,
+    VisualAnnotationParser, VisualAnnotationReport,
+};
+pub use multiplayer_swarm::{
+    FlightGraphSyncReport, MultiplayerSession, MultiplayerSessionReport, MultiplayerSwarmHub,
+    PresenceUpdateReport, SharedRaceSyncReport, SwarmPeer, SwarmPeerRole,
+};
+pub use companion_bridge::{
+    CompanionBridgeConfig, CompanionBridgeConfigReport, CompanionBridgeInstallReport,
+    CompanionConfigFile, CompanionEditorBridge, CompanionEditorKind,
+};
+
+pub use visual_live_preview::{LivePreviewConfig, LivePreviewHandle, PreviewDomClickEvent, VisualLivePreview};
+pub use multimodal_vision::{ImageFormat, MultimodalPromptPayload, MultimodalVisionEngine, VisionImage};
+pub use share_tunnel::{ShareTunnelEngine, ShareTunnelSession};
+pub use baas_graduate::{BaasGraduateEngine, BaasGraduationReport, BaasTarget, InferredColumn};
+pub use vibe_intent_expander::{DesignTokens, ExpandedVibeSpec, MotionTokens, VibeIntentExpander};
+pub use auto_dependency_healer::{AutoDependencyHealer, DependencyHealingReport, HealingAction, MissingPackage};
+
+pub use ambient_predictor::{AmbientPredictor, EditEvent, EditKind, PredictedNextEdit, PredictionBatchReport};
+pub use cdp_tweak_mirror::{CdpTweakMirror, DomTweakEvent, TweakSyncReport};
+pub use prompt_mode_docs_harvester::{DocsHarvestResult, ModeHarvesterReport, PromptModeDocsHarvester, VibePromptMode};
+pub use ephemeral_stack_sandbox::{EphemeralStackSandbox, SandboxReport, SandboxSession};
+pub use anti_placebo_gatekeeper::{AntiPlaceboGatekeeper, AntiPlaceboReport, CodeMutant, MutationKind, PlaceboMutantStatus};
+pub use circular_circuit_breaker::{CircuitBreakerReport, CircularCircuitBreaker, CodeStateSnapshot, LoopPatternKind};
+pub use appsec_sentinel::{AppSecReport, AppSecSentinel, SecurityFinding, SecuritySeverity, VulnerabilityCategory};
+pub use cognitive_walkthrough::{CognitiveCard, CognitiveWalkthrough, WalkthroughReport};
+pub use logic_teleport_mirror::{DomInteractionEvent, LogicTarget, LogicTeleportMirror, LogicTeleportReport};
+pub use relational_mock_api_replayer::{MockReplayReport, MockServiceKind, RelationalMockApiReplayer};
+
+pub use lsp_ghost_bridge::{LspGhostBridge, LspGhostReport, LspInlineCompletionItem, LspInlineCompletionParams};
+pub use rolling_compactor::{CompactionReport, ConversationTurn, RollingCompactor};
+pub use git_micro_commit::{GitMicroCommitMirror, MicroCommitPlan, MicroCommitReport};
+pub use vibe_recipe::{RecipeExecutionReport, RecipeStep, StepExecutionLog, VibeRecipe, VibeRecipeEngine};
+pub use behavior_matrix::{BehaviorMatrixEngine, BehaviorMatrixReport, BehavioralContractItem, ContractDimension};
+pub use flight_graph::{FlightGraphReport, FlightGraphVisualizer, FlightNode, FlightNodeStatus};
+pub use repo_map_ranker::{RankedSymbol, RankedSymbolKind, RepoMapRanker, RepoSymbolGraph};
+pub use shadow_workspace::{BuildRunner, PreflightResult, ShadowDiagnostic, ShadowWorkspace};
+pub use stream_squeezer::{SqueezedDigest, StreamSqueezer};
+pub use mutation_fuzzer::{MutantCandidate, MutantStatus, MutationFuzzer, MutationOperator, MutationReport};
+pub use dom_preview_bridge::{BoundingBox, DomElement, DomPreviewBridge};
+pub use mcp_host_orchestrator::{McpHostOrchestrator, McpServerStatus, NamespacedMcpTool};
+pub use live_graph_watcher::{IndexedSymbol, LiveGraphSummary, LiveGraphWatcher};
+pub use shell_panic_hook::{ShellFailureCategory, ShellIncident, ShellPanicDiagnosis, ShellPanicHook};
+pub use spec_decomposer::{DecomposedStep, SpecDecomposer, SpecDecompositionReport, StepStatus};
+pub use dynamic_at_context::{AtDirectiveKind, ContextAttachment, DynamicAtContext, ExpandedPromptResult};
+pub use visual_regression_sentry::{VisualDeltaType, VisualNodeSnapshot, VisualRegressionDelta, VisualRegressionReport, VisualRegressionSentry};
+pub use continuous_flaky_watchdog::{AutonomousHealingAction, ContinuousFlakyWatchdog, WatchdogReport};
+
+pub use visual_canvas::{CanvasMutationReport, CanvasStyleMutation, VisualCanvasEngine};
+pub use multi_repo_federator::{FederatedRepoTask, FederatedSyncReport, MultiRepoFederator};
+pub use time_warp_data::{SyntheticEntity, TableSummary, TimeWarpConfig, TimeWarpDataEngine, TimeWarpReport};
+pub use structural_guardrails::{GuardrailReport, GuardrailViolation, StructuralGuardrails, ViolationSeverity};
+pub use crash_triage::{CrashTriagePipeline, CrashTriageReport};
+pub use flaky_exterminator::{FlakyAnalysisReport, FlakyExterminator, FlakyTestRun};
+pub use neural_context_anchor::{AnchorCategory, AnchorItem, ContextAnchorReport, NeuralContextAnchor};
+
+pub use cdp_teleport::{CdpTeleportEngine, TeleportTarget, TeleportTargetReport};
+pub use voice_flow::{VoiceActionDispatch, VoiceCommandKind, VoiceFlowEngine, VoiceFlowSessionReport};
+pub use pr_tape::{PrTapeEngine, PrTapeReport, ScreenplayStep};
+pub use finops_arbitrage::{ArbitrageRouteDecision, FinOpsArbitrageEngine, FinOpsReport, ModelTier};
+pub use airgap_cloak::{AirgapCloakEngine, CloakAuditReport, CloakedEntity};
+pub use sql_guard::{SafetyVerdict, SqlGuardEngine, SqlGuardReport};
+pub use execution_replay::{ExecutionReplayEngine, ExecutionTraceReport, ReplayFrame};
+
+pub use shadow_synthesizer::{ShadowPrediction, ShadowSynthesisReport, ShadowSynthesizer};
+pub use api_mirage::{ApiMirageEngine, MirageEndpoint, MirageExecutionReport};
+pub use chaos_monkey::{ChaosMonkeyEngine, ChaosMonkeyReport, ChaosTrialResult, FuzzVector, FuzzVectorKind};
+pub use nightshift_pipeline::{NightShiftPipeline, NightShiftPipelineReport, NightShiftStage, StageLog};
+pub use vault_ghost_envs::{GhostEnvAuditReport, GhostVaultSeal, VaultGhostEnvs};
+pub use polyglot_typelock::{PolyglotField, PolyglotModel, PolyglotTypeLock, TypeDriftItem, TypeLockSyncReport};
+pub use spatial_radar::{RadarNode, SpatialCockpitRadar, SpatialRadarReport, ZoomTier};
+pub use cdp_patcher::{CdpLivePatcher, CdpPatchKind, CdpPatchReport};
+pub use skeleton_lens::{AstSkeletonLens, SkeletonLensReport};
+pub use lakandiwa_swarm::{LakandiwaSwarmArbiter, SwarmCandidate, SwarmConsensusReport};
+pub use db_cow_time_machine::{DbCowTimeMachine, DbSnapshotRecord};
+pub use slopsquatting_firewall::{FirewallAuditReport, PackageAuditItem, PackageRiskLevel, SlopsquattingFirewall};
+pub use cloud_launchpad::{CloudLaunchpad, LaunchpadDeploymentReport};
+pub use flight_simulator::{ArchitectureFlightSimulator, FlightHop, FlightSimulatorReport};
+pub use ast_arbiter::{AstHunk, AstHunkDecision, AstHunkKind, AstPatchArbiter, AstPatchReport};
+pub use live_tunnel::{LiveTunnelManager, LiveTunnelSession, MobileTelemetryEvent};
+pub use tdd_loop::{RedGreenTddEngine, TddPhase, TddReport, TddSpec};
+pub use micro_sandbox::{MicroSandboxConfig, MicroSandboxEngine, MicroSandboxReport, SandboxCapability};
+pub use ambient_audio::{AmbientAudioEngine, AudioCueKind, VoiceDiffIntent};
 pub use agent::{AgentEvent, AgentLoopConfig, AgentMessage, AgentRole, AgentSessionReport, AgentStepInfo, AgentToolCall, AgentToolResult, ReActAgentEngine};
 pub use ambient_vibe::{AmbientVibeConfig, AmbientVibeEngine, TestSuiteConfig, VibeWatchEvent};
 pub use verification_gate::{GoldenInvariant, VerificationCertificate, VerificationCheckKind, VerificationGate, VerificationStatus, VerificationStepResult};
