@@ -118,6 +118,71 @@ pub mod mobile_qr_teleport;
 pub mod production_hotfix_sentinel;
 pub mod llm_cost_gateway;
 pub mod privacy_funnel_analytics;
+pub mod rails_engine;
+pub mod project_coordinator;
+pub mod tiered_rules_engine;
+pub mod autopilot_pipeline;
+pub mod decision_explainer;
+pub mod merkle_smart_index;
+pub mod rollout_health_watch;
+pub mod ai_pr_security_audit;
+pub mod preview_cloud_deployer;
+pub mod multi_dev_collab;
+pub mod prompt_lab_workspace;
+pub mod language_intelligence_pack;
+pub mod native_mobile_matrix;
+pub mod session_budget_envelope;
+pub mod vscode_extension_bridge;
+
+pub use rails_engine::{
+    MigrationHazard, MigrationRiskLevel, MigrationSafetyReport, NPlusOneIssue, NPlusOneReport,
+    ParsedRoute, RailsAppInfo, RailsDbAdapter, RailsEngine, RailsScaffoldResult, ScaffoldField,
+};
+pub use project_coordinator::{
+    AdrRecord, ProjectAdrStatus, ProjectCoordinator, ProjectCoordinatorSnapshot, ProjectCoordinatorState,
+    ProjectTask, TaskPriority, TaskStatus,
+};
+pub use tiered_rules_engine::{
+    EvaluatedRuleset, RuleTier, TieredRule, TieredRulesEngine,
+};
+pub use autopilot_pipeline::{
+    AutopilotPatchItem, AutopilotPipeline, AutopilotReport, AutopilotStage, ImpactPlan,
+    IngestedTicket, PullRequestMetadata, VerificationSummary,
+};
+pub use decision_explainer::{
+    DecisionExplanationReport, DecisionExplainer, DecisionTradeoff,
+};
+pub use merkle_smart_index::{
+    FileLeafNode, MerkleCodebaseSnapshot, MerkleDiffReport, MerkleSmartIndex,
+};
+pub use rollout_health_watch::{
+    RolloutHealthVerdict, RolloutHealthWatch, RolloutWatchConfig, RolloutWatchReport, TelemetrySample,
+};
+pub use ai_pr_security_audit::{
+    AiPrSecurityAudit, PrSecurityReport, VulnerabilityFinding, VulnSeverity,
+};
+pub use preview_cloud_deployer::{
+    PreviewCloudDeployer, PreviewCloudProvider, PreviewDeploymentConfig, PreviewDeploymentReport,
+};
+pub use multi_dev_collab::{
+    CollabConflictWarning, CollabPatchIntent, CollabPeer, CollabSessionState, MultiDevCollabEngine,
+};
+pub use prompt_lab_workspace::{
+    PromptBenchmarkResult, PromptLabReport, PromptLabWorkspace, PromptVariant,
+};
+pub use language_intelligence_pack::{
+    FrameworkDiagnosisReport, LanguageIntelligencePack, LanguagePackInfo, SupportedFramework,
+};
+pub use native_mobile_matrix::{
+    MobileCrashDiagnosis, MobileEnvironmentReport, MobilePlatformKind, NativeMobileMatrix,
+    SymbolicatedCrashFrame,
+};
+pub use session_budget_envelope::{
+    BudgetCallRecord, BudgetGovernorState, BudgetStatusReport, BudgetTier, SessionBudgetEnvelope,
+};
+pub use vscode_extension_bridge::{
+    VsCodeBridgeConfig, VsCodeExtensionBridge, VsCodeExtensionScaffoldReport,
+};
 
 pub use saas_monetization::{
     PricingTier, SaasMonetizationFabric, SaasProvider, SaasScaffoldConfig, SaasScaffoldReport,

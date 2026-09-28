@@ -2131,6 +2131,151 @@ impl HagibisDaemon {
                 let rep = analytics.scaffold_analytics();
                 HgbResponse::PrivacyAnalyticsScaffoldResult(rep)
             }
+            // 88. Rails Intelligence Engine
+            HgbRequest::RailsDetect { workspace_path } => {
+                let p = workspace_path.map(std::path::PathBuf::from).unwrap_or_else(|| std::path::PathBuf::from("."));
+                let info = hgb_core::RailsEngine::detect_app(&p);
+                HgbResponse::RailsDetectResult(info)
+            }
+            HgbRequest::RailsLintMigration { file_name, migration_code } => {
+                let rep = hgb_core::RailsEngine::lint_migration(&file_name, &migration_code);
+                HgbResponse::RailsLintMigrationResult(rep)
+            }
+            HgbRequest::RailsScaffold { model_name, fields } => {
+                let rep = hgb_core::RailsEngine::generate_scaffold(&model_name, &fields);
+                HgbResponse::RailsScaffoldResult(rep)
+            }
+            HgbRequest::RailsAuditNPlusOne { file_path, content } => {
+                let rep = hgb_core::RailsEngine::audit_n_plus_one(&file_path, &content);
+                HgbResponse::RailsAuditNPlusOneResult(rep)
+            }
+            HgbRequest::RailsParseRoutes { routes_content } => {
+                let routes = hgb_core::RailsEngine::parse_routes(&routes_content);
+                HgbResponse::RailsParseRoutesResult(routes)
+            }
+            // 89. Persistent Project Coordinator
+            HgbRequest::ProjectSnapshot => {
+                let coord = hgb_core::ProjectCoordinator::global();
+                let snap = coord.snapshot();
+                HgbResponse::ProjectSnapshotResult(snap)
+            }
+            HgbRequest::ProjectAddTask { title, description, priority, tags } => {
+                let coord = hgb_core::ProjectCoordinator::global();
+                let task = coord.add_task(&title, &description, priority, tags);
+                HgbResponse::ProjectTaskResult(Some(task))
+            }
+            HgbRequest::ProjectUpdateTask { task_id, status } => {
+                let coord = hgb_core::ProjectCoordinator::global();
+                let task = coord.update_task_status(&task_id, status);
+                HgbResponse::ProjectTaskResult(task)
+            }
+            HgbRequest::ProjectAddAdr { title, context, decision, consequences, why } => {
+                let coord = hgb_core::ProjectCoordinator::global();
+                let adr = coord.add_adr(&title, &context, &decision, &consequences, &why);
+                HgbResponse::ProjectAdrResult(adr)
+            }
+            // 90. Tiered Rules Auto-Engine
+            HgbRequest::RulesEngineEvaluate { active_files, manual_mentions } => {
+                let engine = hgb_core::TieredRulesEngine::new();
+                let files_ref: Vec<&str> = active_files.iter().map(|s| s.as_str()).collect();
+                let mentions_ref: Vec<&str> = manual_mentions.iter().map(|s| s.as_str()).collect();
+                let res = engine.evaluate(&files_ref, &mentions_ref);
+                HgbResponse::RulesEngineResult(res)
+            }
+            // 91. Ticket-to-PR Autopilot
+            HgbRequest::AutopilotRun { ticket_text } => {
+                let rep = hgb_core::AutopilotPipeline::run(&ticket_text);
+                HgbResponse::AutopilotResult(rep)
+            }
+            // 92. Agent Decision Explainer & ADR Generator
+            HgbRequest::ExplainAction { intent, diff_content } => {
+                let rep = hgb_core::DecisionExplainer::explain_action(&intent, &diff_content);
+                HgbResponse::ExplainResult(rep)
+            }
+            // 93. Merkle Tree Collaborative Codebase Index
+            HgbRequest::SmartIndexSnapshot { workspace_path } => {
+                let p = workspace_path.map(std::path::PathBuf::from).unwrap_or_else(|| std::path::PathBuf::from("."));
+                let snap = hgb_core::MerkleSmartIndex::build_snapshot(&p);
+                HgbResponse::SmartIndexSnapshotResult(snap)
+            }
+            HgbRequest::SmartIndexDiff { prev_snapshot, curr_snapshot } => {
+                let rep = hgb_core::MerkleSmartIndex::diff(&prev_snapshot, &curr_snapshot);
+                HgbResponse::SmartIndexDiffResult(rep)
+            }
+            // 94. PR / Deployment Health Monitor
+            HgbRequest::RolloutWatchEvaluate { deployment_id, samples, baseline_samples, config } => {
+                let rep = hgb_core::RolloutHealthWatch::evaluate(&deployment_id, &samples, &baseline_samples, config);
+                HgbResponse::RolloutWatchResult(rep)
+            }
+            // 95. AI-PR Security Audit
+            HgbRequest::PrAuditScan { files } => {
+                let files_ref: Vec<(&str, &str)> = files.iter().map(|(p, c)| (p.as_str(), c.as_str())).collect();
+                let rep = hgb_core::AiPrSecurityAudit::scan_files(&files_ref);
+                HgbResponse::PrAuditResult(rep)
+            }
+            // 96. Ephemeral Cloud Preview Deployment
+            HgbRequest::PreviewCloudDeploy { config } => {
+                let rep = hgb_core::PreviewCloudDeployer::deploy(config);
+                HgbResponse::PreviewCloudResult(rep)
+            }
+            // 97. Multi-Dev Real-Time Collaboration
+            HgbRequest::CollabSessionSnapshot => {
+                let engine = hgb_core::MultiDevCollabEngine::new("default-room", "current-dev");
+                HgbResponse::CollabSessionResult(engine.session_snapshot())
+            }
+            HgbRequest::CollabJoin { username } => {
+                let mut engine = hgb_core::MultiDevCollabEngine::new("default-room", "host-dev");
+                let _ = engine.join_peer(&username);
+                HgbResponse::CollabSessionResult(engine.session_snapshot())
+            }
+            HgbRequest::CollabSubmitIntent { intent } => {
+                let mut engine = hgb_core::MultiDevCollabEngine::new("default-room", "host-dev");
+                let conflicts = engine.submit_intent(intent);
+                HgbResponse::CollabConflictResult(conflicts)
+            }
+            // 98. Prompt A/B Engineering Workspace
+            HgbRequest::PromptLabBenchmark { variants, test_cases } => {
+                let rep = hgb_core::PromptLabWorkspace::benchmark(&variants, &test_cases);
+                HgbResponse::PromptLabResult(rep)
+            }
+            // 99. Framework Language Intelligence Packs
+            HgbRequest::LangPackInspect { workspace_path } => {
+                let p = workspace_path.map(std::path::PathBuf::from).unwrap_or_else(|| std::path::PathBuf::from("."));
+                let rep = hgb_core::LanguageIntelligencePack::inspect_workspace(&p);
+                HgbResponse::LangPackResult(rep)
+            }
+            // 100. React Native & Flutter Mobile Dev Intelligence
+            HgbRequest::NativeMobileDetect { workspace_path } => {
+                let p = workspace_path.map(std::path::PathBuf::from).unwrap_or_else(|| std::path::PathBuf::from("."));
+                let rep = hgb_core::NativeMobileMatrix::detect_environment(&p);
+                HgbResponse::NativeMobileDetectResult(rep)
+            }
+            HgbRequest::NativeMobileDiagnoseCrash { raw_trace } => {
+                let rep = hgb_core::NativeMobileMatrix::diagnose_crash(&raw_trace);
+                HgbResponse::NativeMobileCrashResult(rep)
+            }
+            // 101. Session Cost Budget Envelope & Hard Cap
+            HgbRequest::BudgetStatus => {
+                let env = hgb_core::SessionBudgetEnvelope::global();
+                HgbResponse::BudgetStatusResult(env.status())
+            }
+            HgbRequest::BudgetSetLimit { limit_usd } => {
+                let env = hgb_core::SessionBudgetEnvelope::global();
+                env.set_limit(limit_usd);
+                HgbResponse::BudgetStatusResult(env.status())
+            }
+            HgbRequest::BudgetRecordCall { model, prompt_tokens, completion_tokens } => {
+                let env = hgb_core::SessionBudgetEnvelope::global();
+                match env.record_call(&model, prompt_tokens, completion_tokens) {
+                    Ok(st) => HgbResponse::BudgetStatusResult(st),
+                    Err(e) => HgbResponse::Error(e),
+                }
+            }
+            // 102. VS Code Extension Bridge to hgbd IPC
+            HgbRequest::VsCodeScaffold { config } => {
+                let rep = hgb_core::VsCodeExtensionBridge::scaffold_extension(config);
+                HgbResponse::VsCodeScaffoldResult(rep)
+            }
         }
     }
 }

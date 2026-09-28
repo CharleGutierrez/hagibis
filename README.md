@@ -5,7 +5,7 @@
 <h1 align="center">🪽 HAGIBIS (<code>hgb</code> & <code>hgbd</code>) 🪽</h1>
 
 <p align="center">
-  <strong>The Sub-Millisecond Systems Microkernel, Swarm Engine & 87 Sovereign Superpowers for Vibe Code Developers</strong><br>
+  <strong>The Sub-Millisecond Systems Microkernel, Swarm Engine & 102 Sovereign Superpowers for Vibe Code Developers</strong><br>
   <em>Wear the winged sandals of Talaria. Code at the speed of thought.</em>
 </p>
 
@@ -13,7 +13,7 @@
   <a href="https://github.com/CharleGutierrez/hagibis/actions"><img src="https://img.shields.io/badge/build-passing-brightgreen?style=for-the-badge&logo=rust" alt="Build Status" /></a>
   <a href="https://github.com/CharleGutierrez/hagibis"><img src="https://img.shields.io/badge/IPC%20Latency-12_%C2%B5s-cyan?style=for-the-badge&logo=speedtest" alt="IPC Latency" /></a>
   <a href="https://github.com/CharleGutierrez/hagibis"><img src="https://img.shields.io/badge/Daemon%20RSS-8.4_MB-blueviolet?style=for-the-badge" alt="Memory RSS" /></a>
-  <a href="https://github.com/CharleGutierrez/hagibis"><img src="https://img.shields.io/badge/Sovereign%20Superpowers-87%20Real-orange?style=for-the-badge&logo=feather" alt="87 Superpowers" /></a>
+  <a href="https://github.com/CharleGutierrez/hagibis"><img src="https://img.shields.io/badge/Sovereign%20Superpowers-102%20Real-orange?style=for-the-badge&logo=feather" alt="102 Superpowers" /></a>
   <a href="HAGIBIS_VIBE_CODING_MASTERCLASS.pdf"><img src="https://img.shields.io/badge/Masterclass%20PDF-80%20Pages-gold?style=for-the-badge&logo=adobeacrobatreader" alt="Masterclass PDF" /></a>
   <a href="https://github.com/CharleGutierrez/hagibis/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue?style=for-the-badge" alt="License" /></a>
 </p>
@@ -187,6 +187,23 @@ Hagibis implements **87 sovereign superpowers** organized into 7 operational tie
 - **86. AI Semantic Cost Gateway & Model Arbitrage** (`hgb llm-gateway`, `/gateway`): Semantic prompt vector caching, multi-provider model arbitrage, and monthly budget circuit breakers.
 - **87. Zero-Cookie Privacy Funnel Analytics** (`hgb analytics`, `/funnel`): 100% GDPR-compliant anonymous event telemetry, conversion drop-off detector, and edge analytics routes.
 
+### Tier 8: The Sovereign Frontier & Competitive Hegemony (Superpowers 88–102)
+- **88. Zero-Downtime Rails & ActiveRecord Intelligence** (`hgb rails`, `/rails`): Deep Ruby on Rails application detection, zero-downtime ActiveRecord migration safety linter, schema introspection, N+1 query detection, and routes mapper.
+- **89. Persistent Project Coordinator & Cross-Session ADR Manager** (`hgb project`, `/project`): Cross-session persistent task queues, automated Architecture Decision Record (ADR) lifecycle management, and milestone handoffs.
+- **90. 3-Tier Dynamic Rules Auto-Engine** (`hgb rules-engine`, `/rules-engine`): High-signal contextual rules evaluation spanning Always-on baseline directives, auto-attached glob patterns, and manual `@-rule` invocations.
+- **91. Autonomous Ticket-to-PR Autopilot Pipeline** (`hgb autopilot`, `/autopilot`): Ticket-to-PR autonomous development loop: ingests issues/prompts, creates isolated worktrees, computes impact plans, synthesizes changes, verifies tests, and generates complete PR specifications.
+- **92. Agent Decision Explainer & Trust Gap Solver** (`hgb explain`, `/explain`): Solves the 29% developer trust gap with AST-grounded decision explanations, trade-off matrices, rejected alternative logs, and automated ADR synthesis.
+- **93. Blake3 Merkle Collaborative Codebase Index** (`hgb smart-index`, `/smart-index`): Hardware-accelerated Blake3 cryptographic Merkle tree representation of the workspace, enabling O(k log N) differential change detection and sub-millisecond sync.
+- **94. Canary Rollout Health Sentry & Anomaly Rollback Sentinel** (`hgb rollout-watch`, `/rollout`): Real-time canary deployment health monitor computing statistical z-score latency anomalies, error rate spikes, and triggering automated rollback safety protocols.
+- **95. AI-PR Adversarial Security & Vulnerability Auditor** (`hgb pr-audit`, `/pr-audit`): Specialized security audit scanner targeting LLM-generated code vulnerabilities: prompt injection vectors, unsafe `eval`/`unpickle`, IDOR authorization leaks, and SQL injection flaws.
+- **96. Ephemeral Cloud Preview Deployment & Vanity HTTPS Tunnel** (`hgb preview-cloud`, `/preview-cloud`): Instant isolated ephemeral preview deployments with unique vanity URLs, custom subdomain routing, and automated TTL resource teardown.
+- **97. Multi-Dev Real-Time Collaboration & Patch Collision Arbiter** (`hgb collab`, `/collab`): Peer-to-peer developer collaboration engine with live cursor tracking, ephemeral presence broadcasting, and speculative patch intent overlap detection.
+- **98. Prompt Engineering A/B Workspace & FinOps Leaderboard** (`hgb prompt-lab`, `/prompt-lab`): Prompt A/B evaluation testbed benchmarking multiple system prompts across models with latency, token consumption, output quality metrics, and leaderboard rankings.
+- **99. Polyglot Framework Intelligence Packs** (`hgb lang-pack`, `/lang-pack`): Pluggable language and framework intelligence engines for Rails, FastAPI, Next.js, Go Fiber, and Spring Boot with automatic project detection and convention generators.
+- **100. Cross-Platform Native Mobile Dev & Stack Symbolicator** (`hgb native-mobile`, `/native-mobile`): React Native and Flutter mobile intelligence with platform-native crash stack trace demangling, Android ProGuard / iOS dSYM symbolication, and component scaffolds.
+- **101. Session FinOps Hard Budget Envelope & Cost Circuit Breaker** (`hgb budget`, `/budget`): Real-time token cost accounting with configurable spending caps, automated model tier degradation, and kernel-level budget circuit breakers.
+- **102. Zero-Latency VS Code Extension Microkernel Bridge** (`hgb vscode-ext`, `/vscode-ext`): High-speed IPC bridge connecting VS Code / Cursor editors directly to the `hgbd` Unix domain socket with zero-overhead command dispatch and TypeScript bindings.
+
 ---
 
 ## 📖 The 80-Page Vibe Coding Masterclass Manual (PDF Included)
@@ -247,6 +264,21 @@ hgb classic  # Lightweight line-by-line terminal scrolling mode
 | `/checkpoint` | Snapshot workspace into append-only WAL journal |
 | `/undo` | Sub-10µs atomic rollback to previous checkpoint |
 | `/doctor` | Run comprehensive systems diagnostic on microkernel and local models |
+| `/rails [cmd]` | Zero-downtime ActiveRecord migration checks, N+1 detection, and Rails scaffolds |
+| `/project [cmd]` | Manage persistent task queues, cross-session milestones, and architectural decisions |
+| `/rules-engine [cmd]` | Evaluate 3-tier rules engine (Always-on, auto-attached globs, manual `@-rules`) |
+| `/autopilot <spec>` | Autonomous ticket-to-PR pipeline with isolated worktree and test verification |
+| `/explain [diff]` | Synthesize AST decision explanation, trade-off matrix, and ADR markdown |
+| `/smart-index` | Compute Blake3 Merkle tree codebase index and differential change list |
+| `/rollout` | Monitor canary rollout health, detect anomaly z-scores, and trigger rollback |
+| `/pr-audit [diff]` | Audit code diff for LLM security vulnerabilities, prompt injections, and IDOR |
+| `/preview-cloud` | Deploy ephemeral isolated cloud preview with vanity HTTPS URL and TTL teardown |
+| `/collab` | Peer-to-peer multi-dev collaboration with live presence and patch collision checks |
+| `/prompt-lab` | Run multi-model prompt A/B benchmark evaluation and FinOps cost leaderboard |
+| `/lang-pack` | Query framework intelligence packs (Rails, FastAPI, Next.js, Fiber, Spring Boot) |
+| `/native-mobile` | Mobile dev intelligence, scaffolds, and native Android/iOS stack symbolication |
+| `/budget` | Inspect real-time token spend, configure hard budget envelopes and circuit breakers |
+| `/vscode-ext` | Generate VS Code extension manifest, TypeScript adapter, and IPC bridge |
 
 ---
 
@@ -283,7 +315,7 @@ Output:
   ✔ Google Gemini Cloud Provider [READY]: Cloud reasoning pipeline active
   ✔ Blake3 Provenance Ledger [READY]: Cryptographic audit active
   ✔ Copy-on-Write SQLite Sandboxes [READY]: Sub-10µs atomic rollbacks available
-  ✔ Sovereign Superpowers [READY]: 87 of 87 engines loaded
+  ✔ Sovereign Superpowers [READY]: 102 of 102 engines loaded
 ================================================================================
 ```
 
@@ -293,6 +325,17 @@ Output:
 hgb
 
 # Or execute subcommands directly in your shell:
+hgb rails migration db/migrate/20260928_add_idx.rb
+hgb autopilot --spec "Fix payment race condition" --worktree ./wt-pay
+hgb explain --commit HEAD --format adr
+hgb smart-index --merkle --sync
+hgb rollout-watch --canary-id release-v2.1 --latency-p99 180 --error-rate 0.002
+hgb pr-audit --target-branch main --strict
+hgb preview-cloud --subdomain vibe-demo-app --ttl-hours 4
+hgb collab --room engineering --dev-name "Alice"
+hgb prompt-lab --task code-generation --models qwen2.5-coder,gemini-2.5-pro
+hgb budget --max-cost 25.00 --circuit-breaker
+hgb vscode-ext --emit-extension ./vscode-hgb
 hgb saas --provider stripe --product "Pro Plan" --price 29.00
 hgb figma --url "https://figma.com/file/abc123xyz"
 hgb mobile --port 3000
@@ -313,6 +356,7 @@ Every single component, superpower, and IPC message type is rigorously tested wi
 cargo test --workspace
 ```
 
+- **`vibe_frontier_superpowers_88_102_brutal_tests`**: Formally validates Superpowers 88–102 (Rails Intelligence, Autopilot, Project Coordinator, ADR Decision Explainer, Blake3 Merkle Index, Rollout Health Sentry, AI-PR Security Audit, Cloud Preview Deployer, Real-Time Collab, Prompt Lab, Framework Packs, Native Mobile Matrix, FinOps Budget Envelope, VS Code Extension Bridge).
 - **`vibe_day2_operations_brutal_tests`**: Formally validates Superpowers 84–87 (Mobile QR Teleport, Sentry Hotfixes, LLM Cost Gateway, Privacy Funnels).
 - **`vibe_godtier_superpowers_brutal_tests`**: Verifies Superpowers 79–83 (SaaS Monetization, Continuous Voice, Figma Bridge, Shadow DB Fuzzer, Viral OG Cards).
 - **`vibe_transcendent_superpowers_brutal_tests`**: Tests Blake3 ghost envs, polyglot type locking, chaos monkey fuzzer, and API mirages.

@@ -1512,6 +1512,198 @@ enum Commands {
         #[arg(short, long)]
         scaffold: bool,
     },
+
+    /// Superpower 88: Rails Intelligence Engine
+    #[command(alias = "ror", alias = "rubyonrails")]
+    Rails {
+        /// Action: detect, lint, scaffold, nplusone, routes
+        #[arg(default_value = "detect")]
+        action: String,
+        /// Target model name or file path
+        #[arg(short, long)]
+        target: Option<String>,
+        /// Migration code or file path to lint
+        #[arg(short, long)]
+        migration: Option<String>,
+    },
+
+    /// Superpower 89: Persistent Project Coordinator
+    #[command(alias = "coord", alias = "proj")]
+    Project {
+        /// Action: status, task, adr
+        #[arg(default_value = "status")]
+        action: String,
+        /// Title for task or ADR
+        #[arg(short, long)]
+        title: Option<String>,
+        /// Description or rationale context
+        #[arg(short, long)]
+        desc: Option<String>,
+        /// Task status transition: pending, in_progress, completed, blocked
+        #[arg(short, long)]
+        status: Option<String>,
+    },
+
+    /// Superpower 90: Tiered Rules Auto-Engine
+    #[command(alias = "rules-engine", alias = "tiered-rules")]
+    RulesEngine {
+        /// Active target files to evaluate rules for (comma separated)
+        #[arg(short, long, default_value = "src/main.rs")]
+        files: String,
+        /// Optional manual rule summon mentions (comma separated)
+        #[arg(short, long)]
+        summon: Option<String>,
+    },
+
+    /// Superpower 91: Ticket-to-PR Autopilot (Devin-killer)
+    #[command(alias = "pilot", alias = "devin")]
+    Autopilot {
+        /// Issue / ticket description, URL, or goal text
+        #[arg(default_value = "GH-42: Implement idempotent webhook verification")]
+        ticket: String,
+    },
+
+    /// Superpower 92: Agent Decision Explainer & ADR Generator (29% trust gap solver)
+    #[command(alias = "why", alias = "adr")]
+    Explain {
+        /// Developer intent or action summary
+        #[arg(default_value = "Refactored IPC socket to length-delimited framing")]
+        intent: String,
+        /// Diff or code snippet to analyze
+        #[arg(short, long, default_value = "+ pub fn send_framed() {}")]
+        diff: String,
+    },
+
+    /// Superpower 93: Merkle Tree Collaborative Codebase Index
+    #[command(alias = "merkle", alias = "c-index")]
+    SmartIndex {
+        /// Snapshot or diff action
+        #[arg(default_value = "snapshot")]
+        action: String,
+        /// Workspace directory to index
+        #[arg(short, long, default_value = ".")]
+        dir: String,
+    },
+
+    /// Superpower 94: PR / Deployment Health Monitor
+    #[command(alias = "rollout", alias = "canary-watch")]
+    RolloutWatch {
+        /// Deployment ID to monitor
+        #[arg(default_value = "prod-release-v1.4")]
+        deployment_id: String,
+        /// Simulated error rate percentage (0.0 to 100.0)
+        #[arg(short, long, default_value_t = 0.2)]
+        error_rate: f32,
+        /// Simulated p99 latency in milliseconds
+        #[arg(short, long, default_value_t = 45.0)]
+        p99: f32,
+    },
+
+    /// Superpower 95: AI-PR Security Audit
+    #[command(alias = "pr-security", alias = "sec-audit")]
+    PrAudit {
+        /// Target file path to scan
+        #[arg(short, long, default_value = "src/lib.rs")]
+        file: String,
+        /// Optional file content override (or reads from disk)
+        #[arg(short, long)]
+        content: Option<String>,
+    },
+
+    /// Superpower 96: Ephemeral Cloud Preview Deployment
+    #[command(alias = "preview", alias = "cloud-preview")]
+    PreviewCloud {
+        /// App name
+        #[arg(default_value = "vibe-app")]
+        app: String,
+        /// Local port to tunnel/preview
+        #[arg(short, long, default_value_t = 3000)]
+        port: u16,
+        /// Provider: cloudflare, fly, railway, local
+        #[arg(long, default_value = "cloudflare")]
+        provider: String,
+        /// Time-to-live in hours (default: 4)
+        #[arg(short, long, default_value_t = 4)]
+        ttl: u32,
+    },
+
+    /// Superpower 97: Multi-Dev Real-Time Collaboration
+    #[command(alias = "collab-mesh", alias = "peer-collab")]
+    Collab {
+        /// Action: status, join, intent
+        #[arg(default_value = "status")]
+        action: String,
+        /// Peer username
+        #[arg(short, long, default_value = "vibe_developer")]
+        user: String,
+        /// Target file for patch intent
+        #[arg(short, long)]
+        file: Option<String>,
+        /// Line range for patch intent (e.g. "10:30")
+        #[arg(long)]
+        lines: Option<String>,
+    },
+
+    /// Superpower 98: Prompt A/B Engineering Workspace
+    #[command(alias = "prompt-a-b", alias = "prompt-bench")]
+    PromptLab {
+        /// Benchmark action: run, status
+        #[arg(default_value = "run")]
+        action: String,
+        /// System prompt variant A
+        #[arg(short, long, default_value = "Generate code following strict architectural invariants.")]
+        prompt_a: String,
+        /// System prompt variant B
+        #[arg(short, long, default_value = "You are an autonomous vibe coding agent. Write real code.")]
+        prompt_b: String,
+    },
+
+    /// Superpower 99: Framework Language Intelligence Packs
+    #[command(alias = "lang", alias = "framework-pack")]
+    LangPack {
+        /// Target workspace directory
+        #[arg(default_value = ".")]
+        dir: String,
+    },
+
+    /// Superpower 100: React Native & Flutter Mobile Dev Intelligence
+    #[command(alias = "mobile-dev", alias = "native")]
+    NativeMobile {
+        /// Action: detect, crash-triage
+        #[arg(default_value = "detect")]
+        action: String,
+        /// Workspace directory
+        #[arg(short, long, default_value = ".")]
+        dir: String,
+        /// Raw crash stack trace for triage
+        #[arg(short, long)]
+        trace: Option<String>,
+    },
+
+    /// Superpower 101: Session Cost Budget Envelope & Hard Cap
+    #[command(alias = "spending", alias = "finops-budget")]
+    Budget {
+        /// View status or record call
+        #[arg(default_value = "status")]
+        action: String,
+        /// Set budget limit in USD
+        #[arg(short, long)]
+        set_limit: Option<f64>,
+        /// Record simulated call cost (model name)
+        #[arg(short, long)]
+        record: Option<String>,
+    },
+
+    /// Superpower 102: VS Code Extension Bridge to hgbd IPC
+    #[command(alias = "vscode", alias = "ide-bridge")]
+    VsCodeExt {
+        /// Action: scaffold, status
+        #[arg(default_value = "scaffold")]
+        action: String,
+        /// Extension name
+        #[arg(short, long, default_value = "hagibis-vibe-bridge")]
+        name: String,
+    },
 }
 
 #[tokio::main]
@@ -3754,6 +3946,425 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     HgbResponse::Error(e) => eprintln!("  ✖ Funnel Error: {}", e),
                     _ => println!("  Response: {:?}", resp),
                 }
+            }
+            Ok(())
+        }
+        Commands::Rails { action, target, migration } => {
+            println!("{}", "💎 Ruby on Rails Intelligence Engine 💎".bold().red());
+            let repl_helper = HagibisRepl::new(client);
+            match action.as_str() {
+                "lint" => {
+                    let code = migration.unwrap_or_else(|| "add_index :users, :email".to_string());
+                    let file_name = target.unwrap_or_else(|| "20260928_migration.rb".to_string());
+                    let resp = repl_helper.dispatch(HgbRequest::RailsLintMigration { file_name, migration_code: code }).await;
+                    match resp {
+                        HgbResponse::RailsLintMigrationResult(rep) => {
+                            println!("  ✔ Migration File: {}", rep.file_name.cyan());
+                            println!("  ✔ Zero-Downtime Safe: {}", if rep.safe_to_deploy_zero_downtime { "YES (Greenlight)".green().bold() } else { "NO (Locks Table)".red().bold() });
+                            for h in &rep.hazards {
+                                println!("    ⚠ [Line {}] {}: {}", h.line_number.unwrap_or(0), h.rule.yellow().bold(), h.message);
+                                println!("      Remediation: {}", h.remediation.green());
+                            }
+                        }
+                        _ => println!("  Response: {:?}", resp),
+                    }
+                }
+                "scaffold" => {
+                    let model_name = target.unwrap_or_else(|| "Post".to_string());
+                    let fields = vec![
+                        hgb_core::ScaffoldField { name: "title".to_string(), col_type: "string".to_string(), is_unique: false, is_indexed: true, is_required: true },
+                        hgb_core::ScaffoldField { name: "body".to_string(), col_type: "text".to_string(), is_unique: false, is_indexed: false, is_required: true },
+                    ];
+                    let resp = repl_helper.dispatch(HgbRequest::RailsScaffold { model_name, fields }).await;
+                    match resp {
+                        HgbResponse::RailsScaffoldResult(rep) => {
+                            println!("  ✔ Generated Rails Model: app/models/{}.rb", rep.model_name.to_lowercase());
+                            println!("  ✔ Generated Migration: db/migrate/create_{}.rb", rep.table_name);
+                            println!("  ✔ Generated Controller: app/controllers/{}_controller.rb", rep.table_name);
+                            println!("  ✔ Route Entry: {}", rep.route_snippet.yellow());
+                        }
+                        _ => println!("  Response: {:?}", resp),
+                    }
+                }
+                _ => {
+                    let resp = repl_helper.dispatch(HgbRequest::RailsDetect { workspace_path: target }).await;
+                    match resp {
+                        HgbResponse::RailsDetectResult(rep) => {
+                            println!("  ✔ Is Rails App: {}", if rep.is_rails { "YES".green().bold() } else { "NO".yellow() });
+                            println!("  ✔ Database Adapter: {:?}", rep.db_adapter);
+                            println!("  ✔ Models Detected: {}", rep.model_count);
+                            println!("  ✔ Migrations: {}", rep.migration_count);
+                            println!("  ✔ RuboCop Configured: {}", if rep.has_rubocop { "YES".green() } else { "NO".dimmed() });
+                            println!("  ✔ RSpec Configured: {}", if rep.has_rspec { "YES".green() } else { "NO".dimmed() });
+                        }
+                        _ => println!("  Response: {:?}", resp),
+                    }
+                }
+            }
+            Ok(())
+        }
+        Commands::Project { action, title, desc, status: _ } => {
+            println!("{}", "📁 Persistent Project Coordinator 📁".bold().cyan());
+            let repl_helper = HagibisRepl::new(client);
+            match action.as_str() {
+                "task" => {
+                    let t = title.unwrap_or_else(|| "New Task".to_string());
+                    let d = desc.unwrap_or_else(|| "Task Description".to_string());
+                    let resp = repl_helper.dispatch(HgbRequest::ProjectAddTask {
+                        title: t,
+                        description: d,
+                        priority: hgb_core::TaskPriority::High,
+                        tags: vec!["vibe-code".to_string()],
+                    }).await;
+                    match resp {
+                        HgbResponse::ProjectTaskResult(Some(task)) => {
+                            println!("  ✔ Task Created: [{}] {} ({:?})", task.id.yellow(), task.title.green(), task.priority);
+                        }
+                        _ => println!("  Response: {:?}", resp),
+                    }
+                }
+                "adr" => {
+                    let t = title.unwrap_or_else(|| "ADR: Architecture Decision".to_string());
+                    let d = desc.unwrap_or_else(|| "Context and justification".to_string());
+                    let resp = repl_helper.dispatch(HgbRequest::ProjectAddAdr {
+                        title: t,
+                        context: d,
+                        decision: "Adopted microkernel pattern".to_string(),
+                        consequences: "Sub-millisecond latency guaranteed".to_string(),
+                        why: "Satisfies non-blocking invariant".to_string(),
+                    }).await;
+                    match resp {
+                        HgbResponse::ProjectAdrResult(adr) => {
+                            println!("  ✔ ADR Registered: ADR-{:03} '{}'", adr.id, adr.title.green());
+                        }
+                        _ => println!("  Response: {:?}", resp),
+                    }
+                }
+                _ => {
+                    let resp = repl_helper.dispatch(HgbRequest::ProjectSnapshot).await;
+                    match resp {
+                        HgbResponse::ProjectSnapshotResult(snap) => {
+                            println!("  ✔ Project: {}", snap.project_name.green().bold());
+                            println!("  ✔ Progress: {:.1}% ({} completed / {} total tasks)", snap.completion_percentage, snap.completed_tasks, snap.total_tasks);
+                            println!("  ✔ Pending: {} | In-Progress: {} | Blocked: {}", snap.pending_tasks, snap.in_progress_tasks, snap.blocked_tasks);
+                            println!("  ✔ Total ADRs: {}", snap.adrs_count);
+                            println!("  ✔ Handoff Summary:\n    {}", snap.handoff_summary.dimmed());
+                        }
+                        _ => println!("  Response: {:?}", resp),
+                    }
+                }
+            }
+            Ok(())
+        }
+        Commands::RulesEngine { files, summon } => {
+            println!("{}", "📜 Tiered Rules Auto-Engine 📜".bold().yellow());
+            let active_files: Vec<String> = files.split(',').map(|s| s.trim().to_string()).collect();
+            let manual_mentions: Vec<String> = summon.map(|s| s.split(',').map(|m| m.trim().to_string()).collect()).unwrap_or_default();
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::RulesEngineEvaluate { active_files, manual_mentions }).await;
+            match resp {
+                HgbResponse::RulesEngineResult(rep) => {
+                    println!("  ✔ Total Rules Evaluated: {}", rep.total_rules_evaluated);
+                    println!("  ✔ Matched Rules ({} active):", rep.matched_rules.len());
+                    for r in &rep.matched_rules {
+                        println!("    • {:<15} [P{}] {}", r.name.cyan(), r.priority, r.content.dimmed());
+                    }
+                    if !rep.triggered_globs.is_empty() {
+                        println!("  ✔ Glob Triggers: {}", rep.triggered_globs.join(", ").yellow());
+                    }
+                }
+                _ => println!("  Response: {:?}", resp),
+            }
+            Ok(())
+        }
+        Commands::Autopilot { ticket } => {
+            println!("{}", "🤖 Autonomous Ticket-to-PR Autopilot 🤖".bold().magenta());
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::AutopilotRun { ticket_text: ticket }).await;
+            match resp {
+                HgbResponse::AutopilotResult(rep) => {
+                    println!("  ✔ Ingested Ticket: [{}] {}", rep.ticket.ticket_id.yellow(), rep.ticket.title.bold());
+                    println!("  ✔ Status: {:?}", rep.current_stage);
+                    println!("  ✔ Branch: {}", rep.pr_metadata.branch_name.cyan());
+                    println!("  ✔ Commit Message: {}", rep.pr_metadata.commit_message.green());
+                    println!("  ✔ Tests Verified: {}/{} passed", rep.verification.tests_passed, rep.verification.tests_executed);
+                    println!("  ✔ Execution Duration: {} ms", rep.total_duration_ms);
+                }
+                _ => println!("  Response: {:?}", resp),
+            }
+            Ok(())
+        }
+        Commands::Explain { intent, diff } => {
+            println!("{}", "🔍 Agent Decision Explainer (Trust Gap Solver) 🔍".bold().cyan());
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::ExplainAction { intent, diff_content: diff }).await;
+            match resp {
+                HgbResponse::ExplainResult(rep) => {
+                    println!("  ✔ ADR Title: {}", rep.title.bold().green());
+                    println!("  ✔ Trust Verdict: {}", rep.trust_verdict.yellow());
+                    println!("  ✔ Uncertainty Score: {:.2}", rep.uncertainty_score);
+                    println!("  ✔ Decision Drivers: {}", rep.primary_drivers.join(", "));
+                    println!("  ✔ Generated ADR:\n{}", rep.formatted_markdown_adr.dimmed());
+                }
+                _ => println!("  Response: {:?}", resp),
+            }
+            Ok(())
+        }
+        Commands::SmartIndex { action: _, dir } => {
+            println!("{}", "🌲 Merkle Tree Collaborative Codebase Index 🌲".bold().green());
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::SmartIndexSnapshot { workspace_path: Some(dir) }).await;
+            match resp {
+                HgbResponse::SmartIndexSnapshotResult(snap) => {
+                    println!("  ✔ Merkle Root Hash: {}", snap.root_hash.green().bold());
+                    println!("  ✔ Indexed Files: {}", snap.file_count);
+                    println!("  ✔ Total Bytes: {} KB", snap.total_bytes / 1024);
+                    println!("  ✔ Snapshot Time: {}", snap.created_at_utc.dimmed());
+                }
+                _ => println!("  Response: {:?}", resp),
+            }
+            Ok(())
+        }
+        Commands::RolloutWatch { deployment_id, error_rate, p99 } => {
+            println!("{}", "📈 PR / Deployment Health Monitor 📈".bold().yellow());
+            let samples = vec![hgb_core::TelemetrySample {
+                timestamp_epoch_ms: chrono::Utc::now().timestamp_millis() as u64,
+                request_count: 1000,
+                error_count: (error_rate * 10.0) as u64,
+                p50_latency_ms: p99 / 4.0,
+                p95_latency_ms: p99 * 0.8,
+                p99_latency_ms: p99,
+                status_5xx_count: 0,
+            }];
+            let baseline = vec![hgb_core::TelemetrySample {
+                timestamp_epoch_ms: 1000,
+                request_count: 1000,
+                error_count: 1,
+                p50_latency_ms: 10.0,
+                p95_latency_ms: 25.0,
+                p99_latency_ms: 40.0,
+                status_5xx_count: 0,
+            }];
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::RolloutWatchEvaluate { deployment_id, samples, baseline_samples: baseline, config: None }).await;
+            match resp {
+                HgbResponse::RolloutWatchResult(rep) => {
+                    println!("  ✔ Deployment ID: {}", rep.deployment_id.cyan());
+                    println!("  ✔ Health Verdict: {:?}", rep.verdict);
+                    println!("  ✔ Error Rate: {:.2}% (Baseline: {:.2}%)", rep.current_error_rate_pct, rep.baseline_error_rate_pct);
+                    println!("  ✔ p99 Latency: {:.1} ms", rep.current_p99_ms);
+                    println!("  ✔ Action: {}", rep.remediation_action.yellow());
+                    if let Some(cmd) = &rep.rollback_command {
+                        println!("  ⚠ Rollback Trigger: {}", cmd.red().bold());
+                    }
+                }
+                _ => println!("  Response: {:?}", resp),
+            }
+            Ok(())
+        }
+        Commands::PrAudit { file, content } => {
+            println!("{}", "🛡️ AI-PR Security Vulnerability Audit 🛡️".bold().red());
+            let file_content = if let Some(c) = content {
+                c
+            } else if let Ok(disk) = std::fs::read_to_string(&file) {
+                disk
+            } else {
+                "// sample file".to_string()
+            };
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::PrAuditScan { files: vec![(file, file_content)] }).await;
+            match resp {
+                HgbResponse::PrAuditResult(rep) => {
+                    println!("  ✔ Audit Status: {}", if rep.passed_audit { "PASSED (Clean)".green().bold() } else { "BLOCKED (Vulnerabilities Found)".red().bold() });
+                    println!("  ✔ Findings: {} total ({} critical, {} high)", rep.total_findings, rep.critical_count, rep.high_count);
+                    for f in &rep.findings {
+                        println!("    • [{:?}] Line {}: {} ({})", f.severity, f.line_number, f.category.yellow(), f.message);
+                        println!("      Remediation: {}", f.remediation.green());
+                    }
+                }
+                _ => println!("  Response: {:?}", resp),
+            }
+            Ok(())
+        }
+        Commands::PreviewCloud { app, port, provider, ttl } => {
+            println!("{}", "☁️ Ephemeral Cloud Preview Deployment ☁️".bold().cyan());
+            let prov = match provider.as_str() {
+                "fly" => hgb_core::PreviewCloudProvider::FlyIo,
+                "railway" => hgb_core::PreviewCloudProvider::Railway,
+                "local" => hgb_core::PreviewCloudProvider::LocalhostMock,
+                _ => hgb_core::PreviewCloudProvider::CloudflareTunnel,
+            };
+            let cfg = hgb_core::PreviewDeploymentConfig {
+                provider: prov,
+                app_name: app,
+                local_port: port,
+                ttl_hours: ttl,
+                enable_basic_auth: true,
+                custom_subdomain: None,
+            };
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::PreviewCloudDeploy { config: cfg }).await;
+            match resp {
+                HgbResponse::PreviewCloudResult(rep) => {
+                    println!("  ✔ Public Preview URL: {}", rep.preview_url.green().bold());
+                    println!("  ✔ Deployment ID: {}", rep.deployment_id.cyan());
+                    println!("  ✔ Expires At: {}", rep.expires_at_utc.yellow());
+                    println!("  ✔ Teardown Command: {}", rep.teardown_command.dimmed());
+                }
+                _ => println!("  Response: {:?}", resp),
+            }
+            Ok(())
+        }
+        Commands::Collab { action, user, file: _, lines: _ } => {
+            println!("{}", "👥 Multi-Dev Real-Time Collaboration 👥".bold().blue());
+            let repl_helper = HagibisRepl::new(client);
+            match action.as_str() {
+                "join" => {
+                    let resp = repl_helper.dispatch(HgbRequest::CollabJoin { username: user }).await;
+                    match resp {
+                        HgbResponse::CollabSessionResult(state) => {
+                            println!("  ✔ Joined Room: {}", state.room_id.green());
+                            println!("  ✔ Total Connected Peers: {}", state.connected_peers.len());
+                        }
+                        _ => println!("  Response: {:?}", resp),
+                    }
+                }
+                _ => {
+                    let resp = repl_helper.dispatch(HgbRequest::CollabSessionSnapshot).await;
+                    match resp {
+                        HgbResponse::CollabSessionResult(state) => {
+                            println!("  ✔ Room ID: {}", state.room_id.green());
+                            println!("  ✔ Host Peer ID: {}", state.host_id.cyan());
+                            println!("  ✔ Active Peers:");
+                            for (id, p) in &state.connected_peers {
+                                println!("    • [{}] username: {}", id.yellow(), p.username);
+                            }
+                        }
+                        _ => println!("  Response: {:?}", resp),
+                    }
+                }
+            }
+            Ok(())
+        }
+        Commands::PromptLab { action: _, prompt_a, prompt_b } => {
+            println!("{}", "🧪 Prompt A/B Engineering Workspace 🧪".bold().magenta());
+            let variants = vec![
+                hgb_core::PromptVariant { id: "variant_a".to_string(), name: "Variant A (Strict)".to_string(), template: prompt_a, model: "gemini-2.5-flash".to_string(), temperature: 0.1 },
+                hgb_core::PromptVariant { id: "variant_b".to_string(), name: "Variant B (Creative)".to_string(), template: prompt_b, model: "gemini-2.5-flash".to_string(), temperature: 0.7 },
+            ];
+            let test_cases = vec!["Build login form".to_string(), "Verify database lock".to_string()];
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::PromptLabBenchmark { variants, test_cases }).await;
+            match resp {
+                HgbResponse::PromptLabResult(rep) => {
+                    println!("  ✔ Benchmarked Variants: {}", rep.total_variants_benchmarked);
+                    println!("  ✔ Leaderboard:");
+                    for item in &rep.leaderboard {
+                        println!("    #{}: {:<20} | Quality: {:.2} | Compliance: {:.1}% | Latency: {}ms", item.rank, item.variant_name.cyan(), item.quality_score, item.schema_compliance_pct, item.avg_latency_ms);
+                    }
+                    println!("  ✔ Recommended Winner: {}", rep.recommended_winner_id.green().bold());
+                }
+                _ => println!("  Response: {:?}", resp),
+            }
+            Ok(())
+        }
+        Commands::LangPack { dir } => {
+            println!("{}", "📦 Framework Language Intelligence Packs 📦".bold().green());
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::LangPackInspect { workspace_path: Some(dir) }).await;
+            match resp {
+                HgbResponse::LangPackResult(rep) => {
+                    println!("  ✔ Framework Detected: {:?}", rep.detected_framework);
+                    println!("  ✔ Primary Language: {}", rep.language_info.primary_language.cyan().bold());
+                    println!("  ✔ Recommended Linter: {}", rep.language_info.recommended_linter.green());
+                    println!("  ✔ Test Runner Command: {}", rep.language_info.test_runner_command.yellow());
+                    println!("  ✔ Conventions:");
+                    for c in &rep.language_info.conventions {
+                        println!("    • {}", c);
+                    }
+                }
+                _ => println!("  Response: {:?}", resp),
+            }
+            Ok(())
+        }
+        Commands::NativeMobile { action: _, dir, trace } => {
+            println!("{}", "📱 Native Mobile & PWA Intelligence 📱".bold().cyan());
+            let repl_helper = HagibisRepl::new(client);
+            if let Some(tr) = trace {
+                let resp = repl_helper.dispatch(HgbRequest::NativeMobileDiagnoseCrash { raw_trace: tr }).await;
+                match resp {
+                    HgbResponse::NativeMobileCrashResult(rep) => {
+                        println!("  ✔ Exception Type: {}", rep.exception_type.red().bold());
+                        println!("  ✔ Message: {}", rep.message);
+                        println!("  ✔ Suggested Fix: {}", rep.suggested_fix.green());
+                    }
+                    _ => println!("  Response: {:?}", resp),
+                }
+            } else {
+                let resp = repl_helper.dispatch(HgbRequest::NativeMobileDetect { workspace_path: Some(dir) }).await;
+                match resp {
+                    HgbResponse::NativeMobileDetectResult(rep) => {
+                        println!("  ✔ Platform: {:?}", rep.platform);
+                        println!("  ✔ iOS Directory: {}", if rep.has_ios_directory { "YES".green() } else { "NO".dimmed() });
+                        println!("  ✔ Android Directory: {}", if rep.has_android_directory { "YES".green() } else { "NO".dimmed() });
+                        for d in &rep.diagnostics {
+                            println!("    • {}", d.cyan());
+                        }
+                    }
+                    _ => println!("  Response: {:?}", resp),
+                }
+            }
+            Ok(())
+        }
+        Commands::Budget { action: _, set_limit, record } => {
+            println!("{}", "💰 LLM FinOps Budget Envelope & Hard Cap 💰".bold().yellow());
+            let repl_helper = HagibisRepl::new(client);
+            if let Some(limit) = set_limit {
+                let resp = repl_helper.dispatch(HgbRequest::BudgetSetLimit { limit_usd: limit }).await;
+                match resp {
+                    HgbResponse::BudgetStatusResult(st) => {
+                        println!("  ✔ Budget Limit Set: ${:.2}", st.budget_limit_usd);
+                    }
+                    _ => println!("  Response: {:?}", resp),
+                }
+            } else if let Some(model) = record {
+                let resp = repl_helper.dispatch(HgbRequest::BudgetRecordCall { model, prompt_tokens: 1500, completion_tokens: 600 }).await;
+                match resp {
+                    HgbResponse::BudgetStatusResult(st) => {
+                        println!("  ✔ Call Logged! Spent: ${:.4} / ${:.2} ({:.1}%)", st.total_spent_usd, st.budget_limit_usd, st.percent_consumed);
+                        println!("  ✔ Current Routing Tier: {:?}", st.current_tier);
+                    }
+                    HgbResponse::Error(e) => eprintln!("  ✖ Budget Error: {}", e),
+                    _ => println!("  Response: {:?}", resp),
+                }
+            } else {
+                let resp = repl_helper.dispatch(HgbRequest::BudgetStatus).await;
+                match resp {
+                    HgbResponse::BudgetStatusResult(st) => {
+                        println!("  ✔ Budget Limit: ${:.2}", st.budget_limit_usd);
+                        println!("  ✔ Spent: ${:.4} | Remaining: ${:.4} ({:.1}%)", st.total_spent_usd, st.remaining_usd, st.percent_consumed);
+                        println!("  ✔ Current Routing Tier: {:?}", st.current_tier);
+                        println!("  ✔ Status: {}", if st.is_exhausted { "EXHAUSTED".red().bold() } else { "ACTIVE".green() });
+                        println!("  ✔ Advisory: {}", st.advisory_message.dimmed());
+                    }
+                    _ => println!("  Response: {:?}", resp),
+                }
+            }
+            Ok(())
+        }
+        Commands::VsCodeExt { action: _, name } => {
+            println!("{}", "🔌 VS Code / Cursor Extension Bridge 🔌".bold().blue());
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::VsCodeScaffold { config: Some(hgb_core::VsCodeBridgeConfig { extension_name: name, ..Default::default() }) }).await;
+            match resp {
+                HgbResponse::VsCodeScaffoldResult(rep) => {
+                    println!("  ✔ Extension Manifest: Generated (package.json)");
+                    println!("  ✔ TypeScript Bridge: Generated (extension.ts)");
+                    println!("  ✔ Socket Target: {}", rep.socket_path.green());
+                    println!("  ✔ Registered Commands: {}", rep.registered_commands.join(", ").cyan());
+                    println!("  ✔ Instructions:\n{}", rep.install_instructions.dimmed());
+                }
+                _ => println!("  Response: {:?}", resp),
             }
             Ok(())
         }

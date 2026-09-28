@@ -4410,6 +4410,149 @@ impl HagibisRepl {
                 println!("{}", "📊 PRIVACY ANALYTICS SCAFFOLD 📊".bold().cyan());
                 println!("  Script Tag:\n{}", rep.client_script_tag.cyan());
             }
+            HgbResponse::RailsDetectResult(rep) => {
+                println!("{}", "💎 RAILS APPLICATION DETECTED 💎".bold().red());
+                println!("  Is Rails App:    {}", if rep.is_rails { "YES".green().bold() } else { "NO".yellow() });
+                println!("  Database:        {:?}", rep.db_adapter);
+                println!("  Models Count:    {}", rep.model_count);
+                println!("  Migrations:      {}", rep.migration_count);
+            }
+            HgbResponse::RailsLintMigrationResult(rep) => {
+                println!("{}", "💎 RAILS ZERO-DOWNTIME MIGRATION LINTER 💎".bold().red());
+                println!("  Safe to Deploy:  {}", if rep.safe_to_deploy_zero_downtime { "YES (Greenlight)".green().bold() } else { "NO (Table Lock Hazard)".red().bold() });
+                for h in &rep.hazards {
+                    println!("    ⚠ [Line {}] {}: {}", h.line_number.unwrap_or(0), h.rule.yellow().bold(), h.message);
+                }
+            }
+            HgbResponse::RailsScaffoldResult(rep) => {
+                println!("{}", "💎 RAILS SCAFFOLD GENERATED 💎".bold().green());
+                println!("  Model:           app/models/{}.rb", rep.model_name.to_lowercase());
+                println!("  Migration:       db/migrate/create_{}.rb", rep.table_name);
+                println!("  Route:           {}", rep.route_snippet.yellow());
+            }
+            HgbResponse::RailsAuditNPlusOneResult(rep) => {
+                println!("{}", "💎 RAILS N+1 QUERY AUDIT 💎".bold().yellow());
+                println!("  Issues Found:    {}", rep.issues_found.len());
+                for iss in &rep.issues_found {
+                    println!("    ⚠ Line {}: {}", iss.line_number, iss.suggestion.green());
+                }
+            }
+            HgbResponse::RailsParseRoutesResult(routes) => {
+                println!("{}", "💎 RAILS ROUTES PARSER 💎".bold().cyan());
+                for r in routes.iter().take(10) {
+                    println!("  {:<6} {:<25} => {}#{}", r.verb.green(), r.path, r.controller, r.action);
+                }
+            }
+            HgbResponse::ProjectSnapshotResult(snap) => {
+                println!("{}", "📁 PERSISTENT PROJECT COORDINATOR 📁".bold().cyan());
+                println!("  Project:         {}", snap.project_name.green().bold());
+                println!("  Completion:      {:.1}% ({} completed / {} total)", snap.completion_percentage, snap.completed_tasks, snap.total_tasks);
+                println!("  ADRs:            {}", snap.adrs_count);
+            }
+            HgbResponse::ProjectTaskResult(task) => {
+                if let Some(t) = task {
+                    println!("  Task [{}] {} ({:?}): {:?}", t.id.yellow(), t.title.green(), t.priority, t.status);
+                }
+            }
+            HgbResponse::ProjectTasksListResult(tasks) => {
+                for t in tasks {
+                    println!("  [{}] {} ({:?}): {:?}", t.id.yellow(), t.title.green(), t.priority, t.status);
+                }
+            }
+            HgbResponse::ProjectAdrResult(adr) => {
+                println!("  ADR-{:03}: {} ({:?})", adr.id, adr.title.green(), adr.status);
+            }
+            HgbResponse::ProjectAdrsListResult(adrs) => {
+                for a in adrs {
+                    println!("  ADR-{:03}: {}", a.id, a.title.green());
+                }
+            }
+            HgbResponse::RulesEngineResult(rep) => {
+                println!("{}", "📜 TIERED RULES AUTO-ENGINE 📜".bold().yellow());
+                println!("  Evaluated:       {} rules", rep.total_rules_evaluated);
+                println!("  Active Matches:  {}", rep.matched_rules.len());
+            }
+            HgbResponse::AutopilotResult(rep) => {
+                println!("{}", "🤖 TICKET-TO-PR AUTOPILOT COMPLETED 🤖".bold().magenta());
+                println!("  Ticket:          [{}] {}", rep.ticket.ticket_id.yellow(), rep.ticket.title);
+                println!("  Branch:          {}", rep.pr_metadata.branch_name.cyan());
+                println!("  Verification:    {}/{} tests passed", rep.verification.tests_passed, rep.verification.tests_executed);
+            }
+            HgbResponse::ExplainResult(rep) => {
+                println!("{}", "🔍 AGENT DECISION EXPLAINER (ADR) 🔍".bold().cyan());
+                println!("  Title:           {}", rep.title.green().bold());
+                println!("  Uncertainty:     {:.2}", rep.uncertainty_score);
+                println!("  Trust Verdict:   {}", rep.trust_verdict.yellow());
+            }
+            HgbResponse::SmartIndexSnapshotResult(snap) => {
+                println!("{}", "🌲 MERKLE SMART-INDEX SNAPSHOT 🌲".bold().green());
+                println!("  Root Hash:       {}", snap.root_hash.green().bold());
+                println!("  Indexed Files:   {}", snap.file_count);
+            }
+            HgbResponse::SmartIndexDiffResult(rep) => {
+                println!("{}", "🌲 MERKLE SMART-INDEX DIFF 🌲".bold().green());
+                println!("  Modified Files:  {}", rep.modified_files.len());
+                println!("  Added Files:     {}", rep.added_files.len());
+            }
+            HgbResponse::RolloutWatchResult(rep) => {
+                println!("{}", "📈 PR / DEPLOYMENT HEALTH MONITOR 📈".bold().yellow());
+                println!("  Verdict:         {:?}", rep.verdict);
+                println!("  Error Rate:      {:.2}%", rep.current_error_rate_pct);
+                println!("  p99 Latency:     {:.1} ms", rep.current_p99_ms);
+            }
+            HgbResponse::PrAuditResult(rep) => {
+                println!("{}", "🛡️ AI-PR SECURITY AUDIT 🛡️".bold().red());
+                println!("  Passed:          {}", if rep.passed_audit { "YES (Clean)".green().bold() } else { "BLOCKED (Vulns Found)".red().bold() });
+                println!("  Critical Vulns:  {}", rep.critical_count);
+                println!("  High Vulns:      {}", rep.high_count);
+            }
+            HgbResponse::PreviewCloudResult(rep) => {
+                println!("{}", "☁️ EPHEMERAL CLOUD PREVIEW ☁️".bold().cyan());
+                println!("  Preview URL:     {}", rep.preview_url.green().bold());
+                println!("  Expires At:      {}", rep.expires_at_utc.yellow());
+            }
+            HgbResponse::CollabSessionResult(state) => {
+                println!("{}", "👥 MULTI-DEV COLLAB SESSION 👥".bold().blue());
+                println!("  Room ID:         {}", state.room_id.green());
+                println!("  Connected Peers: {}", state.connected_peers.len());
+            }
+            HgbResponse::CollabConflictResult(conflicts) => {
+                println!("{}", "👥 COLLAB CONFLICT REPORT 👥".bold().yellow());
+                println!("  Conflicts:       {}", conflicts.len());
+            }
+            HgbResponse::PromptLabResult(rep) => {
+                println!("{}", "🧪 PROMPT A/B ENGINEERING WORKSPACE 🧪".bold().magenta());
+                println!("  Leaderboard:     {} variants evaluated", rep.total_variants_benchmarked);
+                println!("  Winner:          {}", rep.recommended_winner_id.green().bold());
+            }
+            HgbResponse::LangPackResult(rep) => {
+                println!("{}", "📦 FRAMEWORK LANGUAGE INTELLIGENCE PACK 📦".bold().green());
+                println!("  Framework:       {:?}", rep.detected_framework);
+                println!("  Language:        {}", rep.language_info.primary_language.cyan().bold());
+                println!("  Linter:          {}", rep.language_info.recommended_linter.yellow());
+            }
+            HgbResponse::NativeMobileDetectResult(rep) => {
+                println!("{}", "📱 NATIVE MOBILE MATRIX 📱".bold().cyan());
+                println!("  Platform:        {:?}", rep.platform);
+                println!("  iOS Ready:       {}", rep.has_ios_directory);
+                println!("  Android Ready:   {}", rep.has_android_directory);
+            }
+            HgbResponse::NativeMobileCrashResult(rep) => {
+                println!("{}", "📱 MOBILE CRASH DIAGNOSIS 📱".bold().red());
+                println!("  Exception:       {}", rep.exception_type.bold());
+                println!("  Fix:             {}", rep.suggested_fix.green());
+            }
+            HgbResponse::BudgetStatusResult(st) => {
+                println!("{}", "💰 LLM FINOPS BUDGET STATUS 💰".bold().yellow());
+                println!("  Spent / Limit:   ${:.4} / ${:.2} ({:.1}%)", st.total_spent_usd, st.budget_limit_usd, st.percent_consumed);
+                println!("  Current Tier:    {:?}", st.current_tier);
+                println!("  Remaining:       ${:.4}", st.remaining_usd);
+            }
+            HgbResponse::VsCodeScaffoldResult(rep) => {
+                println!("{}", "🔌 VS CODE EXTENSION BRIDGE 🔌".bold().blue());
+                println!("  Manifest:        Generated package.json");
+                println!("  Socket Target:   {}", rep.socket_path.green());
+            }
         }
     }
 

@@ -868,6 +868,125 @@ pub enum HgbRequest {
         event_to_record: Option<crate::privacy_funnel_analytics::AnalyticsEvent>,
     },
     PrivacyAnalyticsScaffold,
+    // 88. Rails Intelligence Engine
+    RailsDetect {
+        #[serde(default)]
+        workspace_path: Option<String>,
+    },
+    RailsLintMigration {
+        file_name: String,
+        migration_code: String,
+    },
+    RailsScaffold {
+        model_name: String,
+        fields: Vec<crate::rails_engine::ScaffoldField>,
+    },
+    RailsAuditNPlusOne {
+        file_path: String,
+        content: String,
+    },
+    RailsParseRoutes {
+        routes_content: String,
+    },
+    // 89. Persistent Project Coordinator
+    ProjectSnapshot,
+    ProjectAddTask {
+        title: String,
+        description: String,
+        priority: crate::project_coordinator::TaskPriority,
+        tags: Vec<String>,
+    },
+    ProjectUpdateTask {
+        task_id: String,
+        status: crate::project_coordinator::TaskStatus,
+    },
+    ProjectAddAdr {
+        title: String,
+        context: String,
+        decision: String,
+        consequences: String,
+        why: String,
+    },
+    // 90. Tiered Rules Auto-Engine
+    RulesEngineEvaluate {
+        active_files: Vec<String>,
+        manual_mentions: Vec<String>,
+    },
+    // 91. Ticket-to-PR Autopilot
+    AutopilotRun {
+        ticket_text: String,
+    },
+    // 92. Agent Decision Explainer & ADR Generator
+    ExplainAction {
+        intent: String,
+        diff_content: String,
+    },
+    // 93. Merkle Tree Collaborative Codebase Index
+    SmartIndexSnapshot {
+        #[serde(default)]
+        workspace_path: Option<String>,
+    },
+    SmartIndexDiff {
+        prev_snapshot: crate::merkle_smart_index::MerkleCodebaseSnapshot,
+        curr_snapshot: crate::merkle_smart_index::MerkleCodebaseSnapshot,
+    },
+    // 94. PR / Deployment Health Monitor
+    RolloutWatchEvaluate {
+        deployment_id: String,
+        samples: Vec<crate::rollout_health_watch::TelemetrySample>,
+        baseline_samples: Vec<crate::rollout_health_watch::TelemetrySample>,
+        #[serde(default)]
+        config: Option<crate::rollout_health_watch::RolloutWatchConfig>,
+    },
+    // 95. AI-PR Security Audit
+    PrAuditScan {
+        files: Vec<(String, String)>,
+    },
+    // 96. Ephemeral Cloud Preview Deployment
+    PreviewCloudDeploy {
+        config: crate::preview_cloud_deployer::PreviewDeploymentConfig,
+    },
+    // 97. Multi-Dev Real-Time Collaboration
+    CollabSessionSnapshot,
+    CollabJoin {
+        username: String,
+    },
+    CollabSubmitIntent {
+        intent: crate::multi_dev_collab::CollabPatchIntent,
+    },
+    // 98. Prompt A/B Engineering Workspace
+    PromptLabBenchmark {
+        variants: Vec<crate::prompt_lab_workspace::PromptVariant>,
+        test_cases: Vec<String>,
+    },
+    // 99. Framework Language Intelligence Packs
+    LangPackInspect {
+        #[serde(default)]
+        workspace_path: Option<String>,
+    },
+    // 100. React Native & Flutter Mobile Dev Intelligence
+    NativeMobileDetect {
+        #[serde(default)]
+        workspace_path: Option<String>,
+    },
+    NativeMobileDiagnoseCrash {
+        raw_trace: String,
+    },
+    // 101. Session Cost Budget Envelope & Hard Cap
+    BudgetStatus,
+    BudgetSetLimit {
+        limit_usd: f64,
+    },
+    BudgetRecordCall {
+        model: String,
+        prompt_tokens: usize,
+        completion_tokens: usize,
+    },
+    // 102. VS Code Extension Bridge to hgbd IPC
+    VsCodeScaffold {
+        #[serde(default)]
+        config: Option<crate::vscode_extension_bridge::VsCodeBridgeConfig>,
+    },
 }
 
 fn default_two() -> usize {
@@ -1252,6 +1371,47 @@ pub enum HgbResponse {
     // 87. Zero-Cookie Privacy Funnel Analytics
     PrivacyFunnelResult(crate::privacy_funnel_analytics::FunnelReport),
     PrivacyAnalyticsScaffoldResult(crate::privacy_funnel_analytics::AnalyticsScaffoldReport),
+    // 88. Rails Intelligence Engine
+    RailsDetectResult(crate::rails_engine::RailsAppInfo),
+    RailsLintMigrationResult(crate::rails_engine::MigrationSafetyReport),
+    RailsScaffoldResult(crate::rails_engine::RailsScaffoldResult),
+    RailsAuditNPlusOneResult(crate::rails_engine::NPlusOneReport),
+    RailsParseRoutesResult(Vec<crate::rails_engine::ParsedRoute>),
+    // 89. Persistent Project Coordinator
+    ProjectSnapshotResult(crate::project_coordinator::ProjectCoordinatorSnapshot),
+    ProjectTaskResult(Option<crate::project_coordinator::ProjectTask>),
+    ProjectTasksListResult(Vec<crate::project_coordinator::ProjectTask>),
+    ProjectAdrResult(crate::project_coordinator::AdrRecord),
+    ProjectAdrsListResult(Vec<crate::project_coordinator::AdrRecord>),
+    // 90. Tiered Rules Auto-Engine
+    RulesEngineResult(crate::tiered_rules_engine::EvaluatedRuleset),
+    // 91. Ticket-to-PR Autopilot
+    AutopilotResult(crate::autopilot_pipeline::AutopilotReport),
+    // 92. Agent Decision Explainer & ADR Generator
+    ExplainResult(crate::decision_explainer::DecisionExplanationReport),
+    // 93. Merkle Tree Collaborative Codebase Index
+    SmartIndexSnapshotResult(crate::merkle_smart_index::MerkleCodebaseSnapshot),
+    SmartIndexDiffResult(crate::merkle_smart_index::MerkleDiffReport),
+    // 94. PR / Deployment Health Monitor
+    RolloutWatchResult(crate::rollout_health_watch::RolloutWatchReport),
+    // 95. AI-PR Security Audit
+    PrAuditResult(crate::ai_pr_security_audit::PrSecurityReport),
+    // 96. Ephemeral Cloud Preview Deployment
+    PreviewCloudResult(crate::preview_cloud_deployer::PreviewDeploymentReport),
+    // 97. Multi-Dev Real-Time Collaboration
+    CollabSessionResult(crate::multi_dev_collab::CollabSessionState),
+    CollabConflictResult(Vec<crate::multi_dev_collab::CollabConflictWarning>),
+    // 98. Prompt A/B Engineering Workspace
+    PromptLabResult(crate::prompt_lab_workspace::PromptLabReport),
+    // 99. Framework Language Intelligence Packs
+    LangPackResult(crate::language_intelligence_pack::FrameworkDiagnosisReport),
+    // 100. React Native & Flutter Mobile Dev Intelligence
+    NativeMobileDetectResult(crate::native_mobile_matrix::MobileEnvironmentReport),
+    NativeMobileCrashResult(crate::native_mobile_matrix::MobileCrashDiagnosis),
+    // 101. Session Cost Budget Envelope & Hard Cap
+    BudgetStatusResult(crate::session_budget_envelope::BudgetStatusReport),
+    // 102. VS Code Extension Bridge to hgbd IPC
+    VsCodeScaffoldResult(crate::vscode_extension_bridge::VsCodeExtensionScaffoldReport),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
