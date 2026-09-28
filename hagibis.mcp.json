@@ -185,6 +185,10 @@
     "office": {
       "command": "uvx",
       "args": ["libreoffice-mcp"]
+    },
+    "blender": {
+      "command": "uvx",
+      "args": ["mcp-for-blender"]
     }
   }
 }
