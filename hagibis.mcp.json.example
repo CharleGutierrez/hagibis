@@ -53,6 +53,10 @@
     "curl": {
       "command": "bunx",
       "args": ["@247arjun/mcp-curl"]
+    },
+    "ast_grep": {
+      "command": "ast-grep-mcp",
+      "args": []
     }
   }
 }
