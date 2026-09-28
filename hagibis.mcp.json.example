@@ -57,6 +57,30 @@
     "ast_grep": {
       "command": "ast-grep-mcp",
       "args": []
+    },
+    "context7": {
+      "command": "bunx",
+      "args": ["@upstash/context7-mcp"]
+    },
+    "memory": {
+      "command": "bunx",
+      "args": ["@modelcontextprotocol/server-memory"]
+    },
+    "iconify": {
+      "command": "bunx",
+      "args": ["@pipeworx/mcp-iconify"]
+    },
+    "bundlephobia": {
+      "command": "bunx",
+      "args": ["@pipeworx/mcp-bundlephobia"]
+    },
+    "npm": {
+      "command": "bunx",
+      "args": ["@arvoretech/npm-registry-mcp"]
+    },
+    "mermaid": {
+      "command": "bunx",
+      "args": ["mermaid-mcp-server"]
     }
   }
 }
