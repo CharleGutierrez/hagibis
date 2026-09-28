@@ -13,3 +13,4 @@ test_app/
 
 __pycache__/
 *.pyc
+/logs/
