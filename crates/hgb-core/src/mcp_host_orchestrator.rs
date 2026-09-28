@@ -173,7 +173,22 @@ impl McpHostOrchestrator {
         aggregated
     }
 
-    /// Dispatch tool invocation to the appropriate MCP server
+    /// Start all registered servers in the fleet
+    pub async fn start_all(&self) -> Result<Vec<(String, Vec<McpTool>)>> {
+        let names: Vec<String> = {
+            let lock = self.servers.read().await;
+            lock.keys().cloned().collect()
+        };
+        let mut results = Vec::new();
+        for name in names {
+            if let Ok(tools) = self.start_server(&name).await {
+                results.push((name, tools));
+            }
+        }
+        Ok(results)
+    }
+
+    /// Dispatch tool invocation to the appropriate MCP server (auto-starts server if registered but not running)
     pub async fn dispatch_tool(
         &self,
         namespaced_tool: &str,
@@ -188,18 +203,24 @@ impl McpHostOrchestrator {
             )));
         };
 
+        let is_running = {
+            let lock = self.servers.read().await;
+            if let Some(server) = lock.get(server_name) {
+                server.status == McpServerStatus::Running && server.client.is_some()
+            } else {
+                return Err(HgbError::Execution(format!("MCP server '{}' is not registered", server_name)));
+            }
+        };
+
+        if !is_running {
+            self.start_server(server_name).await?;
+        }
+
         let client = {
             let lock = self.servers.read().await;
             let server = lock.get(server_name).ok_or_else(|| {
                 HgbError::Execution(format!("MCP server '{}' is not registered", server_name))
             })?;
-
-            if server.status != McpServerStatus::Running {
-                return Err(HgbError::Execution(format!(
-                    "MCP server '{}' is not running (status: {:?})",
-                    server_name, server.status
-                )));
-            }
 
             server
                 .client

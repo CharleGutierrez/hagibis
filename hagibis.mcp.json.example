@@ -1,0 +1,36 @@
+{
+  "mcpServers": {
+    "duckduckgo": {
+      "command": "duckduckgo-mcp-server",
+      "args": [],
+      "env": {
+        "PYTHONUNBUFFERED": "1"
+      }
+    },
+    "fetch": {
+      "command": "mcp-server-fetch",
+      "args": [],
+      "env": {
+        "PYTHONUNBUFFERED": "1"
+      }
+    },
+    "git": {
+      "command": "mcp-server-git",
+      "args": [],
+      "env": {
+        "PYTHONUNBUFFERED": "1"
+      }
+    },
+    "puppeteer": {
+      "command": "bunx",
+      "args": ["puppeteer-mcp-server"],
+      "env": {
+        "PUPPETEER_EXECUTABLE_PATH": "/usr/bin/google-chrome-stable"
+      }
+    },
+    "filesystem": {
+      "command": "bunx",
+      "args": ["@modelcontextprotocol/server-filesystem", "."]
+    }
+  }
+}

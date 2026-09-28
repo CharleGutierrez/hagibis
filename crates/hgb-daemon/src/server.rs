@@ -28,6 +28,7 @@ pub struct DaemonState {
     pub trace_buffer: hgb_core::trace::TraceRingBuffer,
     pub browser_snoop: hgb_nextgen::BrowserSnoopEngine,
     pub variant_race: hgb_nextgen::VariantRaceEngine,
+    pub mcp_orchestrator: Arc<hgb_core::McpHostOrchestrator>,
 }
 
 impl DaemonState {
@@ -51,6 +52,9 @@ impl DaemonState {
             "gemini-2.5-flash".to_string()
         };
 
+        let ws_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let mcp_orchestrator = Arc::new(hgb_core::McpHostOrchestrator::new(&ws_dir));
+
         Self {
             start_time: std::time::Instant::now(),
             socket_path,
@@ -62,6 +66,7 @@ impl DaemonState {
             trace_buffer: hgb_core::trace::TraceRingBuffer::default(),
             browser_snoop: hgb_nextgen::BrowserSnoopEngine::new("http://127.0.0.1:3000".to_string(), None),
             variant_race: hgb_nextgen::VariantRaceEngine::new(),
+            mcp_orchestrator,
         }
     }
 }
@@ -1722,13 +1727,14 @@ impl HagibisDaemon {
             }
             // 51. Goose-Style Universal MCP Host Orchestrator & Tool Namespace Hub
             HgbRequest::McpOrchestrate { action, server_name, tool_name, arguments } => {
-                let ws_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-                let orchestrator = hgb_core::McpHostOrchestrator::new(&ws_dir);
+                let orchestrator = &state.mcp_orchestrator;
                 let _ = orchestrator.auto_discover().await;
                 match action.as_str() {
                     "start" => {
                         if let Some(ref name) = server_name {
                             let _ = orchestrator.start_server(name).await;
+                        } else {
+                            let _ = orchestrator.start_all().await;
                         }
                     }
                     "stop" => {
@@ -1738,17 +1744,20 @@ impl HagibisDaemon {
                     }
                     _ => {}
                 }
-                let active_servers = orchestrator.health_summary().await;
-                let tools = orchestrator.list_aggregated_tools().await;
                 let tool_output = if action == "call" {
                     if let Some(ref t_name) = tool_name {
-                        orchestrator.dispatch_tool(t_name, arguments.unwrap_or(serde_json::json!({}))).await.ok()
+                        match orchestrator.dispatch_tool(t_name, arguments.unwrap_or(serde_json::json!({}))).await {
+                            Ok(res) => Some(res),
+                            Err(e) => Some(serde_json::json!({ "error": e.to_string() })),
+                        }
                     } else {
                         None
                     }
                 } else {
                     None
                 };
+                let active_servers = orchestrator.health_summary().await;
+                let tools = orchestrator.list_aggregated_tools().await;
                 HgbResponse::McpOrchestrateResult {
                     active_servers,
                     tools,
