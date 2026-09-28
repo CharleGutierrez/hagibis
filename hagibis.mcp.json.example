@@ -35,6 +35,20 @@
     "sequentialthinking": {
       "command": "bunx",
       "args": ["@modelcontextprotocol/server-sequential-thinking"]
+    },
+    "time": {
+      "command": "mcp-server-time",
+      "args": [],
+      "env": {
+        "PYTHONUNBUFFERED": "1"
+      }
+    },
+    "github": {
+      "command": "bunx",
+      "args": ["@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": ""
+      }
     }
   }
 }
