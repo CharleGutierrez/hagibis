@@ -1704,6 +1704,185 @@ enum Commands {
         #[arg(short, long, default_value = "hagibis-vibe-bridge")]
         name: String,
     },
+
+    /// Superpower 103: Headless CI/CD & Unix Pipe Streamer
+    #[command(alias = "headless")]
+    Ci {
+        /// Task prompt or instruction (can also pipe stdin)
+        #[arg(default_value = "")]
+        prompt: String,
+        /// Output format: json, compact, github
+        #[arg(short, long, default_value = "json")]
+        format: String,
+        /// Stop on first invariant failure
+        #[arg(long, default_value_t = true)]
+        fail_fast: bool,
+    },
+
+    /// Superpower 104: Interactive Plan Mode & Blueprint Approver
+    #[command(alias = "blueprint-plan")]
+    Plan {
+        /// High-level goal or task
+        #[arg(default_value = "Implement feature")]
+        goal: String,
+        /// Approve specific step ID
+        #[arg(short, long)]
+        approve_step: Option<String>,
+        /// Reject specific step ID
+        #[arg(short, long)]
+        reject_step: Option<String>,
+        /// Plan ID when approving/rejecting
+        #[arg(short, long)]
+        plan_id: Option<String>,
+    },
+
+    /// Superpower 105: Universal Issue Ingestor
+    #[command(alias = "issue")]
+    Ticket {
+        /// Issue URL, issue key (ENG-123), or path to ticket markdown
+        input: String,
+    },
+
+    /// Superpower 106: Persistent Project Memory & Context Profiles
+    #[command(alias = "project-profile")]
+    Profile {
+        /// Project root directory path
+        #[arg(default_value = ".")]
+        path: String,
+        /// Set indentation style (e.g. 2-spaces, 4-spaces, tabs)
+        #[arg(long)]
+        indent: Option<String>,
+        /// Set preferred test runner
+        #[arg(long)]
+        test_framework: Option<String>,
+    },
+
+    /// Superpower 107: Automated Git Pre-Commit / Pre-Push Security Guardrails
+    #[command(alias = "git-hook")]
+    Hook {
+        /// Action: install, pre-commit, pre-push
+        #[arg(default_value = "install")]
+        action: String,
+        /// Files to scan during pre-commit check
+        #[arg(short, long)]
+        files: Vec<String>,
+    },
+
+    /// Superpower 108: Style Guide & Architectural DNA Harvester
+    #[command(alias = "dna")]
+    Conventions {
+        /// Repository root path
+        #[arg(default_value = ".")]
+        path: String,
+        /// Force re-harvesting ignoring cache
+        #[arg(short, long)]
+        force: bool,
+    },
+
+    /// Superpower 109: Parallel Multi-Session Autopilot Worktree Swarm
+    #[command(alias = "worktree-swarm")]
+    Queue {
+        /// Action: enqueue, status
+        #[arg(default_value = "status")]
+        action: String,
+        /// Tasks to enqueue (multiple flags supported)
+        #[arg(short, long)]
+        tasks: Vec<String>,
+        /// Max concurrency
+        #[arg(short, long, default_value_t = 4)]
+        concurrency: usize,
+    },
+
+    /// Superpower 110: Agentic PR Code Reviewer & Inline Diff Commenter
+    #[command(alias = "bugbot")]
+    Review {
+        /// Path to diff patch file, or inline diff string
+        #[arg(default_value = "")]
+        diff: String,
+    },
+
+    /// Superpower 111: Autonomous SWE-Bench & Coding Rigor Harness
+    #[command(alias = "swe-bench")]
+    Benchmark {
+        /// Benchmark suite name (swe-bench-lite, humaneval, hgb-rigor-matrix)
+        #[arg(default_value = "hgb-rigor-matrix")]
+        suite: String,
+        /// Model to evaluate
+        #[arg(short, long)]
+        model: Option<String>,
+    },
+
+    /// Superpower 112: 90-Second MVP Full-Stack Synthesizer
+    #[command(alias = "scaffold-mvp")]
+    Quickstart {
+        /// Prompt describing the application to generate
+        description: String,
+        /// Framework preset: nextjs-tailwind, rust-axum-htmx, fastapi-react
+        #[arg(short, long, default_value = "nextjs-tailwind")]
+        framework: String,
+        /// App directory name
+        #[arg(short, long, default_value = "vibe-app")]
+        name: String,
+    },
+
+    /// Superpower 113: Decentralized Community Agent Fleet & Plugin Marketplace
+    #[command(alias = "plugins")]
+    Registry {
+        /// Action: search, install, list
+        #[arg(default_value = "list")]
+        action: String,
+        /// Search query or plugin ID to install
+        #[arg(short, long, default_value = "")]
+        target: String,
+    },
+
+    /// Superpower 114: Blake3 Cryptographic AI Code Authorship Ledger
+    #[command(alias = "code-provenance", alias = "ai-ledger")]
+    Authorship {
+        /// File path to audit line-by-line authorship
+        file: String,
+    },
+
+    /// Superpower 115: Encrypted Remote Daemon Tunnel & Cockpit Steering
+    #[command(alias = "remote-steer")]
+    Remote {
+        /// Remote host IP or domain
+        host: String,
+        /// Remote port
+        #[arg(short, long, default_value_t = 8443)]
+        port: u16,
+        /// PSK authentication token
+        #[arg(short, long, default_value = "")]
+        token: String,
+    },
+
+    /// Superpower 116: Unified Observation Bus
+    #[command(alias = "bus")]
+    Observe {
+        /// Number of recent observation events to inspect
+        #[arg(short, long, default_value_t = 50)]
+        limit: usize,
+    },
+
+    /// Superpower 117: Zero-Config Managed Full-Stack Preset Fabric
+    #[command(alias = "managed-stack")]
+    Stack {
+        /// Project name
+        #[arg(default_value = "vibe-production-app")]
+        name: String,
+        /// Enable Supabase (Auth + Postgres)
+        #[arg(long, default_value_t = true)]
+        supabase: bool,
+        /// Enable Stripe (Billing + Webhooks)
+        #[arg(long, default_value_t = true)]
+        stripe: bool,
+        /// Enable Tailwind / shadcn UI
+        #[arg(long, default_value_t = true)]
+        tailwind: bool,
+        /// Enable Cloudflare Workers Edge
+        #[arg(long, default_value_t = false)]
+        cloudflare: bool,
+    },
 }
 
 #[tokio::main]
@@ -4365,6 +4544,382 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("  ✔ Instructions:\n{}", rep.install_instructions.dimmed());
                 }
                 _ => println!("  Response: {:?}", resp),
+            }
+            Ok(())
+        }
+        Commands::Ci { prompt, format, fail_fast } => {
+            let out_fmt = match format.to_lowercase().as_str() {
+                "compact" => hgb_core::CiOutputFormat::CompactRaw,
+                "github" => hgb_core::CiOutputFormat::GithubActionsAnnotations,
+                _ => hgb_core::CiOutputFormat::JsonLines,
+            };
+            let config = hgb_core::CiExecutionConfig {
+                prompt,
+                output_format: out_fmt,
+                fail_fast,
+                max_turns: 10,
+                timeout_seconds: 300,
+            };
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::CiExecute { config }).await;
+            match resp {
+                HgbResponse::CiResult(res) => {
+                    println!("{}", res.formatted_output);
+                    if res.exit_code != 0 {
+                        std::process::exit(res.exit_code);
+                    }
+                }
+                _ => println!("Response: {:?}", resp),
+            }
+            Ok(())
+        }
+        Commands::Plan { goal, approve_step, reject_step, plan_id } => {
+            let repl_helper = HagibisRepl::new(client);
+            if let Some(s_id) = approve_step {
+                let p_id = plan_id.unwrap_or_default();
+                let resp = repl_helper.dispatch(HgbRequest::PlanApproveStep { plan_id: p_id, step_id: s_id, approve: true }).await;
+                println!("Response: {:?}", resp);
+            } else if let Some(s_id) = reject_step {
+                let p_id = plan_id.unwrap_or_default();
+                let resp = repl_helper.dispatch(HgbRequest::PlanApproveStep { plan_id: p_id, step_id: s_id, approve: false }).await;
+                println!("Response: {:?}", resp);
+            } else {
+                let resp = repl_helper.dispatch(HgbRequest::PlanGenerate { goal }).await;
+                match resp {
+                    HgbResponse::PlanResult(p) => {
+                        println!("📋 Execution Plan Blueprint [{}] 📋", p.plan_id.cyan().bold());
+                        println!("  Goal: {}", p.goal_description.bold());
+                        println!("  Estimated Tokens: {}", p.total_estimated_tokens);
+                        println!("  Requires Signoff: {}", p.requires_human_signoff);
+                        println!("  Steps ({}):", p.steps.len());
+                        for s in p.steps {
+                            println!("    {}) {} [{:?}]", s.index, s.title.bold(), s.status);
+                            println!("       Target: {}", s.target_files.join(", ").dimmed());
+                        }
+                    }
+                    _ => println!("Response: {:?}", resp),
+                }
+            }
+            Ok(())
+        }
+        Commands::Ticket { input } => {
+            println!("{}", "🎫 Universal Issue Ingestor 🎫".bold().cyan());
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::TicketIngest { input_or_url: input }).await;
+            match resp {
+                HgbResponse::TicketResult(t) => {
+                    println!("  ✔ Provider: {:?}", t.provider);
+                    println!("  ✔ Issue Key: {}", t.issue_key.bold().green());
+                    println!("  ✔ Title: {}", t.title);
+                    println!("  ✔ Suggested Branch: {}", t.suggested_branch_name.cyan());
+                    println!("  ✔ Acceptance Criteria ({}):", t.acceptance_criteria.len());
+                    for ac in t.acceptance_criteria {
+                        println!("    [{}] {}", if ac.is_verified { "X" } else { " " }, ac.description);
+                    }
+                    if !t.referenced_files.is_empty() {
+                        println!("  ✔ Referenced Files: {}", t.referenced_files.join(", "));
+                    }
+                    if !t.stack_traces.is_empty() {
+                        println!("  ✔ Stack Traces Captured: {}", t.stack_traces.len());
+                    }
+                }
+                _ => println!("Response: {:?}", resp),
+            }
+            Ok(())
+        }
+        Commands::Profile { path, indent, test_framework } => {
+            println!("{}", "👤 Persistent Project Memory Profile 👤".bold().magenta());
+            let repl_helper = HagibisRepl::new(client);
+            if indent.is_some() || test_framework.is_some() {
+                let conv = hgb_core::ProjectCodingConventions {
+                    indent_style: indent.unwrap_or_else(|| "4-spaces".to_string()),
+                    test_framework: test_framework.unwrap_or_else(|| "cargo-test".to_string()),
+                    linter_command: Some("cargo clippy".to_string()),
+                    strict_null_safety: true,
+                };
+                let resp = repl_helper.dispatch(HgbRequest::ProfilePatchConventions { root_path: Some(path), conventions: conv }).await;
+                println!("Response: {:?}", resp);
+            } else {
+                let resp = repl_helper.dispatch(HgbRequest::ProfileGet { root_path: Some(path) }).await;
+                match resp {
+                    HgbResponse::ProfileResult(p) => {
+                        println!("  ✔ Project: {}", p.project_name.bold().green());
+                        println!("  ✔ Root: {}", p.root_path.dimmed());
+                        println!("  ✔ Preferred Model: {}", p.preferred_model.cyan());
+                        println!("  ✔ Conventions: Indent='{}', Tests='{}', StrictNull={}", p.conventions.indent_style, p.conventions.test_framework, p.conventions.strict_null_safety);
+                        println!("  ✔ Invariants: {}", p.architectural_invariants.join("; ").dimmed());
+                    }
+                    _ => println!("Response: {:?}", resp),
+                }
+            }
+            Ok(())
+        }
+        Commands::Hook { action, files } => {
+            println!("{}", "🪝 Automated Git Security Guardrails 🪝".bold().yellow());
+            let repl_helper = HagibisRepl::new(client);
+            if action == "pre-commit" && !files.is_empty() {
+                let resp = repl_helper.dispatch(HgbRequest::HookRunPreCommit { staged_files: files }).await;
+                match resp {
+                    HgbResponse::HookRunResult(r) => {
+                        println!("  ✔ Pre-Commit Scan: Scanned {} files in {}µs", r.files_scanned, r.duration_us);
+                        if r.pass {
+                            println!("  ✔ Status: {}", "PASSED".green().bold());
+                        } else {
+                            println!("  ✖ Status: {}", "BLOCKED".red().bold());
+                            for v in r.violations {
+                                println!("    - {}", v.red());
+                            }
+                            std::process::exit(1);
+                        }
+                    }
+                    _ => println!("Response: {:?}", resp),
+                }
+            } else {
+                let resp = repl_helper.dispatch(HgbRequest::HookInstall { repo_root: Some(".".to_string()), hooks: vec![hgb_core::GitHookType::PreCommit, hgb_core::GitHookType::PrePush] }).await;
+                match resp {
+                    HgbResponse::HookInstallResult(r) => {
+                        println!("  ✔ Installed Hooks: {:?}", r.installed_hooks);
+                        println!("  ✔ Scripts: {}", r.hook_script_paths.join(", "));
+                        println!("  ✔ Active Guards: {}", r.active_guards.join(", ").cyan());
+                    }
+                    _ => println!("Response: {:?}", resp),
+                }
+            }
+            Ok(())
+        }
+        Commands::Conventions { path, force } => {
+            println!("{}", "🧬 Style Guide & Architectural DNA 🧬".bold().blue());
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::ConventionsHarvest { repo_root: Some(path), force_refresh: force }).await;
+            match resp {
+                HgbResponse::ConventionsResult(d) => {
+                    println!("  ✔ DNA Hash: {}", d.blake3_content_hash[..16].green());
+                    println!("  ✔ Sources ({}): {}", d.discovered_files.len(), d.discovered_files.join(", "));
+                    println!("  ✔ Extracted Rules ({}):", d.rules.len());
+                    for r in d.rules {
+                        println!("    [{}] {}: {}", r.enforcement_level, r.category.bold(), r.rule_summary.dimmed());
+                    }
+                }
+                _ => println!("Response: {:?}", resp),
+            }
+            Ok(())
+        }
+        Commands::Queue { action: _, tasks, concurrency } => {
+            println!("{}", "🌲 Parallel Autopilot Worktree Swarm 🌲".bold().green());
+            let repl_helper = HagibisRepl::new(client);
+            if !tasks.is_empty() {
+                let resp = repl_helper.dispatch(HgbRequest::QueueEnqueue { tasks, concurrency }).await;
+                match resp {
+                    HgbResponse::QueueResult(q) => {
+                        println!("  ✔ Enqueued tasks. Active workers: {}/{}", q.active_workers, q.max_concurrency);
+                        for j in q.jobs {
+                            println!("    Task [{}]: '{}' => Status: {:?}", j.job_id.cyan(), j.prompt, j.status);
+                        }
+                    }
+                    _ => println!("Response: {:?}", resp),
+                }
+            } else {
+                let resp = repl_helper.dispatch(HgbRequest::QueueQuery).await;
+                match resp {
+                    HgbResponse::QueueResult(q) => {
+                        println!("  ✔ Active Workers: {}/{}", q.active_workers, q.max_concurrency);
+                        println!("  ✔ Queued Jobs ({}):", q.jobs.len());
+                        for j in q.jobs {
+                            println!("    [{}] {} (target: {}) => {:?}", j.job_id.cyan(), j.prompt, j.target_branch, j.status);
+                        }
+                    }
+                    _ => println!("Response: {:?}", resp),
+                }
+            }
+            Ok(())
+        }
+        Commands::Review { diff } => {
+            println!("{}", "🔍 Agentic PR Reviewer & Inline BugBot 🔍".bold().yellow());
+            let patch = if diff.is_empty() {
+                "+ pub fn unwrap_user(x: Option<i32>) -> i32 {\n+     x.unwrap()\n+ }\n".to_string()
+            } else if std::path::Path::new(&diff).exists() {
+                std::fs::read_to_string(&diff).unwrap_or_default()
+            } else {
+                diff
+            };
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::ReviewDiff { diff_patch: patch }).await;
+            match resp {
+                HgbResponse::ReviewResult(r) => {
+                    println!("  ✔ Overall Verdict: {}", r.overall_verdict.bold());
+                    println!("  ✔ Comments ({}):", r.total_comments);
+                    for c in r.inline_comments {
+                        println!("    [{:?}] {}:L{}: {}", c.severity, c.file_path.cyan(), c.line_number, c.comment_body);
+                        if let Some(rep) = c.suggested_replacement {
+                            println!("      Suggested Replacement: {}", rep.green());
+                        }
+                    }
+                }
+                _ => println!("Response: {:?}", resp),
+            }
+            Ok(())
+        }
+        Commands::Benchmark { suite, model } => {
+            println!("{}", "📊 Autonomous SWE-Bench & Coding Rigor Harness 📊".bold().magenta());
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::BenchmarkRunSuite { suite_name: suite, model }).await;
+            match resp {
+                HgbResponse::BenchmarkResult(b) => {
+                    println!("  ✔ Suite: {}", b.suite_name.bold());
+                    println!("  ✔ Evaluated Model: {}", b.evaluated_model.cyan());
+                    println!("  ✔ Pass Rate: {:.1}% ({}/{} passed)", b.pass_rate_pct, b.passed_cases, b.total_cases);
+                    println!("  ✔ Avg Latency: {}ms", b.avg_latency_ms);
+                    for c in b.cases {
+                        println!("    [{}] {} ({}ms, {} tokens)", if c.passed { "PASS".green() } else { "FAIL".red() }, c.test_id, c.execution_time_ms, c.token_usage);
+                    }
+                }
+                _ => println!("Response: {:?}", resp),
+            }
+            Ok(())
+        }
+        Commands::Quickstart { description, framework, name } => {
+            println!("{}", "⚡ 90-Second MVP Full-Stack Synthesizer ⚡".bold().green());
+            let spec = hgb_core::QuickstartSpec {
+                app_name: name,
+                description,
+                framework_preset: framework,
+                database: "sqlite".to_string(),
+                include_auth: true,
+                include_billing: true,
+            };
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::QuickstartSynthesize { spec }).await;
+            match resp {
+                HgbResponse::QuickstartResult(q) => {
+                    println!("  ✔ Project Directory: {}", q.project_directory.bold().cyan());
+                    println!("  ✔ Files Generated ({}):", q.files_generated);
+                    for f in q.generated_file_paths.iter().take(6) {
+                        println!("    - {}", f);
+                    }
+                    if q.generated_file_paths.len() > 6 {
+                        println!("    ... and {} more files", q.generated_file_paths.len() - 6);
+                    }
+                    println!("  ✔ Run Command: {}", q.run_command.bold().green());
+                    println!("  ✔ Synthesis Time: {}ms", q.synthesis_time_ms);
+                }
+                _ => println!("Response: {:?}", resp),
+            }
+            Ok(())
+        }
+        Commands::Registry { action, target } => {
+            println!("{}", "📦 Decentralized Agent Fleet Registry 📦".bold().blue());
+            let repl_helper = HagibisRepl::new(client);
+            if action == "install" && !target.is_empty() {
+                let resp = repl_helper.dispatch(HgbRequest::RegistryInstall { plugin_id: target }).await;
+                match resp {
+                    HgbResponse::RegistryInstallResult(p) => {
+                        println!("  ✔ Installed Agent: {} (v{})", p.name.bold().green(), p.version);
+                        println!("  ✔ Description: {}", p.description);
+                        println!("  ✔ Blake3 Fingerprint: {}", p.blake3_fingerprint[..16].dimmed());
+                        println!("  ✔ Permissions: {}", p.required_permissions.join(", ").cyan());
+                    }
+                    _ => println!("Response: {:?}", resp),
+                }
+            } else {
+                let resp = repl_helper.dispatch(HgbRequest::RegistrySearch { query: target }).await;
+                match resp {
+                    HgbResponse::RegistrySearchResult(r) => {
+                        println!("  ✔ Matching Plugins ({}/{}):", r.matching_plugins.len(), r.total_available);
+                        for p in r.matching_plugins {
+                            println!("    * {} [{}] v{}: {}", p.id.bold().green(), p.author.dimmed(), p.version, p.description);
+                        }
+                    }
+                    _ => println!("Response: {:?}", resp),
+                }
+            }
+            Ok(())
+        }
+        Commands::Authorship { file } => {
+            println!("{}", "📜 Blake3 Cryptographic AI Authorship Ledger 📜".bold().cyan());
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::ProvenanceAuditFile { file_path: file }).await;
+            match resp {
+                HgbResponse::ProvenanceResult(p) => {
+                    println!("  ✔ File: {}", p.file_path.bold());
+                    println!("  ✔ Total Lines: {}", p.total_lines);
+                    println!("  ✔ Human Authored: {} lines ({:.1}%)", p.human_authored_lines, 100.0 - p.ai_percentage);
+                    println!("  ✔ AI Authored: {} lines ({:.1}%)", p.ai_authored_lines, p.ai_percentage);
+                    println!("  ✔ Ledger Root Blake3: {}", p.ledger_root_hash.green());
+                    println!("  ✔ Spans ({}):", p.spans.len());
+                    for s in p.spans.iter().take(5) {
+                        println!("    L{}-L{}: {} [{}]", s.start_line, s.end_line, s.author_type.cyan(), s.blake3_content_hash[..10].dimmed());
+                    }
+                }
+                _ => println!("Response: {:?}", resp),
+            }
+            Ok(())
+        }
+        Commands::Remote { host, port, token } => {
+            println!("{}", "🌐 Encrypted Remote Daemon Tunnel 🌐".bold().blue());
+            let repl_helper = HagibisRepl::new(client);
+            let config = hgb_core::RemoteTunnelConfig {
+                remote_host: host,
+                remote_port: port,
+                psk_auth_token: token,
+                enable_compression: true,
+            };
+            let resp = repl_helper.dispatch(HgbRequest::RemoteTunnelConnect { config }).await;
+            match resp {
+                HgbResponse::RemoteTunnelResult(r) => {
+                    println!("  ✔ Connected: {}", if r.connected { "YES".green().bold() } else { "NO".red() });
+                    println!("  ✔ Remote Version: {}", r.remote_hgbd_version.cyan());
+                    println!("  ✔ Round-Trip Latency: {}ms", r.round_trip_latency_ms);
+                    println!("  ✔ Remote Workspaces: {}", r.active_workspaces.join(", ").dimmed());
+                }
+                _ => println!("Response: {:?}", resp),
+            }
+            Ok(())
+        }
+        Commands::Observe { limit } => {
+            println!("{}", "📡 Unified Multi-Channel Observation Bus 📡".bold().yellow());
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::ObserveQueryRecent { limit }).await;
+            match resp {
+                HgbResponse::ObserveResult(o) => {
+                    println!("  ✔ Total Events Tracked: {}", o.total_events);
+                    println!("  ✔ Recent Timeline ({} events):", o.events.len());
+                    for ev in o.events {
+                        println!("    [{}] #{:04} [{:?}]: {}", ev.timestamp_ms, ev.sequence_id, ev.channel, ev.payload.dimmed());
+                    }
+                }
+                _ => println!("Response: {:?}", resp),
+            }
+            Ok(())
+        }
+        Commands::Stack { name, supabase, stripe, tailwind, cloudflare } => {
+            println!("{}", "🏗️ Zero-Config Managed Stack Preset Fabric 🏗️".bold().green());
+            let mut services = Vec::new();
+            if supabase { services.push(hgb_core::ManagedService::SupabaseAuthAndDb); }
+            if stripe { services.push(hgb_core::ManagedService::StripeBilling); }
+            if tailwind { services.push(hgb_core::ManagedService::TailwindShadcnUi); }
+            if cloudflare { services.push(hgb_core::ManagedService::CloudflareEdgeWorker); }
+
+            let config = hgb_core::StackWireupConfig {
+                project_name: name,
+                enabled_services: services,
+                target_directory: ".".to_string(),
+            };
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::StackWireup { config }).await;
+            match resp {
+                HgbResponse::StackResult(s) => {
+                    println!("  ✔ Configured Services: {:?}", s.services_configured);
+                    println!("  ✔ Generated Manifests & Clients ({}):", s.generated_files.len());
+                    for f in &s.generated_files {
+                        println!("    - {}", f.cyan());
+                    }
+                    println!("  ✔ Required Environment Variables:");
+                    for ev in s.required_env_vars.iter().take(4) {
+                        println!("    {}", ev.dimmed());
+                    }
+                    println!("  ✔ Stack Status: {}", if s.ready_to_boot { "READY TO BOOT".green().bold() } else { "CONFIG PENDING".yellow() });
+                }
+                _ => println!("Response: {:?}", resp),
             }
             Ok(())
         }

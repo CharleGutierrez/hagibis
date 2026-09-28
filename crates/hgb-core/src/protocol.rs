@@ -987,6 +987,94 @@ pub enum HgbRequest {
         #[serde(default)]
         config: Option<crate::vscode_extension_bridge::VsCodeBridgeConfig>,
     },
+    // 103. Headless CI/CD & Unix Pipe Streamer
+    CiExecute {
+        config: crate::ci_streamer::CiExecutionConfig,
+    },
+    // 104. Interactive Plan Mode & Blueprint Approver
+    PlanGenerate {
+        goal: String,
+    },
+    PlanApproveStep {
+        plan_id: String,
+        step_id: String,
+        approve: bool,
+    },
+    // 105. Universal Issue Ingestor
+    TicketIngest {
+        input_or_url: String,
+    },
+    // 106. Persistent Project Memory & Context Profiles
+    ProfileGet {
+        #[serde(default)]
+        root_path: Option<String>,
+    },
+    ProfilePatchConventions {
+        #[serde(default)]
+        root_path: Option<String>,
+        conventions: crate::profile_manager::ProjectCodingConventions,
+    },
+    // 107. Automated Git Pre-Commit / Pre-Push Security Guardrails
+    HookInstall {
+        #[serde(default)]
+        repo_root: Option<String>,
+        hooks: Vec<crate::git_hook_guard::GitHookType>,
+    },
+    HookRunPreCommit {
+        staged_files: Vec<String>,
+    },
+    // 108. Style Guide & Architectural DNA Harvester
+    ConventionsHarvest {
+        #[serde(default)]
+        repo_root: Option<String>,
+        #[serde(default)]
+        force_refresh: bool,
+    },
+    // 109. Parallel Multi-Session Autopilot Worktree Swarm
+    QueueEnqueue {
+        tasks: Vec<String>,
+        #[serde(default)]
+        concurrency: usize,
+    },
+    QueueQuery,
+    // 110. Agentic PR Code Reviewer & Inline Diff Commenter
+    ReviewDiff {
+        diff_patch: String,
+    },
+    // 111. Autonomous SWE-Bench & Coding Rigor Harness
+    BenchmarkRunSuite {
+        suite_name: String,
+        #[serde(default)]
+        model: Option<String>,
+    },
+    // 112. 90-Second MVP Full-Stack Synthesizer
+    QuickstartSynthesize {
+        spec: crate::quickstart_synthesizer::QuickstartSpec,
+    },
+    // 113. Decentralized Community Agent Fleet & Plugin Marketplace
+    RegistrySearch {
+        query: String,
+    },
+    RegistryInstall {
+        plugin_id: String,
+    },
+    // 114. Blake3 Cryptographic AI Code Authorship Ledger
+    ProvenanceAuditFile {
+        file_path: String,
+    },
+    // 115. Encrypted Remote Daemon Tunnel & Cockpit Steering
+    RemoteTunnelConnect {
+        config: crate::remote_tunnel::RemoteTunnelConfig,
+    },
+    // 116. Unified Observation Bus
+    ObserveQueryRecent {
+        #[serde(default)]
+        limit: usize,
+    },
+    // 117. Zero-Config Managed Full-Stack Preset Fabric
+    StackWireup {
+        config: crate::stack_preset_fabric::StackWireupConfig,
+    },
 }
 
 fn default_two() -> usize {
@@ -1412,6 +1500,38 @@ pub enum HgbResponse {
     BudgetStatusResult(crate::session_budget_envelope::BudgetStatusReport),
     // 102. VS Code Extension Bridge to hgbd IPC
     VsCodeScaffoldResult(crate::vscode_extension_bridge::VsCodeExtensionScaffoldReport),
+    // 103. Headless CI/CD & Unix Pipe Streamer
+    CiResult(crate::ci_streamer::CiExecutionSummary),
+    // 104. Interactive Plan Mode & Blueprint Approver
+    PlanResult(crate::plan_mode::ExecutionPlan),
+    // 105. Universal Issue Ingestor
+    TicketResult(crate::ticket_ingest::ParsedTicketContext),
+    // 106. Persistent Project Memory & Context Profiles
+    ProfileResult(crate::profile_manager::ProjectProfile),
+    // 107. Automated Git Pre-Commit / Pre-Push Security Guardrails
+    HookInstallResult(crate::git_hook_guard::HookInstallReport),
+    HookRunResult(crate::git_hook_guard::HookScanResult),
+    // 108. Style Guide & Architectural DNA Harvester
+    ConventionsResult(crate::conventions_harvester::ConventionsDna),
+    // 109. Parallel Multi-Session Autopilot Worktree Swarm
+    QueueResult(crate::worktree_queue::WorktreeQueueReport),
+    // 110. Agentic PR Code Reviewer & Inline Diff Commenter
+    ReviewResult(crate::agentic_reviewer::PrReviewReport),
+    // 111. Autonomous SWE-Bench & Coding Rigor Harness
+    BenchmarkResult(crate::swe_bench_harness::BenchmarkRunReport),
+    // 112. 90-Second MVP Full-Stack Synthesizer
+    QuickstartResult(crate::quickstart_synthesizer::QuickstartReport),
+    // 113. Decentralized Community Agent Fleet & Plugin Marketplace
+    RegistrySearchResult(crate::agent_registry::RegistrySearchReport),
+    RegistryInstallResult(crate::agent_registry::AgentPluginManifest),
+    // 114. Blake3 Cryptographic AI Code Authorship Ledger
+    ProvenanceResult(crate::provenance_ledger::AuthorshipAuditReport),
+    // 115. Encrypted Remote Daemon Tunnel & Cockpit Steering
+    RemoteTunnelResult(crate::remote_tunnel::RemoteTunnelReport),
+    // 116. Unified Observation Bus
+    ObserveResult(crate::observation_bus::ObservationStreamReport),
+    // 117. Zero-Config Managed Full-Stack Preset Fabric
+    StackResult(crate::stack_preset_fabric::StackWireupReport),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

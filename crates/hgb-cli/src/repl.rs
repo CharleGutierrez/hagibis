@@ -4553,6 +4553,90 @@ impl HagibisRepl {
                 println!("  Manifest:        Generated package.json");
                 println!("  Socket Target:   {}", rep.socket_path.green());
             }
+            HgbResponse::CiResult(res) => {
+                println!("{}", "🚀 HEADLESS CI EXECUTION RESULT 🚀".bold().cyan());
+                println!("{}", res.formatted_output);
+            }
+            HgbResponse::PlanResult(p) => {
+                println!("{}", "📋 INTERACTIVE PLAN BLUEPRINT 📋".bold().magenta());
+                println!("  Plan ID:         {}", p.plan_id.cyan());
+                println!("  Goal:            {}", p.goal_description);
+                println!("  Steps:           {}", p.steps.len());
+            }
+            HgbResponse::TicketResult(t) => {
+                println!("{}", "🎫 INGESTED TICKET CONTEXT 🎫".bold().cyan());
+                println!("  Key:             {}", t.issue_key.green());
+                println!("  Title:           {}", t.title);
+                println!("  Branch:          {}", t.suggested_branch_name);
+            }
+            HgbResponse::ProfileResult(p) => {
+                println!("{}", "👤 PERSISTENT PROJECT PROFILE 👤".bold().green());
+                println!("  Project:         {}", p.project_name);
+                println!("  Root:            {}", p.root_path);
+            }
+            HgbResponse::HookInstallResult(r) => {
+                println!("{}", "🪝 GIT HOOKS INSTALLATION 🪝".bold().yellow());
+                println!("  Hooks:           {:?}", r.installed_hooks);
+            }
+            HgbResponse::HookRunResult(r) => {
+                println!("{}", "🪝 PRE-COMMIT SCAN 🪝".bold().yellow());
+                println!("  Pass:            {}", if r.pass { "YES".green() } else { "NO".red() });
+                println!("  Files:           {}", r.files_scanned);
+            }
+            HgbResponse::ConventionsResult(d) => {
+                println!("{}", "🧬 ARCHITECTURAL DNA 🧬".bold().blue());
+                println!("  DNA Hash:        {}", d.blake3_content_hash[..16].green());
+                println!("  Rules:           {}", d.rules.len());
+            }
+            HgbResponse::QueueResult(q) => {
+                println!("{}", "🌲 PARALLEL WORKTREE QUEUE 🌲".bold().green());
+                println!("  Active Workers:  {}/{}", q.active_workers, q.max_concurrency);
+                println!("  Jobs:            {}", q.jobs.len());
+            }
+            HgbResponse::ReviewResult(r) => {
+                println!("{}", "🔍 PR REVIEW BUG-BOT 🔍".bold().yellow());
+                println!("  Verdict:         {}", r.overall_verdict.bold());
+                println!("  Comments:        {}", r.total_comments);
+            }
+            HgbResponse::BenchmarkResult(b) => {
+                println!("{}", "📊 BENCHMARK HARNESS 📊".bold().magenta());
+                println!("  Suite:           {}", b.suite_name);
+                println!("  Pass Rate:       {:.1}%", b.pass_rate_pct);
+            }
+            HgbResponse::QuickstartResult(q) => {
+                println!("{}", "⚡ QUICKSTART SYNTHESIZER ⚡".bold().green());
+                println!("  Directory:       {}", q.project_directory);
+                println!("  Files:           {}", q.files_generated);
+            }
+            HgbResponse::RegistrySearchResult(r) => {
+                println!("{}", "📦 AGENT REGISTRY SEARCH 📦".bold().blue());
+                println!("  Matches:         {}/{}", r.matching_plugins.len(), r.total_available);
+            }
+            HgbResponse::RegistryInstallResult(p) => {
+                println!("{}", "📦 AGENT INSTALLED 📦".bold().green());
+                println!("  Name:            {} v{}", p.name, p.version);
+            }
+            HgbResponse::ProvenanceResult(p) => {
+                println!("{}", "📜 AUTHORSHIP PROVENANCE 📜".bold().cyan());
+                println!("  File:            {}", p.file_path);
+                println!("  AI Lines:        {} ({:.1}%)", p.ai_authored_lines, p.ai_percentage);
+                println!("  Root Hash:       {}", p.ledger_root_hash);
+            }
+            HgbResponse::RemoteTunnelResult(r) => {
+                println!("{}", "🌐 REMOTE DAEMON TUNNEL 🌐".bold().blue());
+                println!("  Connected:       {}", if r.connected { "YES".green() } else { "NO".red() });
+                println!("  Latency:         {}ms", r.round_trip_latency_ms);
+            }
+            HgbResponse::ObserveResult(o) => {
+                println!("{}", "📡 OBSERVATION BUS 📡".bold().yellow());
+                println!("  Total Events:    {}", o.total_events);
+                println!("  Recent:          {}", o.events.len());
+            }
+            HgbResponse::StackResult(s) => {
+                println!("{}", "🏗️ MANAGED STACK PRESET 🏗️".bold().green());
+                println!("  Configured:      {:?}", s.services_configured);
+                println!("  Ready:           {}", if s.ready_to_boot { "YES".green() } else { "NO".red() });
+            }
         }
     }
 

@@ -133,6 +133,67 @@ pub mod language_intelligence_pack;
 pub mod native_mobile_matrix;
 pub mod session_budget_envelope;
 pub mod vscode_extension_bridge;
+pub mod ci_streamer;
+pub mod plan_mode;
+pub mod ticket_ingest;
+pub mod profile_manager;
+pub mod git_hook_guard;
+pub mod conventions_harvester;
+pub mod worktree_queue;
+pub mod agentic_reviewer;
+pub mod swe_bench_harness;
+pub mod quickstart_synthesizer;
+pub mod agent_registry;
+pub mod provenance_ledger;
+pub mod remote_tunnel;
+pub mod observation_bus;
+pub mod stack_preset_fabric;
+
+pub use ci_streamer::{
+    CiEventKind, CiExecutionConfig, CiExecutionSummary, CiOutputFormat, CiStreamerEngine,
+};
+pub use plan_mode::{
+    ExecutionPlan, PlanEngine, PlanStep, PlanStepStatus,
+};
+pub use ticket_ingest::{
+    AcceptanceCriterion, ParsedTicketContext, TicketIngestEngine, TicketProvider,
+};
+pub use profile_manager::{
+    ProfileEngine, ProjectCodingConventions, ProjectProfile,
+};
+pub use git_hook_guard::{
+    GitHookEngine, GitHookType, HookInstallReport, HookScanResult,
+};
+pub use conventions_harvester::{
+    ConventionRule, ConventionsDna, ConventionsHarvester,
+};
+pub use worktree_queue::{
+    WorktreeJob, WorktreeJobStatus, WorktreeQueueEngine, WorktreeQueueReport,
+};
+pub use agentic_reviewer::{
+    AgenticReviewerEngine, InlineReviewComment, PrReviewReport, ReviewSeverity,
+};
+pub use swe_bench_harness::{
+    BenchmarkRunReport, SweBenchEngine, TestCaseResult,
+};
+pub use quickstart_synthesizer::{
+    QuickstartReport, QuickstartSpec, QuickstartSynthesizer,
+};
+pub use agent_registry::{
+    AgentPluginManifest, AgentRegistryEngine, RegistrySearchReport,
+};
+pub use provenance_ledger::{
+    AuthorshipAuditReport, AuthorshipSpan, ProvenanceEngine,
+};
+pub use remote_tunnel::{
+    RemoteTunnelConfig, RemoteTunnelEngine, RemoteTunnelReport,
+};
+pub use observation_bus::{
+    ObservationBusEngine, ObservationChannel, ObservationEvent, ObservationStreamReport,
+};
+pub use stack_preset_fabric::{
+    ManagedService, StackPresetEngine, StackWireupConfig, StackWireupReport,
+};
 
 pub use rails_engine::{
     MigrationHazard, MigrationRiskLevel, MigrationSafetyReport, NPlusOneIssue, NPlusOneReport,

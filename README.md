@@ -5,7 +5,7 @@
 <h1 align="center">🪽 HAGIBIS (<code>hgb</code> & <code>hgbd</code>) 🪽</h1>
 
 <p align="center">
-  <strong>The Sub-Millisecond Systems Microkernel, Swarm Engine & 102 Sovereign Superpowers for Vibe Code Developers</strong><br>
+  <strong>The Sub-Millisecond Systems Microkernel, Swarm Engine & 117 Sovereign Superpowers for Vibe Code Developers</strong><br>
   <em>Wear the winged sandals of Talaria. Code at the speed of thought.</em>
 </p>
 
@@ -13,7 +13,7 @@
   <a href="https://github.com/CharleGutierrez/hagibis/actions"><img src="https://img.shields.io/badge/build-passing-brightgreen?style=for-the-badge&logo=rust" alt="Build Status" /></a>
   <a href="https://github.com/CharleGutierrez/hagibis"><img src="https://img.shields.io/badge/IPC%20Latency-12_%C2%B5s-cyan?style=for-the-badge&logo=speedtest" alt="IPC Latency" /></a>
   <a href="https://github.com/CharleGutierrez/hagibis"><img src="https://img.shields.io/badge/Daemon%20RSS-8.4_MB-blueviolet?style=for-the-badge" alt="Memory RSS" /></a>
-  <a href="https://github.com/CharleGutierrez/hagibis"><img src="https://img.shields.io/badge/Sovereign%20Superpowers-102%20Real-orange?style=for-the-badge&logo=feather" alt="102 Superpowers" /></a>
+  <a href="https://github.com/CharleGutierrez/hagibis"><img src="https://img.shields.io/badge/Sovereign%20Superpowers-117%20Real-orange?style=for-the-badge&logo=feather" alt="117 Superpowers" /></a>
   <a href="HAGIBIS_VIBE_CODING_MASTERCLASS.pdf"><img src="https://img.shields.io/badge/Masterclass%20PDF-80%20Pages-gold?style=for-the-badge&logo=adobeacrobatreader" alt="Masterclass PDF" /></a>
   <a href="https://github.com/CharleGutierrez/hagibis/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue?style=for-the-badge" alt="License" /></a>
 </p>
@@ -204,6 +204,23 @@ Hagibis implements **87 sovereign superpowers** organized into 7 operational tie
 - **101. Session FinOps Hard Budget Envelope & Cost Circuit Breaker** (`hgb budget`, `/budget`): Real-time token cost accounting with configurable spending caps, automated model tier degradation, and kernel-level budget circuit breakers.
 - **102. Zero-Latency VS Code Extension Microkernel Bridge** (`hgb vscode-ext`, `/vscode-ext`): High-speed IPC bridge connecting VS Code / Cursor editors directly to the `hgbd` Unix domain socket with zero-overhead command dispatch and TypeScript bindings.
 
+### Tier 9: The Autonomous Substrate & Competitive Hegemony (Superpowers 103–117)
+- **103. Headless CI/CD & Unix Pipe Streamer** (`hgb ci`, `/ci`): Claude Code parity non-TTY execution participating in Unix pipelines (`cat issue.txt | hgb ci --json`), structured JSONL event logging, and GitHub Actions workflow command integration.
+- **104. Interactive Plan Mode & Blueprint Approver** (`hgb plan`, `/plan`): GitHub Copilot Plan Mode parity inspect-before-execute blueprint generation with dry-run diffs, step-by-step sign-off, and token impact budgets.
+- **105. Universal Issue Ingestor** (`hgb ticket`, `/ticket`): Devin & Copilot parity issue parser supporting GitHub, Linear (`ENG-123`), Jira (`PROJ-456`), and Markdown, automatically extracting acceptance criteria, stack traces, and suggesting branch names.
+- **106. Persistent Project Memory & Context Profiles** (`hgb profile`, `/profile`): Windsurf Cascade parity project profiles (`.hgb/profile.toml`) preserving architectural conventions, test runners, and developer memory across restarts.
+- **107. Automated Git Pre-Commit / Pre-Push Security Guardrails** (`hgb hook`, `/hook`): Cursor BugBot parity zero-latency Git hooks blocking secret leaks, destructive SQL commands, and slopsquatting packages before commit.
+- **108. Style Guide & Architectural DNA Harvester** (`hgb conventions`, `/conventions`): Ingests `STYLE_GUIDE.md`, `.editorconfig`, `CONTRIBUTING.md`, and linter configs into an ultra-compact, token-compressed system prompt DNA block.
+- **109. Parallel Multi-Session Autopilot Worktree Swarm** (`hgb queue`, `/queue`): Devin parity parallel multi-agent task runner orchestrating N independent sessions across isolated Git worktrees without index lock contention.
+- **110. Agentic PR Code Reviewer & Inline Diff Commenter** (`hgb review`, `/review`): Cursor BugBot parity autonomous line-by-line diff reviewer detecting thread blocking, unsafe unwraps, and emitting inline review suggestions.
+- **111. Autonomous SWE-Bench & Coding Rigor Harness** (`hgb benchmark`, `/benchmark`): Standardized SWE-Bench Lite and production invariant benchmark harness tracking pass@1, token FinOps, and execution latency.
+- **112. 90-Second MVP Full-Stack Synthesizer** (`hgb quickstart`, `/quickstart`): Bolt.new & Lovable parity description-to-working-app generator scaffolding complete Next.js/Axum/FastAPI projects with routes, UI, and auth in seconds.
+- **113. Decentralized Community Agent Fleet & Plugin Marketplace** (`hgb registry`, `/registry`): OpenHands parity decentralized catalog for searching, verifying, and dispatching specialized micro-agents with Blake3 integrity fingerprints.
+- **114. Blake3 Cryptographic AI Code Authorship Ledger** (`hgb authorship`, `/authorship`): Tamper-proof, line-level Blake3 cryptographic Merkle ledger attributing code authorship between humans and AI models for corporate compliance and legal governance.
+- **115. Encrypted Remote Daemon Tunnel & Cockpit Steering** (`hgb remote`, `/remote`): Claude Code Remote parity secure authenticated tunnel steering remote `hgbd` instances over cloud VMs, developer boxes, or GPU clusters.
+- **116. Unified Multi-Channel Observation Bus** (`hgb observe`, `/observe`): Windsurf Cascade parity synchronous event bus unifying terminal stdout/stderr, CDP browser console/network, and filesystem notifications into a real-time stream.
+- **117. Zero-Config Managed Full-Stack Preset Fabric** (`hgb stack`, `/stack`): Lovable parity one-command integration linking Supabase (Auth/DB), Stripe (Billing/Webhooks), Tailwind/shadcn UI, and Cloudflare Workers (Edge).
+
 ---
 
 ## 📖 The 80-Page Vibe Coding Masterclass Manual (PDF Included)
@@ -279,6 +296,21 @@ hgb classic  # Lightweight line-by-line terminal scrolling mode
 | `/native-mobile` | Mobile dev intelligence, scaffolds, and native Android/iOS stack symbolication |
 | `/budget` | Inspect real-time token spend, configure hard budget envelopes and circuit breakers |
 | `/vscode-ext` | Generate VS Code extension manifest, TypeScript adapter, and IPC bridge |
+| `/ci <prompt>` | Headless non-TTY CI/CD runner participating in Unix pipes |
+| `/plan <goal>` | Interactive plan mode: inspect dry-run diffs before approving execution |
+| `/ticket <url>` | Ingest GitHub, Linear, or Jira issues into structured acceptance criteria |
+| `/profile` | Inspect or patch persistent project memory profile and conventions |
+| `/hook [cmd]` | Install or run zero-latency Git pre-commit security guardrails |
+| `/conventions` | Harvest style guide and architectural DNA into compressed context |
+| `/queue [tasks]` | Enqueue autonomous tasks across isolated Git worktrees |
+| `/review [diff]` | Agentic PR code reviewer and inline bug-bot diff analyzer |
+| `/benchmark` | Run autonomous SWE-Bench Lite and production invariant tests |
+| `/quickstart` | Synthesize complete working full-stack MVP in under 90 seconds |
+| `/registry` | Search and install decentralized community micro-agent plugins |
+| `/authorship <file>` | Line-by-line Blake3 cryptographic human vs AI authorship audit |
+| `/remote <host>` | Connect encrypted tunnel to steer remote `hgbd` daemon instance |
+| `/observe` | Inspect unified observation bus (terminal, CDP browser, and file events) |
+| `/stack` | Wire up managed Supabase, Stripe, Tailwind, and Cloudflare services |
 
 ---
 
@@ -315,7 +347,7 @@ Output:
   ✔ Google Gemini Cloud Provider [READY]: Cloud reasoning pipeline active
   ✔ Blake3 Provenance Ledger [READY]: Cryptographic audit active
   ✔ Copy-on-Write SQLite Sandboxes [READY]: Sub-10µs atomic rollbacks available
-  ✔ Sovereign Superpowers [READY]: 102 of 102 engines loaded
+  ✔ Sovereign Superpowers [READY]: 117 of 117 engines loaded
 ================================================================================
 ```
 
@@ -325,6 +357,21 @@ Output:
 hgb
 
 # Or execute subcommands directly in your shell:
+hgb ci "Run security verification suite" --format json
+hgb plan "Synthesize payment webhooks and add idempotency test"
+hgb ticket "https://github.com/org/repo/issues/42"
+hgb profile --indent "2-spaces" --test-framework "cargo-nextest"
+hgb hook install
+hgb conventions --path .
+hgb queue --tasks "Fix cart bug","Refactor DB pool" --concurrency 2
+hgb review --diff ./patch.diff
+hgb benchmark --suite hgb-rigor-matrix
+hgb quickstart "SaaS CRM with Stripe billing and SQLite" --name crm-app
+hgb registry list
+hgb authorship src/main.rs
+hgb remote 192.168.1.100 --port 8443
+hgb observe --limit 50
+hgb stack vibe-app --supabase --stripe --tailwind
 hgb rails migration db/migrate/20260928_add_idx.rb
 hgb autopilot --spec "Fix payment race condition" --worktree ./wt-pay
 hgb explain --commit HEAD --format adr
@@ -356,6 +403,7 @@ Every single component, superpower, and IPC message type is rigorously tested wi
 cargo test --workspace
 ```
 
+- **`vibe_frontier_superpowers_103_117_brutal_tests`**: Formally validates Superpowers 103–117 (Headless CI/CD, Interactive Plan Mode, Universal Issue Ingestor, Persistent Project Memory Profiles, Git Security Guardrails, Style Guide & Architectural DNA, Worktree Queue Swarm, Agentic Code Reviewer, SWE-Bench Rigor Harness, 90-Second Full-Stack Synthesizer, Community Agent Registry, Blake3 AI Authorship Ledger, Encrypted Remote Daemon Tunnel, Unified Multi-Channel Observation Bus, and Managed Stack Preset Fabric).
 - **`vibe_frontier_superpowers_88_102_brutal_tests`**: Formally validates Superpowers 88–102 (Rails Intelligence, Autopilot, Project Coordinator, ADR Decision Explainer, Blake3 Merkle Index, Rollout Health Sentry, AI-PR Security Audit, Cloud Preview Deployer, Real-Time Collab, Prompt Lab, Framework Packs, Native Mobile Matrix, FinOps Budget Envelope, VS Code Extension Bridge).
 - **`vibe_day2_operations_brutal_tests`**: Formally validates Superpowers 84–87 (Mobile QR Teleport, Sentry Hotfixes, LLM Cost Gateway, Privacy Funnels).
 - **`vibe_godtier_superpowers_brutal_tests`**: Verifies Superpowers 79–83 (SaaS Monetization, Continuous Voice, Figma Bridge, Shadow DB Fuzzer, Viral OG Cards).

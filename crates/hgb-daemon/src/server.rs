@@ -2276,6 +2276,145 @@ impl HagibisDaemon {
                 let rep = hgb_core::VsCodeExtensionBridge::scaffold_extension(config);
                 HgbResponse::VsCodeScaffoldResult(rep)
             }
+            // 103. Headless CI/CD & Unix Pipe Streamer
+            HgbRequest::CiExecute { config } => {
+                match hgb_core::CiStreamerEngine::execute(&config) {
+                    Ok(rep) => HgbResponse::CiResult(rep),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            // 104. Interactive Plan Mode & Blueprint Approver
+            HgbRequest::PlanGenerate { goal } => {
+                match hgb_core::PlanEngine::generate_plan(&goal) {
+                    Ok(plan) => HgbResponse::PlanResult(plan),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            HgbRequest::PlanApproveStep { plan_id, step_id, approve } => {
+                match hgb_core::PlanEngine::approve_step(&plan_id, &step_id, approve) {
+                    Ok(plan) => HgbResponse::PlanResult(plan),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            // 105. Universal Issue Ingestor
+            HgbRequest::TicketIngest { input_or_url } => {
+                match hgb_core::TicketIngestEngine::ingest(&input_or_url) {
+                    Ok(ctx) => HgbResponse::TicketResult(ctx),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            // 106. Persistent Project Memory & Context Profiles
+            HgbRequest::ProfileGet { root_path } => {
+                let path = root_path.as_deref().unwrap_or(".");
+                match hgb_core::ProfileEngine::get_profile(path) {
+                    Ok(prof) => HgbResponse::ProfileResult(prof),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            HgbRequest::ProfilePatchConventions { root_path, conventions } => {
+                let path = root_path.as_deref().unwrap_or(".");
+                match hgb_core::ProfileEngine::patch_conventions(path, conventions) {
+                    Ok(prof) => HgbResponse::ProfileResult(prof),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            // 107. Automated Git Pre-Commit / Pre-Push Security Guardrails
+            HgbRequest::HookInstall { repo_root, hooks } => {
+                let root = repo_root.as_deref().unwrap_or(".");
+                match hgb_core::GitHookEngine::install_hooks(root, &hooks) {
+                    Ok(rep) => HgbResponse::HookInstallResult(rep),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            HgbRequest::HookRunPreCommit { staged_files } => {
+                match hgb_core::GitHookEngine::run_pre_commit(&staged_files) {
+                    Ok(res) => HgbResponse::HookRunResult(res),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            // 108. Style Guide & Architectural DNA Harvester
+            HgbRequest::ConventionsHarvest { repo_root, force_refresh } => {
+                let root = repo_root.as_deref().unwrap_or(".");
+                match hgb_core::ConventionsHarvester::harvest(root, force_refresh) {
+                    Ok(dna) => HgbResponse::ConventionsResult(dna),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            // 109. Parallel Multi-Session Autopilot Worktree Swarm
+            HgbRequest::QueueEnqueue { tasks, concurrency } => {
+                match hgb_core::WorktreeQueueEngine::enqueue(&tasks, concurrency) {
+                    Ok(rep) => HgbResponse::QueueResult(rep),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            HgbRequest::QueueQuery => {
+                match hgb_core::WorktreeQueueEngine::query() {
+                    Ok(rep) => HgbResponse::QueueResult(rep),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            // 110. Agentic PR Code Reviewer & Inline Diff Commenter
+            HgbRequest::ReviewDiff { diff_patch } => {
+                match hgb_core::AgenticReviewerEngine::review_diff(&diff_patch) {
+                    Ok(rep) => HgbResponse::ReviewResult(rep),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            // 111. Autonomous SWE-Bench & Coding Rigor Harness
+            HgbRequest::BenchmarkRunSuite { suite_name, model } => {
+                match hgb_core::SweBenchEngine::run_suite(&suite_name, model.as_deref()) {
+                    Ok(rep) => HgbResponse::BenchmarkResult(rep),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            // 112. 90-Second MVP Full-Stack Synthesizer
+            HgbRequest::QuickstartSynthesize { spec } => {
+                match hgb_core::QuickstartSynthesizer::synthesize(&spec) {
+                    Ok(rep) => HgbResponse::QuickstartResult(rep),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            // 113. Decentralized Community Agent Fleet & Plugin Marketplace
+            HgbRequest::RegistrySearch { query } => {
+                match hgb_core::AgentRegistryEngine::search(&query) {
+                    Ok(rep) => HgbResponse::RegistrySearchResult(rep),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            HgbRequest::RegistryInstall { plugin_id } => {
+                match hgb_core::AgentRegistryEngine::install(&plugin_id) {
+                    Ok(plug) => HgbResponse::RegistryInstallResult(plug),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            // 114. Blake3 Cryptographic AI Code Authorship Ledger
+            HgbRequest::ProvenanceAuditFile { file_path } => {
+                match hgb_core::ProvenanceEngine::audit_file(&file_path) {
+                    Ok(rep) => HgbResponse::ProvenanceResult(rep),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            // 115. Encrypted Remote Daemon Tunnel & Cockpit Steering
+            HgbRequest::RemoteTunnelConnect { config } => {
+                match hgb_core::RemoteTunnelEngine::connect(&config) {
+                    Ok(rep) => HgbResponse::RemoteTunnelResult(rep),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            // 116. Unified Observation Bus
+            HgbRequest::ObserveQueryRecent { limit } => {
+                match hgb_core::ObservationBusEngine::query_recent(limit) {
+                    Ok(rep) => HgbResponse::ObserveResult(rep),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            // 117. Zero-Config Managed Full-Stack Preset Fabric
+            HgbRequest::StackWireup { config } => {
+                match hgb_core::StackPresetEngine::wireup(&config) {
+                    Ok(rep) => HgbResponse::StackResult(rep),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
         }
     }
 }
