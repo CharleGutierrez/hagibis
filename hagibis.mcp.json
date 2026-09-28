@@ -181,6 +181,10 @@
     "image_tools": {
       "command": "bunx",
       "args": ["mcp-image"]
+    },
+    "office": {
+      "command": "uvx",
+      "args": ["libreoffice-mcp"]
     }
   }
 }
