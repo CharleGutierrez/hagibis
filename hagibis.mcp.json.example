@@ -31,6 +31,10 @@
     "filesystem": {
       "command": "bunx",
       "args": ["@modelcontextprotocol/server-filesystem", "."]
+    },
+    "sequentialthinking": {
+      "command": "bunx",
+      "args": ["@modelcontextprotocol/server-sequential-thinking"]
     }
   }
 }
