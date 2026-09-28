@@ -10,3 +10,6 @@
 .hgb/
 test_app/
 **/test_app/
+
+__pycache__/
+*.pyc
