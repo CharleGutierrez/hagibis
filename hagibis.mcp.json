@@ -189,6 +189,46 @@
     "blender": {
       "command": "uvx",
       "args": ["mcp-for-blender"]
+    },
+    "ffmpeg": {
+      "command": "bunx",
+      "args": ["mcp-ffmpeg"]
+    },
+    "obsidian": {
+      "command": "bunx",
+      "args": ["@fazer-ai/mcp-obsidian"]
+    },
+    "comfy": {
+      "command": "uvx",
+      "args": ["comfy-mcp"]
+    },
+    "obs": {
+      "command": "uvx",
+      "args": ["obs-mcp"]
+    },
+    "zotero": {
+      "command": "uvx",
+      "args": ["zotero-mcp"]
+    },
+    "openscad": {
+      "command": "uvx",
+      "args": ["openscad-mcp"]
+    },
+    "freecad": {
+      "command": "uvx",
+      "args": ["freecad-mcp"]
+    },
+    "nextcloud": {
+      "command": "uvx",
+      "args": ["nextcloud-mcp"]
+    },
+    "chroma": {
+      "command": "uvx",
+      "args": ["chroma-mcp"]
+    },
+    "homeassistant": {
+      "command": "uvx",
+      "args": ["homeassistant-mcp"]
     }
   }
 }
