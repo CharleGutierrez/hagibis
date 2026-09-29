@@ -4001,6 +4001,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
                 "lemonsqueezy" | "lemon" => hgb_core::SaasProvider::LemonSqueezy,
                 "paddle" => hgb_core::SaasProvider::Paddle,
                 "gcash" | "paymongo" | "gcash-paymongo" => hgb_core::SaasProvider::GCashPayMongo,
+                "maya" | "paymaya" | "maya-checkout" => hgb_core::SaasProvider::MayaCheckout,
                 _ => hgb_core::SaasProvider::Stripe,
             };
             let cfg = hgb_core::SaasScaffoldConfig {
