@@ -256,6 +256,58 @@ Hagibis includes an authoritative, publication-grade masterclass course and tech
 
 ---
 
+## 💡 How to Work With Hagibis Effortlessly (No Need to Memorize Slash Commands)
+
+With **125 sovereign superpowers**, memorizing 100+ slash commands can feel overwhelming. **The good news: You don't have to memorize any of them.**
+
+### 1. Plain English First (Natural Language Intent)
+The Cockpit is an autonomous agent with semantic intent understanding. Instead of typing rigid commands, simply talk to Hagibis like a senior pair programmer:
+- Instead of `/mock users` ➔ Type: `create a mock server for users`
+- Instead of `/deflake` ➔ Type: `fix the flaky tests in my auth suite`
+- Instead of `/saas --provider gcash` ➔ Type: `add GCash and Maya checkout to this Next.js app`
+- Instead of `/review` ➔ Type: `review my latest git changes for bugs`
+- Instead of `/panic-fix` ➔ Type: `fix the error that just happened in the terminal`
+
+### 2. The "Rule of 5" — The Only 5 Commands You Actually Need
+If you prefer quick keyboard shortcuts, these **5 commands** handle 95% of daily software engineering tasks:
+
+| Shortcut | Operational Role | When to Use It |
+| :--- | :--- | :--- |
+| **`/plan <task>`** | **Inspect Before Execute** | When you want to see what files will change before the AI touches anything. |
+| **`/autopilot <task>`** | **End-to-End Build** | When you want the AI to write the code, run the tests, and make it green. |
+| **`/tdd`** | **Green Test Loop** | When tests are failing and you want Hagibis to fix them automatically. |
+| **`/undo`** (or `/rewind`) | **The Panic Revert** | Instantly undoes whatever Hagibis just did (sub-10µs atomic rollback). |
+| **`/panic-fix`** | **Terminal Rescue** | When a terminal command or build errors out, 1 key diagnoses and fixes it. |
+
+### 3. Use `Tab` Autocompletion
+You never have to guess command spelling:
+- Inside the interactive cockpit, type `/` and press **`<Tab>`** to display the complete interactive grid of commands with descriptions.
+- Type `/p` and press **`<Tab>`** to auto-filter commands (`/plan`, `/pod`, `/patch`, etc.).
+- Type `/help <topic>` (e.g. `/help saas` or `/help test`) for targeted syntax guidance.
+
+### 4. CLI Subcommand Parity (Run Directly from Bash/Zsh)
+If you prefer standard Unix shell commands over interactive prompts, every slash command has a 1:1 terminal equivalent:
+```bash
+hgb plan "add search bar"
+hgb autopilot "fix issue #12"
+hgb tdd
+hgb rewind
+hgb saas my-app --provider gcash
+```
+
+### 5. Pro Tip: 2-Letter Shell Aliases (`~/.bashrc`)
+Add these shortcuts to your `~/.bashrc` or `~/.zshrc`:
+```bash
+alias hp="hgb plan"          # 'hp "create login page"'
+alias ha="hgb autopilot"     # 'ha "implement payment flow"'
+alias ht="hgb tdd"           # 'ht' (run and fix tests)
+alias hu="hgb rewind"        # 'hu' (undo last change)
+alias hf="hgb shell-panic"   # 'hf' (fix last terminal error)
+```
+Reload with `source ~/.bashrc`. You can now run `ha "build feature"` in under 2 seconds.
+
+---
+
 ## ⌨️ Interactive Cockpit & Slash Command Reference
 
 Launch the interactive Ratatui Cockpit canvas:
@@ -268,7 +320,7 @@ hgb classic  # Lightweight line-by-line terminal scrolling mode
 | :--- | :--- |
 | `/vibe <prompt>` | Launch speculative dual-draft race (First Green Wins) |
 | `/model [name]` | Dynamically switch model (`/model qwen2.5-coder:7b`, `/model gemini-2.5-pro`, `/model auto`) |
-| `/saas` | Configure Stripe/LemonSqueezy monetization, paywalls, and billing portals |
+| `/saas` | Configure Stripe, LemonSqueezy, GCash, or Maya monetization, paywalls, and billing portals |
 | `/ambient-voice` | Toggle full-duplex continuous ambient voice loop with VAD and barge-in |
 | `/figma <url>` | Synchronize Figma design tokens into Tailwind React components |
 | `/shadow-db` | Launch autonomous 10k-op database stress fuzzer and latency profiler |
