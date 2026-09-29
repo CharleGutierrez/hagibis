@@ -8,6 +8,8 @@ pub enum SupportedFramework {
     TypeScriptNextJs,
     GoFiber,
     JavaSpringBoot,
+    PhpLaravel,
+    GenericPhp,
     GenericRust,
     Unknown(String),
 }
@@ -112,6 +114,39 @@ impl LanguageIntelligencePack {
                     vec!["pom.xml".to_string()],
                     vec![],
                 )
+            } else if workspace_root.join("artisan").exists() || (workspace_root.join("composer.json").exists() && workspace_root.join("routes/web.php").exists()) {
+                (
+                    SupportedFramework::PhpLaravel,
+                    "PHP".to_string(),
+                    "./vendor/bin/pint --test".to_string(),
+                    "php artisan test".to_string(),
+                    vec![
+                        "PSR-12 coding standard & strict types (declare(strict_types=1);)".to_string(),
+                        "Eloquent eager loading with with() to prevent N+1 query leaks".to_string(),
+                        "FormRequest classes for controller validation & authorization".to_string(),
+                        "Database transactions for multi-write business operations".to_string(),
+                    ],
+                    vec!["artisan".to_string(), "composer.json".to_string()],
+                    if !workspace_root.join("phpunit.xml").exists() && !workspace_root.join("pest.php").exists() {
+                        vec!["phpunit.xml".to_string()]
+                    } else {
+                        vec![]
+                    },
+                )
+            } else if workspace_root.join("composer.json").exists() {
+                (
+                    SupportedFramework::GenericPhp,
+                    "PHP".to_string(),
+                    "vendor/bin/phpstan analyse".to_string(),
+                    "vendor/bin/phpunit".to_string(),
+                    vec![
+                        "PSR-4 autoloading via Composer".to_string(),
+                        "Strict typing & return type declarations".to_string(),
+                        "Dependency injection container patterns".to_string(),
+                    ],
+                    vec!["composer.json".to_string()],
+                    vec![],
+                )
             } else {
                 (
                     SupportedFramework::GenericRust,
@@ -166,6 +201,23 @@ mod tests {
         assert_eq!(rep.language_info.primary_language, "Ruby");
         assert!(rep.language_info.recommended_linter.contains("rubocop"));
         assert!(rep.language_info.test_runner_command.contains("rspec"));
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_inspect_workspace_php_laravel() {
+        let tmp = std::env::temp_dir().join("hgb_lang_php_laravel_test");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("artisan"), "#!/usr/bin/env php").unwrap();
+        std::fs::write(tmp.join("composer.json"), r#"{"name": "app/laravel"}"#).unwrap();
+
+        let rep = LanguageIntelligencePack::inspect_workspace(&tmp);
+        assert_eq!(rep.detected_framework, SupportedFramework::PhpLaravel);
+        assert_eq!(rep.language_info.primary_language, "PHP");
+        assert!(rep.language_info.recommended_linter.contains("pint"));
+        assert_eq!(rep.language_info.test_runner_command, "php artisan test");
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

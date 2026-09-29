@@ -37,7 +37,9 @@ impl SlopsquattingFirewall {
     const CANONICAL_PACKAGES: &'static [&'static str] = &[
         "react", "react-dom", "express", "next", "vue", "axios", "lodash",
         "tokio", "serde", "syn", "anyhow", "thiserror", "reqwest", "tracing",
-        "flask", "django", "requests", "numpy", "pandas", "fastapi", "pydantic"
+        "flask", "django", "requests", "numpy", "pandas", "fastapi", "pydantic",
+        "laravel/framework", "symfony/http-foundation", "guzzlehttp/guzzle",
+        "phpunit/phpunit", "pestphp/pest", "spatie/laravel-permission", "monolog/monolog"
     ];
 
     /// Audits a list of package names for an ecosystem
