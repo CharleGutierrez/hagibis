@@ -2851,6 +2851,92 @@ impl HagibisRepl {
                 let resp = self.dispatch(HgbRequest::AutoDependencyHeal { compiler_log: log }).await;
                 self.render_response(resp);
             }
+            "/evolve" | "/self-evolve" => {
+                let config = hgb_core::SelfEvolutionConfig {
+                    target_path: if args.is_empty() { ".".to_string() } else { args.trim().to_string() },
+                    max_generations: 3,
+                    mutation_rate: 0.15,
+                    auto_distill_recipes: true,
+                    export_dpo_dataset: true,
+                };
+                let resp = self.dispatch(HgbRequest::SelfEvolutionRun { config }).await;
+                self.render_response(resp);
+            }
+            "/desktop" => {
+                let parts: Vec<&str> = args.split_whitespace().collect();
+                let sub = parts.first().copied().unwrap_or("inspect");
+                if sub == "inspect" {
+                    let resp = self.dispatch(HgbRequest::DesktopInspect).await;
+                    self.render_response(resp);
+                } else {
+                    let act = hgb_core::DesktopAction::Click { x: 100, y: 100, button: "left".to_string() };
+                    let resp = self.dispatch(HgbRequest::DesktopActionExecute { action: act }).await;
+                    self.render_response(resp);
+                }
+            }
+            "/verify-proof" | "/verify" => {
+                let target = if args.is_empty() { "src/lib.rs".to_string() } else { args.trim().to_string() };
+                let config = hgb_core::FormalVerificationConfig {
+                    target_file: target,
+                    solver: hgb_core::SmtSolverKind::Z3,
+                    verify_overflows: true,
+                    verify_bounds: true,
+                    timeout_seconds: 15,
+                };
+                let resp = self.dispatch(HgbRequest::FormalVerifyRun { config }).await;
+                self.render_response(resp);
+            }
+            "/monorepo" | "/hypergraph" => {
+                let parts: Vec<&str> = args.split_whitespace().collect();
+                if parts.first().copied() == Some("blast") {
+                    let files = if parts.len() > 1 { parts[1..].iter().map(|s| s.to_string()).collect() } else { vec!["crates/hgb-core/src/lib.rs".to_string()] };
+                    let resp = self.dispatch(HgbRequest::MonorepoBlastRadius { changed_files: files }).await;
+                    self.render_response(resp);
+                } else {
+                    let resp = self.dispatch(HgbRequest::MonorepoAnalyze).await;
+                    self.render_response(resp);
+                }
+            }
+            "/embedded" | "/firmware" => {
+                let config = hgb_core::EmbeddedCheckConfig {
+                    target_arch: hgb_core::TargetMcuArchitecture::ArmCortexM,
+                    no_std: true,
+                    max_flash_bytes: 256 * 1024,
+                    max_ram_bytes: 64 * 1024,
+                };
+                let code = if args.is_empty() { "#![no_std]\npub fn init() {}".to_string() } else { args.to_string() };
+                let resp = self.dispatch(HgbRequest::EmbeddedCheck { code, config }).await;
+                self.render_response(resp);
+            }
+            "/store" | "/release" => {
+                let config = hgb_core::StoreReleaseConfig {
+                    platform: hgb_core::AppStorePlatform::AppleAppStore,
+                    track: hgb_core::ReleaseTrack::Beta,
+                    app_bundle_id: "com.hagibis.app".to_string(),
+                    version_name: "1.0.0".to_string(),
+                    build_number: 1,
+                    fastlane_lane: "beta".to_string(),
+                };
+                let resp = self.dispatch(HgbRequest::StoreReleaseRun { config }).await;
+                self.render_response(resp);
+            }
+            "/speak" | "/tts" => {
+                let text = if args.is_empty() { "Hagibis voice synthesis active.".to_string() } else { args.to_string() };
+                let config = hgb_core::SynthesisConfig {
+                    voice_id: "en_US-kokoro-v1".to_string(),
+                    speaking_rate: 1.0,
+                    pitch: 1.0,
+                    output_format: "wav".to_string(),
+                };
+                let resp = self.dispatch(HgbRequest::SpeechSynthesize { text, config }).await;
+                self.render_response(resp);
+            }
+            "/studio" => {
+                let parts: Vec<&str> = args.split_whitespace().collect();
+                let port = parts.first().and_then(|p| p.parse::<u16>().ok());
+                let resp = self.dispatch(HgbRequest::StudioStart { port }).await;
+                self.render_response(resp);
+            }
             _ => {}
         }
 
@@ -4636,6 +4722,82 @@ impl HagibisRepl {
                 println!("{}", "🏗️ MANAGED STACK PRESET 🏗️".bold().green());
                 println!("  Configured:      {:?}", s.services_configured);
                 println!("  Ready:           {}", if s.ready_to_boot { "YES".green() } else { "NO".red() });
+            }
+            HgbResponse::SelfEvolutionResult(r) => {
+                println!("{}", "🧬 RECURSIVE SELF-EVOLUTION DPO 🧬".bold().magenta());
+                println!("  Generations:      {}", r.total_generations);
+                println!("  Mutations:        {}", r.total_mutations_evaluated);
+                println!("  Final Fitness:    {:.1}%", r.overall_fitness_score);
+                println!("  DPO Pairs:        {}", r.dpo_pairs_generated);
+                println!("  Summary:          {}", r.summary_message.green());
+            }
+            HgbResponse::DesktopInspectResult(r) => {
+                println!("{}", "🖥️ DESKTOP SENTRY INSPECTION 🖥️".bold().cyan());
+                println!("  Resolution:       {}x{}", r.screen_resolution.0, r.screen_resolution.1);
+                println!("  Windows ({}):", r.visible_windows.len());
+                for w in r.visible_windows {
+                    println!("    - [{}] \"{}\"", w.window_id, w.title.cyan());
+                }
+            }
+            HgbResponse::DesktopActionResult(r) => {
+                println!("{}", "🖱️ DESKTOP ACTION EXECUTED 🖱️".bold().cyan());
+                println!("  Action:           {}", r.action_type);
+                println!("  Success:          {}", if r.success { "YES".green() } else { "NO".red() });
+                println!("  Message:          {}", r.message.dimmed());
+            }
+            HgbResponse::FormalVerifyResult(r) => {
+                println!("{}", "📐 FORMAL VERIFICATION & SMT SOLVER 📐".bold().yellow());
+                println!("  Solver:           {:?}", r.solver_used);
+                println!("  Target:           {}", r.target_file.cyan());
+                println!("  Properties:       {}/{} proven", r.proven_count, r.total_properties);
+                println!("  Soundness:        {}", if r.mathematically_sound { "MATHEMATICALLY PROVEN".green().bold() } else { "FAILED".red() });
+            }
+            HgbResponse::MonorepoAnalyzeResult(r) => {
+                println!("{}", "🌐 MONOREPO HYPERGRAPH 🌐".bold().blue());
+                println!("  Root:             {}", r.workspace_root.cyan());
+                println!("  Packages:         {}", r.total_packages);
+                println!("  Edges:            {}", r.total_dependency_edges);
+            }
+            HgbResponse::MonorepoBlastRadiusResult(r) => {
+                println!("{}", "💥 MONOREPO BLAST RADIUS 💥".bold().red());
+                println!("  Direct Impact:    {:?}", r.directly_impacted_packages);
+                println!("  Downstream:       {:?}", r.downstream_impacted_packages);
+            }
+            HgbResponse::EmbeddedCheckResult(r) => {
+                println!("{}", "⚡ EMBEDDED FIRMWARE LAB ⚡".bold().magenta());
+                println!("  Target MCU:       {:?}", r.architecture);
+                println!("  no_std Valid:     {}", if r.compiles_no_std { "YES".green() } else { "NO".red() });
+                println!("  Invariants Passed:{}", if r.memory_invariants_passed { "YES".green() } else { "NO".red() });
+                println!("  Flash / RAM:      {} / {} bytes", r.estimated_flash_bytes, r.estimated_ram_bytes);
+            }
+            HgbResponse::StoreReleaseResult(r) => {
+                println!("{}", "🚀 STORE RELEASE ORCHESTRATOR 🚀".bold().cyan());
+                println!("  Platform:         {:?}", r.platform);
+                println!("  Artifact:         {}", r.build_artifact_path.cyan());
+                println!("  Code Signing:     {}", if r.code_signing_verified { "PASSED".green() } else { "FAILED".red() });
+                println!("  Status:           {}", r.message.green());
+            }
+            HgbResponse::SpeechSynthesizeResult(r) => {
+                println!("{}", "🗣️ NEURAL SPEECH SYNTHESIS 🗣️".bold().green());
+                println!("  Voice:            {}", r.voice_used.cyan());
+                println!("  Duration:         {:.2}s ({} bytes)", r.duration_seconds, r.audio_bytes_len);
+                println!("  Hash:             {}", r.audio_sha256.dimmed());
+            }
+            HgbResponse::SpeechListVoicesResult(voices) => {
+                println!("{}", "🗣️ AVAILABLE NEURAL VOICES 🗣️".bold().green());
+                for v in voices {
+                    println!("  - {:<24} ({}) {}Hz", v.voice_id.green(), v.name.cyan(), v.sample_rate_hz);
+                }
+            }
+            HgbResponse::StudioStartResult(r) => {
+                println!("{}", "🎨 VISUAL CANVAS STUDIO 🎨".bold().magenta());
+                println!("  Preview URL:      {}", r.live_preview_url.cyan().bold());
+                println!("  Components:       {}", r.root_components.len());
+                println!("  Sync:             {}", if r.bi_directional_sync_active { "ACTIVE".green() } else { "INACTIVE".red() });
+            }
+            HgbResponse::StudioApplyPatchResult(msg) => {
+                println!("{}", "🎨 STUDIO VISUAL PATCH 🎨".bold().magenta());
+                println!("  Result:           {}", msg.green());
             }
         }
     }

@@ -148,6 +148,14 @@ pub mod provenance_ledger;
 pub mod remote_tunnel;
 pub mod observation_bus;
 pub mod stack_preset_fabric;
+pub mod self_evolution_engine;
+pub mod desktop_computer_use;
+pub mod formal_verification_engine;
+pub mod monorepo_hypergraph;
+pub mod embedded_firmware_lab;
+pub mod store_release_orchestrator;
+pub mod speech_synthesis_engine;
+pub mod visual_canvas_studio;
 
 pub use ci_streamer::{
     CiEventKind, CiExecutionConfig, CiExecutionSummary, CiOutputFormat, CiStreamerEngine,
@@ -282,6 +290,36 @@ pub use privacy_funnel_analytics::{
 pub use visual_canvas_hud::{
     AstComponentMapping, CanvasHudConfig, CanvasHudHandle, CanvasHudReport,
     CssLiveTweak, HudBoundingBox, HudElementSelection, VisualCanvasHud,
+};
+
+pub use self_evolution_engine::{
+    DpoPreferencePair, EvolutionGeneration, SelfEvolutionConfig, SelfEvolutionEngine,
+    SelfEvolutionReport,
+};
+pub use desktop_computer_use::{
+    DesktopAction, DesktopActionResult, DesktopComputerUseEngine, DesktopInspectionReport,
+    DesktopTargetWindow,
+};
+pub use formal_verification_engine::{
+    FormalProofStatus, FormalVerificationConfig, FormalVerificationEngine,
+    FormalVerificationReport, SmtSolverKind, VerificationProperty, VerificationPropertyKind,
+};
+pub use monorepo_hypergraph::{
+    BlastRadiusReport, MonorepoHypergraphEngine, MonorepoHypergraphReport, MonorepoPackageNode,
+};
+pub use embedded_firmware_lab::{
+    EmbeddedCheckConfig, EmbeddedCheckReport, EmbeddedFirmwareEngine, HdlLanguage,
+    TargetMcuArchitecture,
+};
+pub use store_release_orchestrator::{
+    AppStorePlatform, ReleaseTrack, StoreReleaseConfig, StoreReleaseEngine, StoreReleaseReport,
+};
+pub use speech_synthesis_engine::{
+    SpeechSynthesisEngine, SynthesisConfig, SynthesisReport, VoiceProfile,
+};
+pub use visual_canvas_studio::{
+    VisualCanvasStudioEngine, VisualComponentNode, VisualStudioSessionReport,
+    VisualStudioSyncPatch,
 };
 pub use edge_deployer::{
     DetectedFramework, EdgeDeployConfig, EdgeDeployReport, EdgeDeployer, EdgeProvider,

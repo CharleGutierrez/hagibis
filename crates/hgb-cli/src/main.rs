@@ -1545,7 +1545,7 @@ enum Commands {
     },
 
     /// Superpower 90: Tiered Rules Auto-Engine
-    #[command(alias = "rules-engine", alias = "tiered-rules")]
+    #[command(alias = "tiered-rules")]
     RulesEngine {
         /// Active target files to evaluate rules for (comma separated)
         #[arg(short, long, default_value = "src/main.rs")]
@@ -1769,7 +1769,7 @@ enum Commands {
     },
 
     /// Superpower 108: Style Guide & Architectural DNA Harvester
-    #[command(alias = "dna")]
+    #[command(alias = "style-dna", alias = "harvest-dna")]
     Conventions {
         /// Repository root path
         #[arg(default_value = ".")]
@@ -1883,10 +1883,155 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         cloudflare: bool,
     },
+
+    /// Superpower 118: Recursive Self-Evolution & Autonomous DPO Distillation Engine
+    #[command(alias = "self-evolve", alias = "dpo")]
+    Evolve {
+        /// Base model identifier to distill / evolve
+        #[arg(default_value = "hagibis-core")]
+        model: String,
+        /// Maximum generations to simulate
+        #[arg(short, long, default_value_t = 3)]
+        generations: usize,
+        /// Minimum win-rate threshold for preference acceptance
+        #[arg(long, default_value_t = 0.85)]
+        threshold: f64,
+    },
+
+    /// Superpower 119: OS-Level Desktop Computer-Use & Multi-Modal Window Sentry
+    #[command(alias = "os-control", alias = "desktop-sentry")]
+    Desktop {
+        /// Desktop action: inspect, click, key, type, drag
+        #[arg(default_value = "inspect")]
+        action: String,
+        /// X coordinate for click/drag
+        #[arg(short, long, default_value_t = 0)]
+        x: i32,
+        /// Y coordinate for click/drag
+        #[arg(short, long, default_value_t = 0)]
+        y: i32,
+        /// Text payload for typing or key name
+        #[arg(short, long, default_value = "")]
+        text: String,
+    },
+
+    /// Superpower 120: Formal Mathematical Verification & SMT Solver Proof Engine
+    #[command(alias = "formal-verify", alias = "smt-proof")]
+    VerifyProof {
+        /// Target source file to verify
+        #[arg(default_value = "src/lib.rs")]
+        target: String,
+        /// SMT Solver: z3, cvc5, kani
+        #[arg(short, long, default_value = "z3")]
+        solver: String,
+        /// Formally verify absence of integer overflows
+        #[arg(long, default_value_t = true)]
+        overflows: bool,
+        /// Formally verify slice bounds safety
+        #[arg(long, default_value_t = true)]
+        bounds: bool,
+    },
+
+    /// Superpower 121: Enterprise Distributed Monorepo Hypergraph & Build Cache
+    #[command(alias = "hypergraph", alias = "mono")]
+    Monorepo {
+        /// Action: analyze or blast-radius
+        #[arg(default_value = "analyze")]
+        action: String,
+        /// Comma-separated list of changed files for blast radius calculation
+        #[arg(short, long, default_value = "")]
+        files: String,
+    },
+
+    /// Superpower 122: Embedded Firmware, Microcontroller & HDL Lab
+    #[command(alias = "embedded-lab", alias = "firmware")]
+    Embedded {
+        /// Target MCU architecture: arm, esp32, riscv, avr
+        #[arg(default_value = "arm")]
+        arch: String,
+        /// Source file or snippet to analyze
+        #[arg(short, long, default_value = "src/main.rs")]
+        file: String,
+        /// Enforce strict no_std bare-metal compatibility
+        #[arg(long, default_value_t = true)]
+        no_std: bool,
+        /// Validate FreeRTOS task deadlock freedom
+        #[arg(long, default_value_t = true)]
+        freertos: bool,
+    },
+
+    /// Superpower 123: Native App Store Release & Fastlane Orchestrator
+    #[command(alias = "app-store", alias = "fastlane")]
+    StoreRelease {
+        /// App Platform: ios, android, macos, windows
+        #[arg(default_value = "ios")]
+        platform: String,
+        /// Release track: internal, alpha, beta, production
+        #[arg(short, long, default_value = "beta")]
+        track: String,
+        /// Bundle identifier (e.g. com.hagibis.app)
+        #[arg(short, long, default_value = "com.hagibis.app")]
+        bundle_id: String,
+        /// Version string (e.g. 1.0.0)
+        #[arg(short, long, default_value = "1.0.0")]
+        version: String,
+    },
+
+    /// Superpower 124: Local Neural Speech Synthesis Engine
+    #[command(alias = "tts", alias = "speak")]
+    VoiceTts {
+        /// Text message to synthesize
+        #[arg(default_value = "Hagibis vibe system is fully operational.")]
+        text: String,
+        /// Voice model: piper-en-lessac, piper-en-amy, kokoro-82m, vits-neutral
+        #[arg(short, long, default_value = "piper-en-lessac")]
+        voice: String,
+        /// Speaking rate (0.5 to 2.0)
+        #[arg(short, long, default_value_t = 1.0)]
+        rate: f32,
+        /// List available neural voices
+        #[arg(long)]
+        list_voices: bool,
+    },
+
+    /// Superpower 125: Interactive Visual WYSIWYG Web Canvas Studio
+    #[command(alias = "visual-canvas", alias = "studio-ui")]
+    Studio {
+        /// Local port for WYSIWYG canvas server (default: 4000)
+        #[arg(short, long)]
+        port: Option<u16>,
+        /// Component ID to test patching
+        #[arg(long)]
+        patch_component: Option<String>,
+        /// CSS class to add via visual patch
+        #[arg(long)]
+        add_class: Option<String>,
+    },
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Systems-grade stack envelope (32MB): guarantees seamless parsing of 125+ sovereign subcommands & deep ASTs
+    let builder = std::thread::Builder::new()
+        .name("hgb-runtime".to_string())
+        .stack_size(32 * 1024 * 1024);
+
+    let handler = builder.spawn(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("Failed to initialize tokio runtime")
+            .block_on(async_main())
+            .map_err(|e| e.to_string())
+    })?;
+
+    match handler.join() {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(err_msg)) => Err(err_msg.into()),
+        Err(e) => std::panic::resume_unwind(e),
+    }
+}
+
+async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     let client = HgbClient::new();
 
@@ -4920,6 +5065,250 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("  ✔ Stack Status: {}", if s.ready_to_boot { "READY TO BOOT".green().bold() } else { "CONFIG PENDING".yellow() });
                 }
                 _ => println!("Response: {:?}", resp),
+            }
+            Ok(())
+        }
+        Commands::Evolve { model: _, generations, threshold: _ } => {
+            println!("{}", "🧬 Recursive Self-Evolution & Autonomous DPO Distillation 🧬".bold().magenta());
+            let config = hgb_core::SelfEvolutionConfig {
+                target_path: ".".to_string(),
+                max_generations: generations,
+                mutation_rate: 0.15,
+                auto_distill_recipes: true,
+                export_dpo_dataset: true,
+            };
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::SelfEvolutionRun { config }).await;
+            match resp {
+                HgbResponse::SelfEvolutionResult(r) => {
+                    println!("  ✔ Total Generations: {}", r.total_generations);
+                    println!("  ✔ Mutations Evaluated: {}", r.total_mutations_evaluated);
+                    println!("  ✔ Overall Fitness: {:.1}%", r.overall_fitness_score);
+                    println!("  ✔ DPO Pairs Generated: {}", r.dpo_pairs_generated);
+                    println!("  ✔ Convergence: {}", if r.convergence_achieved { "ACHIEVED".green().bold() } else { "IN PROGRESS".yellow() });
+                    println!("  ✔ Summary: {}", r.summary_message.green());
+                }
+                _ => println!("Response: {:?}", resp),
+            }
+            Ok(())
+        }
+        Commands::Desktop { action, x, y, text } => {
+            println!("{}", "🖥️ OS-Level Desktop Computer-Use & Sentry 🖥️".bold().cyan());
+            let repl_helper = HagibisRepl::new(client);
+            if action == "inspect" {
+                let resp = repl_helper.dispatch(HgbRequest::DesktopInspect).await;
+                match resp {
+                    HgbResponse::DesktopInspectResult(r) => {
+                        println!("  ✔ Screen Resolution: {}x{}", r.screen_resolution.0, r.screen_resolution.1);
+                        println!("  ✔ Visible Windows ({}):", r.visible_windows.len());
+                        for w in r.visible_windows {
+                            println!("    - [{}] \"{}\" ({},{} {}x{})", w.window_id, w.title.cyan(), w.bounds.0, w.bounds.1, w.bounds.2, w.bounds.3);
+                        }
+                    }
+                    _ => println!("Response: {:?}", resp),
+                }
+            } else {
+                let act = match action.as_str() {
+                    "click" => hgb_core::DesktopAction::Click { x, y, button: "left".to_string() },
+                    "key" => hgb_core::DesktopAction::KeyPress { key: if text.is_empty() { "Return".to_string() } else { text } },
+                    "type" => hgb_core::DesktopAction::Type { text },
+                    _ => hgb_core::DesktopAction::Click { x, y, button: "left".to_string() },
+                };
+                let resp = repl_helper.dispatch(HgbRequest::DesktopActionExecute { action: act }).await;
+                match resp {
+                    HgbResponse::DesktopActionResult(r) => {
+                        println!("  ✔ Action: {}", r.action_type);
+                        println!("  ✔ Success: {}", if r.success { "YES".green() } else { "NO".red() });
+                        println!("  ✔ Message: {}", r.message.dimmed());
+                    }
+                    _ => println!("Response: {:?}", resp),
+                }
+            }
+            Ok(())
+        }
+        Commands::VerifyProof { target, solver, overflows, bounds } => {
+            println!("{}", "📐 Formal Mathematical Verification & SMT Solver 📐".bold().yellow());
+            let s = match solver.to_lowercase().as_str() {
+                "cvc5" => hgb_core::SmtSolverKind::Cvc5,
+                "kani" => hgb_core::SmtSolverKind::Kani,
+                _ => hgb_core::SmtSolverKind::Z3,
+            };
+            let config = hgb_core::FormalVerificationConfig {
+                target_file: target,
+                solver: s,
+                verify_overflows: overflows,
+                verify_bounds: bounds,
+                timeout_seconds: 15,
+            };
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::FormalVerifyRun { config }).await;
+            match resp {
+                HgbResponse::FormalVerifyResult(r) => {
+                    println!("  ✔ Solver: {:?}", r.solver_used);
+                    println!("  ✔ Target: {}", r.target_file.cyan());
+                    println!("  ✔ Properties Verified: {}/{}", r.proven_count, r.total_properties);
+                    println!("  ✔ Mathematically Sound: {}", if r.mathematically_sound { "PROVEN [SOUND]".green().bold() } else { "COUNTEREXAMPLE FOUND".red().bold() });
+                }
+                _ => println!("Response: {:?}", resp),
+            }
+            Ok(())
+        }
+        Commands::Monorepo { action, files } => {
+            println!("{}", "🌐 Enterprise Distributed Monorepo Hypergraph 🌐".bold().blue());
+            let repl_helper = HagibisRepl::new(client);
+            if action == "blast-radius" || !files.is_empty() {
+                let changed: Vec<String> = files.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+                let resp = repl_helper.dispatch(HgbRequest::MonorepoBlastRadius { changed_files: changed }).await;
+                match resp {
+                    HgbResponse::MonorepoBlastRadiusResult(r) => {
+                        println!("  ✔ Directly Impacted Packages ({}): {:?}", r.directly_impacted_packages.len(), r.directly_impacted_packages);
+                        println!("  ✔ Downstream Impact ({}): {:?}", r.downstream_impacted_packages.len(), r.downstream_impacted_packages);
+                        println!("  ✔ Affected Test Targets: {:?}", r.affected_test_targets);
+                    }
+                    _ => println!("Response: {:?}", resp),
+                }
+            } else {
+                let resp = repl_helper.dispatch(HgbRequest::MonorepoAnalyze).await;
+                match resp {
+                    HgbResponse::MonorepoAnalyzeResult(r) => {
+                        println!("  ✔ Workspace Root: {}", r.workspace_root.cyan());
+                        println!("  ✔ Total Packages: {}", r.total_packages);
+                        println!("  ✔ Total Edges: {}", r.total_dependency_edges);
+                        for p in r.packages {
+                            println!("    - {:<20} ({}) deps: {:?}", p.name.green().bold(), p.relative_path.dimmed(), p.dependencies);
+                        }
+                    }
+                    _ => println!("Response: {:?}", resp),
+                }
+            }
+            Ok(())
+        }
+        Commands::Embedded { arch, file, no_std, freertos: _ } => {
+            println!("{}", "⚡ Embedded Firmware & Microcontroller Lab ⚡".bold().magenta());
+            let mcu_arch = match arch.to_lowercase().as_str() {
+                "esp32" => hgb_core::TargetMcuArchitecture::Esp32,
+                "riscv" => hgb_core::TargetMcuArchitecture::RiscV,
+                "avr" => hgb_core::TargetMcuArchitecture::Avr,
+                _ => hgb_core::TargetMcuArchitecture::ArmCortexM,
+            };
+            let config = hgb_core::EmbeddedCheckConfig {
+                target_arch: mcu_arch,
+                no_std,
+                max_flash_bytes: 256 * 1024,
+                max_ram_bytes: 64 * 1024,
+            };
+            let snippet = std::fs::read_to_string(&file).unwrap_or_else(|_| "// Bare-metal firmware entry\n#![no_std]\npub fn init() {}".to_string());
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::EmbeddedCheck { code: snippet, config }).await;
+            match resp {
+                HgbResponse::EmbeddedCheckResult(r) => {
+                    println!("  ✔ Target MCU: {:?}", r.architecture);
+                    println!("  ✔ no_std Valid: {}", if r.compiles_no_std { "YES".green() } else { "NO".red() });
+                    println!("  ✔ Invariants Passed: {}", if r.memory_invariants_passed { "YES".green() } else { "NO".red() });
+                    println!("  ✔ Flash Footprint: {} bytes ({:.1}%)", r.estimated_flash_bytes, r.flash_utilization_pct);
+                    println!("  ✔ RAM Footprint:   {} bytes ({:.1}%)", r.estimated_ram_bytes, r.ram_utilization_pct);
+                }
+                _ => println!("Response: {:?}", resp),
+            }
+            Ok(())
+        }
+        Commands::StoreRelease { platform, track, bundle_id, version } => {
+            println!("{}", "🚀 Native App Store Release & Fastlane Orchestrator 🚀".bold().cyan());
+            let plat = match platform.to_lowercase().as_str() {
+                "android" => hgb_core::AppStorePlatform::GooglePlayStore,
+                _ => hgb_core::AppStorePlatform::AppleAppStore,
+            };
+            let trk = match track.to_lowercase().as_str() {
+                "internal" => hgb_core::ReleaseTrack::InternalTesting,
+                "alpha" => hgb_core::ReleaseTrack::Alpha,
+                "production" => hgb_core::ReleaseTrack::Production,
+                _ => hgb_core::ReleaseTrack::Beta,
+            };
+            let config = hgb_core::StoreReleaseConfig {
+                platform: plat,
+                track: trk,
+                app_bundle_id: bundle_id,
+                version_name: version,
+                build_number: 1,
+                fastlane_lane: "beta".to_string(),
+            };
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::StoreReleaseRun { config }).await;
+            match resp {
+                HgbResponse::StoreReleaseResult(r) => {
+                    println!("  ✔ Platform: {:?}", r.platform);
+                    println!("  ✔ Artifact: {}", r.build_artifact_path.cyan());
+                    println!("  ✔ Code Signing: {}", if r.code_signing_verified { "VERIFIED".green() } else { "FAILED".red() });
+                    println!("  ✔ Success: {}", if r.success { "YES".green() } else { "NO".red() });
+                    println!("  ✔ Message: {}", r.message.green());
+                }
+                _ => println!("Response: {:?}", resp),
+            }
+            Ok(())
+        }
+        Commands::VoiceTts { text, voice, rate, list_voices } => {
+            println!("{}", "🗣️ Local Neural Speech Synthesis Engine 🗣️".bold().green());
+            let repl_helper = HagibisRepl::new(client);
+            if list_voices {
+                let resp = repl_helper.dispatch(HgbRequest::SpeechListVoices).await;
+                match resp {
+                    HgbResponse::SpeechListVoicesResult(voices) => {
+                        println!("  Available Neural Voices ({}):", voices.len());
+                        for v in voices {
+                            println!("    - {:<24} ({}) sample_rate: {}Hz", v.voice_id.green().bold(), v.name.cyan(), v.sample_rate_hz);
+                        }
+                    }
+                    _ => println!("Response: {:?}", resp),
+                }
+            } else {
+                let config = hgb_core::SynthesisConfig {
+                    voice_id: voice,
+                    speaking_rate: rate,
+                    pitch: 1.0,
+                    output_format: "wav".to_string(),
+                };
+                let resp = repl_helper.dispatch(HgbRequest::SpeechSynthesize { text, config }).await;
+                match resp {
+                    HgbResponse::SpeechSynthesizeResult(r) => {
+                        println!("  ✔ Voice Model: {}", r.voice_used.cyan());
+                        println!("  ✔ Audio Duration: {:.2}s", r.duration_seconds);
+                        println!("  ✔ Output Buffer: {} bytes", r.audio_bytes_len);
+                        println!("  ✔ Audio Hash: {}", r.audio_sha256.dimmed());
+                    }
+                    _ => println!("Response: {:?}", resp),
+                }
+            }
+            Ok(())
+        }
+        Commands::Studio { port, patch_component, add_class } => {
+            println!("{}", "🎨 Interactive Visual WYSIWYG Web Canvas Studio 🎨".bold().magenta());
+            let repl_helper = HagibisRepl::new(client);
+            if let Some(comp) = patch_component {
+                let patch = hgb_core::VisualStudioSyncPatch {
+                    component_id: comp,
+                    target_file: "src/App.tsx".to_string(),
+                    added_classes: add_class.map(|c| vec![c]).unwrap_or_default(),
+                    removed_classes: vec![],
+                    updated_styles: std::collections::HashMap::new(),
+                };
+                let resp = repl_helper.dispatch(HgbRequest::StudioApplyPatch { patch }).await;
+                match resp {
+                    HgbResponse::StudioApplyPatchResult(msg) => {
+                        println!("  ✔ Patch Applied: {}", msg.green());
+                    }
+                    _ => println!("Response: {:?}", resp),
+                }
+            } else {
+                let resp = repl_helper.dispatch(HgbRequest::StudioStart { port }).await;
+                match resp {
+                    HgbResponse::StudioStartResult(r) => {
+                        println!("  ✔ Studio Server: {}", r.live_preview_url.cyan().bold());
+                        println!("  ✔ Port: {}", r.local_server_port);
+                        println!("  ✔ Components Discovered: {}", r.root_components.len());
+                        println!("  ✔ Bi-Directional Sync: {}", if r.bi_directional_sync_active { "ACTIVE".green() } else { "INACTIVE".red() });
+                    }
+                    _ => println!("Response: {:?}", resp),
+                }
             }
             Ok(())
         }

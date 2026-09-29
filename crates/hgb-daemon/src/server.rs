@@ -2424,6 +2424,86 @@ impl HagibisDaemon {
                     Err(e) => HgbResponse::Error(e.to_string()),
                 }
             }
+            // 118. Recursive Self-Evolution & Autonomous DPO Distillation Engine
+            HgbRequest::SelfEvolutionRun { config } => {
+                match hgb_core::SelfEvolutionEngine::evolve(&config) {
+                    Ok(rep) => HgbResponse::SelfEvolutionResult(rep),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            // 119. OS-Level Desktop Computer-Use & Multi-Modal Window Sentry
+            HgbRequest::DesktopInspect => {
+                match hgb_core::DesktopComputerUseEngine::inspect_desktop() {
+                    Ok(rep) => HgbResponse::DesktopInspectResult(rep),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            HgbRequest::DesktopActionExecute { action } => {
+                match hgb_core::DesktopComputerUseEngine::execute_action(&action) {
+                    Ok(rep) => HgbResponse::DesktopActionResult(rep),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            // 120. Formal Verification & SMT Solver Proof Engine
+            HgbRequest::FormalVerifyRun { config } => {
+                match hgb_core::FormalVerificationEngine::verify(&config) {
+                    Ok(rep) => HgbResponse::FormalVerifyResult(rep),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            // 121. Enterprise Distributed Monorepo Hypergraph & Build Cache
+            HgbRequest::MonorepoAnalyze => {
+                let ws_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                match hgb_core::MonorepoHypergraphEngine::build_hypergraph(&ws_dir) {
+                    Ok(rep) => HgbResponse::MonorepoAnalyzeResult(rep),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            HgbRequest::MonorepoBlastRadius { changed_files } => {
+                match hgb_core::MonorepoHypergraphEngine::calculate_blast_radius(&changed_files) {
+                    Ok(rep) => HgbResponse::MonorepoBlastRadiusResult(rep),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            // 122. Embedded Firmware, Microcontroller & HDL Lab
+            HgbRequest::EmbeddedCheck { code, config } => {
+                match hgb_core::EmbeddedFirmwareEngine::check_firmware(&code, &config) {
+                    Ok(rep) => HgbResponse::EmbeddedCheckResult(rep),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            // 123. Native App Store Release & Fastlane Orchestrator
+            HgbRequest::StoreReleaseRun { config } => {
+                match hgb_core::StoreReleaseEngine::execute_release(&config) {
+                    Ok(rep) => HgbResponse::StoreReleaseResult(rep),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            // 124. Local Neural Speech Synthesis Engine
+            HgbRequest::SpeechSynthesize { text, config } => {
+                match hgb_core::SpeechSynthesisEngine::synthesize(&text, &config) {
+                    Ok(rep) => HgbResponse::SpeechSynthesizeResult(rep),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            HgbRequest::SpeechListVoices => {
+                let voices = hgb_core::SpeechSynthesisEngine::list_available_voices();
+                HgbResponse::SpeechListVoicesResult(voices)
+            }
+            // 125. Interactive Visual WYSIWYG Web Canvas Studio
+            HgbRequest::StudioStart { port } => {
+                let ws_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                match hgb_core::VisualCanvasStudioEngine::start_session(&ws_dir, port) {
+                    Ok(rep) => HgbResponse::StudioStartResult(rep),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            HgbRequest::StudioApplyPatch { patch } => {
+                match hgb_core::VisualCanvasStudioEngine::apply_visual_patch(&patch) {
+                    Ok(msg) => HgbResponse::StudioApplyPatchResult(msg),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
         }
     }
 }

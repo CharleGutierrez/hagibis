@@ -1075,6 +1075,46 @@ pub enum HgbRequest {
     StackWireup {
         config: crate::stack_preset_fabric::StackWireupConfig,
     },
+    // 118. Recursive Self-Evolution & Autonomous DPO Distillation Engine
+    SelfEvolutionRun {
+        config: crate::self_evolution_engine::SelfEvolutionConfig,
+    },
+    // 119. OS-Level Desktop Computer-Use & Multi-Modal Window Sentry
+    DesktopInspect,
+    DesktopActionExecute {
+        action: crate::desktop_computer_use::DesktopAction,
+    },
+    // 120. Formal Verification & SMT Solver Proof Engine
+    FormalVerifyRun {
+        config: crate::formal_verification_engine::FormalVerificationConfig,
+    },
+    // 121. Enterprise Distributed Monorepo Hypergraph & Build Cache
+    MonorepoAnalyze,
+    MonorepoBlastRadius {
+        changed_files: Vec<String>,
+    },
+    // 122. Embedded Firmware, Microcontroller & HDL Lab
+    EmbeddedCheck {
+        code: String,
+        config: crate::embedded_firmware_lab::EmbeddedCheckConfig,
+    },
+    // 123. Native App Store Release & Fastlane Orchestrator
+    StoreReleaseRun {
+        config: crate::store_release_orchestrator::StoreReleaseConfig,
+    },
+    // 124. Local Neural Speech Synthesis Engine
+    SpeechSynthesize {
+        text: String,
+        config: crate::speech_synthesis_engine::SynthesisConfig,
+    },
+    SpeechListVoices,
+    // 125. Interactive Visual WYSIWYG Web Canvas Studio
+    StudioStart {
+        port: Option<u16>,
+    },
+    StudioApplyPatch {
+        patch: crate::visual_canvas_studio::VisualStudioSyncPatch,
+    },
 }
 
 fn default_two() -> usize {
@@ -1532,6 +1572,26 @@ pub enum HgbResponse {
     ObserveResult(crate::observation_bus::ObservationStreamReport),
     // 117. Zero-Config Managed Full-Stack Preset Fabric
     StackResult(crate::stack_preset_fabric::StackWireupReport),
+    // 118. Recursive Self-Evolution & Autonomous DPO Distillation Engine
+    SelfEvolutionResult(crate::self_evolution_engine::SelfEvolutionReport),
+    // 119. OS-Level Desktop Computer-Use & Multi-Modal Window Sentry
+    DesktopInspectResult(crate::desktop_computer_use::DesktopInspectionReport),
+    DesktopActionResult(crate::desktop_computer_use::DesktopActionResult),
+    // 120. Formal Verification & SMT Solver Proof Engine
+    FormalVerifyResult(crate::formal_verification_engine::FormalVerificationReport),
+    // 121. Enterprise Distributed Monorepo Hypergraph & Build Cache
+    MonorepoAnalyzeResult(crate::monorepo_hypergraph::MonorepoHypergraphReport),
+    MonorepoBlastRadiusResult(crate::monorepo_hypergraph::BlastRadiusReport),
+    // 122. Embedded Firmware, Microcontroller & HDL Lab
+    EmbeddedCheckResult(crate::embedded_firmware_lab::EmbeddedCheckReport),
+    // 123. Native App Store Release & Fastlane Orchestrator
+    StoreReleaseResult(crate::store_release_orchestrator::StoreReleaseReport),
+    // 124. Local Neural Speech Synthesis Engine
+    SpeechSynthesizeResult(crate::speech_synthesis_engine::SynthesisReport),
+    SpeechListVoicesResult(Vec<crate::speech_synthesis_engine::VoiceProfile>),
+    // 125. Interactive Visual WYSIWYG Web Canvas Studio
+    StudioStartResult(crate::visual_canvas_studio::VisualStudioSessionReport),
+    StudioApplyPatchResult(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
