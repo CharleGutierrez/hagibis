@@ -4000,6 +4000,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             let prov = match provider.to_lowercase().as_str() {
                 "lemonsqueezy" | "lemon" => hgb_core::SaasProvider::LemonSqueezy,
                 "paddle" => hgb_core::SaasProvider::Paddle,
+                "gcash" | "paymongo" | "gcash-paymongo" => hgb_core::SaasProvider::GCashPayMongo,
                 _ => hgb_core::SaasProvider::Stripe,
             };
             let cfg = hgb_core::SaasScaffoldConfig {
