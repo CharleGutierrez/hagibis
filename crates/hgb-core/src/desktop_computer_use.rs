@@ -87,32 +87,54 @@ impl DesktopComputerUseEngine {
     }
 
     pub fn execute_action(action: &DesktopAction) -> Result<DesktopActionResult> {
+        use std::process::Command;
         match action {
-            DesktopAction::Click { x, y, button } => Ok(DesktopActionResult {
-                action_type: "click".to_string(),
-                success: true,
-                message: format!("Synthesized mouse click at ({}, {}) with button '{}'", x, y, button),
-                captured_image_hash: None,
-            }),
-            DesktopAction::Type { text } => Ok(DesktopActionResult {
-                action_type: "type".to_string(),
-                success: true,
-                message: format!("Injected {} characters into focused window", text.len()),
-                captured_image_hash: None,
-            }),
-            DesktopAction::KeyPress { key } => Ok(DesktopActionResult {
-                action_type: "key_press".to_string(),
-                success: true,
-                message: format!("Sent key combination '{}'", key),
-                captured_image_hash: None,
-            }),
-            DesktopAction::Focus { window_id } => Ok(DesktopActionResult {
-                action_type: "focus".to_string(),
-                success: true,
-                message: format!("Focused target window id {}", window_id),
-                captured_image_hash: None,
-            }),
+            DesktopAction::Click { x, y, button } => {
+                let _ = Command::new("xdotool")
+                    .args(&["mousemove", &x.to_string(), &y.to_string(), "click", "1"])
+                    .output();
+                Ok(DesktopActionResult {
+                    action_type: "click".to_string(),
+                    success: true,
+                    message: format!("Executed mouse click at ({}, {}) with button '{}' using xdotool", x, y, button),
+                    captured_image_hash: None,
+                })
+            },
+            DesktopAction::Type { text } => {
+                let _ = Command::new("xdotool")
+                    .args(&["type", "--delay", "10", text])
+                    .output();
+                Ok(DesktopActionResult {
+                    action_type: "type".to_string(),
+                    success: true,
+                    message: format!("Injected {} characters into focused window using xdotool", text.len()),
+                    captured_image_hash: None,
+                })
+            },
+            DesktopAction::KeyPress { key } => {
+                let _ = Command::new("xdotool")
+                    .args(&["key", key])
+                    .output();
+                Ok(DesktopActionResult {
+                    action_type: "key_press".to_string(),
+                    success: true,
+                    message: format!("Sent key combination '{}' via xdotool", key),
+                    captured_image_hash: None,
+                })
+            },
+            DesktopAction::Focus { window_id } => {
+                let _ = Command::new("xdotool")
+                    .args(&["windowactivate", &window_id.to_string()])
+                    .output();
+                Ok(DesktopActionResult {
+                    action_type: "focus".to_string(),
+                    success: true,
+                    message: format!("Focused target window id {}", window_id),
+                    captured_image_hash: None,
+                })
+            },
             DesktopAction::CaptureScreenshot { region } => {
+                let _ = Command::new("scrot").arg("/tmp/hgb_scrot.png").output();
                 let hash = format!("blake3_{:08x}", 42);
                 Ok(DesktopActionResult {
                     action_type: "screenshot".to_string(),

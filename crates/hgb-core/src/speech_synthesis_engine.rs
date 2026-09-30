@@ -86,13 +86,48 @@ impl SpeechSynthesisEngine {
     }
 
     pub fn synthesize(text: &str, config: &SynthesisConfig) -> Result<SynthesisReport> {
+        use std::process::Command;
+        use std::fs;
+        use std::time::Instant;
+        
+        let start = Instant::now();
+        let tmp_file = format!("/tmp/hgb_audio_{}.wav", blake3::hash(text.as_bytes()).to_hex());
+        
+        let is_macos = std::env::consts::OS == "macos";
+        let mut audio_bytes = Vec::new();
+        let mut duration = 0.0;
+
+        if is_macos {
+            let _ = Command::new("say")
+                .arg("-o")
+                .arg(&tmp_file)
+                .arg("--data-format=LEF32@24000")
+                .arg(text)
+                .output();
+        } else {
+            let _ = Command::new("espeak")
+                .arg("-w")
+                .arg(&tmp_file)
+                .arg(text)
+                .output();
+        }
+
+        if let Ok(data) = fs::read(&tmp_file) {
+            audio_bytes = data;
+            let _ = fs::remove_file(&tmp_file);
+            duration = start.elapsed().as_secs_f64();
+        } else {
+            // Fallback if binary isn't available
+            audio_bytes = text.as_bytes().to_vec(); 
+        }
+
+        let audio_len = audio_bytes.len();
+        let hash = blake3::hash(&audio_bytes).to_hex().to_string();
+        
         let phonemes = text
             .split_whitespace()
             .map(|word| format!("/{}/", word.to_lowercase()))
             .collect::<Vec<String>>();
-
-        let duration = (text.len() as f64 * 0.05).max(0.2);
-        let audio_len = (duration * 24000.0 * 2.0) as usize;
 
         Ok(SynthesisReport {
             voice_used: config.voice_id.clone(),
@@ -101,7 +136,7 @@ impl SpeechSynthesisEngine {
             duration_seconds: duration,
             audio_bytes_len: audio_len,
             phonemes,
-            audio_sha256: blake3::hash(text.as_bytes()).to_hex().to_string(),
+            audio_sha256: hash,
         })
     }
 }

@@ -79,29 +79,57 @@ pub struct FormalVerificationEngine;
 
 impl FormalVerificationEngine {
     pub fn verify(config: &FormalVerificationConfig) -> Result<FormalVerificationReport> {
-        let properties = vec![
-            VerificationProperty {
-                name: "inv_no_integer_overflow".to_string(),
-                kind: VerificationPropertyKind::IntegerOverflowSafety,
-                formula: "(assert (forall ((x Int) (y Int)) (=> (and (>= x 0) (>= y 0)) (>= (+ x y) 0))))".to_string(),
-                status: FormalProofStatus::Proven,
-                proof_time_ms: 12,
-            },
-            VerificationProperty {
-                name: "inv_bounds_check_slice".to_string(),
-                kind: VerificationPropertyKind::MemoryBoundsCheck,
-                formula: "(assert (forall ((idx Int) (len Int)) (=> (and (>= idx 0) (< idx len)) (valid_slice_idx idx len))))".to_string(),
-                status: FormalProofStatus::Proven,
-                proof_time_ms: 18,
-            },
-            VerificationProperty {
-                name: "inv_state_machine_transition".to_string(),
-                kind: VerificationPropertyKind::StateTransitionCorrectness,
-                formula: "(assert (forall ((s1 State) (s2 State)) (=> (valid_transition s1 s2) (not (deadlock_state s2)))))".to_string(),
-                status: FormalProofStatus::Proven,
-                proof_time_ms: 24,
-            },
-        ];
+        use std::process::Command;
+        use std::io::Write;
+        use std::time::Instant;
+
+        let start = Instant::now();
+        
+        // We will generate an actual SMT-LIB2 formula to verify integer overflow safety
+        // using the existing helper method.
+        let smt_logic = Self::synthesize_smtlib2(
+            "inv_no_integer_overflow", 
+            "(not (forall ((x Int) (y Int)) (=> (and (>= x 0) (>= y 0)) (>= (+ x y) 0))))"
+        );
+        
+        let mut child = Command::new("z3")
+            .arg("-in")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn();
+
+        let mut properties = Vec::new();
+        let mut status = FormalProofStatus::Timeout;
+
+        match child {
+            Ok(mut process) => {
+                if let Some(mut stdin) = process.stdin.take() {
+                    let _ = stdin.write_all(smt_logic.as_bytes());
+                }
+                
+                let output = process.wait_with_output().unwrap();
+                let result_str = String::from_utf8_lossy(&output.stdout);
+                
+                if result_str.contains("unsat") {
+                    status = FormalProofStatus::Proven; // Inverse of condition is unsat -> proven
+                } else if result_str.contains("sat") {
+                    status = FormalProofStatus::CounterexampleFound;
+                }
+            }
+            Err(_) => {
+                // z3 is not installed or failed to start
+                status = FormalProofStatus::Timeout;
+            }
+        }
+
+        properties.push(VerificationProperty {
+            name: "inv_no_integer_overflow_dynamic".to_string(),
+            kind: VerificationPropertyKind::IntegerOverflowSafety,
+            formula: smt_logic,
+            status,
+            proof_time_ms: start.elapsed().as_millis() as u64,
+        });
 
         let proven = properties.iter().filter(|p| p.status == FormalProofStatus::Proven).count();
         let counterexamples = properties.len() - proven;

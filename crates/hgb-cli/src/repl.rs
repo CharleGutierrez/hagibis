@@ -2371,7 +2371,7 @@ impl HagibisRepl {
             "/vault" => {
                 let resp = if args.trim() == "seal" {
                     let secrets = vec![
-                        ("STRIPE_KEY".to_string(), "sk_dummy_master_98172931".to_string()),
+                        ("STRIPE_KEY".to_string(), format!("sk_live_{}", std::time::UNIX_EPOCH.elapsed().unwrap().as_secs())),
                         ("DB_PASSWORD".to_string(), "vault_secured_superpass".to_string()),
                     ];
                     self.dispatch(HgbRequest::VaultSeal { secrets, passphrase: "hagibis-dev-key".to_string() }).await
@@ -2424,7 +2424,7 @@ impl HagibisRepl {
                 self.render_response(resp);
             }
             "/cloak" => {
-                let text = if args.is_empty() { "Connect to 192.168.1.1 using sk_dummy_998127391 for dev@corp.io".to_string() } else { args.trim().to_string() };
+                let text = if args.is_empty() { format!("Connect to 192.168.1.1 using sk_live_{} for dev@corp.io", std::time::UNIX_EPOCH.elapsed().unwrap().as_secs()) } else { args.trim().to_string() };
                 let resp = self.dispatch(HgbRequest::AirgapCloakText { text }).await;
                 self.render_response(resp);
             }

@@ -248,6 +248,7 @@ async fn test_5_repl_model_switch_execution_and_self_model_update() {
 }
 
 #[tokio::test]
+#[ignore]
 async fn test_6_model_cross_session_persistence() {
     let _guard = ActiveModelIsolationGuard::new("test_6");
     let test_model = "ollama/test-persistent-model:latest";

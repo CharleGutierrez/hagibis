@@ -82,7 +82,26 @@ impl FigmaDesignBridge {
         file_key: &str,
         raw_figma_json: Option<&str>,
     ) -> FigmaSyncReport {
-        let (tokens, components) = if let Some(raw) = raw_figma_json {
+        let mut actual_json = raw_figma_json.map(|s| s.to_string());
+        
+        if actual_json.is_none() {
+            if let Ok(token) = std::env::var("FIGMA_API_TOKEN") {
+                let url = format!("https://api.figma.com/v1/files/{}", file_key);
+                if let Ok(out) = std::process::Command::new("curl")
+                    .arg("-s")
+                    .arg("-H")
+                    .arg(format!("X-Figma-Token: {}", token))
+                    .arg(&url)
+                    .output() 
+                {
+                    if out.status.success() {
+                        actual_json = Some(String::from_utf8_lossy(&out.stdout).into_owned());
+                    }
+                }
+            }
+        }
+
+        let (tokens, components) = if let Some(raw) = &actual_json {
             self.parse_figma_document(raw)
         } else {
             self.default_fallback_tokens_and_components(file_key)

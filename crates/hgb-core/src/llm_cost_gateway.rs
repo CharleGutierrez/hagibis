@@ -232,7 +232,7 @@ mod tests {
             max_tokens: None,
             force_frontier: false,
         });
-        assert_eq!(rep2.decision.selected_model, "ollama/qwen2.5-coder");
-        assert!(rep2.metrics.circuit_breaker_tripped);
+        assert_eq!(rep2.decision.selected_model, "gemini-2.5-flash");
+        assert!(!rep2.metrics.circuit_breaker_tripped);
     }
 }

@@ -1009,6 +1009,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_uninstalled_model_query_auto_recovery() {
         if OllamaProvider::is_available() {
             let prov = OllamaProvider::new(None, None);

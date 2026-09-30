@@ -56,6 +56,8 @@ pub struct StoreReleaseReport {
     pub message: String,
 }
 
+use std::process::Command;
+
 pub struct StoreReleaseEngine;
 
 impl StoreReleaseEngine {
@@ -65,18 +67,43 @@ impl StoreReleaseEngine {
             AppStorePlatform::GooglePlayStore => format!("build/{}.aab", config.app_bundle_id),
         };
 
-        Ok(StoreReleaseReport {
-            platform: config.platform,
-            app_bundle_id: config.app_bundle_id.clone(),
-            code_signing_verified: true,
-            fastlane_lane_executed: config.fastlane_lane.clone(),
-            build_artifact_path: artifact,
-            submission_id: format!("rel_{}_{}", config.version_name, config.build_number),
-            success: true,
-            message: format!(
-                "Successfully orchestrated Fastlane lane '{}' for {} track {:?}",
-                config.fastlane_lane, config.app_bundle_id, config.track
-            ),
-        })
+        // ACTUALLY execute fastlane instead of mocking it
+        let output = Command::new("fastlane")
+            .arg(&config.fastlane_lane)
+            .output();
+
+        match output {
+            Ok(out) => {
+                let success = out.status.success();
+                let msg = if success {
+                    String::from_utf8_lossy(&out.stdout).into_owned()
+                } else {
+                    String::from_utf8_lossy(&out.stderr).into_owned()
+                };
+                
+                Ok(StoreReleaseReport {
+                    platform: config.platform,
+                    app_bundle_id: config.app_bundle_id.clone(),
+                    code_signing_verified: success,
+                    fastlane_lane_executed: config.fastlane_lane.clone(),
+                    build_artifact_path: artifact,
+                    submission_id: format!("rel_{}_{}", config.version_name, config.build_number),
+                    success,
+                    message: format!("Fastlane exited with {}: {}", out.status, msg),
+                })
+            }
+            Err(e) => {
+                Ok(StoreReleaseReport {
+                    platform: config.platform,
+                    app_bundle_id: config.app_bundle_id.clone(),
+                    code_signing_verified: false,
+                    fastlane_lane_executed: config.fastlane_lane.clone(),
+                    build_artifact_path: artifact,
+                    submission_id: format!("rel_{}_{}", config.version_name, config.build_number),
+                    success: false,
+                    message: format!("Failed to spawn fastlane process: {}", e),
+                })
+            }
+        }
     }
 }

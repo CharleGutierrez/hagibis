@@ -99,6 +99,24 @@ pub enum TimelineSubcommand {
     },
 }
 
+#[derive(Subcommand, Debug, Clone)]
+pub enum SkillSubcommand {
+    /// Seed the skill store with default real skills
+    Seed,
+    /// List all skills in the store
+    List,
+    /// Add a new skill (or replace if name exists)
+    Add {
+        name: String,
+        description: String,
+        content: String,
+        #[arg(long, default_value = "custom")]
+        tier: String,
+        #[arg(long, value_delimiter = ',')]
+        triggers: Vec<String>,
+    },
+}
+
 #[derive(Subcommand)]
 enum Commands {
     /// Launch the classic terminal REPL (line-by-line scrolling mode)
@@ -146,6 +164,13 @@ enum Commands {
         action: Option<ModelSubcommand>,
         /// Optional model name for backwards compatibility (e.g. gemini-2.5-pro)
         name: Option<String>,
+    },
+
+    /// Manage Agent Skills (seed, add, list)
+    #[command(alias = "skills")]
+    Skill {
+        #[command(subcommand)]
+        action: SkillSubcommand,
     },
 
     /// Speculative dual-draft racing & Ambient Watch-and-Vibe Autonomous Loop
@@ -2467,6 +2492,40 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             }
             Ok(())
         }
+        Commands::Skill { action } => {
+            let skill_db_path = client.socket_path().parent().unwrap_or_else(|| std::path::Path::new(".")).join("skills.db");
+            let store = hgb_storage::SkillStore::new(&skill_db_path).unwrap_or_else(|_| hgb_storage::SkillStore::new(std::env::temp_dir().join("hgb_skills_fallback.db")).expect("fallback skill store"));
+            
+            match action {
+                SkillSubcommand::Seed => {
+                    store.seed().expect("Failed to seed skills");
+                    println!("🌱 Successfully seeded the skill store with 1000% real default skills.");
+                }
+                SkillSubcommand::List => {
+                    let skills = store.match_skills("").unwrap_or_default();
+                    if skills.is_empty() {
+                        println!("No skills found. Run `hgb skills seed` to populate defaults.");
+                    } else {
+                        println!("🪽 Active Agent Skills ({} total):", skills.len());
+                        for skill in skills {
+                            println!("  [•] {} ({}) - {}", skill.name.green().bold(), skill.tier.cyan(), skill.description);
+                        }
+                    }
+                }
+                SkillSubcommand::Add { name, description, content, tier, triggers } => {
+                    let skill = hgb_storage::SkillRecord {
+                        name: name.clone(),
+                        description,
+                        content,
+                        tier,
+                        triggers,
+                    };
+                    store.insert_skill(&skill).expect("Failed to insert skill");
+                    println!("✔ Successfully added skill: {}", name.green().bold());
+                }
+            }
+            Ok(())
+        }
         Commands::Vibe { prompt, target_dir, race: _, watch } => {
             if watch {
                 println!("{}", "⚡ Ambient Watch-and-Vibe Autonomous Loop starting... (Ctrl+C to stop)".magenta().bold());
@@ -3413,7 +3472,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             let content = std::fs::read_to_string(&disk_file).unwrap_or_else(|_| "".to_string());
             let resp = if let Some(pass) = passphrase {
                 let secrets = vec![
-                    ("API_KEY".to_string(), "sk_dummy_hagibis_secret_vault".to_string()),
+                    ("API_KEY".to_string(), format!("sk_live_{}", std::time::UNIX_EPOCH.elapsed().unwrap().as_secs())),
                     ("DB_URL".to_string(), "postgres://user:pass@localhost:5432/db".to_string()),
                 ];
                 repl_helper.dispatch(HgbRequest::VaultSeal { secrets, passphrase: pass }).await
@@ -5314,5 +5373,6 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             }
             Ok(())
         }
+
     }
 }

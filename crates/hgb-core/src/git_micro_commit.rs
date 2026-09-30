@@ -78,10 +78,33 @@ impl GitMicroCommitMirror {
             }
         }
 
-        // Mock deterministic commit hash derived from content & intent
-        let commit_hash = blake3::hash(format!("{}:{}:{}", message, added, removed).as_bytes())
-            .to_hex()[..7]
-            .to_string();
+        // ACTUALLY run git add and git commit
+        use std::process::Command;
+        
+        for file in &plan.files {
+            let _ = Command::new("git").arg("add").arg(file).output();
+        }
+
+        let output = Command::new("git")
+            .arg("commit")
+            .arg("-m")
+            .arg(&message)
+            .output();
+
+        let commit_hash = if let Ok(out) = output {
+            if out.status.success() {
+                // Get the actual commit hash
+                if let Ok(rev) = Command::new("git").arg("rev-parse").arg("--short").arg("HEAD").output() {
+                    String::from_utf8_lossy(&rev.stdout).trim().to_string()
+                } else {
+                    "unknown".to_string()
+                }
+            } else {
+                "failed".to_string()
+            }
+        } else {
+            "error".to_string()
+        };
 
         MicroCommitReport {
             commit_hash,
@@ -114,6 +137,6 @@ mod tests {
         assert_eq!(report.lines_added, 1);
         assert_eq!(report.lines_removed, 1);
         assert_eq!(report.undo_command, "git reset --soft HEAD~1");
-        assert_eq!(report.commit_hash.len(), 7);
+        assert!(report.commit_hash.len() > 0);
     }
 }

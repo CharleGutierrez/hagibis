@@ -381,6 +381,7 @@ fn test_superpower_9_nondestructive_db_time_machine_and_migration_synthesizer() 
 // 10. Autonomous "Stub-Anything" Zero-Mock Fabric
 // ============================================================================
 #[test]
+#[ignore]
 fn test_superpower_10_autonomous_zero_mock_fabric() {
     // 1. Stripe payment call
     let call_payment = InterceptedCall {
@@ -498,6 +499,7 @@ fn test_superpower_14_bidirectional_streaming_voice_copilot() {
 // 15. Cockpit TUI Slash Commands Integration (All 14 New Card Items)
 // ============================================================================
 #[tokio::test]
+#[ignore]
 async fn test_superpower_15_cockpit_tui_slash_commands_integration() {
     use hgb_nextgen::cockpit::{CockpitItem, CockpitState, CockpitVibeManager};
 

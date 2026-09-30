@@ -1,12 +1,7 @@
 //! # VisualRegressionSentry - Devin & Replit-Style Visual Layout Regression Oracle
-//!
-//! Elevates Devin and Replit's visual regression verification. Compares DOM
-//! snapshots and bounding box metrics before and after frontend edits, computing
-//! visual stability scores and flagging unintended layout shifts.
 
 use serde::{Deserialize, Serialize};
 
-/// Snapshot of a visual node at a given point in time
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct VisualNodeSnapshot {
     pub tag: String,
@@ -19,7 +14,6 @@ pub struct VisualNodeSnapshot {
     pub text_preview: Option<String>,
 }
 
-/// Type of visual delta detected between snapshots
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum VisualDeltaType {
     NodeDisappeared,
@@ -29,7 +23,6 @@ pub enum VisualDeltaType {
     StyleDrift,
 }
 
-/// Detailed regression record for an individual DOM node
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct VisualRegressionDelta {
     pub selector: String,
@@ -38,7 +31,6 @@ pub struct VisualRegressionDelta {
     pub description: String,
 }
 
-/// Comprehensive visual regression report
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct VisualRegressionReport {
     pub baseline_elements: usize,
@@ -54,7 +46,48 @@ pub struct VisualRegressionReport {
 pub struct VisualRegressionSentry;
 
 impl VisualRegressionSentry {
-    /// Compare a baseline visual snapshot against current DOM state
+    /// Captures a live snapshot by launching Puppeteer/Playwright
+    pub fn capture_snapshot(url: &str) -> Result<Vec<VisualNodeSnapshot>, String> {
+        let script = format!(r#"
+            const puppeteer = require('puppeteer');
+            (async () => {{
+                const browser = await puppeteer.launch();
+                const page = await browser.newPage();
+                await page.goto('{}', {{waitUntil: 'networkidle0'}});
+                const elements = await page.evaluate(() => {{
+                    return Array.from(document.body.querySelectorAll('*')).map(el => {{
+                        const rect = el.getBoundingClientRect();
+                        return {{
+                            tag: el.tagName.toLowerCase(),
+                            id: el.id || null,
+                            classes: Array.from(el.classList),
+                            x: rect.x,
+                            y: rect.y,
+                            width: rect.width,
+                            height: rect.height,
+                            text_preview: null // Keep small
+                        }};
+                    }}).filter(e => e.width > 0 && e.height > 0);
+                }});
+                console.log(JSON.stringify(elements));
+                await browser.close();
+            }})();
+        "#, url);
+
+        let output = std::process::Command::new("node")
+            .arg("-e")
+            .arg(&script)
+            .output()
+            .map_err(|e| e.to_string())?;
+
+        if !output.status.success() {
+            return Err("Failed to execute Puppeteer snapshot".to_string());
+        }
+
+        let json_str = String::from_utf8_lossy(&output.stdout);
+        serde_json::from_str(&json_str).map_err(|e| e.to_string())
+    }
+
     pub fn compare(
         baseline: &[VisualNodeSnapshot],
         current: &[VisualNodeSnapshot],
@@ -62,19 +95,9 @@ impl VisualRegressionSentry {
         let mut deltas = Vec::new();
         let mut breaking_count = 0;
 
-        // Check for removed/shifted baseline elements
         for base in baseline {
-            let selector = base
-                .id
-                .as_ref()
-                .map(|i| format!("#{}", i))
-                .or_else(|| {
-                    if !base.classes.is_empty() {
-                        Some(format!(".{}", base.classes[0]))
-                    } else {
-                        None
-                    }
-                })
+            let selector = base.id.as_ref().map(|i| format!("#{}", i))
+                .or_else(|| { if !base.classes.is_empty() { Some(format!(".{}", base.classes[0])) } else { None } })
                 .unwrap_or_else(|| base.tag.clone());
 
             if let Some(curr) = current.iter().find(|c| c.tag == base.tag && c.id == base.id) {
@@ -83,12 +106,9 @@ impl VisualRegressionSentry {
                 let dw = curr.width - base.width;
                 let dh = curr.height - base.height;
 
-                // Significant layout shift (>15px)
                 if dx.abs() > 15.0 || dy.abs() > 15.0 {
                     let is_breaking = dy.abs() > 50.0;
-                    if is_breaking {
-                        breaking_count += 1;
-                    }
+                    if is_breaking { breaking_count += 1; }
                     deltas.push(VisualRegressionDelta {
                         selector: selector.clone(),
                         delta_type: VisualDeltaType::LayoutShift { dx, dy },
@@ -97,12 +117,9 @@ impl VisualRegressionSentry {
                     });
                 }
 
-                // Significant dimension change (>25%)
                 if base.width > 0.0 && (dw.abs() / base.width) > 0.25 {
                     let is_breaking = dw < 0.0 && dw.abs() > 50.0;
-                    if is_breaking {
-                        breaking_count += 1;
-                    }
+                    if is_breaking { breaking_count += 1; }
                     deltas.push(VisualRegressionDelta {
                         selector: selector.clone(),
                         delta_type: VisualDeltaType::DimensionChange { dw, dh },
@@ -111,7 +128,6 @@ impl VisualRegressionSentry {
                     });
                 }
             } else {
-                // Node disappeared entirely
                 breaking_count += 1;
                 deltas.push(VisualRegressionDelta {
                     selector: selector.clone(),
@@ -122,7 +138,6 @@ impl VisualRegressionSentry {
             }
         }
 
-        // Check for new unexpected nodes
         for curr in current {
             if !baseline.iter().any(|b| b.tag == curr.tag && b.id == curr.id) {
                 deltas.push(VisualRegressionDelta {
@@ -135,7 +150,6 @@ impl VisualRegressionSentry {
         }
 
         let total_deltas = deltas.len();
-        let _total_nodes = baseline.len().max(1);
         let penalty = (breaking_count as f64 * 25.0) + ((total_deltas - breaking_count) as f64 * 5.0);
         let visual_stability_score = (100.0 - penalty).clamp(0.0, 100.0);
         let is_visually_stable = breaking_count == 0 && visual_stability_score >= 80.0;

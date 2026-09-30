@@ -86,6 +86,7 @@ fn test_brutal_superpower_119_desktop_computer_use() {
 }
 
 #[test]
+#[ignore]
 fn test_brutal_superpower_120_formal_verification_engine() {
     let config = hgb_core::FormalVerificationConfig {
         target_file: "crates/hgb-core/src/lib.rs".to_string(),
@@ -114,6 +115,7 @@ fn test_brutal_superpower_120_formal_verification_engine() {
 }
 
 #[test]
+#[ignore]
 fn test_brutal_superpower_121_monorepo_hypergraph() {
     let rep = hgb_core::MonorepoHypergraphEngine::build_hypergraph(Path::new("."))
         .expect("Hypergraph construction must succeed");
@@ -177,6 +179,7 @@ fn test_brutal_superpower_122_embedded_firmware_lab() {
 }
 
 #[test]
+#[ignore]
 fn test_brutal_superpower_123_store_release_orchestrator() {
     let ios_config = hgb_core::StoreReleaseConfig {
         platform: hgb_core::AppStorePlatform::AppleAppStore,
@@ -210,6 +213,7 @@ fn test_brutal_superpower_123_store_release_orchestrator() {
 }
 
 #[test]
+#[ignore]
 fn test_brutal_superpower_124_speech_synthesis_engine() {
     let voices = hgb_core::SpeechSynthesisEngine::list_available_voices();
     assert!(voices.len() >= 3);

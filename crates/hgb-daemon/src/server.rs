@@ -29,6 +29,7 @@ pub struct DaemonState {
     pub browser_snoop: hgb_nextgen::BrowserSnoopEngine,
     pub variant_race: hgb_nextgen::VariantRaceEngine,
     pub mcp_orchestrator: Arc<hgb_core::McpHostOrchestrator>,
+    pub skill_store: Arc<hgb_storage::SkillStore>,
 }
 
 impl DaemonState {
@@ -55,6 +56,9 @@ impl DaemonState {
         let ws_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let mcp_orchestrator = Arc::new(hgb_core::McpHostOrchestrator::new(&ws_dir));
 
+        let skill_db_path = socket_path.parent().unwrap_or_else(|| Path::new(".")).join("skills.db");
+        let skill_store = Arc::new(hgb_storage::SkillStore::new(&skill_db_path).unwrap_or_else(|_| hgb_storage::SkillStore::new(std::env::temp_dir().join("hgb_skills_fallback.db")).expect("fallback skill store")));
+
         Self {
             start_time: std::time::Instant::now(),
             socket_path,
@@ -67,6 +71,7 @@ impl DaemonState {
             browser_snoop: hgb_nextgen::BrowserSnoopEngine::new("http://127.0.0.1:3000".to_string(), None),
             variant_race: hgb_nextgen::VariantRaceEngine::new(),
             mcp_orchestrator,
+            skill_store,
         }
     }
 }
@@ -222,6 +227,16 @@ impl HagibisDaemon {
                 let req_model = hgb_core::validate_and_resolve_active_model(Some(raw_req_model))
                     .unwrap_or_else(|| raw_req_model.to_string());
 
+                let mut final_prompt = prompt.clone();
+                if let Ok(matched) = state.skill_store.match_skills(&prompt) {
+                    if !matched.is_empty() {
+                        final_prompt.push_str("\n\n--- AUTO-INJECTED SKILLS ---\n");
+                        for skill in matched {
+                            final_prompt.push_str(&format!("Skill [{}]: {}\n{}\n\n", skill.name, skill.description, skill.content));
+                        }
+                    }
+                }
+
                 // If resolved model differs from active, heal state and persisted model
                 if req_model != active {
                     let mut w = state.active_model.write().await;
@@ -241,7 +256,7 @@ impl HagibisDaemon {
                         } else {
                             Some(req_model.as_str())
                         };
-                        match prov.complete(&prompt, model_arg).await {
+                        match prov.complete(&final_prompt, model_arg).await {
                             Ok(text) => {
                                 let calls = hgb_core::agent::ReActAgentEngine::extract_tool_calls(&text);
                                 let final_output = if !calls.is_empty() {
@@ -259,7 +274,7 @@ impl HagibisDaemon {
                                     }
                                     let followup = format!(
                                         "<user>\n{}\n</user>\n<assistant>\n{}\n</assistant>\n<tool_results>\n{}\n</tool_results>\nPlease synthesize your final answer using the above tool results.",
-                                        prompt, text, tool_results.join("\n\n")
+                                        final_prompt, text, tool_results.join("\n\n")
                                     );
                                     prov.complete(&followup, model_arg).await.unwrap_or(text)
                                 } else {
@@ -268,7 +283,7 @@ impl HagibisDaemon {
                                 let duration_ms = start.elapsed().as_millis() as u64;
                                 return HgbResponse::Complete {
                                     output: final_output,
-                                    tokens_used: prompt.len() / 4,
+                                    tokens_used: final_prompt.len() / 4,
                                     duration_ms,
                                 };
                             }
@@ -276,11 +291,11 @@ impl HagibisDaemon {
                                 // Automatic Dual-Brain failover: If Local Ollama fails (e.g. 404, uninstalled model, offline) and Gemini is available, failover to Gemini!
                                 if hgb_core::GeminiProvider::is_available() {
                                     if let Some(gemini_prov) = hgb_core::GeminiProvider::auto_discover() {
-                                        if let Ok(text) = gemini_prov.complete(&prompt, None).await {
+                                        if let Ok(text) = gemini_prov.complete(&final_prompt, None).await {
                                             let duration_ms = start.elapsed().as_millis() as u64;
                                             return HgbResponse::Complete {
                                                 output: format!("⚠️ [Local Ollama Error: {} -> Failover to Cloud Gemini]\n\n{}", e, text),
-                                                tokens_used: prompt.len() / 4,
+                                                tokens_used: final_prompt.len() / 4,
                                                 duration_ms,
                                             };
                                         }
@@ -296,12 +311,12 @@ impl HagibisDaemon {
                 let is_gemini = req_model.contains("gemini") || req_model.contains("flash") || req_model.contains("pro") || req_model == "auto";
                 if is_gemini && hgb_core::GeminiProvider::is_available() {
                     if let Some(prov) = hgb_core::GeminiProvider::auto_discover() {
-                        match prov.complete(&prompt, Some(req_model.as_str())).await {
+                        match prov.complete(&final_prompt, Some(req_model.as_str())).await {
                             Ok(text) => {
                                 let duration_ms = start.elapsed().as_millis() as u64;
                                 return HgbResponse::Complete {
                                     output: text,
-                                    tokens_used: prompt.len() / 4,
+                                    tokens_used: final_prompt.len() / 4,
                                     duration_ms,
                                 };
                             }
@@ -404,8 +419,10 @@ impl HagibisDaemon {
                 }
             }
             HgbRequest::MeshStatus => {
+                let out = std::process::Command::new("ps").args(&["aux"]).output().unwrap_or_else(|_| std::process::Output { status: Default::default(), stdout: vec![], stderr: vec![] });
+                let count = String::from_utf8_lossy(&out.stdout).lines().filter(|l| l.contains("hgbd")).count();
                 HgbResponse::Complete {
-                    output: "🌐 P2P Swarm Mesh: 1 local node active (Tier 3 Edge NPU, 8GB RAM)".to_string(),
+                    output: format!("🌐 P2P Swarm Mesh: {} local node(s) active on this machine (via ps aux)", count),
                     tokens_used: 0,
                     duration_ms: 1,
                 }
@@ -671,7 +688,17 @@ impl HagibisDaemon {
                 let sys_prompt = engine.build_system_prompt(rules_str.as_deref(), repomap.as_deref(), None, fallback_style);
                 engine = engine.with_system_prompt(sys_prompt);
 
-                match engine.run(&prompt, |_| {}).await {
+                let mut final_prompt = prompt.clone();
+                if let Ok(matched) = state.skill_store.match_skills(&prompt) {
+                    if !matched.is_empty() {
+                        final_prompt.push_str("\n\n--- AUTO-INJECTED SKILLS ---\n");
+                        for skill in matched {
+                            final_prompt.push_str(&format!("Skill [{}]: {}\n{}\n\n", skill.name, skill.description, skill.content));
+                        }
+                    }
+                }
+
+                match engine.run(&final_prompt, |_| {}).await {
                     Ok(report) => HgbResponse::AgentSession {
                         output: report.final_output,
                         turns: report.turns_taken,
