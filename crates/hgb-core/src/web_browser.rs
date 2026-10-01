@@ -154,23 +154,7 @@ impl WebBrowserEngine {
             }
         }
 
-        // 3. Fallback search aggregator: provide direct search navigation results
-        let fallback_results = vec![
-            WebSearchResult {
-                title: format!("Search results for: {}", q),
-                url: format!("https://duckduckgo.com/?q={}", encoded_q),
-                snippet: format!("Direct web search portal query for '{}'", q),
-                rank: 1,
-            },
-            WebSearchResult {
-                title: format!("Google Search: {}", q),
-                url: format!("https://www.google.com/search?q={}", encoded_q),
-                snippet: format!("Google web search results query for '{}'", q),
-                rank: 2,
-            },
-        ];
-
-        Ok(fallback_results.into_iter().take(limit).collect())
+        Err(HgbError::Execution(format!("Live web search failed for query: '{}'. Rate limits or network error.", q)))
     }
 
     /// Synchronous wrapper for search_web

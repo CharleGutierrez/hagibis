@@ -634,3 +634,18 @@ mod tests {
         }
     }
 }
+pub mod wasm_fabric;
+pub mod debt_shredder;
+pub mod firecracker_shield;
+pub mod npu_native;
+pub mod vision_sync;
+pub mod rag_stack;
+pub mod cloud_swarm;
+pub mod plugin_fabric;
+pub mod stakeholder_portal;
+pub mod enterprise_gateway;
+
+pub use cloud_swarm::{CloudSwarm, CloudSwarmConfig, CloudSwarmStatus};
+pub use plugin_fabric::{PluginFabric, PluginContext, PluginExecutionResult};
+pub use stakeholder_portal::{StakeholderPortal, PortalConfig, PortalStatus};
+pub use enterprise_gateway::{EnterpriseGateway, EnterpriseCompliance, GatewayAuthResult};

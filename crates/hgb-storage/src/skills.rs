@@ -144,6 +144,48 @@ impl SkillStore {
                 content: "Always analyze dependencies, data flow, and separation of concerns. Break monoliths into crates if compilation times exceed 5s, and use ports & adapters (hexagonal) architecture.".to_string(),
                 tier: "architect".to_string(),
                 triggers: vec!["architecture".to_string(), "design".to_string(), "refactor".to_string(), "review".to_string()],
+            },
+            SkillRecord {
+                name: "Universal_MCP_Integration".to_string(),
+                description: "Universal Model Context Protocol client integration".to_string(),
+                content: "Dynamically connects to external MCP servers (Postgres, GitHub, Slack) to aggregate tools under a unified namespace. Auto-discovers .hgb/mcp.json files.".to_string(),
+                tier: "core".to_string(),
+                triggers: vec!["mcp".to_string(), "tools".to_string(), "protocol".to_string(), "server".to_string()],
+            },
+            SkillRecord {
+                name: "Local_First_SLM_Orchestration".to_string(),
+                description: "Routes logic to local models vs cloud based on complexity".to_string(),
+                content: "Use LLM Cost Gateway to route simple tasks to local Ollama (qwen2.5-coder) or cheap models, and complex reasoning to frontier models, avoiding runaway API costs.".to_string(),
+                tier: "core".to_string(),
+                triggers: vec!["slm".to_string(), "ollama".to_string(), "local".to_string(), "cost".to_string(), "arbitrage".to_string()],
+            },
+            SkillRecord {
+                name: "Continuous_Duplex_Voice".to_string(),
+                description: "WebRTC and WebSocket architecture for real-time voice".to_string(),
+                content: "Maintains a full-duplex voice loop using VAD thresholds, handling barge-ins gracefully, and triggering acoustic earcons for ambient feedback.".to_string(),
+                tier: "core".to_string(),
+                triggers: vec!["voice".to_string(), "webrtc".to_string(), "duplex".to_string(), "audio".to_string()],
+            },
+            SkillRecord {
+                name: "Phantom_Swarm_Worktrees".to_string(),
+                description: "Parallel autonomous dev branches using git worktrees".to_string(),
+                content: "Orchestrates multi-agent parallel execution across N isolated git worktrees, preventing index locks and state collision for invisible agentic fixes.".to_string(),
+                tier: "core".to_string(),
+                triggers: vec!["worktree".to_string(), "phantom".to_string(), "swarm".to_string(), "parallel".to_string()],
+            },
+            SkillRecord {
+                name: "Remote_Cloud_Micro_Sandboxing".to_string(),
+                description: "Secure ephemeral code execution inside micro-VMs".to_string(),
+                content: "Executes untrusted tasks in a capability-restricted jail with strict environment sanitization, ephemeral overlay FS, and timeouts.".to_string(),
+                tier: "core".to_string(),
+                triggers: vec!["sandbox".to_string(), "jail".to_string(), "ephemeral".to_string(), "security".to_string()],
+            },
+            SkillRecord {
+                name: "Semantic_Code_Graph".to_string(),
+                description: "AST-based continuous spatial memory for relationships".to_string(),
+                content: "Analyzes ambient AST contexts continuously, determining enclosing symbols, gathering specific imports, and resolving multi-crate architectural relationships beyond standard vector space.".to_string(),
+                tier: "core".to_string(),
+                triggers: vec!["ast".to_string(), "semantic".to_string(), "graph".to_string(), "ambient".to_string()],
             }
         ];
 

@@ -395,6 +395,11 @@ impl AgyCrud {
             return Err(HgbError::NotFound(format!("File '{}' not found", path.display())));
         }
 
+        let metadata = fs::metadata(path)?;
+        if metadata.len() > 10 * 1024 * 1024 { // 10MB limit
+            return Err(HgbError::Execution(format!("File '{}' is too large ({} bytes). Maximum allowed is 10MB.", path.display(), metadata.len())));
+        }
+
         let mut file = File::open(path)?;
         let mut raw_bytes = Vec::new();
         file.read_to_end(&mut raw_bytes)?;
