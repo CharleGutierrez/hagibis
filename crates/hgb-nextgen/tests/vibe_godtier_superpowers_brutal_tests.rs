@@ -158,7 +158,13 @@ pub fn brand_new_currency_formatter(cents: u64) -> String {
 
 #[test]
 fn test_superpower_4_living_architecture_blueprint_and_mermaid() {
-    let workspace = PathBuf::from("/home/dyna/TGS Projects/hagibis");
+    // Determine the root of the workspace dynamically
+    let mut workspace = std::env::current_dir().expect("Failed to get current dir");
+    while !workspace.join("Cargo.toml").exists() || !workspace.join("crates").exists() {
+        if !workspace.pop() {
+            panic!("Could not find workspace root");
+        }
+    }
     let blueprint = ArchitectureBlueprint::scan_workspace(&workspace).expect("Scan workspace");
 
     assert!(blueprint.nodes.len() >= 3, "Should discover crates and core components");
