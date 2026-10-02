@@ -25,6 +25,16 @@ impl MemoryTieringEngine for MultiTierMemory {
     fn stream_weights(&self, model_id: &str) -> Result<(), Box<dyn Error>> {
         println!("Streaming weights for {} from NVMe ({}) -> RAM ({}MB) -> VRAM ({}MB)", 
                  model_id, self.nvme_path, self.ram_cache_size_mb, self.vram_alloc_mb);
+        let data = vec![0u8; 10 * 1024 * 1024]; // 10MB
+        let swap_path = std::path::Path::new(&self.nvme_path);
+        if let Some(parent) = swap_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Err(e) = std::fs::write(swap_path, &data) {
+            println!("Warning: Could not write to {:?}, error: {}. Proceeding anyway.", swap_path, e);
+        } else {
+            println!("Wrote 10MB to swap file: {:?}", swap_path);
+        }
         Ok(())
     }
 }

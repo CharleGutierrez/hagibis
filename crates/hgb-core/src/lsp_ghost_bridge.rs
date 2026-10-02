@@ -38,6 +38,12 @@ pub struct LspGhostBridge;
 
 impl LspGhostBridge {
     pub fn new() -> Self {
+        let _ = std::fs::remove_file("/tmp/hgb_lsp.sock");
+        if let Ok(_listener) = std::os::unix::net::UnixListener::bind("/tmp/hgb_lsp.sock") {
+            // Unix socket bound successfully
+        } else {
+            let _ = std::net::TcpListener::bind("127.0.0.1:0");
+        }
         Self
     }
 

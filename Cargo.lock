@@ -706,6 +706,8 @@ dependencies = [
  "blake3",
  "chrono",
  "colored",
+ "crossterm",
+ "ratatui",
  "regex",
  "reqwest",
  "rusqlite",
