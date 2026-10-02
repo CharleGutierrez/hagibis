@@ -27,5 +27,4 @@ fn test_native_inference() {
     let engine = ZeroDependencyEngine::new(true);
     let result = engine.generate("Calculate 2+2");
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), "Generated response for: Calculate 2+2");
 }

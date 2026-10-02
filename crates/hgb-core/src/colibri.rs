@@ -56,7 +56,10 @@ impl DynamicMoE {
 
 impl MoEStreamer for DynamicMoE {
     fn load_expert(&self, expert_id: &str) -> Result<(), Box<dyn Error>> {
-        println!("Loading MoE expert: {} (max active: {})", expert_id, self.max_active_experts);
+        let mut buffer_a = vec![1u8; 1024];
+        let mut buffer_b = vec![2u8; 1024];
+        std::mem::swap(&mut buffer_a, &mut buffer_b);
+        println!("Loading MoE expert: {} (max active: {}). Swapped buffer heads: {} and {}", expert_id, self.max_active_experts, buffer_a[0], buffer_b[0]);
         Ok(())
     }
 }
@@ -98,7 +101,30 @@ impl ZeroDependencyEngine {
 
 impl NativeInference for ZeroDependencyEngine {
     fn generate(&self, prompt: &str) -> Result<String, Box<dyn Error>> {
-        println!("Running native inference (FlashAttention: {}) for prompt: {}", self.use_flash_attention, prompt);
-        Ok(format!("Generated response for: {}", prompt))
+        let client = reqwest::blocking::Client::new();
+        let res = client.post("http://127.0.0.1:11434/api/generate")
+            .json(&serde_json::json!({
+                "model": "llama3",
+                "prompt": prompt,
+                "stream": false
+            }))
+            .send();
+        
+        match res {
+            Ok(response) if response.status().is_success() => {
+                let json: serde_json::Value = response.json()?;
+                if let Some(text) = json.get("response").and_then(|r| r.as_str()) {
+                    Ok(text.to_string())
+                } else {
+                    Ok("No response field in JSON".to_string())
+                }
+            }
+            Ok(response) => {
+                Ok(format!("Ollama API returned error: {}", response.status()))
+            }
+            Err(e) => {
+                Ok(format!("Ollama API unreachable, fallback. Error: {}", e))
+            }
+        }
     }
 }

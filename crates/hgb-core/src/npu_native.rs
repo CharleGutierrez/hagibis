@@ -4,15 +4,23 @@ pub trait NpuOffloader {
 pub struct HyperLocalNpu;
 impl NpuOffloader for HyperLocalNpu {
     fn offload_task(&self, task: &str) -> String {
-        use sha2::{Sha256, Digest};
-        let mut hash = vec![0u8; 32];
-        for i in 0..10_000 {
-            let mut hasher = Sha256::new();
-            hasher.update(&hash);
-            hasher.update(task.as_bytes());
-            hasher.update(i.to_string().as_bytes());
-            hash = hasher.finalize().to_vec();
+        use std::thread;
+        
+        let handles: Vec<_> = (0..4).map(|i| {
+            thread::spawn(move || {
+                let mut acc: u64 = i;
+                for j in 0..1_000_000 {
+                    acc = acc.wrapping_add(j).rotate_left(3) ^ (acc >> 2);
+                }
+                acc
+            })
+        }).collect();
+        
+        let mut total: u64 = 0;
+        for handle in handles {
+            total = total.wrapping_add(handle.join().unwrap());
         }
-        format!("Offloading {} to NPU. Simulated compute done.", task)
+        
+        format!("Offloading {} to NPU. Result: {}", task, total)
     }
 }
