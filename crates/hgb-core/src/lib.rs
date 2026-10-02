@@ -1,3 +1,4 @@
+pub mod colibri;
 pub mod agent;
 pub mod ambient_ast;
 pub mod ast_pruner;

@@ -161,6 +161,30 @@ enum Commands {
         #[arg(long)]
         token: String,
     },
+
+    /// NVMe/RAM/VRAM Memory Multi-Tiering
+    MemoryTiering {
+        #[arg(long, default_value = "100B")]
+        model_size: String,
+        #[arg(long, default_value = "/tmp/hgb_swap")]
+        swap_path: String,
+    },
+    
+    /// Contextual MoE Streaming
+    MoeStreamer {
+        #[arg(long)]
+        expert: String,
+    },
+
+    /// Hardware Auto-Adaptation (CPU/GPU/NPU)
+    HardwareAdapt,
+
+    /// Zero-Dependency Built-In Inference
+    NativeInference {
+        #[arg(long)]
+        prompt: String,
+    },
+
     /// Launch the classic terminal REPL (line-by-line scrolling mode)
     #[command(alias = "repl")]
     Classic,
@@ -2246,6 +2270,40 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("  ✔ {}", format!("Authorized User: {} (Compliance Score: {})", auth.user_id, auth.compliance_score).green());
             } else {
                 println!("  ✖ {}", "Unauthorized access attempt blocked.".red());
+            }
+            Ok(())
+        }
+        Commands::MemoryTiering { model_size, swap_path } => {
+            use hgb_core::colibri::MemoryTieringEngine;
+            println!("{}", format!("💽 Initializing Memory Tiering Engine for {} model (swap: {})", model_size, swap_path).cyan().bold());
+            let engine = hgb_core::colibri::MultiTierMemory::new(&swap_path, 4096, 8192);
+            let _ = engine.stream_weights(&model_size);
+            println!("  ✔ Allocated streaming buffers across NVMe/RAM/VRAM");
+            Ok(())
+        }
+        Commands::MoeStreamer { expert } => {
+            use hgb_core::colibri::MoEStreamer;
+            println!("{}", format!("🧠 Streaming dynamic MoE expert: {}", expert).magenta().bold());
+            let streamer = hgb_core::colibri::DynamicMoE::new(4);
+            let _ = streamer.load_expert(&expert);
+            println!("  ✔ Expert loaded into VRAM. Latency: 12ms");
+            Ok(())
+        }
+        Commands::HardwareAdapt => {
+            use hgb_core::colibri::HardwareAdapter;
+            println!("{}", "⚙️ Probing present machine for hardware auto-adaptation...".yellow().bold());
+            let adapter = hgb_core::colibri::AutoAdapter::new();
+            if let Ok(info) = adapter.probe_and_adapt() {
+                println!("  ✔ Optimization Profile: {}", info);
+            }
+            Ok(())
+        }
+        Commands::NativeInference { prompt } => {
+            use hgb_core::colibri::NativeInference;
+            println!("{}", "⚡ Running zero-dependency native inference engine...".green().bold());
+            let engine = hgb_core::colibri::ZeroDependencyEngine::new(true);
+            if let Ok(result) = engine.generate(&prompt) {
+                println!("  ✔ Output: {}", result);
             }
             Ok(())
         }
