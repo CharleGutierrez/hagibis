@@ -194,7 +194,7 @@ fn test_slopsquatting_firewall_detection() {
         "serde",                     // Safe canonical
         "reqwests",                  // Levenshtein typosquat of reqwest
         "tokio",                     // Safe canonical
-        "expresss",                  // Levenshtein typosquat of express
+        "regexx",                    // Levenshtein typosquat of regex
         "auto-generated-token-flow", // Hallucinated synthetic package
         "my-safe-custom-pkg",        // Safe unknown package
     ];
@@ -202,7 +202,7 @@ fn test_slopsquatting_firewall_detection() {
     let audit = SlopsquattingFirewall::audit_packages(&test_packages, "cargo");
     assert_eq!(audit.total_inspected, 6);
     assert_eq!(audit.safe_count, 3); // serde, tokio, my-safe-custom-pkg
-    assert_eq!(audit.blocked_count, 3); // reqwests, expresss, auto-generated-token-flow
+    assert_eq!(audit.blocked_count, 3); // reqwests, regexx, auto-generated-token-flow
 
     let typosquat1 = audit.items.iter().find(|i| i.package_name == "reqwests").unwrap();
     assert_eq!(typosquat1.risk_level, PackageRiskLevel::Quarantined);
