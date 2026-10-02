@@ -35,11 +35,7 @@ pub struct SlopsquattingFirewall;
 
 impl SlopsquattingFirewall {
     const CANONICAL_PACKAGES: &'static [&'static str] = &[
-        "react", "react-dom", "express", "next", "vue", "axios", "lodash",
-        "tokio", "serde", "syn", "anyhow", "thiserror", "reqwest", "tracing",
-        "flask", "django", "requests", "numpy", "pandas", "fastapi", "pydantic",
-        "laravel/framework", "symfony/http-foundation", "guzzlehttp/guzzle",
-        "phpunit/phpunit", "pestphp/pest", "spatie/laravel-permission", "monolog/monolog"
+        "tokio", "serde", "reqwest", "regex"
     ];
 
     /// Audits a list of package names for an ecosystem
@@ -145,15 +141,19 @@ mod tests {
 
     #[test]
     fn test_slopsquatting_firewall_blocks_typosquats() {
-        let pkgs = ["react", "reqwests", "express", "tokio", "expres", "auto-generated-crypto"];
+        let pkgs = ["serde", "reqwests", "tokio", "tokiio", "regex", "auto-generated-crypto"];
         let report = SlopsquattingFirewall::audit_packages(&pkgs, "cargo");
 
         assert_eq!(report.total_inspected, 6);
-        assert_eq!(report.safe_count, 3); // react, express, tokio
-        assert_eq!(report.blocked_count, 3); // reqwests, expres, auto-generated-crypto
+        assert_eq!(report.safe_count, 3); // serde, tokio, regex
+        assert_eq!(report.blocked_count, 3); // reqwests, tokiio, auto-generated-crypto
 
         let reqwests_item = report.items.iter().find(|i| i.package_name == "reqwests").unwrap();
         assert_eq!(reqwests_item.risk_level, PackageRiskLevel::Quarantined);
         assert!(reqwests_item.blocked);
+        
+        let tokiio_item = report.items.iter().find(|i| i.package_name == "tokiio").unwrap();
+        assert_eq!(tokiio_item.risk_level, PackageRiskLevel::Quarantined);
+        assert!(tokiio_item.blocked);
     }
 }

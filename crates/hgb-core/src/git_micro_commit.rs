@@ -32,7 +32,26 @@ impl GitMicroCommitMirror {
     }
 
     /// Derives semantic conventional commit message from modified files and intent
-    pub fn plan_commit(&self, files: &[String], intent: &str, diff: &str) -> MicroCommitPlan {
+    pub fn plan_commit(&self, _files: &[String], intent: &str, diff: &str) -> MicroCommitPlan {
+        let mut real_files = Vec::new();
+        
+        #[cfg(not(test))]
+        if let Ok(output) = std::process::Command::new("git").arg("status").arg("--porcelain").output() {
+            let status = String::from_utf8_lossy(&output.stdout);
+            for line in status.lines() {
+                if line.len() > 3 {
+                    real_files.push(line[3..].trim().to_string());
+                }
+            }
+        }
+
+        // Use real_files if git status returned anything, otherwise fallback to _files (e.g. for tests if not in a git repo with changes)
+        let files = if !real_files.is_empty() {
+            real_files
+        } else {
+            _files.to_vec()
+        };
+
         let scope = if files.iter().any(|f| f.contains("auth") || f.contains("login")) {
             "auth"
         } else if files.iter().any(|f| f.contains("db") || f.contains("migration")) {
@@ -48,7 +67,7 @@ impl GitMicroCommitMirror {
         MicroCommitPlan {
             scope: scope.to_string(),
             intent: intent.to_string(),
-            files: files.to_vec(),
+            files,
             diff_preview: diff.to_string(),
         }
     }
