@@ -650,3 +650,4 @@ pub use cloud_swarm::{CloudSwarm, CloudSwarmConfig, CloudSwarmStatus};
 pub use plugin_fabric::{PluginFabric, PluginContext, PluginExecutionResult};
 pub use stakeholder_portal::{StakeholderPortal, PortalConfig, PortalStatus};
 pub use enterprise_gateway::{EnterpriseGateway, EnterpriseCompliance, GatewayAuthResult};
+pub mod visionary;
