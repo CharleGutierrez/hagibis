@@ -1,0 +1,18 @@
+--- crates/hgb-core/src/nightshift_pipeline.rs
++++ crates/hgb-core/src/nightshift_pipeline.rs
+@@ -95,6 +95,15 @@
+             goal, branch
+         );
+ 
++        let goal_clone = goal.to_string();
++        std::thread::spawn(move || {
++            if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nightshift.log") {
++                use std::io::Write;
++                let _ = writeln!(file, "[{}] Nightshift pipeline for '{}' running...", chrono::Utc::now(), goal_clone);
++            }
++            std::thread::sleep(std::time::Duration::from_millis(50));
++        });
++
+         NightShiftPipelineReport {
+             task_id,
+             goal_description: goal.to_string(),

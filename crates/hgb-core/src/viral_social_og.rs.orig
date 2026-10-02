@@ -67,7 +67,6 @@ impl ViralSocialOgEngine {
     /// Synthesizes dynamic OpenGraph image, edge handler, meta tags, and viral scorecard.
     pub fn generate_viral_suite(&self, config: OgCardConfig) -> ViralOgReport {
         let svg = self.generate_svg_card(&config);
-        let _ = std::fs::write("/tmp/viral_og.svg", &svg);
         let meta_tags = self.generate_meta_tags(&config);
         let json_ld = self.generate_json_ld(&config);
         let html_snippet = self.generate_html_head(&meta_tags, &json_ld);

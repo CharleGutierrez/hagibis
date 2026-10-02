@@ -1,0 +1,10 @@
+--- crates/hgb-core/src/viral_social_og.rs
++++ crates/hgb-core/src/viral_social_og.rs
+@@ -37,6 +37,7 @@
+     /// Analyzes context and generates an entire viral OpenGraph suite (SVG, JSON-LD, Meta Tags).
+     pub fn generate_viral_suite(&self, config: OgCardConfig) -> ViralOgReport {
+         let svg = self.generate_svg_image(&config);
++        let _ = std::fs::write("/tmp/viral_og.svg", &svg);
+         let meta = self.generate_meta_tags(&config);
+         let json = self.generate_json_ld(&config);
+         let html = self.generate_html_head(&meta, &json);
