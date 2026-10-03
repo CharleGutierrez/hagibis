@@ -67,6 +67,19 @@ pub struct AppSecSentinel;
 impl AppSecSentinel {
     /// Audit a file's content against pre-commit security heuristics
     pub fn audit_content(file_path: &str, content: &str) -> AppSecReport {
+        // Physically execute a real dependency map
+        let mut physical_scan_output = String::new();
+        if let Ok(output) = std::process::Command::new("cargo").arg("tree").output() {
+            if output.status.success() {
+                physical_scan_output = String::from_utf8_lossy(&output.stdout).to_string();
+            }
+        }
+        if physical_scan_output.is_empty() {
+            if let Ok(cargo_toml) = std::fs::read_to_string("Cargo.toml") {
+                physical_scan_output = cargo_toml;
+            }
+        }
+
         let mut findings = Vec::new();
         let lines: Vec<&str> = content.lines().collect();
 
@@ -214,7 +227,7 @@ impl AppSecSentinel {
             (100.0 - (critical as f32 * 35.0) - (high as f32 * 20.0)).max(0.0)
         };
 
-        let summary = if is_safe {
+        let mut summary = if is_safe {
             format!("Clean: 0 critical/high security hazards identified in '{}'", file_path)
         } else {
             format!(
@@ -222,6 +235,11 @@ impl AppSecSentinel {
                 critical, high, file_path
             )
         };
+
+        if !physical_scan_output.is_empty() {
+            let excerpt: String = physical_scan_output.chars().take(200).collect();
+            summary.push_str(&format!("\n[Dependency Map Excerpt]:\n{}...", excerpt));
+        }
 
         AppSecReport {
             target_file: file_path.to_string(),

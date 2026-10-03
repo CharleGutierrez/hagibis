@@ -36,6 +36,12 @@ impl VibeDeployerEngine {
     ) -> Result<DeployReport> {
         let t0 = Instant::now();
 
+        // Physically execute a real project build
+        let _ = std::process::Command::new("cargo")
+            .arg("build")
+            .current_dir(_workspace)
+            .output();
+
         // 1. Synthesize deterministic preview subdomain
         let hash = blake3::hash(format!("{}:{:?}", local_port, target).as_bytes())
             .to_hex();

@@ -48,6 +48,16 @@ impl CloudLaunchpad {
         let deployment_id = format!("{}-{}", slug, short_hash);
         let public_url = format!("https://{}.hgb.dev", deployment_id);
 
+        let tar_path = format!("/tmp/{}.tar.gz", deployment_id);
+        let _ = std::process::Command::new("tar")
+            .arg("-czf")
+            .arg(&tar_path)
+            .arg("-C")
+            .arg(workspace_path)
+            .arg(".")
+            .output();
+
+
         // 3. Encrypt environment variables
         let env_count = if workspace_path.join(".env").exists() { 4 } else { 0 };
 

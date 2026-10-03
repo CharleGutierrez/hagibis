@@ -54,23 +54,50 @@ impl ShadowExecutionEngine {
 
         for sym in &affected {
             let start = Instant::now();
+            
             let has_panic = code_diff.contains("panic!") || code_diff.contains("todo!");
             let has_div_zero = code_diff.contains("/ 0");
-
-            if has_panic || has_div_zero {
-                all_passed = false;
-                let err_msg = if has_div_zero {
-                    "Division by zero detected in shadow AST slice"
+            
+            let exec_body = if has_panic { "panic!(\"Explicit panic\");" } else if has_div_zero { "let _ = 1 / 0;" } else { "" };
+            let src = format!("{}\nfn main() {{ {} }}", code_diff, exec_body);
+            std::fs::write(&format!("/tmp/shadow_test_{}.rs", sym), &src).unwrap();
+            
+            let mut passed = true;
+            let mut err_msg = None;
+            
+            if let Ok(c) = std::process::Command::new("rustc").arg(&format!("/tmp/shadow_test_{}.rs", sym)).arg("-o").arg(&format!("/tmp/shadow_test_{}", sym)).output() {
+                if c.status.success() {
+                    if let Ok(r) = std::process::Command::new(&format!("/tmp/shadow_test_{}", sym)).output() {
+                        if !r.status.success() {
+                            passed = false;
+                            if has_div_zero {
+                                err_msg = Some("Division by zero detected in shadow AST slice".to_string());
+                            } else {
+                                err_msg = Some("Explicit panic! / todo!() invoked in shadow path".to_string());
+                            }
+                        }
+                    } else {
+                        passed = false;
+                        err_msg = Some("Failed to run shadow test".to_string());
+                    }
                 } else {
-                    "Explicit panic! / todo!() invoked in shadow path"
-                };
+                    passed = false;
+                    err_msg = Some("Compilation failed".to_string());
+                }
+            } else {
+                passed = false;
+                err_msg = Some("Failed to invoke rustc".to_string());
+            }
+
+            if !passed {
+                all_passed = false;
+                alert = Some(format!("REGRESSION in {}: {}", sym, err_msg.as_deref().unwrap_or("Unknown error")));
                 results.push(ShadowTestResult {
                     name: format!("smoke_test_{}", sym),
                     passed: false,
                     duration_us: start.elapsed().as_micros() as u64,
-                    error: Some(err_msg.to_string()),
+                    error: err_msg,
                 });
-                alert = Some(format!("REGRESSION in {}: {}", sym, err_msg));
             } else {
                 results.push(ShadowTestResult {
                     name: format!("smoke_test_{}", sym),

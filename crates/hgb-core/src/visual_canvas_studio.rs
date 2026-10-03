@@ -70,6 +70,11 @@ impl VisualCanvasStudioEngine {
             },
         ];
 
+        let html_content = format!(
+            "<html>\n<head><title>Hagibis Vibe Studio</title></head>\n<body>\n  <section id='hero-section' class='flex flex-col items-center py-16'>\n    <h1 id='hero-title' class='text-4xl font-bold text-cyan-400'>Built with Hagibis Vibe Studio</h1>\n    <button id='hero-cta' class='mt-6 px-6 py-3 bg-cyan-500 rounded-xl'>Deploy to Edge</button>\n  </section>\n</body>\n</html>"
+        );
+        let _ = std::fs::write("/tmp/visual_canvas_studio_output.html", html_content);
+
         Ok(VisualStudioSessionReport {
             session_id: format!("studio_sess_{}", p),
             local_server_port: p,

@@ -47,35 +47,32 @@ pub struct DesktopComputerUseEngine;
 
 impl DesktopComputerUseEngine {
     pub fn inspect_desktop() -> Result<DesktopInspectionReport> {
-        let windows = vec![
-            DesktopTargetWindow {
-                window_id: 101,
-                title: "Visual Studio Code - hagibis".to_string(),
-                app_name: "Code".to_string(),
-                pid: 1420,
-                bounds: (0, 0, 1920, 1080),
-                is_focused: true,
-            },
-            DesktopTargetWindow {
-                window_id: 102,
-                title: "Google Chrome - Localhost Dev".to_string(),
-                app_name: "chrome".to_string(),
-                pid: 1890,
-                bounds: (1920, 0, 1920, 1080),
-                is_focused: false,
-            },
-            DesktopTargetWindow {
-                window_id: 103,
-                title: "Terminal Cockpit (Ratatui)".to_string(),
-                app_name: "alacritty".to_string(),
-                pid: 2045,
-                bounds: (200, 200, 1200, 800),
-                is_focused: false,
-            },
-        ];
+        let mut windows = Vec::new();
+        if let Ok(output) = std::process::Command::new("wmctrl").arg("-l").output() {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                for line in stdout.lines() {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() >= 4 {
+                        let window_id = u64::from_str_radix(parts[0].trim_start_matches("0x"), 16).unwrap_or(0);
+                        let title = parts[3..].join(" ");
+                        windows.push(DesktopTargetWindow {
+                            window_id,
+                            title,
+                            app_name: "unknown".to_string(),
+                            pid: 0,
+                            bounds: (0, 0, 0, 0),
+                            is_focused: false,
+                        });
+                    }
+                }
+            }
+        }
+
+        let active_window = windows.first().cloned();
 
         Ok(DesktopInspectionReport {
-            active_window: Some(windows[0].clone()),
+            active_window,
             visible_windows: windows,
             screen_resolution: (3840, 1080),
             supported_backends: vec!["x11".to_string(), "wayland-portal".to_string(), "at-spi2".to_string()],

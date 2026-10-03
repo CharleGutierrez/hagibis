@@ -123,6 +123,13 @@ impl CognitiveWalkthrough {
             if has_type_def {
                 takeaways.push("Updated structural type contracts".to_string());
             }
+            
+            // Actually read the physical file to get byte and line counts!
+            if let Ok(content) = std::fs::read_to_string(path) {
+                let bytes = content.len();
+                let lines = content.lines().count();
+                takeaways.push(format!("Physical file size: {} bytes, {} lines", bytes, lines));
+            }
 
             cards.push(CognitiveCard {
                 file_path: path.to_string(),

@@ -94,6 +94,22 @@ impl PromptLabWorkspace {
             results.get(0).map(|r| r.schema_compliance_pct).unwrap_or(0.0)
         );
 
+        let mut echo_cmd = std::process::Command::new("echo")
+            .arg(&summary)
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("Failed to start echo process");
+
+        let mut tee_cmd = std::process::Command::new("tee")
+            .arg("/tmp/prompt_lab_workspace.txt")
+            .stdin(echo_cmd.stdout.take().unwrap())
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .expect("Failed to start tee process");
+
+        tee_cmd.wait().unwrap();
+        echo_cmd.wait().unwrap();
+
         PromptLabReport {
             total_variants_benchmarked: variants.len(),
             test_case_count: test_cases.len(),

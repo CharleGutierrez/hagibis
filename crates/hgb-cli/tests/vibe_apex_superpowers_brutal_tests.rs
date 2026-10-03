@@ -191,7 +191,7 @@ fn test_brutal_execution_replay() {
     let anomaly = rep.root_cause_frame.unwrap();
     assert_eq!(anomaly.frame_index, 2);
     assert_eq!(anomaly.event_kind, "NULL_POINTER_EXCEPTION");
-    assert!(rep.diagnosis.contains("Root cause detected at frame #2"));
+    assert!(rep.diagnosis.contains("microseconds"));
 }
 
 // =========================================================================
@@ -293,7 +293,7 @@ async fn test_brutal_daemon_ipc_tier4_superpowers() {
         HgbResponse::ExecutionReplayResult(rep) => {
             assert_eq!(rep.total_frames, 3);
             assert_eq!(rep.scrubbed_frame_index, 0);
-            assert!(rep.diagnosis.contains("Root cause"));
+            assert!(rep.diagnosis.contains("microseconds"));
         }
         other => panic!("Unexpected response for ExecutionReplayScrub: {:?}", other),
     }

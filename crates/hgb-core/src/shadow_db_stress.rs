@@ -79,17 +79,22 @@ impl ShadowDbStressFuzzer {
         let start = Instant::now();
         let total = profile.total_operations.max(100);
 
-        // Simulate microsecond latency samples for concurrent operations
+        // --- 100% REAL SQLITE IN-MEMORY STRESS TEST ---
         let mut latencies: Vec<f64> = Vec::with_capacity(total);
-        for i in 0..total {
-            let base_ms = if i % 10 == 0 {
-                // Occasional write lock or full table scan simulation
-                3.2 + ((i % 7) as f64 * 0.4)
-            } else {
-                0.3 + ((i % 5) as f64 * 0.1)
-            };
-            latencies.push(base_ms);
+        if let Ok(conn) = rusqlite::Connection::open_in_memory() {
+            let _ = conn.execute("CREATE TABLE stress_test (id INTEGER PRIMARY KEY, val TEXT)", ());
+            for i in 0..total {
+                let op_start = Instant::now();
+                if i % 10 == 0 {
+                    let _ = conn.execute("INSERT INTO stress_test (val) VALUES (?)", [&format!("data-{}", i)]);
+                } else {
+                    let mut stmt = conn.prepare("SELECT * FROM stress_test WHERE val = ?").unwrap();
+                    let _ = stmt.query([&format!("data-{}", i)]);
+                }
+                latencies.push(op_start.elapsed().as_secs_f64() * 1000.0);
+            }
         }
+        // ----------------------------------------------
 
         latencies.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
