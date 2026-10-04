@@ -1,0 +1,21 @@
+--- behavior_matrix.rs
++++ behavior_matrix.rs
+@@ -48,7 +48,15 @@
+         let mut map = std::collections::HashMap::new();
+-        map.insert("latency_tolerance".to_string(), "high".to_string());
+-        map.insert("error_sensitivity".to_string(), "low".to_string());
+-        map.insert("throughput_bias".to_string(), "batch".to_string());
++        for (k, v) in std::env::vars() {
++            if k.contains("LATENCY") {
++                map.insert("latency_tolerance".to_string(), v);
++            }
++        }
++        if map.is_empty() {
++            map.insert("latency_tolerance".to_string(), "default".to_string());
++        }
++        let throughput = std::process::Command::new("uptime").output().map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_else(|_| "unknown".to_string());
++        map.insert("throughput_bias".to_string(), throughput);
++        
+         let score = BehaviorScore {
+             dimensions: map,
+             confidence: 0.95,

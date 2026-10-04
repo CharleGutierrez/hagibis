@@ -6,8 +6,8 @@ use hgb_core::blueprint::ArchitectureBlueprint;
 use hgb_nextgen::redteam::{RedTeamAuditor, RedTeamCategory, RedTeamVerdict};
 use hgb_nextgen::passive_sentinel::{PassiveSentinel, SentinelEventKind, SentinelHealthStatus};
 
-#[test]
-fn test_superpower_1_browser_hud_cdp_streaming_and_heal() {
+#[tokio::test]
+async fn test_superpower_1_browser_hud_cdp_streaming_and_heal() {
     let mut hud = BrowserLiveHud::new(50);
 
     // 1. Ingest raw CDP console error event
@@ -65,8 +65,8 @@ fn test_superpower_1_browser_hud_cdp_streaming_and_heal() {
     assert_eq!(hud.telemetry().unresolved_count, 1);
 }
 
-#[test]
-fn test_superpower_2_instant_persona_and_synthetic_seed_engine() {
+#[tokio::test]
+async fn test_superpower_2_instant_persona_and_synthetic_seed_engine() {
     // 1. Generate standalone users batch with 25 records and seed 42
     let user_batch = PersonaSeedEngine::generate_batch("users", 25, Some(42))
         .expect("Must generate users seed batch");
@@ -98,8 +98,8 @@ fn test_superpower_2_instant_persona_and_synthetic_seed_engine() {
     assert!(orders.sql_script.contains("INSERT INTO orders"));
 }
 
-#[test]
-fn test_superpower_3_ast_rewind_timeline_surgical_rollback() {
+#[tokio::test]
+async fn test_superpower_3_ast_rewind_timeline_surgical_rollback() {
     let mut timeline = AstRewindTimeline::new();
     let file = "src/tax.rs";
 
@@ -156,8 +156,8 @@ pub fn brand_new_currency_formatter(cents: u64) -> String {
     assert_eq!(history.len(), 2);
 }
 
-#[test]
-fn test_superpower_4_living_architecture_blueprint_and_mermaid() {
+#[tokio::test]
+async fn test_superpower_4_living_architecture_blueprint_and_mermaid() {
     let workspace = PathBuf::from("/home/dyna/TGS Projects/hagibis");
     let blueprint = ArchitectureBlueprint::scan_workspace(&workspace).expect("Scan workspace");
 
@@ -182,8 +182,8 @@ fn test_superpower_4_living_architecture_blueprint_and_mermaid() {
     assert!(md.contains("## 📦 Component Inventory"));
 }
 
-#[test]
-fn test_superpower_5_adversarial_redteam_and_edge_case_auditor() {
+#[tokio::test]
+async fn test_superpower_5_adversarial_redteam_and_edge_case_auditor() {
     let auditor = RedTeamAuditor::new();
 
     // 1. Test Unbounded Query + Tenant Leak + O(N^2)
@@ -214,7 +214,7 @@ fn test_superpower_5_adversarial_redteam_and_edge_case_auditor() {
     }
     "#;
 
-    let report = auditor.audit_code(hazardous_code, None);
+    let report = auditor.audit_code(hazardous_code, None).await;
     assert_eq!(report.verdict, RedTeamVerdict::Blocked);
     assert!(report.total_critical >= 1, "Must catch tenant isolation leak");
     assert!(report.total_high >= 1, "Must catch unbounded query");
@@ -227,7 +227,7 @@ fn test_superpower_5_adversarial_redteam_and_edge_case_auditor() {
         unsafe { GLOBAL_COUNTER += 1; }
     }
     "#;
-    let static_report = auditor.audit_code(static_mut_code, None);
+    let static_report = auditor.audit_code(static_mut_code, None).await;
     assert_eq!(static_report.verdict, RedTeamVerdict::Blocked);
     assert!(static_report.findings.iter().any(|f| f.category == RedTeamCategory::ConcurrencyHazard));
 
@@ -238,13 +238,13 @@ fn test_superpower_5_adversarial_redteam_and_edge_case_auditor() {
         db.query(sql, &[&tenant_id]).await
     }
     "#;
-    let clean_report = auditor.audit_code(clean_code, None);
+    let clean_report = auditor.audit_code(clean_code, None).await;
     assert_eq!(clean_report.verdict, RedTeamVerdict::Clean);
     assert_eq!(clean_report.findings.len(), 0);
 }
 
-#[test]
-fn test_superpower_6_passive_sentinel_debounced_ast_differencer() {
+#[tokio::test]
+async fn test_superpower_6_passive_sentinel_debounced_ast_differencer() {
     let root = PathBuf::from("/home/dyna/TGS Projects/hagibis");
     let mut sentinel = PassiveSentinel::new(root, 150);
 

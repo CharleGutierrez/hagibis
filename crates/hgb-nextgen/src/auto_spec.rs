@@ -4,12 +4,14 @@ use hgb_core::auto_spec::{
 use hgb_core::{HgbError, Result};
 use hgb_storage::SpecStore;
 use std::path::Path;
+use hgb_core::providers::OllamaProvider;
+use hgb_core::traits::HgbProvider;
 
 pub struct AutoSpecEngine;
 
 impl AutoSpecEngine {
     /// Synthesize property-based invariant golden spec for a target function
-    pub fn synthesize_golden_spec(
+    pub async fn synthesize_golden_spec(
         target_fn: &str,
         target_module: &str,
         code_body: &str,
@@ -17,70 +19,48 @@ impl AutoSpecEngine {
         let spec_id = format!("spec-{}", target_fn);
         let hash = blake3::hash(code_body.as_bytes()).to_hex().to_string();
 
-        let mut invariant_rules = vec![
-            InvariantType::BoundaryNumeric,
-            InvariantType::BoundaryString,
-            InvariantType::NonNegativeOutput,
-        ];
+        let provider = OllamaProvider::new(None, Some("qwen2.5-coder:7b".to_string()));
+        let prompt = format!(
+            "Analyze the function '{target_fn}' in '{target_module}':
+{code_body}
+Generate property-based testing invariants and test vectors.
+Return ONLY JSON matching:
+{{
+  \"invariant_rules\": [\"BoundaryNumeric\" | \"BoundaryString\" | \"RoundTripIdentity\" | \"Idempotence\" | \"NonNegativeOutput\"],
+  \"golden_vectors\": [
+    {{
+      \"input_repr\": \"string\",
+      \"expected_result_pattern\": \"string\",
+      \"should_panic\": boolean
+    }}
+  ]
+}}",
+            target_fn = target_fn, target_module = target_module, code_body = code_body
+        );
 
-        let mut golden_vectors = vec![
-            TestVector {
-                input_repr: "0".to_string(),
-                expected_result_pattern: Some(">= 0".to_string()),
-                should_panic: false,
-            },
-            TestVector {
-                input_repr: "-1".to_string(),
-                expected_result_pattern: Some("error_or_zero".to_string()),
-                should_panic: false,
-            },
-            TestVector {
-                input_repr: "i64::MAX".to_string(),
-                expected_result_pattern: Some("no_overflow".to_string()),
-                should_panic: false,
-            },
-            TestVector {
-                input_repr: "\"\"".to_string(),
-                expected_result_pattern: Some("empty_or_error".to_string()),
-                should_panic: false,
-            },
-            TestVector {
-                input_repr: "\"<script>alert(1)</script>\"".to_string(),
-                expected_result_pattern: Some("escaped_or_sanitized".to_string()),
-                should_panic: false,
-            },
-            TestVector {
-                input_repr: "\"emoji_test_🦀🚀\"".to_string(),
-                expected_result_pattern: Some("valid_utf8".to_string()),
-                should_panic: false,
-            },
-        ];
+        let resp = provider.complete(&prompt, None).await.unwrap_or_else(|_| "{}".to_string());
+        let start = resp.find('{').unwrap_or(0);
+        let end = resp.rfind('}').unwrap_or(resp.len() - 1) + 1;
+        let json_str = &resp[start..end];
 
-        if code_body.contains("encode") || code_body.contains("decode") || code_body.contains("serialize") {
-            invariant_rules.push(InvariantType::RoundTripIdentity);
-            golden_vectors.push(TestVector {
-                input_repr: "sample_payload".to_string(),
-                expected_result_pattern: Some("identity_preserved".to_string()),
-                should_panic: false,
-            });
+        #[derive(serde::Deserialize)]
+        struct Resp {
+            invariant_rules: Vec<InvariantType>,
+            golden_vectors: Vec<TestVector>,
         }
 
-        if code_body.contains("format") || code_body.contains("normalize") || code_body.contains("clean") {
-            invariant_rules.push(InvariantType::Idempotence);
-            golden_vectors.push(TestVector {
-                input_repr: "unnormalized_input".to_string(),
-                expected_result_pattern: Some("idempotent_fixed_point".to_string()),
-                should_panic: false,
-            });
-        }
+        let parsed = serde_json::from_str::<Resp>(json_str).unwrap_or_else(|_| Resp {
+            invariant_rules: vec![],
+            golden_vectors: vec![],
+        });
 
         Ok(GoldenSpec {
             spec_id,
             target_function: target_fn.to_string(),
             target_module: target_module.to_string(),
             implementation_blake3: hash,
-            invariant_rules,
-            golden_vectors,
+            invariant_rules: parsed.invariant_rules,
+            golden_vectors: parsed.golden_vectors,
             created_at_rfc3339: chrono::Utc::now().to_rfc3339(),
         })
     }
@@ -92,6 +72,7 @@ impl AutoSpecEngine {
     ) -> Result<Vec<SpecExecutionReport>> {
         let specs = SpecStore::list_specs(&workspace_root)?;
         let mut reports = Vec::new();
+        let provider = OllamaProvider::new(None, Some("qwen2.5-coder:7b".to_string()));
 
         for spec in &specs {
             let total_tests = spec.golden_vectors.len();
@@ -100,12 +81,13 @@ impl AutoSpecEngine {
             let mut failures = Vec::new();
 
             for vector in &spec.golden_vectors {
-                // If input contains panic or forbidden crash patterns, simulate failure detection
-                let passes = if vector.input_repr.contains("FORCE_FAIL") {
-                    false
-                } else {
-                    true
-                };
+                let prompt = format!(
+                    "Evaluate if executing function '{}' with input '{}' satisfies expected pattern '{}'. Returns JSON: {{ \"passes\": bool, \"actual_result\": \"string\" }}",
+                    spec.target_function, vector.input_repr, vector.expected_result_pattern.as_deref().unwrap_or("")
+                );
+                let resp = provider.complete(&prompt, None).await.unwrap_or_default();
+                
+                let passes = resp.contains("\"passes\": true") || resp.contains("\"passes\":true");
 
                 if passes {
                     passed_tests += 1;
@@ -114,7 +96,7 @@ impl AutoSpecEngine {
                     failures.push(SpecViolation {
                         input_used: vector.input_repr.clone(),
                         expected: vector.expected_result_pattern.clone().unwrap_or_default(),
-                        actual: "Invariant assertion failed: unexpected behavior".to_string(),
+                        actual: "Invariant assertion failed dynamically evaluated by LLM".to_string(),
                         stack_trace: Some(format!("at {}:{}", spec.target_module, spec.target_function)),
                     });
                 }

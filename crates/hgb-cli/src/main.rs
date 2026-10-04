@@ -3029,11 +3029,11 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
                 let diff_output = std::process::Command::new("git").args(["diff", "HEAD"]).output()
                     .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
                     .unwrap_or_default();
-                auditor.audit_diff(&diff_output)
+                auditor.audit_diff(&diff_output).await
             } else if target.is_file() {
-                auditor.audit_file(&target).unwrap_or_else(|_| auditor.audit_code("", None))
+                match auditor.audit_file(&target).await { Ok(x) => x, Err(_) => auditor.audit_code("", None).await }
             } else {
-                auditor.audit_workspace(&target).unwrap_or_else(|_| auditor.audit_code("", None))
+                auditor.audit_workspace(&target).await.unwrap_or_else(|_| { let engine = tokio::runtime::Handle::current(); tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(auditor.audit_code("", None))) })
             };
 
             println!("\n{}", report.render_terminal_card());
@@ -4159,7 +4159,8 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             let tst = if let Some(t) = test {
                 std::fs::read_to_string(&t).unwrap_or_else(|_| "assert!(calculate(5));".to_string())
             } else {
-                "#[test] fn test_calc() { assert!(calculate(5)); }".to_string()
+                "#[tokio::test]
+async fn test_calc() { assert!(calculate(5)); }".to_string()
             };
             let resp = repl_helper.dispatch(HgbRequest::AntiPlaceboAudit {
                 source_code: src,

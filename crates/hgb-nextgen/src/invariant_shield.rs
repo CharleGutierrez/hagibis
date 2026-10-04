@@ -1,4 +1,6 @@
 use serde::{Deserialize, Serialize};
+use hgb_core::providers::OllamaProvider;
+use hgb_core::traits::HgbProvider;
 
 /// Categories of detected panic hazards
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -33,41 +35,45 @@ pub struct InvariantShieldEngine;
 
 impl InvariantShieldEngine {
     /// Scan source code for panic hazards and synthesize safe defensive replacements
-    pub fn audit_and_shield(file_path: &str, source: &str) -> InvariantAuditReport {
-        let mut hazards = Vec::new();
-        let mut repaired_lines = Vec::new();
+    pub async fn audit_and_shield(file_path: &str, source: &str) -> InvariantAuditReport {
+        let provider = OllamaProvider::new(None, Some("qwen2.5-coder:7b".to_string()));
+        let prompt = format!(
+            "Scan this code for panic hazards (unwrap, out of bounds, div by zero, lock reentrancy).
+Provide a list of hazards and a fully repaired source code string.
+Respond ONLY in JSON:
+{{
+  \"hazards\": [
+    {{
+      \"kind\": \"UncheckedUnwrap\" | \"UnboundedIndex\" | \"PotentialDivZero\" | \"LockReentrancy\",
+      \"line_number\": 10,
+      \"raw_line\": \"string\",
+      \"defensive_replacement\": \"string\"
+    }}
+  ],
+  \"auto_repaired_source\": \"full string\"
+}}
+Code:
+{}",
+            source
+        );
 
-        for (idx, line) in source.lines().enumerate() {
-            let line_num = idx + 1;
-            let mut rep_line = line.to_string();
+        let resp = provider.complete(&prompt, None).await.unwrap_or_default();
+        let start = resp.find('{').unwrap_or(0);
+        let end = resp.rfind('}').unwrap_or(resp.len() - 1) + 1;
+        let json_str = &resp[start..end];
 
-            // 1. Detect unchecked .unwrap()
-            if line.contains(".unwrap()") && !line.contains("// allow-unwrap") {
-                let fix = line.replace(".unwrap()", ".unwrap_or_default()");
-                hazards.push(PanicHazard {
-                    kind: HazardKind::UncheckedUnwrap,
-                    line_number: line_num,
-                    raw_line: line.trim().to_string(),
-                    defensive_replacement: fix.trim().to_string(),
-                });
-                rep_line = fix;
-            }
-            // 2. Detect potential division by zero
-            else if line.contains("/ 0") || (line.contains(" / ") && line.contains("divisor")) {
-                let fix = format!("/* guarded div */ if divisor != 0 {{ {} }} else {{ 0 }}", line.trim());
-                hazards.push(PanicHazard {
-                    kind: HazardKind::PotentialDivZero,
-                    line_number: line_num,
-                    raw_line: line.trim().to_string(),
-                    defensive_replacement: fix.clone(),
-                });
-                rep_line = fix;
-            }
-
-            repaired_lines.push(rep_line);
+        #[derive(serde::Deserialize)]
+        struct Resp {
+            hazards: Vec<PanicHazard>,
+            auto_repaired_source: String,
         }
 
-        let hazard_count = hazards.len();
+        let parsed = serde_json::from_str::<Resp>(json_str).unwrap_or_else(|_| Resp {
+            hazards: vec![],
+            auto_repaired_source: source.to_string(),
+        });
+
+        let hazard_count = parsed.hazards.len();
         let score = if hazard_count == 0 {
             100
         } else {
@@ -77,9 +83,9 @@ impl InvariantShieldEngine {
         InvariantAuditReport {
             file_path: file_path.to_string(),
             total_hazards: hazard_count,
-            hazards,
+            hazards: parsed.hazards,
             safety_score: score,
-            auto_repaired_source: repaired_lines.join("\n"),
+            auto_repaired_source: parsed.auto_repaired_source,
         }
     }
 }

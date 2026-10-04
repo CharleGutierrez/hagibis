@@ -1,4 +1,6 @@
 use regex::Regex;
+use hgb_core::providers::OllamaProvider;
+use hgb_core::traits::HgbProvider;
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
 
@@ -33,51 +35,22 @@ impl CompilerHealer {
     }
 
     /// Surgically heal code given failure diagnostic
-    pub fn heal_code(&self, code: &str, error: &ValidationError) -> String {
-        let mut fixed = code.to_string();
-
-        // 1. Missing imports
-        if error.message.contains("cannot find") || error.message.contains("not found in this scope") {
-            if error.message.contains("HashMap") && !fixed.contains("use std::collections::HashMap;") {
-                fixed = format!("use std::collections::HashMap;\n{}", fixed);
-            }
-            if error.message.contains("Arc") && !fixed.contains("use std::sync::Arc;") {
-                fixed = format!("use std::sync::Arc;\n{}", fixed);
-            }
-            if error.message.contains("PathBuf") && !fixed.contains("use std::path::PathBuf;") {
-                fixed = format!("use std::path::PathBuf;\n{}", fixed);
-            }
-        }
-
-        // 2. Mismatched type / expected &str vs String
-        if error.message.contains("mismatched types") {
-            if error.message.contains("expected `&str`, found `String`") {
-                fixed = fixed.replace("&String::from", "").replace(".to_string()", "");
-            } else if error.message.contains("expected `u32`, found `&str`") {
-                fixed = fixed.replace(r#"let x: u32 = "hello";"#, r#"let x: &str = "hello";"#);
-            }
-        }
-
-        // 3. Mutability mismatch
-        if error.message.contains("cannot borrow as mutable") || error.message.contains("requires `&mut`") {
-            fixed = fixed.replace("&self", "&mut self");
-        }
-
-        // 4. Off-by-one or inverted logic
-        if error.message.contains("assertion `left == right` failed") {
-            if fixed.contains("<= 0") {
-                fixed = fixed.replace("<= 0", "< 0");
-            } else if fixed.contains("false") && !fixed.contains("true") {
-                fixed = fixed.replace("false", "true");
-            }
-        }
-
-        // 5. Syntax repairs: missing closing semicolon or brace
-        if error.message.contains("expected `;`") && !fixed.trim().ends_with(';') && !fixed.trim().ends_with('}') {
-            fixed.push(';');
-        }
-
-        fixed
+    pub async fn heal_code(&self, code: &str, error: &ValidationError) -> String {
+        let provider = OllamaProvider::new(None, Some("qwen2.5-coder:7b".to_string()));
+        let prompt = format!(
+            "Fix the following Rust code based on the compiler error. Return ONLY the fully fixed code, nothing else, no markdown formatting.
+Code:
+{}
+Error:
+{}
+Error Code: {:?}
+Line Hint: {:?}",
+            code, error.message, error.error_code, error.line_hint
+        );
+        let resp = provider.complete(&prompt, None).await.unwrap_or_else(|_| code.to_string());
+        // Simple strip of markdown block if generated
+        let clean = resp.replace("```rust", "").replace("```", "").trim().to_string();
+        clean
     }
 }
 
@@ -140,7 +113,7 @@ impl SelfValidatingEngine {
     }
 
     /// Execute the self-validating loop, auto-healing compiler errors and test failures
-    pub fn validate(&self, goal: &str, code_patch: &str) -> ValidationReport {
+    pub async fn validate(&self, goal: &str, code_patch: &str) -> ValidationReport {
         let start = Instant::now();
         let companion_test = self.synthesize_companion_test(goal, code_patch);
 
@@ -154,7 +127,7 @@ impl SelfValidatingEngine {
             // Check if code has syntax / compiler / assertion defects
             if let Some(error) = Self::evaluate_code(&current_patch, &companion_test) {
                 // Intercept defect using CompilerHealer
-                let healed = self.healer.heal_code(&current_patch, &error);
+                let healed = self.healer.heal_code(&current_patch, &error).await;
                 if healed == current_patch {
                     // No further healing rule matched
                     break;
@@ -233,8 +206,8 @@ impl SelfValidatingEngine {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_companion_test_synthesis() {
+    #[tokio::test]
+async fn test_companion_test_synthesis() {
         let engine = SelfValidatingEngine::new();
         let patch = "pub fn verify_signature(token: &str) -> bool { !token.is_empty() }";
         let test = engine.synthesize_companion_test("verify valid auth tokens", patch);
@@ -242,11 +215,11 @@ mod tests {
         assert!(test.contains("assert!"));
     }
 
-    #[test]
-    fn test_self_healing_missing_hashmap_import() {
+    #[tokio::test]
+async fn test_self_healing_missing_hashmap_import() {
         let engine = SelfValidatingEngine::new();
         let broken_patch = "pub fn build_cache() -> HashMap<String, u32> { HashMap::new() }";
-        let report = engine.validate("initialize cache map", broken_patch);
+        let report = engine.validate("initialize cache map", broken_patch).await;
         assert!(report.passed);
         assert!(report.code_patch.contains("use std::collections::HashMap;"));
         assert_eq!(report.iterations, 2);

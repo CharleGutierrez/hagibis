@@ -6,6 +6,8 @@
 
 use crate::live_graph_watcher::LiveGraphWatcher;
 use serde::{Deserialize, Serialize};
+use crate::providers::OllamaProvider;
+use crate::traits::HgbProvider;
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -81,7 +83,7 @@ impl AmbientPredictor {
     }
 
     /// Predict next edits based on an edit event and current live AST graph
-    pub fn predict_next_edits(
+    pub async fn predict_next_edits(
         &self,
         event: &EditEvent,
         watcher: &LiveGraphWatcher,
@@ -90,6 +92,8 @@ impl AmbientPredictor {
         let mut predictions = Vec::new();
         let callers = watcher.find_callers(&event.symbol_name);
         let call_sites_count = callers.len();
+        
+        let provider = OllamaProvider::new(None, Some("qwen2.5-coder:7b".to_string()));
 
         for caller_rel_path in callers {
             // Skip the file where the edit occurred
@@ -100,47 +104,57 @@ impl AmbientPredictor {
             let full_path = watcher.workspace_root.join(&caller_rel_path);
             if let Ok(content) = fs::read_to_string(&full_path) {
                 let lines: Vec<&str> = content.lines().collect();
+                let mut target_line = 0;
+                let mut context = String::new();
                 for (idx, line) in lines.iter().enumerate() {
                     if line.contains(&event.symbol_name) {
-                        let line_no = idx + 1;
-                        let (diff, action, conf) = match &event.change_kind {
-                            EditKind::SignatureModified => {
-                                let old_call = event.old_snippet.as_deref().unwrap_or(&event.symbol_name);
-                                let new_call = event.new_snippet.as_deref().unwrap_or(&event.symbol_name);
-                                let modified_line = line.replace(old_call, new_call);
-                                let d = format!("@@ -{},1 +{},1 @@\n- {}\n+ {}", line_no, line_no, line.trim(), modified_line.trim());
-                                (d, format!("Update call-site of '{}' to match new signature", event.symbol_name), 92)
-                            }
-                            EditKind::TypeRenamed => {
-                                let old_type = event.old_snippet.as_deref().unwrap_or(&event.symbol_name);
-                                let new_type = event.new_snippet.as_deref().unwrap_or("NewType");
-                                let modified_line = line.replace(old_type, new_type);
-                                let d = format!("@@ -{},1 +{},1 @@\n- {}\n+ {}", line_no, line_no, line.trim(), modified_line.trim());
-                                (d, format!("Rename type reference '{}' -> '{}'", old_type, new_type), 96)
-                            }
-                            EditKind::FieldAddedOrRemoved => {
-                                let d = format!("@@ -{},1 +{},1 @@\n// Ensure struct construction initializes updated fields for {}", line_no, line_no, event.symbol_name);
-                                (d, format!("Reconcile struct fields for '{}'", event.symbol_name), 88)
-                            }
-                            _ => {
-                                let d = format!("@@ -{},1 +{},1 @@\n// Verify dependent invocation of {}", line_no, line_no, event.symbol_name);
-                                (d, format!("Verify dependent contract invocation for '{}'", event.symbol_name), 80)
-                            }
-                        };
-
+                        target_line = idx + 1;
+                        let start_idx = idx.saturating_sub(2);
+                        let end_idx = (idx + 3).min(lines.len());
+                        context = lines[start_idx..end_idx].join("\n");
+                        break;
+                    }
+                }
+                
+                if target_line > 0 {
+                    let prompt = format!(
+                        "Symbol '{}' in '{}' was modified (Kind: {:?}). Old: {:?}, New: {:?}.
+Here is a call site in '{}' at line {}:
+{}
+Predict the necessary next edit to fix this call site. Respond strictly with JSON:
+{{
+  \"suggested_action\": \"string\",
+  \"suggested_diff\": \"string (unified diff format)\",
+  \"confidence_score\": 85,
+  \"rationale\": \"string\"
+}}",
+                        event.symbol_name, event.file_path, event.change_kind, event.old_snippet, event.new_snippet,
+                        caller_rel_path, target_line, context
+                    );
+                    
+                    let resp = provider.complete(&prompt, None).await.unwrap_or_else(|_| "{}".to_string());
+                    let start_json = resp.find('{').unwrap_or(0);
+                    let end_json = resp.rfind('}').unwrap_or(resp.len() - 1) + 1;
+                    let json_str = &resp[start_json..end_json];
+                    
+                    #[derive(serde::Deserialize)]
+                    struct Pred {
+                        suggested_action: String,
+                        suggested_diff: String,
+                        confidence_score: u8,
+                        rationale: String,
+                    }
+                    
+                    if let Ok(p) = serde_json::from_str::<Pred>(json_str) {
                         predictions.push(PredictedNextEdit {
                             target_file: caller_rel_path.clone(),
-                            target_line: line_no,
+                            target_line,
                             affected_symbol: event.symbol_name.clone(),
-                            suggested_action: action,
-                            suggested_diff: diff,
-                            confidence_score: conf,
-                            rationale: format!(
-                                "Call-site in '{}' at line {} directly depends on modified symbol '{}'",
-                                caller_rel_path, line_no, event.symbol_name
-                            ),
+                            suggested_action: p.suggested_action,
+                            suggested_diff: p.suggested_diff,
+                            confidence_score: p.confidence_score,
+                            rationale: p.rationale,
                         });
-                        break; // One primary prediction per caller file
                     }
                 }
             }

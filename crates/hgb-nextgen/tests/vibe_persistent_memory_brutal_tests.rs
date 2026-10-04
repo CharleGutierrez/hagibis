@@ -325,7 +325,7 @@ async fn test_6_cockpit_slash_command_and_canvas_card_rendering() {
     let _ = std::env::set_current_dir(&ws);
 
     // 1. Test /mem status command
-    let status_card = CockpitVibeManager::handle_vibe_slash_command("/mem", "status");
+    let status_card = CockpitVibeManager::handle_vibe_slash_command("/mem", "status").await;
     assert!(status_card.is_some(), "/mem status must produce a card");
     if let Some(CockpitItem::MemoryCard(card)) = status_card {
         assert_eq!(card.action, "STATUS");
@@ -339,7 +339,7 @@ async fn test_6_cockpit_slash_command_and_canvas_card_rendering() {
     let rec_card = CockpitVibeManager::handle_vibe_slash_command(
         "/mem",
         "record Distributed Telemetry Ring Buffer => Zero-allocation bounded memory buffer"
-    );
+    ).await;
     assert!(rec_card.is_some(), "/mem record must produce a card");
     if let Some(CockpitItem::MemoryCard(card)) = rec_card {
         assert_eq!(card.action, "RECORD");
@@ -351,7 +351,7 @@ async fn test_6_cockpit_slash_command_and_canvas_card_rendering() {
     }
 
     // 3. Test /mem search command
-    let search_card = CockpitVibeManager::handle_vibe_slash_command("/mem", "search Microkernel");
+    let search_card = CockpitVibeManager::handle_vibe_slash_command("/mem", "search Microkernel").await;
     assert!(search_card.is_some(), "/mem search must produce a card");
     if let Some(CockpitItem::MemoryCard(card)) = search_card {
         assert_eq!(card.action, "SEARCH");

@@ -21,8 +21,8 @@ use std::path::{Path, PathBuf};
 // SUPERPOWER 1: Semantic Telepathy & Zero-Cost Local Vector RAG Tests
 // ============================================================================
 
-#[test]
-fn test_semantic_telepathy_hybrid_search_accuracy_and_speed() {
+#[tokio::test]
+async fn test_semantic_telepathy_hybrid_search_accuracy_and_speed() {
     let mut index = TelepathyIndex::new();
 
     // 1. Index sample AST symbols
@@ -70,8 +70,8 @@ fn test_semantic_telepathy_hybrid_search_accuracy_and_speed() {
     assert_eq!(results_semantic[0].document.name, "GeminiOAuthManager");
 }
 
-#[test]
-fn test_telepathy_automatic_source_file_slicing() {
+#[tokio::test]
+async fn test_telepathy_automatic_source_file_slicing() {
     let mut index = TelepathyIndex::new();
     let rust_code = r#"
 pub struct NetworkMesh {
@@ -96,8 +96,8 @@ pub fn broadcast_heartbeat(mesh: &NetworkMesh) -> bool {
 // SUPERPOWER 2: The Ghost Engine (Continuous Speculative Pre-Computation) Tests
 // ============================================================================
 
-#[test]
-fn test_ghost_engine_precomputation_and_instantaneous_adoption() {
+#[tokio::test]
+async fn test_ghost_engine_precomputation_and_instantaneous_adoption() {
     let mut ghost = GhostEngine::new("/workspace");
 
     // 1. Feed cursor context with an unimplemented stub
@@ -122,8 +122,8 @@ fn test_ghost_engine_precomputation_and_instantaneous_adoption() {
 // SUPERPOWER 3: The Council of Elders (Dual-Model Adversarial Review) Tests
 // ============================================================================
 
-#[test]
-fn test_council_of_elders_adversarial_debate_and_verdict() {
+#[tokio::test]
+async fn test_council_of_elders_adversarial_debate_and_verdict() {
     let council = CouncilEngine::new("Ollama Qwen2.5-Coder", "Gemini 2.5 Pro");
     let code = "fn hash_payload(data: &[u8]) -> [u8; 32] { blake3::hash(data).into() }";
     let prompt = "Verify zero-alloc cryptographic integrity in state engine";
@@ -148,8 +148,8 @@ fn test_council_of_elders_adversarial_debate_and_verdict() {
 // SUPERPOWER 4: Live Visual Hot-Reload & Pixel-Diff Radar Tests
 // ============================================================================
 
-#[test]
-fn test_pixel_diff_radar_layout_overflow_and_hot_reload_detection() {
+#[tokio::test]
+async fn test_pixel_diff_radar_layout_overflow_and_hot_reload_detection() {
     let radar = PixelDiffRadar::new(1200.0);
 
     // Initial clean DOM snapshot
@@ -184,8 +184,8 @@ fn test_pixel_diff_radar_layout_overflow_and_hot_reload_detection() {
 // SUPERPOWER 5: "Green-Light" Autonomous Spec-Driven TDD Tests
 // ============================================================================
 
-#[test]
-fn test_green_light_autonomous_spec_synthesis() {
+#[tokio::test]
+async fn test_green_light_autonomous_spec_synthesis() {
     let engine = GreenLightEngine::new("/workspace");
     let spec = r#"
 # Merkle Provenance Ledger Specification
@@ -206,8 +206,8 @@ fn test_green_light_autonomous_spec_synthesis() {
 // SUPERPOWER 6: Ephemeral Copy-on-Write Database Time-Machine Tests
 // ============================================================================
 
-#[test]
-fn test_db_time_machine_cow_sandboxing_and_sub_10us_rollback() {
+#[tokio::test]
+async fn test_db_time_machine_cow_sandboxing_and_sub_10us_rollback() {
     let mut tm = DbTimeMachine::new();
     let genesis_payload = b"HAGIBIS_DB_GENESIS_V1_RECORD_STORE_ROOT";
 
@@ -242,12 +242,12 @@ fn test_db_time_machine_cow_sandboxing_and_sub_10us_rollback() {
 // INTEGRATION: Cockpit Slash Commands & Superpower Cards
 // ============================================================================
 
-#[test]
-fn test_cockpit_superpower_slash_commands() {
+#[tokio::test]
+async fn test_cockpit_superpower_slash_commands() {
     use hgb_nextgen::cockpit::CockpitVibeManager;
 
     // 1. /telepathy
-    let card1 = CockpitVibeManager::handle_vibe_slash_command("/telepathy", "audio").expect("Must handle /telepathy");
+    let card1 = CockpitVibeManager::handle_vibe_slash_command("/telepathy", "audio").await.expect("Must handle /telepathy");
     if let hgb_nextgen::CockpitItem::TelepathyCard(card) = card1 {
         assert_eq!(card.query, "audio");
     } else {
@@ -255,7 +255,7 @@ fn test_cockpit_superpower_slash_commands() {
     }
 
     // 2. /ghost
-    let card2 = CockpitVibeManager::handle_vibe_slash_command("/ghost", "").expect("Must handle /ghost");
+    let card2 = CockpitVibeManager::handle_vibe_slash_command("/ghost", "").await.expect("Must handle /ghost");
     if let hgb_nextgen::CockpitItem::GhostCard(card) = card2 {
         assert!(card.confidence >= 0.8);
     } else {
@@ -263,7 +263,7 @@ fn test_cockpit_superpower_slash_commands() {
     }
 
     // 3. /council
-    let card3 = CockpitVibeManager::handle_vibe_slash_command("/council", "Optimize IPC").expect("Must handle /council");
+    let card3 = CockpitVibeManager::handle_vibe_slash_command("/council", "Optimize IPC").await.expect("Must handle /council");
     if let hgb_nextgen::CockpitItem::CouncilCard(card) = card3 {
         assert_eq!(card.topic, "Optimize IPC");
         assert!(card.confidence_score >= 90);
@@ -272,7 +272,7 @@ fn test_cockpit_superpower_slash_commands() {
     }
 
     // 4. /pixel
-    let card4 = CockpitVibeManager::handle_vibe_slash_command("/pixel", "http://localhost:3000").expect("Must handle /pixel");
+    let card4 = CockpitVibeManager::handle_vibe_slash_command("/pixel", "http://localhost:3000").await.expect("Must handle /pixel");
     if let hgb_nextgen::CockpitItem::PixelRadarCard(card) = card4 {
         assert_eq!(card.url, "http://localhost:3000");
     } else {
@@ -280,7 +280,7 @@ fn test_cockpit_superpower_slash_commands() {
     }
 
     // 5. /spec
-    let card5 = CockpitVibeManager::handle_vibe_slash_command("/spec", "# Spec\n- Requirement 1").expect("Must handle /spec");
+    let card5 = CockpitVibeManager::handle_vibe_slash_command("/spec", "# Spec\n- Requirement 1").await.expect("Must handle /spec");
     if let hgb_nextgen::CockpitItem::GreenLightCard(card) = card5 {
         assert!(card.all_passed);
     } else {
@@ -288,7 +288,7 @@ fn test_cockpit_superpower_slash_commands() {
     }
 
     // 6. /db
-    let card6 = CockpitVibeManager::handle_vibe_slash_command("/db", "snapshot").expect("Must handle /db");
+    let card6 = CockpitVibeManager::handle_vibe_slash_command("/db", "snapshot").await.expect("Must handle /db");
     if let hgb_nextgen::CockpitItem::DbTimeMachineCard(card) = card6 {
         assert!(card.verified);
     } else {

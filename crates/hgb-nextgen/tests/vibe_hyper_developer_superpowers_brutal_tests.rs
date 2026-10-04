@@ -48,8 +48,8 @@ impl Drop for TestWorkspace {
 // ---------------------------------------------------------------------------
 // 1. Ambient AST Follower Tests
 // ---------------------------------------------------------------------------
-#[test]
-fn test_ambient_ast_follower_enclosing_symbol_and_anchor() {
+#[tokio::test]
+async fn test_ambient_ast_follower_enclosing_symbol_and_anchor() {
     let ws = TestWorkspace::new("ambient_ast");
     let mut follower = AmbientAstFollower::new(ws.path());
 
@@ -99,20 +99,20 @@ impl ServiceRegistry {
 // ---------------------------------------------------------------------------
 // 2. Self-Validating Vibe Loop Tests
 // ---------------------------------------------------------------------------
-#[test]
-fn test_self_validating_vibe_loop_and_healer() {
+#[tokio::test]
+async fn test_self_validating_vibe_loop_and_healer() {
     let engine = SelfValidatingEngine::new();
 
     // Case A: Clean code with synthesized companion test
     let clean_patch = "pub fn calculate_checksum(data: &[u8]) -> u32 { data.len() as u32 }";
-    let report_a = engine.validate("verify non-empty checksum calculation", clean_patch);
+    let report_a = engine.validate("verify non-empty checksum calculation", clean_patch).await;
     assert!(report_a.passed);
     assert_eq!(report_a.iterations, 1);
     assert!(report_a.companion_test.contains("calculate_checksum"));
 
     // Case B: Broken code requiring CompilerHealer auto-healing for missing HashMap import
     let broken_patch = "pub fn init_routing_table() -> HashMap<String, u16> { HashMap::new() }";
-    let report_b = engine.validate("initialize routing table mapping", broken_patch);
+    let report_b = engine.validate("initialize routing table mapping", broken_patch).await;
     assert!(report_b.passed);
     assert!(report_b.iterations >= 2);
     assert!(report_b.code_patch.contains("use std::collections::HashMap;"));
@@ -122,8 +122,8 @@ fn test_self_validating_vibe_loop_and_healer() {
 // ---------------------------------------------------------------------------
 // 3. hgb forge Instant Scaffolder Tests
 // ---------------------------------------------------------------------------
-#[test]
-fn test_hgb_forge_scaffolds_all_five_stacks_under_2_seconds() {
+#[tokio::test]
+async fn test_hgb_forge_scaffolds_all_five_stacks_under_2_seconds() {
     let ws = TestWorkspace::new("forge_all");
 
     let stacks = [
@@ -156,8 +156,8 @@ fn test_hgb_forge_scaffolds_all_five_stacks_under_2_seconds() {
 // ---------------------------------------------------------------------------
 // 4. Adaptive KV-Cache & AST Pruner Tests
 // ---------------------------------------------------------------------------
-#[test]
-fn test_ast_pruner_folds_non_target_functions_and_preserves_focus() {
+#[tokio::test]
+async fn test_ast_pruner_folds_non_target_functions_and_preserves_focus() {
     let source = r#"use std::sync::Arc;
 
 pub struct Orchestrator {
@@ -202,8 +202,8 @@ pub fn teardown() {
 // ---------------------------------------------------------------------------
 // 5. Auto-Port Multiplexer Tests
 // ---------------------------------------------------------------------------
-#[test]
-fn test_port_multiplexer_scans_and_resolves_gateway() {
+#[tokio::test]
+async fn test_port_multiplexer_scans_and_resolves_gateway() {
     let report = PortMultiplexer::resolve_service_ports();
     assert!(report.scanned_ports >= 40);
     assert_eq!(report.collisions.len(), 4);
@@ -220,8 +220,8 @@ fn test_port_multiplexer_scans_and_resolves_gateway() {
 // ---------------------------------------------------------------------------
 // 6. PR Storyteller & Zero-Friction Branch Committer Tests
 // ---------------------------------------------------------------------------
-#[test]
-fn test_pr_storyteller_generates_atomic_commits_and_pr_story() {
+#[tokio::test]
+async fn test_pr_storyteller_generates_atomic_commits_and_pr_story() {
     let ws = TestWorkspace::new("pr_storyteller");
 
     let changed_files = vec![
@@ -233,7 +233,7 @@ fn test_pr_storyteller_generates_atomic_commits_and_pr_story() {
         "Cargo.toml".to_string(),
     ];
 
-    let story = PrStorytellerEngine::generate_story(ws.path(), &changed_files, false);
+    let story = PrStorytellerEngine::generate_story(ws.path(), &changed_files, false).await;
     assert!(story.pr_title.contains("feat(vibe)"));
     assert!(story.security_passed);
     assert!(!story.commits.is_empty());
@@ -245,14 +245,14 @@ fn test_pr_storyteller_generates_atomic_commits_and_pr_story() {
 // ---------------------------------------------------------------------------
 // 7. Cockpit TUI Integration: Slash Commands, State Vectors, & Card Rendering
 // ---------------------------------------------------------------------------
-#[test]
-fn test_cockpit_vibe_superpowers_integration() {
+#[tokio::test]
+async fn test_cockpit_vibe_superpowers_integration() {
     use hgb_nextgen::cockpit::{CockpitItem, CockpitState, CockpitVibeManager};
 
     let mut state = CockpitState::new();
 
     // 1. /ambient command
-    let ambient_item = CockpitVibeManager::handle_vibe_slash_command("/ambient", "crates/hgb-core/src/lib.rs:1")
+    let ambient_item = CockpitVibeManager::handle_vibe_slash_command("/ambient", "crates/hgb-core/src/lib.rs:1").await
         .expect("handle /ambient");
     if let CockpitItem::AmbientCard(card) = ambient_item {
         assert!(card.file_path.contains("lib.rs"));
@@ -263,7 +263,7 @@ fn test_cockpit_vibe_superpowers_integration() {
     }
 
     // 2. /validate command
-    let validate_item = CockpitVibeManager::handle_vibe_slash_command("/validate", "verify checksum function")
+    let validate_item = CockpitVibeManager::handle_vibe_slash_command("/validate", "verify checksum function").await
         .expect("handle /validate");
     if let CockpitItem::ValidationCard(card) = validate_item {
         assert!(card.passed);
@@ -274,7 +274,7 @@ fn test_cockpit_vibe_superpowers_integration() {
     }
 
     // 3. /forge command
-    let forge_item = CockpitVibeManager::handle_vibe_slash_command("/forge", "ratatui test_app")
+    let forge_item = CockpitVibeManager::handle_vibe_slash_command("/forge", "ratatui test_app").await
         .expect("handle /forge");
     if let CockpitItem::ForgeCard(card) = forge_item {
         assert_eq!(card.stack, "rust-ratatui-tui");
@@ -285,7 +285,7 @@ fn test_cockpit_vibe_superpowers_integration() {
     }
 
     // 4. /prune command
-    let prune_item = CockpitVibeManager::handle_vibe_slash_command("/prune", "crates/hgb-core/src/lib.rs")
+    let prune_item = CockpitVibeManager::handle_vibe_slash_command("/prune", "crates/hgb-core/src/lib.rs").await
         .expect("handle /prune");
     if let CockpitItem::PruneCard(card) = prune_item {
         assert!(card.file_path.contains("lib.rs"));
@@ -295,7 +295,7 @@ fn test_cockpit_vibe_superpowers_integration() {
     }
 
     // 5. /ports command
-    let ports_item = CockpitVibeManager::handle_vibe_slash_command("/ports", "")
+    let ports_item = CockpitVibeManager::handle_vibe_slash_command("/ports", "").await
         .expect("handle /ports");
     if let CockpitItem::PortCard(card) = ports_item {
         assert!(card.scanned_ports >= 40);
@@ -305,7 +305,7 @@ fn test_cockpit_vibe_superpowers_integration() {
     }
 
     // 6. /ship command
-    let ship_item = CockpitVibeManager::handle_vibe_slash_command("/ship", "")
+    let ship_item = CockpitVibeManager::handle_vibe_slash_command("/ship", "").await
         .expect("handle /ship");
     if let CockpitItem::ShipCard(card) = ship_item {
         assert!(card.pr_title.contains("feat(vibe)"));

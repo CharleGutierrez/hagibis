@@ -52,8 +52,8 @@ impl Drop for TempWorkspace {
 // ============================================================================
 // 1. Click-to-Code DOM-to-AST Teleportation
 // ============================================================================
-#[test]
-fn test_superpower_1_click_to_code_dom_to_ast_teleporter() {
+#[tokio::test]
+async fn test_superpower_1_click_to_code_dom_to_ast_teleporter() {
     let ws = TempWorkspace::new("dom_teleport");
     let src_dir = ws.path().join("src").join("components");
     fs::create_dir_all(&src_dir).unwrap();
@@ -91,8 +91,8 @@ fn test_superpower_1_click_to_code_dom_to_ast_teleporter() {
 // ============================================================================
 // 2. Mid-Flight Streaming Steering ("Brake & Nudge")
 // ============================================================================
-#[test]
-fn test_superpower_2_mid_flight_streaming_steering_controller() {
+#[tokio::test]
+async fn test_superpower_2_mid_flight_streaming_steering_controller() {
     let controller = StreamSteeringController::new();
     assert_eq!(controller.status(), SteeringStatus::Running);
 
@@ -196,8 +196,8 @@ async fn test_superpower_4_speculative_multi_worktree_arena_swarm() {
 // ============================================================================
 // 5. Semantic Context Anti-Rot Garbage Collector
 // ============================================================================
-#[test]
-fn test_superpower_5_semantic_context_anti_rot_garbage_collector() {
+#[tokio::test]
+async fn test_superpower_5_semantic_context_anti_rot_garbage_collector() {
     let history = vec![
         TurnRecord {
             turn_index: 1,
@@ -237,8 +237,8 @@ fn test_superpower_5_semantic_context_anti_rot_garbage_collector() {
 // ============================================================================
 // 6. Zero-Config Vibe-to-URL Instant Preview Deployer
 // ============================================================================
-#[test]
-fn test_superpower_6_zero_config_vibe_to_url_instant_preview_deployer() {
+#[tokio::test]
+async fn test_superpower_6_zero_config_vibe_to_url_instant_preview_deployer() {
     let ws = TempWorkspace::new("vibe_deployer");
 
     let report = VibeDeployerEngine::deploy_preview(ws.path(), 8080, DeployTarget::AxumApi)
@@ -258,8 +258,8 @@ fn test_superpower_6_zero_config_vibe_to_url_instant_preview_deployer() {
 // ============================================================================
 // 7. Full-Stack Polyglot Type-Drift Harmonizer
 // ============================================================================
-#[test]
-fn test_superpower_7_full_stack_polyglot_type_drift_harmonizer() {
+#[tokio::test]
+async fn test_superpower_7_full_stack_polyglot_type_drift_harmonizer() {
     let rust_source = r#"
 pub struct UserProfile {
     pub id: u64,
@@ -298,13 +298,13 @@ pub struct UserProfile {
 // ============================================================================
 // 8. Ambient Shadow Execution
 // ============================================================================
-#[test]
-fn test_superpower_8_ambient_shadow_execution_smoke_tests() {
+#[tokio::test]
+async fn test_superpower_8_ambient_shadow_execution_smoke_tests() {
     let ws = TempWorkspace::new("shadow_exec");
 
     // Case A: Clean diff
     let clean_diff = "fn calculate_total(subtotal: f64, tax: f64) -> f64 {\n    subtotal + tax\n}\n";
-    let rep_clean = ShadowExecutionEngine::execute_shadow_tests(ws.path(), "src/billing.rs", clean_diff);
+    let rep_clean = ShadowExecutionEngine::execute_shadow_tests(ws.path(), "src/billing.rs", clean_diff).await;
 
     assert!(rep_clean.passed);
     assert_eq!(rep_clean.tests_executed, 1);
@@ -313,7 +313,7 @@ fn test_superpower_8_ambient_shadow_execution_smoke_tests() {
 
     // Case B: Buggy diff with explicit panic
     let broken_diff = "fn process_order() {\n    panic!(\"unexpected crash\");\n}\n";
-    let rep_broken = ShadowExecutionEngine::execute_shadow_tests(ws.path(), "src/order.rs", broken_diff);
+    let rep_broken = ShadowExecutionEngine::execute_shadow_tests(ws.path(), "src/order.rs", broken_diff).await;
 
     assert!(!rep_broken.passed);
     assert!(rep_broken.alert_message.is_some());
@@ -323,8 +323,8 @@ fn test_superpower_8_ambient_shadow_execution_smoke_tests() {
 // ============================================================================
 // 9. Non-Destructive Database Time-Machine & Live Migration Synthesizer
 // ============================================================================
-#[test]
-fn test_superpower_9_nondestructive_db_time_machine_and_migration_synthesizer() {
+#[tokio::test]
+async fn test_superpower_9_nondestructive_db_time_machine_and_migration_synthesizer() {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute(
         "CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT NOT NULL);",
@@ -410,8 +410,8 @@ fn test_superpower_10_autonomous_zero_local_proxy_fabric() {
 // ============================================================================
 // 11. Speculative Token Pre-Computation (Ghost-Typing Engine)
 // ============================================================================
-#[test]
-fn test_superpower_11_speculative_ghost_typing_engine() {
+#[tokio::test]
+async fn test_superpower_11_speculative_ghost_typing_engine() {
     let engine = GhostTypingEngine::new();
 
     // 1. Prefetch initial cached speculative token
@@ -438,8 +438,8 @@ fn test_superpower_11_speculative_ghost_typing_engine() {
 // ============================================================================
 // 12. Ambient Formal Invariant & Panic Shield
 // ============================================================================
-#[test]
-fn test_superpower_12_ambient_formal_invariant_and_panic_shield() {
+#[tokio::test]
+async fn test_superpower_12_ambient_formal_invariant_and_panic_shield() {
     let buggy_source = r#"
 pub fn parse_and_divide(input: &str, divisor: i32) -> i32 {
     let val = input.parse::<i32>().unwrap();
@@ -448,7 +448,7 @@ pub fn parse_and_divide(input: &str, divisor: i32) -> i32 {
 }
 "#;
 
-    let report = InvariantShieldEngine::audit_and_shield("src/math.rs", buggy_source);
+    let report = InvariantShieldEngine::audit_and_shield("src/math.rs", buggy_source).await;
 
     assert_eq!(report.total_hazards, 2);
     assert!(report.safety_score < 80);
@@ -463,8 +463,8 @@ pub fn parse_and_divide(input: &str, divisor: i32) -> i32 {
 // ============================================================================
 // 13. Interactive Living Architecture DAG Visualizer
 // ============================================================================
-#[test]
-fn test_superpower_13_living_architecture_dag_visualizer() {
+#[tokio::test]
+async fn test_superpower_13_living_architecture_dag_visualizer() {
     let ws = TempWorkspace::new("arch_dag");
 
     let topology = ArchitectureDagVisualizer::discover_topology(ws.path());
@@ -481,8 +481,8 @@ fn test_superpower_13_living_architecture_dag_visualizer() {
 // ============================================================================
 // 14. Bidirectional Streaming Voice Co-Pilot
 // ============================================================================
-#[test]
-fn test_superpower_14_bidirectional_streaming_voice_copilot() {
+#[tokio::test]
+async fn test_superpower_14_bidirectional_streaming_voice_copilot() {
     // Generate synthetic PCM audio with active speech energy
     let mut pcm_bytes = Vec::new();
     for i in 0..1000 {
@@ -508,7 +508,7 @@ async fn test_superpower_15_cockpit_tui_slash_commands_integration() {
     let mut state = CockpitState::new();
 
     // 1. /teleport
-    let item_teleport = CockpitVibeManager::handle_vibe_slash_command("/teleport", "").expect("handle /teleport");
+    let item_teleport = CockpitVibeManager::handle_vibe_slash_command("/teleport", "").await.expect("handle /teleport");
     if let CockpitItem::DomTeleportCard(card) = item_teleport {
         assert_eq!(card.selector, "button.checkout-btn");
         state.teleport_cards.push(card);
@@ -517,7 +517,7 @@ async fn test_superpower_15_cockpit_tui_slash_commands_integration() {
     }
 
     // 2. /steer
-    let item_steer = CockpitVibeManager::handle_vibe_slash_command("/steer", "Use Tailwind grid").expect("handle /steer");
+    let item_steer = CockpitVibeManager::handle_vibe_slash_command("/steer", "Use Tailwind grid").await.expect("handle /steer");
     if let CockpitItem::SteerCard(card) = item_steer {
         assert_eq!(card.instruction, "Use Tailwind grid");
         state.steer_cards.push(card);
@@ -526,7 +526,7 @@ async fn test_superpower_15_cockpit_tui_slash_commands_integration() {
     }
 
     // 3. /sandbox
-    let item_sandbox = CockpitVibeManager::handle_vibe_slash_command("/sandbox", "echo 'ok'").expect("handle /sandbox");
+    let item_sandbox = CockpitVibeManager::handle_vibe_slash_command("/sandbox", "echo 'ok'").await.expect("handle /sandbox");
     if let CockpitItem::SandboxCard(card) = item_sandbox {
         assert!(card.security_passed);
         state.sandbox_cards.push(card);
@@ -535,7 +535,7 @@ async fn test_superpower_15_cockpit_tui_slash_commands_integration() {
     }
 
     // 4. /arena
-    let item_arena = CockpitVibeManager::handle_vibe_slash_command("/arena", "caching strategy").expect("handle /arena");
+    let item_arena = CockpitVibeManager::handle_vibe_slash_command("/arena", "caching strategy").await.expect("handle /arena");
     if let CockpitItem::ArenaCard(card) = item_arena {
         assert_eq!(card.candidates_count, 3);
         state.arena_cards.push(card);
@@ -544,7 +544,7 @@ async fn test_superpower_15_cockpit_tui_slash_commands_integration() {
     }
 
     // 5. /gc
-    let item_gc = CockpitVibeManager::handle_vibe_slash_command("/gc", "").expect("handle /gc");
+    let item_gc = CockpitVibeManager::handle_vibe_slash_command("/gc", "").await.expect("handle /gc");
     if let CockpitItem::GcCard(card) = item_gc {
         assert!(card.tokens_saved > 0);
         state.gc_cards.push(card);
@@ -553,7 +553,7 @@ async fn test_superpower_15_cockpit_tui_slash_commands_integration() {
     }
 
     // 6. /deploy
-    let item_deploy = CockpitVibeManager::handle_vibe_slash_command("/deploy", "8080").expect("handle /deploy");
+    let item_deploy = CockpitVibeManager::handle_vibe_slash_command("/deploy", "8080").await.expect("handle /deploy");
     if let CockpitItem::DeployCard(card) = item_deploy {
         assert!(card.public_url.contains("preview.hgb.dev"));
         state.deploy_cards.push(card);
@@ -562,7 +562,7 @@ async fn test_superpower_15_cockpit_tui_slash_commands_integration() {
     }
 
     // 7. /harmonize
-    let item_harmonize = CockpitVibeManager::handle_vibe_slash_command("/harmonize", "pub struct Order { pub id: u64 }").expect("handle /harmonize");
+    let item_harmonize = CockpitVibeManager::handle_vibe_slash_command("/harmonize", "pub struct Order { pub id: u64 }").await.expect("handle /harmonize");
     if let CockpitItem::HarmonizerCard(card) = item_harmonize {
         assert_eq!(card.models_count, 1);
         state.harmonizer_cards.push(card);
@@ -571,7 +571,7 @@ async fn test_superpower_15_cockpit_tui_slash_commands_integration() {
     }
 
     // 8. /shadow
-    let item_shadow = CockpitVibeManager::handle_vibe_slash_command("/shadow", "").expect("handle /shadow");
+    let item_shadow = CockpitVibeManager::handle_vibe_slash_command("/shadow", "").await.expect("handle /shadow");
     if let CockpitItem::ShadowExecCard(card) = item_shadow {
         assert!(card.passed);
         state.shadow_cards.push(card);
@@ -580,7 +580,7 @@ async fn test_superpower_15_cockpit_tui_slash_commands_integration() {
     }
 
     // 9. /dbmig
-    let item_dbmig = CockpitVibeManager::handle_vibe_slash_command("/dbmig", "").expect("handle /dbmig");
+    let item_dbmig = CockpitVibeManager::handle_vibe_slash_command("/dbmig", "").await.expect("handle /dbmig");
     if let CockpitItem::DbMigrationCard(card) = item_dbmig {
         assert_eq!(card.table_name, "users");
         state.db_mig_cards.push(card);
@@ -589,7 +589,7 @@ async fn test_superpower_15_cockpit_tui_slash_commands_integration() {
     }
 
     // 10. /zeroproxy
-    let item_zeroproxy = CockpitVibeManager::handle_vibe_slash_command("/zeroproxy", "/v1/charges").expect("handle /zeroproxy");
+    let item_zeroproxy = CockpitVibeManager::handle_vibe_slash_command("/zeroproxy", "/v1/charges").await.expect("handle /zeroproxy");
     if let CockpitItem::ZeroProxyCard(card) = item_zeroproxy {
         assert_eq!(card.schema_inferred, "PaymentIntent");
         state.zero_proxy_cards.push(card);
@@ -598,7 +598,7 @@ async fn test_superpower_15_cockpit_tui_slash_commands_integration() {
     }
 
     // 11. /ghosttype
-    let item_ghosttype = CockpitVibeManager::handle_vibe_slash_command("/ghosttype", "pub fn ").expect("handle /ghosttype");
+    let item_ghosttype = CockpitVibeManager::handle_vibe_slash_command("/ghosttype", "pub fn ").await.expect("handle /ghosttype");
     if let CockpitItem::GhostTypingCard(card) = item_ghosttype {
         assert_eq!(card.trigger_prefix, "pub fn ");
         state.ghost_typing_cards.push(card);
@@ -607,7 +607,7 @@ async fn test_superpower_15_cockpit_tui_slash_commands_integration() {
     }
 
     // 12. /invariant
-    let item_invariant = CockpitVibeManager::handle_vibe_slash_command("/invariant", "").expect("handle /invariant");
+    let item_invariant = CockpitVibeManager::handle_vibe_slash_command("/invariant", "").await.expect("handle /invariant");
     if let CockpitItem::InvariantCard(card) = item_invariant {
         assert!(card.total_hazards >= 1);
         state.invariant_cards.push(card);
@@ -616,7 +616,7 @@ async fn test_superpower_15_cockpit_tui_slash_commands_integration() {
     }
 
     // 13. /archdag
-    let item_archdag = CockpitVibeManager::handle_vibe_slash_command("/archdag", "").expect("handle /archdag");
+    let item_archdag = CockpitVibeManager::handle_vibe_slash_command("/archdag", "").await.expect("handle /archdag");
     if let CockpitItem::ArchitectureDagCard(card) = item_archdag {
         assert_eq!(card.nodes_count, 4);
         state.architecture_dag_cards.push(card);
@@ -625,7 +625,7 @@ async fn test_superpower_15_cockpit_tui_slash_commands_integration() {
     }
 
     // 14. /voice
-    let item_voice = CockpitVibeManager::handle_vibe_slash_command("/voice", "").expect("handle /voice");
+    let item_voice = CockpitVibeManager::handle_vibe_slash_command("/voice", "").await.expect("handle /voice");
     if let CockpitItem::VoiceCoPilotCard(card) = item_voice {
         assert!(card.intent_detected);
         state.voice_copilot_cards.push(card);

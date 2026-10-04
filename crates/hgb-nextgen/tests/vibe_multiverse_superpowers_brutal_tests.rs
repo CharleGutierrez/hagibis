@@ -22,8 +22,8 @@ use std::path::{Path, PathBuf};
 // SUPERPOWER 1: Chrono-Warp Omni-Undo Tests
 // ============================================================================
 
-#[test]
-fn test_chrono_warp_4d_capture_and_sub_50ms_atomic_rollback() {
+#[tokio::test]
+async fn test_chrono_warp_4d_capture_and_sub_50ms_atomic_rollback() {
     let mut engine = ChronoWarpEngine::new("/tmp/hgb_chrono_warp_test");
 
     // 1. Setup dimensions
@@ -99,8 +99,8 @@ async fn test_phantom_swarm_traffic_and_percentiles() {
 // SUPERPOWER 3: Zero-Friction Wiretap & Contract Healer Tests
 // ============================================================================
 
-#[test]
-fn test_wiretap_drift_detection_and_dual_patching() {
+#[tokio::test]
+async fn test_wiretap_drift_detection_and_dual_patching() {
     let wiretap = WiretapEngine::new();
 
     let expected = vec![
@@ -146,8 +146,8 @@ fn test_wiretap_drift_detection_and_dual_patching() {
 // SUPERPOWER 4: Hallucination Sentry Package Fact-Checker Tests
 // ============================================================================
 
-#[test]
-fn test_hallucination_sentry_multi_ecosystem_verification() {
+#[tokio::test]
+async fn test_hallucination_sentry_multi_ecosystem_verification() {
     let sentry = HallucinationSentry::new();
 
     // 1. Cargo.toml audit with hallucinated crate `serde-super`
@@ -186,8 +186,8 @@ ratatui = "0.29"
 // SUPERPOWER 5: Direct Clipboard Xerox Component Engine Tests
 // ============================================================================
 
-#[test]
-fn test_clipboard_xerox_image_to_component_synthesis() {
+#[tokio::test]
+async fn test_clipboard_xerox_image_to_component_synthesis() {
     let xerox = ClipboardXeroxEngine::new();
     let placeholder_image_bytes = vec![255u8; 1280 * 720 * 3];
 
@@ -213,8 +213,8 @@ fn test_clipboard_xerox_image_to_component_synthesis() {
 // SUPERPOWER 6: Token & Wattage Governor Tests
 // ============================================================================
 
-#[test]
-fn test_wattage_governor_smart_routing_and_budget_caps() {
+#[tokio::test]
+async fn test_wattage_governor_smart_routing_and_budget_caps() {
     let config = GovernorConfig {
         daily_budget_usd: 0.10, // strict 10 cents cap
         session_budget_usd: 0.05,
@@ -260,12 +260,12 @@ fn test_wattage_governor_smart_routing_and_budget_caps() {
 // INTEGRATION: Cockpit Slash Commands for Multiverse Superpowers
 // ============================================================================
 
-#[test]
-fn test_cockpit_multiverse_slash_commands() {
+#[tokio::test]
+async fn test_cockpit_multiverse_slash_commands() {
     use hgb_nextgen::cockpit::CockpitVibeManager;
 
     // 1. /warp
-    let item1 = CockpitVibeManager::handle_vibe_slash_command("/warp", "").expect("Must handle /warp");
+    let item1 = CockpitVibeManager::handle_vibe_slash_command("/warp", "").await.expect("Must handle /warp");
     if let hgb_nextgen::CockpitItem::ChronoWarpCard(card) = item1 {
         assert_eq!(card.action, "4D SNAPSHOT CAPTURED");
     } else {
@@ -273,7 +273,7 @@ fn test_cockpit_multiverse_slash_commands() {
     }
 
     // 2. /traffic
-    let item2 = CockpitVibeManager::handle_vibe_slash_command("/traffic", "http://localhost:3000").expect("Must handle /traffic");
+    let item2 = CockpitVibeManager::handle_vibe_slash_command("/traffic", "http://localhost:3000").await.expect("Must handle /traffic");
     if let hgb_nextgen::CockpitItem::PhantomSwarmCard(card) = item2 {
         assert_eq!(card.concurrency, 10);
         assert!(card.rps > 0.0);
@@ -282,7 +282,7 @@ fn test_cockpit_multiverse_slash_commands() {
     }
 
     // 3. /wiretap
-    let item3 = CockpitVibeManager::handle_vibe_slash_command("/wiretap", "/api/v1/auth").expect("Must handle /wiretap");
+    let item3 = CockpitVibeManager::handle_vibe_slash_command("/wiretap", "/api/v1/auth").await.expect("Must handle /wiretap");
     if let hgb_nextgen::CockpitItem::WiretapCard(card) = item3 {
         assert_eq!(card.endpoint, "/api/v1/auth");
     } else {
@@ -290,7 +290,7 @@ fn test_cockpit_multiverse_slash_commands() {
     }
 
     // 4. /sentry
-    let item4 = CockpitVibeManager::handle_vibe_slash_command("/sentry", "Cargo.toml").expect("Must handle /sentry");
+    let item4 = CockpitVibeManager::handle_vibe_slash_command("/sentry", "Cargo.toml").await.expect("Must handle /sentry");
     if let hgb_nextgen::CockpitItem::HallucinationSentryCard(card) = item4 {
         assert_eq!(card.manifest, "Cargo.toml");
         assert_eq!(card.hallucinated, 1);
@@ -299,7 +299,7 @@ fn test_cockpit_multiverse_slash_commands() {
     }
 
     // 5. /xerox
-    let item5 = CockpitVibeManager::handle_vibe_slash_command("/xerox", "proxyup.png").expect("Must handle /xerox");
+    let item5 = CockpitVibeManager::handle_vibe_slash_command("/xerox", "proxyup.png").await.expect("Must handle /xerox");
     if let hgb_nextgen::CockpitItem::ClipboardXeroxCard(card) = item5 {
         assert!(card.component_name == "Component" || card.component_name == "Clipboard Empty or Format Not Supported");
     } else {
@@ -307,7 +307,7 @@ fn test_cockpit_multiverse_slash_commands() {
     }
 
     // 6. /governor
-    let item6 = CockpitVibeManager::handle_vibe_slash_command("/governor", "").expect("Must handle /governor");
+    let item6 = CockpitVibeManager::handle_vibe_slash_command("/governor", "").await.expect("Must handle /governor");
     if let hgb_nextgen::CockpitItem::WattageGovernorCard(card) = item6 {
         assert!(card.power_mw > 0.0);
     } else {

@@ -164,8 +164,8 @@ async fn test_pillar2_package_guard_heuristics_caching_and_security_shield() {
 // =========================================================================
 // PILLAR 3: NO-LEAK SECRET SENTINEL (ENV SENTINEL)
 // =========================================================================
-#[test]
-fn test_pillar3_env_sentinel_polyglot_scanner_entropy_and_shredder() {
+#[tokio::test]
+async fn test_pillar3_env_sentinel_polyglot_scanner_entropy_and_shredder() {
     let ws = create_temp_dir("env_sentinel");
 
     // 1. Create polyglot files
@@ -346,8 +346,8 @@ async fn test_pillar4_local_proxy_fabric_http_rest_crud_and_synthetic_data() {
 // =========================================================================
 // PILLAR 5: AMBIENT EXECUTION RECORDER (TRACE RING BUFFER)
 // =========================================================================
-#[test]
-fn test_pillar5_trace_ring_buffer_bounded_capacity_and_post_mortem() {
+#[tokio::test]
+async fn test_pillar5_trace_ring_buffer_bounded_capacity_and_post_mortem() {
     let ring = TraceRingBuffer::new(4);
     assert!(ring.is_empty());
 
@@ -379,8 +379,8 @@ fn test_pillar5_trace_ring_buffer_bounded_capacity_and_post_mortem() {
 // =========================================================================
 // PILLAR 6: ATMOSPHERIC GIT WORKTREES & SEMANTIC STASHING
 // =========================================================================
-#[test]
-fn test_pillar6_atmospheric_worktree_lifecycle_and_semantic_stash() {
+#[tokio::test]
+async fn test_pillar6_atmospheric_worktree_lifecycle_and_semantic_stash() {
     let ws = create_temp_dir("worktree_test");
 
     // Initialize temporary git repo

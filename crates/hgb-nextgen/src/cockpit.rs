@@ -1212,7 +1212,7 @@ pub struct CockpitVibeManager;
 
 impl CockpitVibeManager {
     /// Slash command parser and dispatcher for next-gen powers
-    pub fn handle_vibe_slash_command(cmd: &str, arg: &str) -> Option<CockpitItem> {
+    pub async fn handle_vibe_slash_command(cmd: &str, arg: &str) -> Option<CockpitItem> {
         match cmd {
             "/telepathy" => {
                 let start = std::time::Instant::now();
@@ -1543,7 +1543,7 @@ impl CockpitVibeManager {
                 let goal = if arg.is_empty() { "ensure core system invariants hold" } else { arg };
                 let sample_code = "pub fn execute_vibe_cycle() -> bool { true }";
                 let engine = crate::self_validating::SelfValidatingEngine::new();
-                let report = engine.validate(goal, sample_code);
+                let report = engine.validate(goal, sample_code).await;
                 Some(CockpitItem::ValidationCard(ValidationCardItem {
                     goal: report.goal,
                     passed: report.passed,
@@ -1634,7 +1634,7 @@ impl CockpitVibeManager {
                     "crates/hgb-nextgen/src/port_multiplexer.rs".to_string(),
                     "crates/hgb-nextgen/src/pr_storyteller.rs".to_string(),
                 ];
-                let story = crate::pr_storyteller::PrStorytellerEngine::generate_story(&ws_path, &changed_files, false);
+                let story = crate::pr_storyteller::PrStorytellerEngine::generate_story(&ws_path, &changed_files, false).await;
                 Some(CockpitItem::ShipCard(ShipCardItem {
                     pr_title: story.pr_title,
                     commits_count: story.commits.len(),
@@ -1714,9 +1714,10 @@ impl CockpitVibeManager {
             "/redteam" | "/audit" => {
                 let auditor = crate::redteam::RedTeamAuditor::new();
                 let ws_path = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-                let report = auditor.audit_workspace(&ws_path).unwrap_or_else(|_| {
-                    auditor.audit_code("SELECT * FROM users WHERE id = 1;", None)
-                });
+                let report = match auditor.audit_workspace(&ws_path).await {
+                    Ok(r) => r,
+                    Err(_) => auditor.audit_code("SELECT * FROM users WHERE id = 1;", None).await,
+                };
                 let top_findings = report.findings.iter().take(3).map(|f| format!("{} [{}] {}", f.severity.badge(), f.category.name(), f.title)).collect();
                 Some(CockpitItem::RedTeamCard(RedTeamCardItem {
                     verdict: format!("{:?}", report.verdict),
@@ -1887,7 +1888,7 @@ impl CockpitVibeManager {
                 } else {
                     arg
                 };
-                let rep = crate::shadow_exec::ShadowExecutionEngine::execute_shadow_tests(&ws_path, "src/lib.rs", diff_content);
+                let rep = crate::shadow_exec::ShadowExecutionEngine::execute_shadow_tests(&ws_path, "src/lib.rs", diff_content).await;
                 Some(CockpitItem::ShadowExecCard(ShadowExecCardItem {
                     modified_file: rep.modified_file,
                     tests_count: rep.tests_executed,
@@ -1974,7 +1975,7 @@ impl CockpitVibeManager {
                 } else {
                     arg
                 };
-                let rep = crate::invariant_shield::InvariantShieldEngine::audit_and_shield("src/lib.rs", sample_code);
+                let rep = crate::invariant_shield::InvariantShieldEngine::audit_and_shield("src/lib.rs", sample_code).await;
                 let first_haz = rep.hazards.first().map(|h| format!("{:?} at L{}", h.kind, h.line_number));
                 Some(CockpitItem::InvariantCard(InvariantCardItem {
                     file_path: rep.file_path,
@@ -5926,7 +5927,7 @@ impl CockpitState {
                                 continue;
                             }
                             KeyCode::F(6) => {
-                                if let Some(CockpitItem::ValidationCard(c)) = CockpitVibeManager::handle_vibe_slash_command("/validate", "verify system invariants") {
+                                if let Some(CockpitItem::ValidationCard(c)) = CockpitVibeManager::handle_vibe_slash_command("/validate", "verify system invariants").await {
                                     self.validation_cards.push(c);
                                     hgb_core::play_vibe_chime(true);
                                 }
@@ -5942,7 +5943,7 @@ impl CockpitState {
                                     let id = self.browser_incident_cards[pos].incident_id.clone();
                                     self.add_system_notice(format!("Resolved incident {} via 1-Click Heal", id));
                                     hgb_core::play_vibe_chime(true);
-                                } else if let Some(CockpitItem::BrowserIncidentCard(c)) = CockpitVibeManager::handle_vibe_slash_command("/hud", "inspect") {
+                                } else if let Some(CockpitItem::BrowserIncidentCard(c)) = CockpitVibeManager::handle_vibe_slash_command("/hud", "inspect").await {
                                     self.browser_incident_cards.push(c);
                                     hgb_core::play_vibe_chime(true);
                                 }
@@ -6120,7 +6121,7 @@ impl CockpitState {
                                             } else {
                                                 "".to_string()
                                             };
-                                            if let Some(item) = CockpitVibeManager::handle_vibe_slash_command(cmd, &rest) {
+                                            if let Some(item) = CockpitVibeManager::handle_vibe_slash_command(cmd, &rest).await {
                                                 match item {
                                                     CockpitItem::TelepathyCard(c) => self.telepathy_cards.push(c),
                                                     CockpitItem::GhostCard(c) => self.ghost_cards.push(c),
@@ -6277,8 +6278,8 @@ impl CockpitApp {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_cockpit_state_transitions() {
+    #[tokio::test]
+async fn test_cockpit_state_transitions() {
         let mut state = CockpitState::new();
         let node = CockpitDagNode::new("n1", "Tokenizer", "gemini-2.5-flash");
         state.add_node(node);
@@ -6293,8 +6294,8 @@ mod tests {
         assert_eq!(state.nodes[0].status, CockpitNodeStatus::Succeeded { duration_ms: 120 });
     }
 
-    #[test]
-    fn test_cockpit_steering_actions() {
+    #[tokio::test]
+async fn test_cockpit_steering_actions() {
         let mut state = CockpitState::new();
         let node = CockpitDagNode::new("n1", "Tokenizer", "gemini-2.5-flash");
         state.add_node(node);
@@ -6318,8 +6319,8 @@ mod tests {
         assert!(matches!(state.nodes[0].status, CockpitNodeStatus::Failed { .. }));
     }
 
-    #[test]
-    fn test_cockpit_tabs_cycling() {
+    #[tokio::test]
+async fn test_cockpit_tabs_cycling() {
         let mut state = CockpitState::new();
         assert_eq!(state.active_tab, CockpitActiveTab::LiveStream);
         state.next_tab();
@@ -6332,8 +6333,8 @@ mod tests {
         assert_eq!(state.active_tab, CockpitActiveTab::BackgroundTasks);
     }
 
-    #[test]
-    fn test_cockpit_headless_render() {
+    #[tokio::test]
+async fn test_cockpit_headless_render() {
         let mut state = CockpitState::new();
         state.add_node(CockpitDagNode::new("n1", "Root Task", "gemini-2.5-pro"));
         state.add_artifact_diff(CockpitArtifactDiff::new("src/main.rs", 10, 2, "@@ -1,2 +1,3 @@\n+test"));
@@ -6346,8 +6347,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_scrollbar_mouse_click_up_down() {
+    #[tokio::test]
+async fn test_scrollbar_mouse_click_up_down() {
         let mut state = CockpitState::new();
         state.chat_scroll = 10;
 
@@ -6371,8 +6372,8 @@ mod tests {
         assert_eq!(state.chat_scroll, 10);
     }
 
-    #[test]
-    fn test_scrollbar_mouse_drag_and_track_click() {
+    #[tokio::test]
+async fn test_scrollbar_mouse_drag_and_track_click() {
         let mut state = CockpitState::new();
         state.chat_scroll = 0;
 
@@ -6401,8 +6402,8 @@ mod tests {
         assert!(state.chat_scroll >= 45 && state.chat_scroll <= 55);
     }
 
-    #[test]
-    fn test_scroll_pill_click_to_bottom() {
+    #[tokio::test]
+async fn test_scroll_pill_click_to_bottom() {
         let mut state = CockpitState::new();
         state.chat_scroll = 42;
 

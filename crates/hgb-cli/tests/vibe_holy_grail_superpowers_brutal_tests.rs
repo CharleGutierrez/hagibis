@@ -49,8 +49,8 @@ impl Drop for TempTestDir {
 // =========================================================================
 // 1. CDP LIVE PATCHING & IN-MEMORY RUNTIME INJECTOR
 // =========================================================================
-#[test]
-fn test_cdp_live_patching_css_js_dom() {
+#[tokio::test]
+async fn test_cdp_live_patching_css_js_dom() {
     // 1. Inject live CSS rule
     let css_rep = CdpLivePatcher::inject_css("button.vibe-cta", "background-color", "#3b82f6")
         .expect("CSS live patch should succeed");
@@ -79,8 +79,8 @@ fn test_cdp_live_patching_css_js_dom() {
 // =========================================================================
 // 2. AST SKELETON LENS & CONTEXT TOKEN BUDGETER
 // =========================================================================
-#[test]
-fn test_ast_skeleton_lens_folding_and_token_compression() {
+#[tokio::test]
+async fn test_ast_skeleton_lens_folding_and_token_compression() {
     let large_code = r#"
 import { useState, useEffect } from 'react';
 import { fetchOrders, calculateTax } from '../services/orderApi';
@@ -155,8 +155,8 @@ async fn test_lakandiwa_triple_model_consensus_race() {
 // =========================================================================
 // 4. INSTANT DATABASE COW TIME MACHINE
 // =========================================================================
-#[test]
-fn test_db_cow_time_machine_instant_rollback_and_hash() {
+#[tokio::test]
+async fn test_db_cow_time_machine_instant_rollback_and_hash() {
     let temp_dir = TempTestDir::new("db_time_machine");
     let db_path = temp_dir.path.join("users_test.sqlite");
 
@@ -188,8 +188,8 @@ fn test_db_cow_time_machine_instant_rollback_and_hash() {
 // =========================================================================
 // 5. SUPPLY-CHAIN & SLOPSQUATTING HALLUCINATION FIREWALL
 // =========================================================================
-#[test]
-fn test_slopsquatting_firewall_detection() {
+#[tokio::test]
+async fn test_slopsquatting_firewall_detection() {
     let test_packages = [
         "serde",                     // Safe canonical
         "reqwests",                  // Levenshtein typosquat of reqwest
@@ -217,8 +217,8 @@ fn test_slopsquatting_firewall_detection() {
 // =========================================================================
 // 6. ZERO-OPS CLOUD LAUNCHPAD & EDGE DEPLOYER
 // =========================================================================
-#[test]
-fn test_cloud_launchpad_edge_deployment_and_osc52() {
+#[tokio::test]
+async fn test_cloud_launchpad_edge_deployment_and_osc52() {
     let root = Path::new(".");
     let deploy = CloudLaunchpad::deploy_to_edge(root, "vibe-market")
         .expect("Cloud launchpad deployment should succeed");
@@ -234,8 +234,8 @@ fn test_cloud_launchpad_edge_deployment_and_osc52() {
 // =========================================================================
 // 7. LIVING ARCHITECTURE FLIGHT SIMULATOR
 // =========================================================================
-#[test]
-fn test_architecture_flight_simulator_pipeline_trace() {
+#[tokio::test]
+async fn test_architecture_flight_simulator_pipeline_trace() {
     let report = ArchitectureFlightSimulator::simulate_flight(Path::new("."), "POST /api/v1/orders");
 
     assert_eq!(report.total_hops, 5);
@@ -373,10 +373,10 @@ async fn test_daemon_ipc_roundtrip_all_holy_grail_superpowers() {
 // =========================================================================
 // 9. COCKPIT TUI SLASH COMMANDS INTEGRATION TESTS
 // =========================================================================
-#[test]
-fn test_cockpit_slash_commands_holy_grail_superpowers() {
+#[tokio::test]
+async fn test_cockpit_slash_commands_holy_grail_superpowers() {
     // 1. /hmr
-    let hmr_card = CockpitVibeManager::handle_vibe_slash_command("/hmr", "button color #fff");
+    let hmr_card = CockpitVibeManager::handle_vibe_slash_command("/hmr", "button color #fff").await;
     assert!(hmr_card.is_some());
     match hmr_card.unwrap() {
         CockpitItem::ValidationCard(card) => {
@@ -387,7 +387,7 @@ fn test_cockpit_slash_commands_holy_grail_superpowers() {
     }
 
     // 2. /lens
-    let lens_card = CockpitVibeManager::handle_vibe_slash_command("/lens", "src/lib.rs main");
+    let lens_card = CockpitVibeManager::handle_vibe_slash_command("/lens", "src/lib.rs main").await;
     assert!(lens_card.is_some());
     match lens_card.unwrap() {
         CockpitItem::GcCard(card) => {
@@ -397,7 +397,7 @@ fn test_cockpit_slash_commands_holy_grail_superpowers() {
     }
 
     // 3. /swarm
-    let swarm_card = CockpitVibeManager::handle_vibe_slash_command("/swarm", "build order gateway");
+    let swarm_card = CockpitVibeManager::handle_vibe_slash_command("/swarm", "build order gateway").await;
     assert!(swarm_card.is_some());
     match swarm_card.unwrap() {
         CockpitItem::ArenaCard(card) => {
@@ -408,7 +408,7 @@ fn test_cockpit_slash_commands_holy_grail_superpowers() {
     }
 
     // 4. /dbsnap
-    let dbsnap_card = CockpitVibeManager::handle_vibe_slash_command("/dbsnap", "production.db");
+    let dbsnap_card = CockpitVibeManager::handle_vibe_slash_command("/dbsnap", "production.db").await;
     assert!(dbsnap_card.is_some());
     match dbsnap_card.unwrap() {
         CockpitItem::DbMigrationCard(card) => {
@@ -418,7 +418,7 @@ fn test_cockpit_slash_commands_holy_grail_superpowers() {
     }
 
     // 5. /shield
-    let shield_card = CockpitVibeManager::handle_vibe_slash_command("/shield", "react tokio");
+    let shield_card = CockpitVibeManager::handle_vibe_slash_command("/shield", "react tokio").await;
     assert!(shield_card.is_some());
     match shield_card.unwrap() {
         CockpitItem::ValidationCard(card) => {
@@ -429,7 +429,7 @@ fn test_cockpit_slash_commands_holy_grail_superpowers() {
     }
 
     // 6. /launch
-    let launch_card = CockpitVibeManager::handle_vibe_slash_command("/launch", "fast-checkout");
+    let launch_card = CockpitVibeManager::handle_vibe_slash_command("/launch", "fast-checkout").await;
     assert!(launch_card.is_some());
     match launch_card.unwrap() {
         CockpitItem::DeployCard(card) => {
@@ -440,7 +440,7 @@ fn test_cockpit_slash_commands_holy_grail_superpowers() {
     }
 
     // 7. /flight
-    let flight_card = CockpitVibeManager::handle_vibe_slash_command("/flight", "GET /api/v1/health");
+    let flight_card = CockpitVibeManager::handle_vibe_slash_command("/flight", "GET /api/v1/health").await;
     assert!(flight_card.is_some());
     match flight_card.unwrap() {
         CockpitItem::ArchitectureDagCard(card) => {

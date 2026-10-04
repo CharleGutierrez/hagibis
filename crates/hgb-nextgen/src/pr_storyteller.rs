@@ -1,3 +1,5 @@
+use hgb_core::providers::OllamaProvider;
+use hgb_core::traits::HgbProvider;
 use hgb_core::memory::ProjectMemoryLedger;
 use hgb_core::security::AgentShieldLight;
 use serde::{Deserialize, Serialize};
@@ -41,93 +43,37 @@ pub struct PrStorytellerEngine;
 
 impl PrStorytellerEngine {
     /// Group modified files into atomic conventional commit categories
-    pub fn group_files_into_atomic_commits(files: &[String]) -> Vec<AtomicCommit> {
-        let mut tests = Vec::new();
-        let mut docs = Vec::new();
-        let mut chores = Vec::new();
-        let mut fixes = Vec::new();
-        let mut feats = Vec::new();
-        let mut refactors = Vec::new();
+    pub async fn group_files_into_atomic_commits(files: &[String]) -> Vec<AtomicCommit> {
+        let provider = OllamaProvider::new(None, Some("qwen2.5-coder:7b".to_string()));
+        let prompt = format!(
+            "Group the following modified files into semantic atomic commits. Use Conventional Commits.
+Files: {:?}
+Respond ONLY with a JSON array:
+[
+  {{
+    \"commit_type\": \"feat|fix|refactor|test|docs|chore\",
+    \"scope\": \"core|api|...\",
+    \"message\": \"short description\",
+    \"files\": [\"file1\", \"file2\"],
+    \"adr_ref\": null
+  }}
+]",
+            files
+        );
 
-        for f in files {
-            let lower = f.to_lowercase();
-            if lower.contains("test") || lower.ends_with("_test.rs") || lower.starts_with("tests/") {
-                tests.push(f.clone());
-            } else if lower.ends_with(".md") || lower.contains("docs/") {
-                docs.push(f.clone());
-            } else if lower.ends_with("cargo.toml") || lower.ends_with(".gitignore") || lower.ends_with(".env") {
-                chores.push(f.clone());
-            } else if lower.contains("error") || lower.contains("fix") || lower.contains("rescue") || lower.contains("heal") {
-                fixes.push(f.clone());
-            } else if lower.contains("prune") || lower.contains("clean") || lower.contains("compactor") {
-                refactors.push(f.clone());
-            } else {
-                feats.push(f.clone());
-            }
-        }
-
-        let mut commits = Vec::new();
-        if !feats.is_empty() {
-            commits.push(AtomicCommit {
-                commit_type: "feat".to_string(),
-                scope: "core".to_string(),
-                message: format!("implement autonomous superpowers ({})", feats.join(", ")),
-                files: feats,
-                adr_ref: None,
-            });
-        }
-        if !fixes.is_empty() {
-            commits.push(AtomicCommit {
-                commit_type: "fix".to_string(),
-                scope: "engine".to_string(),
-                message: format!("resolve diagnostics and compiler healing ({})", fixes.join(", ")),
-                files: fixes,
-                adr_ref: None,
-            });
-        }
-        if !refactors.is_empty() {
-            commits.push(AtomicCommit {
-                commit_type: "refactor".to_string(),
-                scope: "ast".to_string(),
-                message: format!("optimize memory and token layout ({})", refactors.join(", ")),
-                files: refactors,
-                adr_ref: None,
-            });
-        }
-        if !tests.is_empty() {
-            commits.push(AtomicCommit {
-                commit_type: "test".to_string(),
-                scope: "vibe".to_string(),
-                message: format!("comprehensive brutal test coverage ({})", tests.join(", ")),
-                files: tests,
-                adr_ref: None,
-            });
-        }
-        if !docs.is_empty() {
-            commits.push(AtomicCommit {
-                commit_type: "docs".to_string(),
-                scope: "adr".to_string(),
-                message: format!("architectural records and story ({})", docs.join(", ")),
-                files: docs,
-                adr_ref: None,
-            });
-        }
-        if !chores.is_empty() {
-            commits.push(AtomicCommit {
-                commit_type: "chore".to_string(),
-                scope: "deps".to_string(),
-                message: format!("workspace dependencies and configuration ({})", chores.join(", ")),
-                files: chores,
-                adr_ref: None,
-            });
-        }
-
+        let resp = provider.complete(&prompt, None).await.unwrap_or_default();
+        let start = resp.find('[').unwrap_or(0);
+        let end = resp.rfind(']').unwrap_or(resp.len() - 1) + 1;
+        let json_str = &resp[start..end];
+        
+        let mut commits = serde_json::from_str::<Vec<AtomicCommit>>(json_str).unwrap_or_else(|_| vec![]);
+        
         if commits.is_empty() {
             commits.push(AtomicCommit {
                 commit_type: "feat".to_string(),
                 scope: "vibe".to_string(),
                 message: "autonomous swarm state progression".to_string(),
-                files: Vec::new(),
+                files: files.to_vec(),
                 adr_ref: None,
             });
         }
@@ -157,12 +103,12 @@ impl PrStorytellerEngine {
     }
 
     /// Generate complete PR story markdown report
-    pub fn generate_story(
+    pub async fn generate_story(
         workspace_root: &Path,
         modified_files: &[String],
         dry_run: bool,
     ) -> PrStoryReport {
-        let mut commits = Self::group_files_into_atomic_commits(modified_files);
+        let mut commits = Self::group_files_into_atomic_commits(modified_files).await;
         let adr_refs = Self::enrich_with_adrs(&mut commits, workspace_root);
 
         // Security check for credentials/secrets
@@ -224,15 +170,15 @@ impl PrStorytellerEngine {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_group_files_into_atomic_commits() {
+    #[tokio::test]
+async fn test_group_files_into_atomic_commits() {
         let files = vec![
             "crates/hgb-core/src/ambient_ast.rs".to_string(),
             "tests/vibe_brutal_tests.rs".to_string(),
             "Cargo.toml".to_string(),
             "README.md".to_string(),
         ];
-        let commits = PrStorytellerEngine::group_files_into_atomic_commits(&files);
+        let commits = PrStorytellerEngine::group_files_into_atomic_commits(&files).await;
         assert_eq!(commits.len(), 4);
         assert!(commits.iter().any(|c| c.commit_type == "feat"));
         assert!(commits.iter().any(|c| c.commit_type == "test"));

@@ -1141,7 +1141,7 @@ impl HagibisDaemon {
                     .file_stem()
                     .and_then(|s| s.to_str())
                     .unwrap_or("module");
-                match hgb_nextgen::AutoSpecEngine::synthesize_golden_spec(&target_function, target_module, &code_body) {
+                match hgb_nextgen::AutoSpecEngine::synthesize_golden_spec(&target_function, target_module, &code_body).await {
                     Ok(spec) => {
                         let _ = hgb_storage::SpecStore::save_spec(".", &spec);
                         HgbResponse::AutoSpecSynthesized(spec)
@@ -1515,7 +1515,7 @@ impl HagibisDaemon {
             // 22. Autonomous Night-Shift Swarm Worktree Pipeline
             HgbRequest::NightShiftDispatch { goal, base_branch } => {
                 let pipeline = hgb_core::NightShiftPipeline::new();
-                let rep = pipeline.dispatch_night_shift(&goal, &base_branch);
+                let rep = pipeline.dispatch_night_shift(&goal, &base_branch).await;
                 HgbResponse::NightShiftResult(rep)
             }
             // 23. Kernel-Level Memory-Only Ghost Envs
@@ -1855,7 +1855,7 @@ impl HagibisDaemon {
                     old_snippet,
                     new_snippet,
                 );
-                let report = predictor.predict_next_edits(&event, &watcher);
+                let report = predictor.predict_next_edits(&event, &watcher).await;
                 HgbResponse::AmbientPredictResult(report)
             }
             // 59. Bolt.new & Devin Bidirectional DevTools Click-to-Source Sync

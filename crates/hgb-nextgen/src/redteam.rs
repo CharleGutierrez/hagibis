@@ -2,6 +2,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use hgb_core::error::Result;
+use hgb_core::providers::OllamaProvider;
+use hgb_core::traits::HgbProvider;
 
 /// Severity classification of a Red Team finding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -210,148 +212,60 @@ impl RedTeamAuditor {
     }
 
     /// Audits a raw code snippet.
-    pub fn audit_code(&self, code: &str, file_hint: Option<&Path>) -> RedTeamReport {
-        let mut findings = Vec::new();
-        let lines: Vec<&str> = code.lines().collect();
+    pub async fn audit_code(&self, code: &str, file_hint: Option<&Path>) -> RedTeamReport {
+        let provider = OllamaProvider::new(None, Some("qwen2.5-coder:7b".to_string()));
+        let prompt = format!(
+            "Analyze the following code for security vulnerabilities, concurrency hazards, secret leaks, etc.
+Respond ONLY with a JSON object matching this schema:
+{{
+  \"findings\": [
+    {{
+      \"id\": \"RT-...\",
+      \"category\": \"SecretLeak\" | \"IdorVulnerability\" | \"ConcurrencyHazard\" | \"UnboundedQuery\" | \"AlgorithmicComplexity\",
+      \"severity\": \"Informational\" | \"Low\" | \"Medium\" | \"High\" | \"Critical\",
+      \"line\": 10,
+      \"snippet\": \"code snippet\",
+      \"title\": \"short title\",
+      \"description\": \"details\",
+      \"exploit_scenario\": \"how to exploit\",
+      \"recommended_fix\": \"how to fix\",
+      \"suggested_patch\": \"diff patch\"
+    }}
+  ]
+}}
+Code to analyze:
+{}",
+            code
+        );
 
-        for (idx, line) in lines.iter().enumerate() {
-            let line_num = idx + 1;
-            let trimmed = line.trim();
+        let resp = match provider.complete(&prompt, None).await {
+            Ok(r) => r,
+            Err(_) => return RedTeamReport::new(vec![], 1),
+        };
 
-            // 1. Unbounded SQL Queries (SELECT * without LIMIT or WHERE)
-            let upper = trimmed.to_uppercase();
-            if upper.contains("SELECT ") && upper.contains(" FROM ") && !upper.contains(" LIMIT ") {
-                if upper.contains("SELECT *") || !upper.contains(" WHERE ") {
-                    findings.push(RedTeamFinding {
-                        id: format!("RT-UNBOUNDED-{}", line_num),
-                        category: RedTeamCategory::UnboundedQuery,
-                        severity: RedTeamSeverity::High,
-                        file: file_hint.map(|p| p.to_path_buf()),
-                        line: Some(line_num),
-                        snippet: Some(trimmed.to_string()),
-                        title: "Unbounded Database Query Detected".to_string(),
-                        description: "Executing SQL queries without a LIMIT clause can saturate DB connection pools and crash the app with OOM on large datasets.".to_string(),
-                        exploit_scenario: "Attacker seeds 100,000 records; calling this endpoint exhausts memory and causes denial of service.".to_string(),
-                        recommended_fix: "Add an explicit 'LIMIT <n>' or implement keyset/cursor pagination.".to_string(),
-                        suggested_patch: Some(format!("- {}\n+ {} LIMIT 100", trimmed, trimmed)),
-                    });
-                }
-            }
+        let start = resp.find('{').unwrap_or(0);
+        let end = resp.rfind('}').unwrap_or(resp.len() - 1) + 1;
+        let json_str = &resp[start..end];
 
-            // 2. Tenant Isolation Leak in multi-tenant contexts
-            if (upper.contains("SELECT ") || upper.contains("UPDATE ") || upper.contains("DELETE "))
-                && upper.contains(" WHERE ")
-                && !upper.contains("TENANT_ID")
-                && !upper.contains("ORGANIZATION_ID")
-                && !upper.contains("ORG_ID")
-                && (upper.contains("FROM ACCOUNTS") || upper.contains("FROM USERS") || upper.contains("FROM ORDERS") || upper.contains("FROM INVOICES"))
-            {
-                findings.push(RedTeamFinding {
-                    id: format!("RT-TENANT-LEAK-{}", line_num),
-                    category: RedTeamCategory::TenantIsolationLeak,
-                    severity: RedTeamSeverity::Critical,
-                    file: file_hint.map(|p| p.to_path_buf()),
-                    line: Some(line_num),
-                    snippet: Some(trimmed.to_string()),
-                    title: "Missing Tenant Isolation Filter".to_string(),
-                    description: "Database operation touches multi-tenant table without verifying tenant_id or org_id.".to_string(),
-                    exploit_scenario: "Tenant A modifies or views financial/user data belonging to Tenant B by manipulating record IDs.".to_string(),
-                    recommended_fix: "Always bind tenant_id in the WHERE predicate: 'AND tenant_id = :tenant_id'.".to_string(),
-                    suggested_patch: Some(format!("- {}\n+ {} AND tenant_id = :tenant_id", trimmed, trimmed)),
-                });
-            }
-
-            // 3. Concurrency Hazard: static mut in Rust
-            if trimmed.contains("static mut ") {
-                findings.push(RedTeamFinding {
-                    id: format!("RT-CONCURRENCY-STATIC-MUT-{}", line_num),
-                    category: RedTeamCategory::ConcurrencyHazard,
-                    severity: RedTeamSeverity::Critical,
-                    file: file_hint.map(|p| p.to_path_buf()),
-                    line: Some(line_num),
-                    snippet: Some(trimmed.to_string()),
-                    title: "Dangerous 'static mut' Variable in Rust".to_string(),
-                    description: "Rust 2024 and concurrency best practices forbid static mut due to ubiquitous data races.".to_string(),
-                    exploit_scenario: "Multiple incoming async requests access static mut simultaneously, corrupting pointers and crashing process.".to_string(),
-                    recommended_fix: "Use std::sync::atomic types, Mutex<T>, RwLock<T>, or OnceLock<T>.".to_string(),
-                    suggested_patch: Some(format!("- {}\n+ static VAR: std::sync::atomic::AtomicUsize = ...;", trimmed)),
-                });
-            }
-
-            // 4. Hardcoded Secrets / Keys
-            if (trimmed.contains("AKIA") && trimmed.len() > 16)
-                || (trimmed.contains("ghp_") && trimmed.len() > 20)
-                || (trimmed.contains("sk-") && (trimmed.contains("openai") || trimmed.contains("anthropic") || trimmed.len() > 30))
-                || ((trimmed.contains("password = \"") || trimmed.contains("api_key = \"") || trimmed.contains("secret = \"")) && !trimmed.contains("env::var"))
-            {
-                findings.push(RedTeamFinding {
-                    id: format!("RT-SECRET-{}", line_num),
-                    category: RedTeamCategory::SecretLeak,
-                    severity: RedTeamSeverity::Critical,
-                    file: file_hint.map(|p| p.to_path_buf()),
-                    line: Some(line_num),
-                    snippet: Some(trimmed.to_string()),
-                    title: "Hardcoded Secret / API Token Detected".to_string(),
-                    description: "High-entropy API token or secret string committed directly in code.".to_string(),
-                    exploit_scenario: "Public repo clone allows malicious actors to drain cloud accounts or compromise credentials.".to_string(),
-                    recommended_fix: "Load secrets from environment variables (e.g. std::env::var) or a secret manager.".to_string(),
-                    suggested_patch: Some("- <hardcoded secret>\n+ std::env::var(\"API_KEY\").unwrap()".to_string()),
-                });
-            }
-
-            // 5. Insecure Direct Object Reference (IDOR) pattern
-            if (trimmed.contains("get_by_id(id)") || trimmed.contains("delete(id)") || trimmed.contains("update(id,"))
-                && !trimmed.contains("user_id")
-                && !trimmed.contains("auth")
-                && !trimmed.contains("tenant")
-            {
-                findings.push(RedTeamFinding {
-                    id: format!("RT-IDOR-{}", line_num),
-                    category: RedTeamCategory::IdorVulnerability,
-                    severity: RedTeamSeverity::High,
-                    file: file_hint.map(|p| p.to_path_buf()),
-                    line: Some(line_num),
-                    snippet: Some(trimmed.to_string()),
-                    title: "Potential IDOR Vulnerability in Entity Access".to_string(),
-                    description: "Object fetched or modified solely by entity ID without checking caller ownership.".to_string(),
-                    exploit_scenario: "Unprivileged user increments 'id=101' to 'id=102' in query param and modifies another user's profile.".to_string(),
-                    recommended_fix: "Enforce caller ownership: 'WHERE id = :id AND user_id = :auth_user_id'.".to_string(),
-                    suggested_patch: None,
-                });
-            }
+        #[derive(serde::Deserialize)]
+        struct Resp {
+            findings: Vec<RedTeamFinding>,
         }
 
-        // 6. Algorithmic Complexity: Scan for nested for loops without map lookup
-        for (i, line) in lines.iter().enumerate() {
-            let trimmed = line.trim();
-            if trimmed.starts_with("for ") && trimmed.ends_with('{') {
-                for (_j, inner_line) in lines.iter().enumerate().skip(i + 1).take(15) {
-                    let inner_trimmed = inner_line.trim();
-                    if inner_trimmed.starts_with("for ") && inner_trimmed.ends_with('{') {
-                        findings.push(RedTeamFinding {
-                            id: format!("RT-COMPLEXITY-O-N2-{}", i + 1),
-                            category: RedTeamCategory::AlgorithmicComplexity,
-                            severity: RedTeamSeverity::Medium,
-                            file: file_hint.map(|p| p.to_path_buf()),
-                            line: Some(i + 1),
-                            snippet: Some(format!("{}\n    {}", trimmed, inner_trimmed)),
-                            title: "Nested Iteration O(N^2) Complexity Warning".to_string(),
-                            description: "Nested loops without index/hash map lookups cause quadratic slowdowns on larger collections.".to_string(),
-                            exploit_scenario: "An input collection with 10,000 items results in 100,000,000 iterations, locking the event loop.".to_string(),
-                            recommended_fix: "Pre-index the inner collection into a HashSet or HashMap for O(1) lookups.".to_string(),
-                            suggested_patch: None,
-                        });
-                        break;
-                    }
-                }
-            }
+        let mut findings = match serde_json::from_str::<Resp>(json_str) {
+            Ok(parsed) => parsed.findings,
+            Err(_) => vec![],
+        };
+
+        for f in &mut findings {
+            f.file = file_hint.map(|p| p.to_path_buf());
         }
 
         RedTeamReport::new(findings, 1)
     }
 
     /// Audits a git diff string.
-    pub fn audit_diff(&self, diff: &str) -> RedTeamReport {
+    pub async fn audit_diff(&self, diff: &str) -> RedTeamReport {
         let mut added_lines = String::new();
         for line in diff.lines() {
             if line.starts_with('+') && !line.starts_with("+++") {
@@ -359,17 +273,17 @@ impl RedTeamAuditor {
                 added_lines.push('\n');
             }
         }
-        self.audit_code(&added_lines, None)
+        self.audit_code(&added_lines, None).await
     }
 
     /// Audits a specific file on disk.
-    pub fn audit_file(&self, path: &Path) -> Result<RedTeamReport> {
+    pub async fn audit_file(&self, path: &Path) -> Result<RedTeamReport> {
         let content = fs::read_to_string(path)?;
-        Ok(self.audit_code(&content, Some(path)))
+        Ok(self.audit_code(&content, Some(path)).await)
     }
 
     /// Audits all source files in a workspace.
-    pub fn audit_workspace(&self, root: &Path) -> Result<RedTeamReport> {
+    pub async fn audit_workspace(&self, root: &Path) -> Result<RedTeamReport> {
         let mut all_findings = Vec::new();
         let mut files_scanned = 0;
 
@@ -379,7 +293,7 @@ impl RedTeamAuditor {
         for file in &files {
             if let Ok(content) = fs::read_to_string(file) {
                 files_scanned += 1;
-                let report = self.audit_code(&content, Some(file));
+                let report = self.audit_code(&content, Some(file)).await;
                 all_findings.extend(report.findings);
             }
         }

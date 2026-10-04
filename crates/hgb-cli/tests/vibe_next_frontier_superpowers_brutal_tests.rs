@@ -47,8 +47,8 @@ impl Drop for TempTestDir {
 // =========================================================================
 // SUPERPOWER 1: AST-Aware Visual Patch Arbiter
 // =========================================================================
-#[test]
-fn test_ast_patch_arbiter_hunk_extraction_and_delimiter_audit() {
+#[tokio::test]
+async fn test_ast_patch_arbiter_hunk_extraction_and_delimiter_audit() {
     let original = r#"
 fn calculate_tax(income: f64) -> f64 {
     if income <= 10000.0 {
@@ -111,8 +111,8 @@ fn broken_function() {
 // =========================================================================
 // SUPERPOWER 2: Instant P2P Mobile QR Live-Sync & Ephemeral Preview Tunnel
 // =========================================================================
-#[test]
-fn test_live_tunnel_session_creation_qr_and_mobile_telemetry() {
+#[tokio::test]
+async fn test_live_tunnel_session_creation_qr_and_mobile_telemetry() {
     let mut manager = LiveTunnelManager::new();
 
     // 1. Create tunnel session
@@ -184,8 +184,8 @@ fn test_speculative_tdd_red_green_cycle_multi_language() {
 // =========================================================================
 // SUPERPOWER 4: In-Process SIMD Vector Index
 // =========================================================================
-#[test]
-fn test_simd_vector_index_8way_unroll_search_and_persistence() {
+#[tokio::test]
+async fn test_simd_vector_index_8way_unroll_search_and_persistence() {
     let mut index = SimdVectorIndex::new();
 
     // 1. Verify unrolled SIMD dot product mathematical accuracy
@@ -277,8 +277,8 @@ async fn test_micro_sandbox_scrubs_secrets_and_enforces_jail() {
 // =========================================================================
 // SUPERPOWER 6: Ambient Audio Earcons & Voice Flow Bridge
 // =========================================================================
-#[test]
-fn test_ambient_audio_earcons_and_voice_diff_intent_parsing() {
+#[tokio::test]
+async fn test_ambient_audio_earcons_and_voice_diff_intent_parsing() {
     // 1. Play all cue varieties
     assert!(AmbientAudioEngine::play_cue(AudioCueKind::TddGreen));
     assert!(AmbientAudioEngine::play_cue(AudioCueKind::CompilerHealed));
@@ -433,10 +433,10 @@ async fn test_daemon_ipc_roundtrip_all_frontier_superpowers() {
 // =========================================================================
 // COCKPIT CANVAS & SLASH COMMANDS INTEGRATION TESTS
 // =========================================================================
-#[test]
-fn test_cockpit_slash_commands_all_frontier_superpowers() {
+#[tokio::test]
+async fn test_cockpit_slash_commands_all_frontier_superpowers() {
     // 1. /patch slash command
-    let patch_item = CockpitVibeManager::handle_vibe_slash_command("/patch", "src/auth.rs");
+    let patch_item = CockpitVibeManager::handle_vibe_slash_command("/patch", "src/auth.rs").await;
     assert!(patch_item.is_some(), "Slash command /patch should produce a CockpitItem");
     match patch_item.unwrap() {
         CockpitItem::ValidationCard(card) => {
@@ -447,7 +447,7 @@ fn test_cockpit_slash_commands_all_frontier_superpowers() {
     }
 
     // 2. /live slash command
-    let live_item = CockpitVibeManager::handle_vibe_slash_command("/live", "4000");
+    let live_item = CockpitVibeManager::handle_vibe_slash_command("/live", "4000").await;
     assert!(live_item.is_some(), "Slash command /live should produce a DeployCard");
     match live_item.unwrap() {
         CockpitItem::DeployCard(card) => {
@@ -458,7 +458,7 @@ fn test_cockpit_slash_commands_all_frontier_superpowers() {
     }
 
     // 3. /tdd slash command
-    let tdd_item = CockpitVibeManager::handle_vibe_slash_command("/tdd", "validate checkout total");
+    let tdd_item = CockpitVibeManager::handle_vibe_slash_command("/tdd", "validate checkout total").await;
     assert!(tdd_item.is_some(), "Slash command /tdd should produce a ValidationCard");
     match tdd_item.unwrap() {
         CockpitItem::ValidationCard(card) => {
@@ -469,7 +469,7 @@ fn test_cockpit_slash_commands_all_frontier_superpowers() {
     }
 
     // 4. /isolate slash command
-    let isolate_item = CockpitVibeManager::handle_vibe_slash_command("/isolate", "ls -la");
+    let isolate_item = CockpitVibeManager::handle_vibe_slash_command("/isolate", "ls -la").await;
     assert!(isolate_item.is_some(), "Slash command /isolate should produce a SandboxCard");
     match isolate_item.unwrap() {
         CockpitItem::SandboxCard(card) => {
@@ -480,6 +480,6 @@ fn test_cockpit_slash_commands_all_frontier_superpowers() {
     }
 
     // 5. /chime slash command
-    let chime_item = CockpitVibeManager::handle_vibe_slash_command("/chime", "green");
+    let chime_item = CockpitVibeManager::handle_vibe_slash_command("/chime", "green").await;
     assert!(chime_item.is_none(), "/chime plays an earcon audio cue and produces no card");
 }
