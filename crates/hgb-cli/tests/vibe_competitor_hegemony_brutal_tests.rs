@@ -151,11 +151,11 @@ fn test_brutal_vibe_recipe_engine() {
 // =========================================================================
 // 5. PRE-FLIGHT BEHAVIORAL CONTRACT MATRIX GENERATOR
 // =========================================================================
-#[test]
-fn test_brutal_behavior_matrix_engine() {
+#[tokio::test]
+async fn test_brutal_behavior_matrix_engine() {
     let engine = BehaviorMatrixEngine::new();
 
-    let report = engine.synthesize_matrix("authorize_transaction", "Biometric Apple Pay checkout flow");
+    let report = engine.synthesize_matrix("authorize_transaction", "Biometric Apple Pay checkout flow").await;
     assert_eq!(report.target_symbol, "authorize_transaction");
     assert_eq!(report.total_contracts, 5);
     assert_eq!(report.dimensions_covered, 5);

@@ -19,7 +19,15 @@ fn test_stakeholder_portal_brutal() {
     // Give axum a moment to start up
     thread::sleep(Duration::from_millis(500));
     
-    let resp = reqwest::blocking::get("http://localhost:19999").unwrap();
+    let mut resp = None;
+    for _ in 0..20 {
+        if let Ok(r) = reqwest::blocking::get("http://localhost:19999") {
+            resp = Some(r);
+            break;
+        }
+        thread::sleep(Duration::from_millis(500));
+    }
+    let resp = resp.unwrap();
     assert!(resp.status().is_success());
     let text = resp.text().unwrap();
     assert!(text.contains("Test Portal"));

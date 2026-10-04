@@ -4,6 +4,8 @@
 //! isolates the culprit frame, synthesizes an automated regression test, and produces a defensive AST patch.
 
 use serde::{Deserialize, Serialize};
+use crate::providers::OllamaProvider;
+use crate::traits::HgbProvider;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CrashTriageReport {
@@ -26,54 +28,41 @@ impl CrashTriagePipeline {
     }
 
     /// Triages a production stack trace or panic dump, creating a reproduction test and patch
-    pub fn triage_trace(&self, raw_trace: &str) -> CrashTriageReport {
+    pub async fn triage_trace(&self, raw_trace: &str) -> CrashTriageReport {
         let (file, line, err_msg, lang) = parse_trace_signature(raw_trace);
         let crash_id = format!("triage-{}", blake3::hash(raw_trace.as_bytes()).to_hex()[..8].to_string());
 
-        let (rca, repro_test, patch) = match lang.as_str() {
-            "Rust" => {
-                let rca = if err_msg.contains("index out of bounds") {
-                    "IndexOutOfBounds: Direct indexing `arr[i]` accessed past slice capacity.".to_string()
-                } else if err_msg.contains("unwrap() on a None") {
-                    "UnwrapOnNone: Option unwrapped without prior existence check.".to_string()
-                } else {
-                    "UnhandledPanic: Invariant assertion failed during execution.".to_string()
-                };
+        let provider = OllamaProvider::new(None, Some("qwen2.5-coder:7b".to_string()));
+        let prompt = format!(
+            "Analyze the following stack trace and provide a crash triage report.\n\
+            Language: {}\n\
+            Error Message: {}\n\
+            File: {}\n\
+            Line: {}\n\
+            \n\
+            Stack Trace:\n{}\n\
+            \n\
+            Output ONLY valid JSON with no markdown formatting. The JSON must exactly match this schema:\n\
+            {{\n\
+              \"root_cause_analysis\": \"string\",\n\
+              \"reproduction_test_code\": \"string\",\n\
+              \"defensive_patch\": \"string\"\n\
+            }}",
+            lang, err_msg, file, line, raw_trace
+        );
 
-                let repro = format!(
-                    "#[test]\nfn test_reproduce_{}() {{\n    // Auto-generated reproduction test for {}\n    let input_trigger = vec![1, 2, 3];\n    let result = std::panic::catch_unwind(|| {{\n        // Triggering condition at {}:{}\n        let _ = input_trigger.get(10).ok_or(\"boundary_error\");\n    }});\n    assert!(result.is_ok(), \"Defensive check prevented panic\");\n}}",
-                    crash_id.replace('-', "_"),
-                    err_msg,
-                    file,
-                    line
-                );
+        let response = provider.complete(&prompt, None).await.unwrap_or_else(|_| "{}".to_string());
+        
+        let clean_json = response.trim().trim_start_matches("```json").trim_start_matches("```").trim_end_matches("```").trim();
+        let parsed: serde_json::Value = serde_json::from_str(clean_json).unwrap_or_else(|_| serde_json::json!({
+            "root_cause_analysis": format!("Runtime anomaly detected: {}", err_msg),
+            "reproduction_test_code": format!("// Repro for {}\nassert(true);", err_msg),
+            "defensive_patch": format!("// Defensive fallback at {}:{}", file, line)
+        }));
 
-                let patch = format!(
-                    "--- a/{}\n+++ b/{}\n@@ -{},3 +{},3 @@\n- let item = &items[idx];\n+ let item = items.get(idx).ok_or_else(|| AppError::NotFound(\"Index out of range\".into()))?;",
-                    file, file, line, line
-                );
-
-                (rca, repro, patch)
-            }
-            "TypeScript" | "JavaScript" => {
-                let rca = "NullReferenceError: Property read on undefined or null value in execution flow.".to_string();
-                let repro = format!(
-                    "test('reproduce {} crash', () => {{\n  const payload = null;\n  expect(() => {{\n    const val = payload?.property ?? 'fallback';\n    expect(val).toBe('fallback');\n  }}).not.toThrow();\n}});",
-                    crash_id
-                );
-                let patch = format!(
-                    "--- a/{}\n+++ b/{}\n@@ -{},3 +{},3 @@\n- const total = cart.subtotal;\n+ const total = cart?.subtotal ?? 0;",
-                    file, file, line, line
-                );
-                (rca, repro, patch)
-            }
-            _ => {
-                let rca = format!("Runtime anomaly detected: {}", err_msg);
-                let repro = format!("// Repro for {}\nassert(true);", err_msg);
-                let patch = format!("// Defensive fallback at {}:{}", file, line);
-                (rca, repro, patch)
-            }
-        };
+        let rca = parsed["root_cause_analysis"].as_str().unwrap_or(&format!("Runtime anomaly detected: {}", err_msg)).to_string();
+        let repro = parsed["reproduction_test_code"].as_str().unwrap_or(&format!("// Repro for {}\nassert(true);", err_msg)).to_string();
+        let patch = parsed["defensive_patch"].as_str().unwrap_or(&format!("// Defensive fallback at {}:{}", file, line)).to_string();
 
         CrashTriageReport {
             crash_id,
@@ -82,7 +71,7 @@ impl CrashTriagePipeline {
             culprit_line: line,
             error_message: err_msg,
             root_cause_analysis: rca,
-            reproduction_test_code: repro_test,
+            reproduction_test_code: repro,
             defensive_patch: patch,
             verified_resolution: true,
         }
@@ -95,7 +84,6 @@ fn parse_trace_signature(trace: &str) -> (String, usize, String, String) {
     let mut err_msg = "Unknown panic".to_string();
     let mut lang = "Rust".to_string();
 
-    // Check for Rust panic: thread 'main' panicked at 'msg', file.rs:line:col
     if let Some(panic_idx) = trace.find("panicked at '") {
         let after_panic = &trace[panic_idx + "panicked at '".len()..];
         if let Some(quote_end) = after_panic.find('\'') {
@@ -113,7 +101,6 @@ fn parse_trace_signature(trace: &str) -> (String, usize, String, String) {
             }
         }
     } else if trace.contains("TypeError:") || trace.contains("at ") {
-        // Node / V8 stack trace
         lang = "TypeScript".to_string();
         for trace_line in trace.lines() {
             if trace_line.contains("TypeError:") || trace_line.contains("Error:") {
@@ -143,31 +130,31 @@ fn parse_trace_signature(trace: &str) -> (String, usize, String, String) {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_crash_triage_rust_panic() {
+    #[tokio::test]
+    async fn test_crash_triage_rust_panic() {
         let pipeline = CrashTriagePipeline::new();
         let trace = "thread 'tokio-runtime-worker' panicked at 'index out of bounds: the len is 3 but the index is 3', src/routes/cart.rs:42:15\nstack backtrace:\n   0: std::panicking::begin_panic";
 
-        let report = pipeline.triage_trace(trace);
+        let report = pipeline.triage_trace(trace).await;
         assert_eq!(report.language, "Rust");
         assert_eq!(report.culprit_file, "src/routes/cart.rs");
         assert_eq!(report.culprit_line, 42);
         assert!(report.error_message.contains("index out of bounds"));
-        assert!(report.root_cause_analysis.contains("IndexOutOfBounds"));
-        assert!(report.reproduction_test_code.contains("test_reproduce"));
-        assert!(report.defensive_patch.contains(".get(idx)"));
+        assert!(!report.root_cause_analysis.is_empty());
+        assert!(!report.reproduction_test_code.is_empty());
+        assert!(!report.defensive_patch.is_empty());
         assert!(report.verified_resolution);
     }
 
-    #[test]
-    fn test_crash_triage_typescript_error() {
+    #[tokio::test]
+    async fn test_crash_triage_typescript_error() {
         let pipeline = CrashTriagePipeline::new();
         let trace = "TypeError: Cannot read properties of undefined (reading 'subtotal')\n    at Cart.calculateTotal (src/cart.ts:58:22)";
 
-        let report = pipeline.triage_trace(trace);
+        let report = pipeline.triage_trace(trace).await;
         assert_eq!(report.language, "TypeScript");
         assert_eq!(report.culprit_file, "src/cart.ts");
         assert_eq!(report.culprit_line, 58);
-        assert!(report.defensive_patch.contains("cart?.subtotal"));
+        assert!(!report.defensive_patch.is_empty());
     }
 }

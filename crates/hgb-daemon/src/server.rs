@@ -1624,7 +1624,7 @@ impl HagibisDaemon {
             // 37. Production Crash Auto-Triage & Reproduction Pipeline
             HgbRequest::CrashTriageTrace { raw_trace } => {
                 let engine = hgb_core::CrashTriagePipeline::new();
-                let rep = engine.triage_trace(&raw_trace);
+                let rep = engine.triage_trace(&raw_trace).await;
                 HgbResponse::CrashTriageResult(rep)
             }
             // 38. Flaky Test Exterminator & Deterministic Stress Fuzzer
@@ -1677,7 +1677,7 @@ impl HagibisDaemon {
             // 44. Pre-Flight Behavioral Contract Matrix Generator
             HgbRequest::BehaviorMatrixGenerate { symbol_name, intent_desc } => {
                 let engine = hgb_core::BehaviorMatrixEngine::new();
-                let rep = engine.synthesize_matrix(&symbol_name, &intent_desc);
+                let rep = engine.synthesize_matrix(&symbol_name, &intent_desc).await;
                 HgbResponse::BehaviorMatrixResult(rep)
             }
             // 45. Live Agent Flight-Graph & Real-Time Task DAG Visualizer
@@ -2220,7 +2220,7 @@ impl HagibisDaemon {
             }
             // 91. Ticket-to-PR Autopilot
             HgbRequest::AutopilotRun { ticket_text } => {
-                let rep = hgb_core::AutopilotPipeline::run(&ticket_text);
+                let rep = hgb_core::AutopilotPipeline::run(&ticket_text).await;
                 HgbResponse::AutopilotResult(rep)
             }
             // 92. Agent Decision Explainer & ADR Generator
@@ -2246,7 +2246,7 @@ impl HagibisDaemon {
             // 95. AI-PR Security Audit
             HgbRequest::PrAuditScan { files } => {
                 let files_ref: Vec<(&str, &str)> = files.iter().map(|(p, c)| (p.as_str(), c.as_str())).collect();
-                let rep = hgb_core::AiPrSecurityAudit::scan_files(&files_ref);
+                let rep = hgb_core::AiPrSecurityAudit::scan_files(&files_ref).await;
                 HgbResponse::PrAuditResult(rep)
             }
             // 96. Ephemeral Cloud Preview Deployment

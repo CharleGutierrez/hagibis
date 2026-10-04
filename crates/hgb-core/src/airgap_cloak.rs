@@ -126,7 +126,7 @@ mod tests {
     #[test]
     fn test_airgap_cloak_and_rehydrate() {
         let mut engine = AirgapCloakEngine::new();
-        let prompt = "Connect to 192.168.1.50 using key secret_key_981723491823981723491823 for admin@corp.internal";
+        let prompt = "Connect to 192.168.1.50 using key sk_dummy_981723491823981723491823 for admin@corp.internal";
 
         let report = engine.cloak(prompt);
         assert!(!report.clean);
@@ -134,12 +134,12 @@ mod tests {
         assert!(report.cloaked_text.contains("<CLOAK_SECRET_1>"));
         assert!(report.cloaked_text.contains("<CLOAK_EMAIL_1>"));
         assert!(report.cloaked_text.contains("<CLOAK_IP_1>"));
-        assert!(!report.cloaked_text.contains("secret_key_981723491823981723491823"));
+        assert!(!report.cloaked_text.contains("sk_dummy_981723491823981723491823"));
 
         let ai_response = "const client = init({ host: '<CLOAK_IP_1>', apiKey: '<CLOAK_SECRET_1>', user: '<CLOAK_EMAIL_1>' });";
         let rehydrated = engine.rehydrate(ai_response);
         assert!(rehydrated.contains("192.168.1.50"));
-        assert!(rehydrated.contains("secret_key_981723491823981723491823"));
+        assert!(rehydrated.contains("sk_dummy_981723491823981723491823"));
         assert!(rehydrated.contains("admin@corp.internal"));
     }
 }
