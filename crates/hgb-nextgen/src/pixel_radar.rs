@@ -187,19 +187,17 @@ impl PixelDiffRadar {
     }
 
     fn generate_ascii_dom_preview(&self, html: &str) -> Vec<String> {
-        let mut lines = Vec::new();
-        lines.push("┌──────────────────────────────────────────────────┐".to_string());
-        lines.push("│  [NAVBAR]   Brand     Home   Docs   Settings     │".to_string());
-        lines.push("├──────────────────────────────────────────────────┤".to_string());
-        if html.contains("<button") || html.contains("<input") {
-            lines.push("│  ┌──────────────┐   ┌────────────────────────┐   │".to_string());
-            lines.push("│  │ Action Button│   │ Input Search Bar...    │   │".to_string());
-            lines.push("│  └──────────────┘   └────────────────────────┘   │".to_string());
+        let prompt = format!("Convert this HTML into an ASCII DOM preview:\n{}", html);
+        let ai_res = std::thread::spawn(move || {
+            let provider = hgb_core::providers::OllamaProvider::new(None, Some("qwen2.5-coder:7b".to_string()));
+            use hgb_core::traits::HgbProvider;
+            tokio::runtime::Runtime::new().unwrap().block_on(provider.complete(&prompt, None))
+        }).join().unwrap();
+        if let Ok(resp) = ai_res {
+            resp.lines().map(|s| s.to_string()).collect()
         } else {
-            lines.push("│                  Hero Content Card               │".to_string());
+            vec!["Failed to generate preview".to_string()]
         }
-        lines.push("└──────────────────────────────────────────────────┘".to_string());
-        lines
     }
 }
 

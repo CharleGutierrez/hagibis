@@ -98,7 +98,7 @@ pub mod circular_circuit_breaker;
 pub mod appsec_sentinel;
 pub mod cognitive_walkthrough;
 pub mod logic_teleport_mirror;
-pub mod relational_mock_api_replayer;
+pub mod relational_webhook_replayer;
 pub mod visual_live_preview;
 pub mod multimodal_vision;
 pub mod share_tunnel;
@@ -354,7 +354,7 @@ pub use circular_circuit_breaker::{CircuitBreakerReport, CircularCircuitBreaker,
 pub use appsec_sentinel::{AppSecReport, AppSecSentinel, SecurityFinding, SecuritySeverity, VulnerabilityCategory};
 pub use cognitive_walkthrough::{CognitiveCard, CognitiveWalkthrough, WalkthroughReport};
 pub use logic_teleport_mirror::{DomInteractionEvent, LogicTarget, LogicTeleportMirror, LogicTeleportReport};
-pub use relational_mock_api_replayer::{MockReplayReport, MockServiceKind, RelationalMockApiReplayer};
+pub use relational_webhook_replayer::{ProxyReplayReport, ProxyServiceKind, RelationalWebhookReplayer};
 
 pub use lsp_ghost_bridge::{LspGhostBridge, LspGhostReport, LspInlineCompletionItem, LspInlineCompletionParams};
 pub use rolling_compactor::{CompactionReport, ConversationTurn, RollingCompactor};
@@ -645,7 +645,7 @@ pub mod cloud_swarm;
 pub mod plugin_fabric;
 pub mod stakeholder_portal;
 pub mod enterprise_gateway;
-
+pub use rag_stack::{RagStackEngine, RagVector, VectorDbConn};
 pub use cloud_swarm::{CloudSwarm, CloudSwarmConfig, CloudSwarmStatus};
 pub use plugin_fabric::{PluginFabric, PluginContext, PluginExecutionResult};
 pub use stakeholder_portal::{StakeholderPortal, PortalConfig, PortalStatus};

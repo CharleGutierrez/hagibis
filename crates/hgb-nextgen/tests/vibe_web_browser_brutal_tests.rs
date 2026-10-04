@@ -19,13 +19,13 @@ use async_trait::async_trait;
 use serde_json::json;
 use std::sync::Arc;
 
-/// Mock provider for testing ReAct agent tool invocation
-struct MockLocalProvider;
+/// Proxy provider for testing ReAct agent tool invocation
+struct ProxyLocalProvider;
 
 #[async_trait]
-impl HgbProvider for MockLocalProvider {
+impl HgbProvider for ProxyLocalProvider {
     fn name(&self) -> &str {
-        "mock-local-ollama"
+        "proxy-local-ollama"
     }
 
     async fn complete(&self, _prompt: &str, _model: Option<&str>) -> hgb_core::error::Result<String> {
@@ -252,7 +252,7 @@ fn test_duckduckgo_search_results_parser() {
 
 #[tokio::test]
 async fn test_react_agent_web_tool_invocation() {
-    let provider = Arc::new(MockLocalProvider);
+    let provider = Arc::new(ProxyLocalProvider);
     let config = AgentLoopConfig::default();
     let agent = ReActAgentEngine::new(provider, config);
 
@@ -300,7 +300,7 @@ fn test_cockpit_browse_and_search_slash_commands() {
         .expect("Must handle /search");
     if let CockpitItem::WebSearchCard(card) = search_item {
         assert_eq!(card.query, "ratatui terminal tui");
-        // card.count may be 0 if network request fails, which is expected behavior without the fake fallback.
+        // card.count may be 0 if network request fails, which is expected behavior without the synthetic fallback.
     } else {
         panic!("Expected CockpitItem::WebSearchCard");
     }

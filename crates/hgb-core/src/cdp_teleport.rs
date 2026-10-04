@@ -1,10 +1,7 @@
-//! # Click-to-Source CDP Teleport & Reverse AST Hyperlink
-//!
-//! Maps live browser DOM elements, CSS selectors, and test IDs back to exact
-//! repository source files, line/column coordinates, and AST symbol declarations.
-
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::Path;
+use std::fs;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TeleportTarget {
@@ -28,87 +25,57 @@ pub struct TeleportTargetReport {
 }
 
 pub struct CdpTeleportEngine {
-    index: HashMap<String, TeleportTarget>,
+    workspace_root: String,
 }
 
 impl CdpTeleportEngine {
     pub fn new() -> Self {
-        let mut index = HashMap::new();
-
-        // 1. Checkout button mapping
-        index.insert(
-            "button#checkout-btn".to_string(),
-            TeleportTarget {
-                selector: "button#checkout-btn".to_string(),
-                source_file: "src/components/CheckoutModal.tsx".to_string(),
-                line_number: 142,
-                column_number: 11,
-                symbol_name: "CheckoutButton".to_string(),
-                component_type: "React.FC".to_string(),
-                code_snippet: "<button id=\"checkout-btn\" onClick={handleCheckout} className=\"btn-primary\">\n  Pay Now\n</button>".to_string(),
-            },
-        );
-
-        // 2. Navigation bar brand link
-        index.insert(
-            "nav.navbar a.brand-logo".to_string(),
-            TeleportTarget {
-                selector: "nav.navbar a.brand-logo".to_string(),
-                source_file: "src/components/Navbar.tsx".to_string(),
-                line_number: 28,
-                column_number: 7,
-                symbol_name: "BrandLogoLink".to_string(),
-                component_type: "React.FC".to_string(),
-                code_snippet: "<a className=\"brand-logo\" href=\"/\">\n  <Logo />\n</a>".to_string(),
-            },
-        );
-
-        // 3. User Avatar Profile
-        index.insert(
-            "div.user-avatar[data-testid='profile-img']".to_string(),
-            TeleportTarget {
-                selector: "div.user-avatar[data-testid='profile-img']".to_string(),
-                source_file: "src/components/UserProfile.tsx".to_string(),
-                line_number: 64,
-                column_number: 9,
-                symbol_name: "UserAvatar".to_string(),
-                component_type: "React.FC".to_string(),
-                code_snippet: "<div className=\"user-avatar\" data-testid=\"profile-img\">\n  <img src={user.avatarUrl} alt={user.name} />\n</div>".to_string(),
-            },
-        );
-
-        Self { index }
+        Self {
+            workspace_root: ".".to_string(),
+        }
     }
 
-    pub fn register_target(&mut self, target: TeleportTarget) {
-        self.index.insert(target.selector.clone(), target);
+    pub fn with_workspace(root: &str) -> Self {
+        Self {
+            workspace_root: root.to_string(),
+        }
     }
 
-    /// Resolves a DOM selector or tag to its originating AST source location
     pub fn resolve_teleport(&self, selector: &str) -> TeleportTargetReport {
         let clean = selector.trim();
-
-        // Direct exact match
-        if let Some(target) = self.index.get(clean) {
-            return TeleportTargetReport {
-                query_selector: clean.to_string(),
-                matched: true,
-                target: Some(target.clone()),
-                alternatives: Vec::new(),
-                confidence: 0.99,
-                ghost_patch_hint: format!("Ready to edit {} at {}:{}", target.symbol_name, target.source_file, target.line_number),
-            };
-        }
-
-        // Fuzzy heuristic match (ignore generic HTML tags like div, span, etc.)
+        
         let mut alternatives = Vec::new();
-        for (k, v) in &self.index {
-            let matches_meaningful_token = clean
-                .split(|c: char| !c.is_alphanumeric())
-                .any(|part| part.len() >= 4 && !["div", "span", "button", "input", "nav"].contains(&part) && k.contains(part));
+        let target_name = clean.split(|c: char| !c.is_alphanumeric() && c != '-').last().unwrap_or(clean);
 
-            if clean.contains(k) || k.contains(clean) || matches_meaningful_token {
-                alternatives.push(v.clone());
+        // Simple recursive search in src/ directory (or workspace_root)
+        let mut to_visit = vec![std::path::PathBuf::from(&self.workspace_root)];
+        while let Some(path) = to_visit.pop() {
+            if path.is_dir() {
+                if let Ok(entries) = fs::read_dir(path) {
+                    for entry in entries.flatten() {
+                        to_visit.push(entry.path());
+                    }
+                }
+            } else if path.is_file() {
+                if let Some(ext) = path.extension() {
+                    if ext == "tsx" || ext == "ts" || ext == "jsx" || ext == "js" {
+                        if let Ok(content) = fs::read_to_string(&path) {
+                            for (i, line) in content.lines().enumerate() {
+                                if line.contains(target_name) {
+                                    alternatives.push(TeleportTarget {
+                                        selector: clean.to_string(),
+                                        source_file: path.to_string_lossy().into_owned(),
+                                        line_number: i + 1,
+                                        column_number: line.find(target_name).unwrap_or(0) + 1,
+                                        symbol_name: target_name.to_string(),
+                                        component_type: "React Component".to_string(),
+                                        code_snippet: line.trim().to_string(),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -117,47 +84,18 @@ impl CdpTeleportEngine {
                 query_selector: clean.to_string(),
                 matched: true,
                 target: Some(first.clone()),
-                alternatives,
-                confidence: 0.85,
-                ghost_patch_hint: format!("Fuzzy resolved to {} at {}:{}", first.symbol_name, first.source_file, first.line_number),
+                alternatives: alternatives.clone(),
+                confidence: 0.95,
+                ghost_patch_hint: format!("Found {} at {}:{}", first.symbol_name, first.source_file, first.line_number),
             }
         } else {
-            // Synthesize dynamic heuristic target based on selector tokens
-            let synthetic_component = clean
-                .split(|c: char| !c.is_alphanumeric())
-                .filter(|s| !s.is_empty() && !["div", "span", "button", "input", "nav", "a", "p"].contains(s))
-                .map(|s| {
-                    let mut chars = s.chars();
-                    match chars.next() {
-                        Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
-                        None => String::new(),
-                    }
-                })
-                .collect::<String>();
-
-            let comp_name = if synthetic_component.is_empty() {
-                "DynamicComponent".to_string()
-            } else {
-                synthetic_component
-            };
-
-            let syn_target = TeleportTarget {
-                selector: clean.to_string(),
-                source_file: format!("src/components/{}.tsx", comp_name),
-                line_number: 1,
-                column_number: 1,
-                symbol_name: comp_name.clone(),
-                component_type: "React.FC".to_string(),
-                code_snippet: format!("export const {}: React.FC = () => {{\n  return <div className=\"{}\">...</div>;\n}};", comp_name, clean),
-            };
-
             TeleportTargetReport {
                 query_selector: clean.to_string(),
                 matched: false,
-                target: Some(syn_target),
+                target: None,
                 alternatives: Vec::new(),
-                confidence: 0.60,
-                ghost_patch_hint: format!("Heuristic template generated for {}", clean),
+                confidence: 0.0,
+                ghost_patch_hint: format!("Could not map {}", clean),
             }
         }
     }
@@ -172,25 +110,22 @@ impl Default for CdpTeleportEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::File;
+    use std::io::Write;
 
     #[test]
-    fn test_cdp_teleport_exact_and_fuzzy() {
-        let engine = CdpTeleportEngine::new();
+    fn test_cdp_teleport_dynamic_search() {
+        // Create a temporary test fixture file to search
+        std::fs::create_dir_all("test_workspace").unwrap();
+        let mut file = File::create("test_workspace/MyButton.tsx").unwrap();
+        writeln!(file, "export const MyButton = () => <button id=\"my-test-btn\">Click</button>;").unwrap();
 
-        // Exact match
-        let rep1 = engine.resolve_teleport("button#checkout-btn");
-        assert!(rep1.matched);
-        assert_eq!(rep1.target.unwrap().source_file, "src/components/CheckoutModal.tsx");
-        assert_eq!(rep1.confidence, 0.99);
+        let engine = CdpTeleportEngine::with_workspace("test_workspace");
+        let rep = engine.resolve_teleport("button#my-test-btn");
+        
+        assert!(rep.matched);
+        assert_eq!(rep.target.unwrap().source_file, "test_workspace/MyButton.tsx");
 
-        // Fuzzy match
-        let rep2 = engine.resolve_teleport("checkout-btn");
-        assert!(rep2.matched);
-        assert_eq!(rep2.target.unwrap().symbol_name, "CheckoutButton");
-
-        // Dynamic fallback
-        let rep3 = engine.resolve_teleport("div.shopping-cart-drawer");
-        assert!(!rep3.matched);
-        assert!(rep3.target.unwrap().source_file.contains("ShoppingCartDrawer"));
+        std::fs::remove_dir_all("test_workspace").unwrap();
     }
 }

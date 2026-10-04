@@ -81,10 +81,10 @@ impl SelfEvolutionEngine {
 
         // Call out to external tool or logic for AST manipulation if real logic is here
         // We will execute a real process that could symbolize mutation (e.g. `cargo check` if in a rust project)
-        let _status = std::process::Command::new("cargo")
-            .arg("check")
-            .current_dir(path)
-            .status();
+        // let _status = std::process::Command::new("cargo")
+        //     .arg("check")
+        //     .current_dir(path)
+        //     .status();
 
         for gen_idx in 1..=config.max_generations {
             let mutations = 10 + (gen_idx * 2);

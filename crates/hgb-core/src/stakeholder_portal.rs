@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
-use std::net::TcpListener;
-use std::io::{Read, Write};
 use std::thread;
+use axum::{routing::get, Router, response::Html};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PortalConfig {
@@ -25,15 +24,26 @@ impl StakeholderPortal {
 
     pub fn serve(&self, config: &PortalConfig) -> PortalStatus {
         let port = config.port;
+        let title = config.title.clone();
+        
         thread::spawn(move || {
-            if let Ok(listener) = TcpListener::bind(("127.0.0.1", port)) {
-                if let Ok((mut stream, _)) = listener.accept() {
-                    let mut buf = [0; 1024];
-                    let _ = stream.read(&mut buf);
-                    let response = "HTTP/1.1 200 OK\r\n\r\n<h1>Hagibis Real Portal</h1>";
-                    let _ = stream.write_all(response.as_bytes());
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+                
+            rt.block_on(async {
+                let app = Router::new().route("/", get(move || {
+                    let title = title.clone();
+                    async move {
+                        Html(format!("<h1>{}</h1><p>Hagibis Real Portal</p>", title))
+                    }
+                }));
+                
+                if let Ok(listener) = tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
+                    let _ = axum::serve(listener, app).await;
                 }
-            }
+            });
         });
 
         PortalStatus {

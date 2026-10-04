@@ -8,6 +8,8 @@
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use std::sync::{Arc, Mutex};
 
 /// Active push-to-talk recording session details
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -30,10 +32,48 @@ impl Default for VoicePromptSession {
 }
 
 /// Push-to-Talk Voice Audio Engine
-#[derive(Debug, Clone, Default)]
 pub struct AudioPromptEngine {
     pub session: VoicePromptSession,
     pub last_transcription: Option<String>,
+    // Store stream in an option to keep it alive
+    #[cfg(not(test))]
+    stream: Option<cpal::Stream>,
+    samples: Arc<Mutex<usize>>,
+}
+
+impl Default for AudioPromptEngine {
+    fn default() -> Self {
+        Self {
+            session: VoicePromptSession::default(),
+            last_transcription: None,
+            #[cfg(not(test))]
+            stream: None,
+            samples: Arc::new(Mutex::new(0)),
+        }
+    }
+}
+
+impl Clone for AudioPromptEngine {
+    fn clone(&self) -> Self {
+        Self {
+            session: self.session.clone(),
+            last_transcription: self.last_transcription.clone(),
+            #[cfg(not(test))]
+            stream: None, // Can't easily clone stream
+            samples: self.samples.clone(),
+        }
+    }
+}
+
+// Implement custom Debug for AudioPromptEngine because cpal::Stream doesn't implement Debug
+impl std::fmt::Debug for AudioPromptEngine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AudioPromptEngine")
+            .field("session", &self.session)
+            .field("last_transcription", &self.last_transcription)
+            .field("samples", &self.samples)
+            .finish()
+    }
 }
 
 impl AudioPromptEngine {
@@ -46,6 +86,44 @@ impl AudioPromptEngine {
         self.session.is_active = true;
         self.session.started_at = Some(Utc::now().format("%H:%M:%S").to_string());
         self.session.samples_captured = 0;
+        
+        let samples = self.samples.clone();
+        *samples.lock().unwrap() = 0;
+        
+        #[cfg(not(test))]
+        {
+            let host = cpal::default_host();
+            if let Some(device) = host.default_input_device() {
+                if let Ok(config) = device.default_input_config() {
+                    let stream = match config.sample_format() {
+                        cpal::SampleFormat::F32 => device.build_input_stream(
+                            &config.into(),
+                            move |data: &[f32], _: &_| {
+                                *samples.lock().unwrap() += data.len();
+                            },
+                            |err| eprintln!("an error occurred on stream: {}", err),
+                            None
+                        ),
+                        cpal::SampleFormat::I16 => device.build_input_stream(
+                            &config.into(),
+                            move |data: &[i16], _: &_| {
+                                *samples.lock().unwrap() += data.len();
+                            },
+                            |err| eprintln!("an error occurred on stream: {}", err),
+                            None
+                        ),
+                        _ => Err(cpal::BuildStreamError::StreamConfigNotSupported),
+                    };
+
+                    if let Ok(stream) = stream {
+                        if stream.play().is_ok() {
+                            self.stream = Some(stream);
+                        }
+                    }
+                }
+            }
+        }
+        
         hgb_core::play_vibe_chime(true);
     }
 
@@ -57,7 +135,8 @@ impl AudioPromptEngine {
     /// Record audio samples into the session buffer
     pub fn record_samples(&mut self, count: usize) {
         if self.session.is_active {
-            self.session.samples_captured += count;
+            *self.samples.lock().unwrap() += count;
+            self.session.samples_captured = *self.samples.lock().unwrap();
         }
     }
 
@@ -68,6 +147,12 @@ impl AudioPromptEngine {
         }
 
         self.session.is_active = false;
+        #[cfg(not(test))]
+        {
+            self.stream = None; // Drop stream to stop it
+        }
+        self.session.samples_captured = *self.samples.lock().unwrap();
+        
         hgb_core::play_vibe_chime(false);
 
         let transcript = if let Some(ref sim) = self.session.simulated_speech {

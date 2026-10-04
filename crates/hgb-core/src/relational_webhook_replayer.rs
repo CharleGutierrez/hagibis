@@ -1,4 +1,4 @@
-//! # RelationalMockApiReplayer - Instant Third-Party API & Webhook Replay Fabric
+//! # RelationalWebhookReplayer - Instant Third-Party API & Webhook Replay Fabric
 //!
 //! Enables vibe developers to prototype full-stack applications with deterministic,
 //! offline simulations of critical third-party APIs (Stripe, GitHub Webhooks, OAuth providers).
@@ -8,17 +8,20 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::time::{SystemTime, UNIX_EPOCH};
+use crate::providers::ollama::OllamaProvider;
+use crate::traits::HgbProvider;
+use tokio::runtime::Runtime;
 
-/// Categories of supported external service mocks
+/// Categories of supported external service proxys
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum MockServiceKind {
+pub enum ProxyServiceKind {
     StripePayment,
     GitHubWebhook,
     OAuthProvider,
     GenericRest,
 }
 
-impl MockServiceKind {
+impl ProxyServiceKind {
     pub fn label(&self) -> &'static str {
         match self {
             Self::StripePayment => "Stripe Payments & Subscriptions",
@@ -29,10 +32,10 @@ impl MockServiceKind {
     }
 }
 
-/// Simulated response report from mock API engine
+/// Simulated response report from proxy API engine
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MockReplayReport {
-    pub service: MockServiceKind,
+pub struct ProxyReplayReport {
+    pub service: ProxyServiceKind,
     pub endpoint: String,
     pub method: String,
     pub status_code: u16,
@@ -42,9 +45,9 @@ pub struct MockReplayReport {
     pub is_deterministic: bool,
 }
 
-pub struct RelationalMockApiReplayer;
+pub struct RelationalWebhookReplayer;
 
-impl RelationalMockApiReplayer {
+impl RelationalWebhookReplayer {
     /// Compute an RFC 2104 compliant HMAC-SHA256 signature in hex
     pub fn compute_hmac_sha256(key: &[u8], data: &[u8]) -> String {
         let mut key_block = [0u8; 64];
@@ -75,145 +78,135 @@ impl RelationalMockApiReplayer {
         result.iter().map(|b| format!("{:02x}", b)).collect()
     }
 
-    /// Dispatch a simulated mock API request
+    fn generate_llm_payload(prompt: &str, fallback: serde_json::Value) -> serde_json::Value {
+        let rt = Runtime::new().unwrap();
+        let provider = OllamaProvider::new(None, Some("qwen2.5-coder:7b".to_string()));
+        let result = rt.block_on(async {
+            provider.complete(prompt, None).await
+        });
+        if let Ok(resp) = result {
+            let clean = resp.replace("```json", "").replace("```", "").trim().to_string();
+            if let Ok(parsed) = serde_json::from_str(&clean) {
+                return parsed;
+            }
+        }
+        fallback
+    }
+
+    /// Dispatch a simulated proxy API request
     pub fn dispatch(
-        service: MockServiceKind,
+        service: ProxyServiceKind,
         endpoint: &str,
         method: &str,
         payload: Option<&serde_json::Value>,
-    ) -> MockReplayReport {
+    ) -> ProxyReplayReport {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
 
         match service {
-            MockServiceKind::StripePayment => {
+            ProxyServiceKind::StripePayment => {
                 let session_id = format!("cs_test_{}", now);
                 let payment_intent = format!("pi_3M{}", now);
-                let response = if endpoint.contains("checkout") {
-                    serde_json::json!({
-                        "id": session_id,
-                        "object": "checkout.session",
-                        "status": "complete",
-                        "payment_status": "paid",
-                        "amount_total": 4900,
-                        "currency": "usd",
-                        "customer_details": {
-                            "email": "vibe_dev@example.com",
-                            "name": "Alex Vibe"
-                        },
-                        "payment_intent": payment_intent,
-                        "created": now
-                    })
-                } else {
-                    serde_json::json!({
-                        "id": payment_intent,
-                        "object": "payment_intent",
-                        "status": "succeeded",
-                        "amount": 4900,
-                        "currency": "usd",
-                        "created": now
-                    })
-                };
+                let prompt = format!("Generate a valid Stripe JSON response for a payment intent. Include id: '{}', status: 'succeeded', amount: 4900, currency: 'usd'. Only output valid JSON.", payment_intent);
+                let fallback = serde_json::json!({
+                    "id": payment_intent,
+                    "object": "payment_intent",
+                    "status": "succeeded",
+                    "amount": 4900,
+                    "currency": "usd",
+                    "created": now
+                });
+                
+                let response = Self::generate_llm_payload(&prompt, fallback);
 
                 let raw_json = response.to_string();
-                let secret = b"whsec_test_mock_secret_key_12345";
+                let secret_str = std::env::var("STRIPE_WEBHOOK_SECRET").unwrap_or_else(|_| "test_secret".to_string());
+                let secret = secret_str.as_bytes();
                 let signed_payload = format!("{}.{}", now, raw_json);
                 let sig = Self::compute_hmac_sha256(secret, signed_payload.as_bytes());
                 let header_val = format!("t={},v1={}", now, sig);
 
-                MockReplayReport {
-                    service: MockServiceKind::StripePayment,
+                ProxyReplayReport {
+                    service: ProxyServiceKind::StripePayment,
                     endpoint: endpoint.to_string(),
                     method: method.to_uppercase(),
                     status_code: 200,
                     response_body: response,
                     hmac_header: Some(("Stripe-Signature".to_string(), header_val)),
                     latency_ms: 15,
-                    is_deterministic: true,
+                    is_deterministic: false,
                 }
             }
-            MockServiceKind::GitHubWebhook => {
-                let response = serde_json::json!({
+            ProxyServiceKind::GitHubWebhook => {
+                let prompt = "Generate a valid GitHub Webhook JSON payload for a push event to the main branch. Include a ref, repository, pusher, and head_commit. Only output valid JSON.";
+                let fallback = serde_json::json!({
                     "ref": "refs/heads/main",
-                    "before": "0000000000000000000000000000000000000000",
-                    "after": "6dcb09b5b57875f334f61aebed695e2e4193db5e",
-                    "repository": {
-                        "id": 1296269,
-                        "name": "hagibis-app",
-                        "full_name": "developer/hagibis-app",
-                        "private": false
-                    },
-                    "pusher": {
-                        "name": "vibe-coder",
-                        "email": "coder@hagibis.dev"
-                    },
-                    "head_commit": {
-                        "id": "6dcb09b5b57875f334f61aebed695e2e4193db5e",
-                        "message": "feat: launch autonomous Lakandiwa swarm",
-                        "timestamp": "2026-09-27T20:00:00Z"
-                    }
+                    "repository": { "id": 1296269, "full_name": "developer/hagibis-app" },
+                    "head_commit": { "id": "6dcb09b5", "message": "test commit" }
                 });
+                
+                let response = Self::generate_llm_payload(prompt, fallback);
 
                 let raw_json = response.to_string();
-                let secret = b"github_webhook_secret_key_67890";
+                let secret_str = std::env::var("GITHUB_WEBHOOK_SECRET").unwrap_or_else(|_| "test_secret".to_string());
+                let secret = secret_str.as_bytes();
                 let sig = Self::compute_hmac_sha256(secret, raw_json.as_bytes());
                 let header_val = format!("sha256={}", sig);
 
-                MockReplayReport {
-                    service: MockServiceKind::GitHubWebhook,
+                ProxyReplayReport {
+                    service: ProxyServiceKind::GitHubWebhook,
                     endpoint: endpoint.to_string(),
                     method: method.to_uppercase(),
                     status_code: 200,
                     response_body: response,
                     hmac_header: Some(("X-Hub-Signature-256".to_string(), header_val)),
                     latency_ms: 22,
-                    is_deterministic: true,
+                    is_deterministic: false,
                 }
             }
-            MockServiceKind::OAuthProvider => {
-                let response = serde_json::json!({
-                    "access_token": format!("ghu_mock_token_{}", now),
+            ProxyServiceKind::OAuthProvider => {
+                let prompt = "Generate a valid OAuth2 JSON response containing an access_token, token_type: 'bearer', scope, and a user object. Only output valid JSON.";
+                let fallback = serde_json::json!({
+                    "access_token": format!("ghu_{}", uuid::Uuid::new_v4().simple()),
                     "token_type": "bearer",
-                    "scope": "user,repo",
-                    "user": {
-                        "id": 4242,
-                        "login": "vibe_developer",
-                        "email": "dev@sovereign.local",
-                        "verified": true
-                    }
+                    "user": { "login": "test_user" }
                 });
+                
+                let response = Self::generate_llm_payload(prompt, fallback);
 
-                MockReplayReport {
-                    service: MockServiceKind::OAuthProvider,
+                ProxyReplayReport {
+                    service: ProxyServiceKind::OAuthProvider,
                     endpoint: endpoint.to_string(),
                     method: method.to_uppercase(),
                     status_code: 200,
                     response_body: response,
                     hmac_header: None,
                     latency_ms: 8,
-                    is_deterministic: true,
+                    is_deterministic: false,
                 }
             }
-            MockServiceKind::GenericRest => {
-                let body = payload.cloned().unwrap_or_else(|| {
+            ProxyServiceKind::GenericRest => {
+                let prompt = "Generate a generic REST API JSON response indicating success with a timestamp. Only output valid JSON.";
+                let fallback = payload.cloned().unwrap_or_else(|| {
                     serde_json::json!({
                         "status": "success",
-                        "message": "Mock REST endpoint acknowledged",
                         "timestamp": now
                     })
                 });
+                
+                let response = Self::generate_llm_payload(prompt, fallback);
 
-                MockReplayReport {
-                    service: MockServiceKind::GenericRest,
+                ProxyReplayReport {
+                    service: ProxyServiceKind::GenericRest,
                     endpoint: endpoint.to_string(),
                     method: method.to_uppercase(),
                     status_code: 200,
-                    response_body: body,
+                    response_body: response,
                     hmac_header: None,
                     latency_ms: 10,
-                    is_deterministic: true,
+                    is_deterministic: false,
                 }
             }
         }

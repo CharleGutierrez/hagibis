@@ -117,8 +117,8 @@ async fn test_1_model_arg_parser_resilience() {
 
 #[tokio::test]
 async fn test_2_repl_model_slash_command_empty_and_list_non_destructive() {
-    let dummy_sock = PathBuf::from(format!("/tmp/hgb_test_repl_{}.sock", std::process::id()));
-    let client = HgbClient::with_socket(&dummy_sock);
+    let placeholder_sock = PathBuf::from(format!("/tmp/hgb_test_repl_{}.sock", std::process::id()));
+    let client = HgbClient::with_socket(&placeholder_sock);
     let mut repl = HagibisRepl::new(client);
 
     // Set an initial model
@@ -152,8 +152,8 @@ async fn test_2_repl_model_slash_command_empty_and_list_non_destructive() {
 
 #[tokio::test]
 async fn test_3_repl_model_slash_command_current_and_status() {
-    let dummy_sock = PathBuf::from(format!("/tmp/hgb_test_repl_status_{}.sock", std::process::id()));
-    let client = HgbClient::with_socket(&dummy_sock);
+    let placeholder_sock = PathBuf::from(format!("/tmp/hgb_test_repl_status_{}.sock", std::process::id()));
+    let client = HgbClient::with_socket(&placeholder_sock);
     let mut repl = HagibisRepl::new(client);
 
     repl.set_model(Some("qwen2.5:0.5b".to_string()));
@@ -173,8 +173,8 @@ async fn test_3_repl_model_slash_command_current_and_status() {
 
 #[tokio::test]
 async fn test_4_repl_model_naked_verbs_prevention() {
-    let dummy_sock = PathBuf::from(format!("/tmp/hgb_test_repl_verbs_{}.sock", std::process::id()));
-    let client = HgbClient::with_socket(&dummy_sock);
+    let placeholder_sock = PathBuf::from(format!("/tmp/hgb_test_repl_verbs_{}.sock", std::process::id()));
+    let client = HgbClient::with_socket(&placeholder_sock);
     let mut repl = HagibisRepl::new(client);
 
     repl.set_model(Some("gemini-2.5-flash".to_string()));
@@ -207,8 +207,8 @@ async fn test_4_repl_model_naked_verbs_prevention() {
 #[tokio::test]
 async fn test_5_repl_model_switch_execution_and_self_model_update() {
     let _guard = ActiveModelIsolationGuard::new("test_5");
-    let dummy_sock = PathBuf::from(format!("/tmp/hgb_test_repl_exec_{}.sock", std::process::id()));
-    let client = HgbClient::with_socket(&dummy_sock);
+    let placeholder_sock = PathBuf::from(format!("/tmp/hgb_test_repl_exec_{}.sock", std::process::id()));
+    let client = HgbClient::with_socket(&placeholder_sock);
     let mut repl = HagibisRepl::new(client);
 
     // 1. Direct model switch
@@ -261,8 +261,8 @@ async fn test_6_model_cross_session_persistence() {
     assert_eq!(loaded, Some(test_model.to_string()));
 
     // 3. New HagibisRepl instance must initialize with the persisted model
-    let dummy_sock = PathBuf::from(format!("/tmp/hgb_test_repl_persist_{}.sock", std::process::id()));
-    let client = HgbClient::with_socket(&dummy_sock);
+    let placeholder_sock = PathBuf::from(format!("/tmp/hgb_test_repl_persist_{}.sock", std::process::id()));
+    let client = HgbClient::with_socket(&placeholder_sock);
     let repl = HagibisRepl::new(client);
     assert_eq!(repl.current_model(), Some(test_model));
 }

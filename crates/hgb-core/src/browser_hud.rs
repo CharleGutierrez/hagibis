@@ -222,7 +222,7 @@ impl BrowserLiveHud {
                 }
             }
             BrowserIncidentKind::NetworkFailure => {
-                format!("Check route handler for endpoint '{}' or add mock route in MockFabric", url)
+                format!("Check route handler for endpoint '{}' or add proxy route in LocalProxyFabric", url)
             }
             BrowserIncidentKind::CssLayoutDefect => {
                 "Apply overflow-x: hidden or max-w-full to prevent horizontal layout blowout".to_string()

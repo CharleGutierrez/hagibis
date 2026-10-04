@@ -21,7 +21,7 @@ fn test_brutal_superpower_79_saas_monetization_fabric() {
     // 1.1 Webhook Verification & Replay Protection
     let stripe_payload = r#"{"id": "evt_charge_9988", "type": "checkout.session.completed", "amount": 2900}"#;
     let secret = "whsec_live_prod_abc";
-    let sig = "t=1700000000,v1=valid_signature_token_123456";
+    let sig = "t=1700000000,v1=3aa54bb4c089550289bddcb229d32fdf6a9d51d4fa5b795b6de446fb00cb9167";
 
     let verify_first = fabric.verify_webhook(SaasProvider::Stripe, stripe_payload, sig, secret);
     assert!(verify_first.valid, "First webhook verification must succeed");
@@ -37,7 +37,8 @@ fn test_brutal_superpower_79_saas_monetization_fabric() {
 
     // 1.2 LemonSqueezy Webhook Verification
     let ls_payload = r#"{"meta": {"event_id": "ls_evt_5544", "event_name": "subscription_created"}, "data": {}}"#;
-    let ls_verify = fabric.verify_webhook(SaasProvider::LemonSqueezy, ls_payload, "sha256=abcdef1234567890", secret);
+    let ls_sig = "sha256=ea6971b150cc1f77f9b4d591c259f615632ebe2353b69190ca5612a6f60da30d";
+    let ls_verify = fabric.verify_webhook(SaasProvider::LemonSqueezy, ls_payload, ls_sig, secret);
     assert!(ls_verify.valid);
     assert_eq!(ls_verify.event_id, "ls_evt_5544");
     assert_eq!(ls_verify.event_type, "subscription_created");

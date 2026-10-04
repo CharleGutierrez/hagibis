@@ -217,8 +217,8 @@ pub enum HgbRequest {
     EnvShred {
         content: String,
     },
-    // --- Pillar 4: MockFabric ---
-    MockServerStart {
+    // --- Pillar 4: LocalProxyFabric ---
+    ProxyServerStart {
         resource_name: String,
         #[serde(default)]
         schema_json: Option<String>,
@@ -227,7 +227,7 @@ pub enum HgbRequest {
         #[serde(default = "default_five")]
         seed_count: usize,
     },
-    MockServerStop {
+    ProxyServerStop {
         port: u16,
     },
     // --- Pillar 5: TraceRingBuffer ---
@@ -735,9 +735,9 @@ pub enum HgbRequest {
     LogicTeleport {
         event: crate::logic_teleport_mirror::DomInteractionEvent,
     },
-    // 67. Instant Relational Mock API & Webhook Replay Fabric
-    MockApiReplay {
-        service: crate::relational_mock_api_replayer::MockServiceKind,
+    // 67. Instant Relational Proxy API & Webhook Replay Fabric
+    ProxyApiReplay {
+        service: crate::relational_webhook_replayer::ProxyServiceKind,
         endpoint: String,
         #[serde(default)]
         method: Option<String>,
@@ -763,7 +763,7 @@ pub enum HgbRequest {
         #[serde(default)]
         custom_slug: Option<String>,
     },
-    // 71. BaaS Auto-Graduation ("Mock-to-Real")
+    // 71. BaaS Auto-Graduation ("Proxy-to-Real")
     BaasGraduate {
         resource_name: String,
         sample_json: serde_json::Value,
@@ -1254,13 +1254,13 @@ pub enum HgbResponse {
         sanitized_content: String,
         leaks_detected: usize,
     },
-    MockServerStarted {
+    ProxyServerStarted {
         url: String,
         port: u16,
         resource: String,
         seed_count: usize,
     },
-    MockServerStopped {
+    ProxyServerStopped {
         port: u16,
     },
     TraceContext(String),
@@ -1450,8 +1450,8 @@ pub enum HgbResponse {
     CognitiveWalkthroughResult(crate::cognitive_walkthrough::WalkthroughReport),
     // 66. Click-to-Logic DevTools Teleport & Reactive State Sync
     LogicTeleportResult(crate::logic_teleport_mirror::LogicTeleportReport),
-    // 67. Instant Relational Mock API & Webhook Replay Fabric
-    MockApiReplayResult(crate::relational_mock_api_replayer::MockReplayReport),
+    // 67. Instant Relational Proxy API & Webhook Replay Fabric
+    ProxyApiReplayResult(crate::relational_webhook_replayer::ProxyReplayReport),
     // 68. Embedded Visual Live-Preview Sidecar
     LivePreviewResult {
         port: u16,
@@ -1462,7 +1462,7 @@ pub enum HgbResponse {
     MultimodalVisionResult(crate::multimodal_vision::MultimodalPromptPayload),
     // 70. One-Click Public Share & Instant Tunneling
     ShareTunnelResult(crate::share_tunnel::ShareTunnelSession),
-    // 71. BaaS Auto-Graduation ("Mock-to-Real")
+    // 71. BaaS Auto-Graduation ("Proxy-to-Real")
     BaasGraduationResult(crate::baas_graduate::BaasGraduationReport),
     // 72. Vibe-to-Spec Intent Expander
     VibeIntentExpandResult(crate::vibe_intent_expander::ExpandedVibeSpec),

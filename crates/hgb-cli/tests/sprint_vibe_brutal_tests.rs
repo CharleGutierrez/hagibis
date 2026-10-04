@@ -4,7 +4,7 @@
 //! 1. Multimodal Visual Canvas & Layout Autopsy (`GlanceEngine`, binary magic bytes, dimensions, CSS suggestions)
 //! 2. Dependency Hallucination Firewall (`PackageGuard`, registry lookups, timeouts, heuristics, `AgentShieldLight`)
 //! 3. No-Leak Secret Sentinel (`EnvSentinel`, polyglot AST/regex scanner, reconciliation, `.env.example`, Shannon entropy, shredder)
-//! 4. Ephemeral Mock Fabric (`MockFabric`, localhost REST server, dynamic CRUD, CORS, synthetic data generation)
+//! 4. Ephemeral Proxy Fabric (`LocalProxyFabric`, localhost REST server, dynamic CRUD, CORS, synthetic data generation)
 //! 5. Ambient Execution Recorder (`TraceRingBuffer`, bounded circular queue, post-mortem XML dump)
 //! 6. Atmospheric Git Worktrees & Semantic Stashing (`AtmosphericWorktreeHandle`, `SemanticStashManager`)
 //! 7. Full Client-Daemon IPC Roundtrip across all new protocol requests
@@ -16,7 +16,7 @@ use hgb_core::protocol::{HgbRequest, HgbResponse};
 use hgb_core::security::AgentShieldLight;
 use hgb_core::trace::TraceRingBuffer;
 use hgb_nextgen::glance_engine::GlanceEngine;
-use hgb_nextgen::mock_fabric::{MockFabric, MockFabricConfig};
+use hgb_nextgen::local_proxy_fabric::{LocalProxyFabric, LocalProxyFabricConfig};
 use hgb_nextgen::worktree::{AtmosphericWorktreeHandle, SemanticStashManager};
 use std::fs;
 use std::path::PathBuf;
@@ -128,14 +128,14 @@ async fn test_pillar2_package_guard_heuristics_caching_and_security_shield() {
     let guard = PackageGuard::default();
 
     // 1. Hallucination heuristic detection
-    let fake_packages = [
+    let synthetic_packages = [
         ("tokio-curl-official-rust", PackageEcosystem::CratesIo),
         ("tokio-compat-0.2", PackageEcosystem::CratesIo),
         ("requests-async-v2", PackageEcosystem::PyPi),
         ("express-auth-ultimate", PackageEcosystem::Npm),
     ];
 
-    for (pkg, eco) in &fake_packages {
+    for (pkg, eco) in &synthetic_packages {
         let rep = guard.verify_package(*eco, pkg, None).await;
         assert!(rep.is_hallucinated, "Package '{}' should be flagged as hallucinated", pkg);
         assert_eq!(rep.status, PackageStatus::SuspiciousHallucination);
@@ -254,11 +254,11 @@ fn test_pillar3_env_sentinel_polyglot_scanner_entropy_and_shredder() {
 }
 
 // =========================================================================
-// PILLAR 4: EPHEMERAL MOCK FABRIC (MOCK FABRIC)
+// PILLAR 4: EPHEMERAL PROXY FABRIC (PROXY FABRIC)
 // =========================================================================
 #[tokio::test]
-async fn test_pillar4_mock_fabric_http_rest_crud_and_synthetic_data() {
-    let config = MockFabricConfig {
+async fn test_pillar4_local_proxy_fabric_http_rest_crud_and_synthetic_data() {
+    let config = LocalProxyFabricConfig {
         resource_name: "products".to_string(),
         schema_template: serde_json::json!({
             "id": "prod_1",
@@ -270,7 +270,7 @@ async fn test_pillar4_mock_fabric_http_rest_crud_and_synthetic_data() {
         seed_count: 3,
     };
 
-    let server = MockFabric::start(config).await.expect("mock server start");
+    let server = LocalProxyFabric::start(config).await.expect("proxy server start");
     let port = server.port();
     assert!(port > 0);
     assert_eq!(server.resource_name(), "products");
@@ -515,21 +515,21 @@ async fn test_full_client_daemon_ipc_roundtrip_all_sprint_requests() {
         panic!("Unexpected response variant for EnvShred");
     }
 
-    // 4. MockServerStart IPC
-    let mock_req = HgbRequest::MockServerStart {
+    // 4. ProxyServerStart IPC
+    let proxy_req = HgbRequest::ProxyServerStart {
         resource_name: "orders".to_string(),
         schema_json: None,
         port: None,
         seed_count: 2,
     };
-    let mock_resp = client.send(mock_req).await.expect("mock server start ipc");
-    if let HgbResponse::MockServerStarted { url, port, resource, seed_count } = mock_resp {
+    let proxy_resp = client.send(proxy_req).await.expect("proxy server start ipc");
+    if let HgbResponse::ProxyServerStarted { url, port, resource, seed_count } = proxy_resp {
         assert!(port > 0);
         assert_eq!(resource, "orders");
         assert_eq!(seed_count, 2);
         assert!(url.contains("/api/orders"));
     } else {
-        panic!("Unexpected response variant for MockServerStart");
+        panic!("Unexpected response variant for ProxyServerStart");
     }
 
     // 5. TraceGetContext IPC

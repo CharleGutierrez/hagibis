@@ -5,6 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use uuid::Uuid;
+use chrono::{DateTime, Utc, TimeZone};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimeWarpConfig {
@@ -89,7 +91,7 @@ impl TimeWarpDataEngine {
 
         // 1. Generate Organizations
         for o_idx in 0..num_orgs {
-            let org_id = format!("org_{:04x}", (pseudo_rand() % 0xFFFF));
+            let org_id = Uuid::new_v4().to_string();
             let offset_sec = (pseudo_rand() % (total_seconds / 4).max(1)) + 10;
             let org_ts = start_ts + offset_sec;
 
@@ -109,7 +111,7 @@ impl TimeWarpDataEngine {
         // 2. Generate Users (belong to orgs)
         for org in &organizations {
             for u_idx in 0..num_users_per_org {
-                let user_id = format!("usr_{:04x}", (pseudo_rand() % 0xFFFF));
+                let user_id = Uuid::new_v4().to_string();
                 let user_ts = start_ts + (pseudo_rand() % (total_seconds / 2).max(1)) + 500;
 
                 let mut attrs = HashMap::new();
@@ -130,7 +132,7 @@ impl TimeWarpDataEngine {
         // 3. Generate Invoices (belong to orgs)
         for org in &organizations {
             for inv_idx in 0..num_invoices_per_org {
-                let invoice_id = format!("inv_{:04x}", (pseudo_rand() % 0xFFFF));
+                let invoice_id = Uuid::new_v4().to_string();
                 let inv_ts = start_ts + (pseudo_rand() % total_seconds.max(1));
 
                 let mut attrs = HashMap::new();
@@ -152,7 +154,7 @@ impl TimeWarpDataEngine {
         // 4. Generate Audit Events (linked to users and orgs)
         let mut clock_skew_events = 0;
         for user in &users {
-            let audit_id = format!("evt_{:04x}", (pseudo_rand() % 0xFFFF));
+            let audit_id = Uuid::new_v4().to_string();
             let mut evt_ts = start_ts + (pseudo_rand() % total_seconds.max(1));
 
             // Inject intentional clock-skew test events if requested (e.g. leap second, leap backward)
@@ -277,20 +279,12 @@ impl TimeWarpDataEngine {
 }
 
 fn format_epoch_iso(epoch_secs: u64) -> String {
-    // Simple reproducible timestamp formatter
-    let days = epoch_secs / 86400;
-    let rem_secs = epoch_secs % 86400;
-    let hours = rem_secs / 3600;
-    let minutes = (rem_secs % 3600) / 60;
-    let seconds = rem_secs % 60;
-
-    // Approximate calendar conversion from year 1970
-    let year = 1970 + days / 365;
-    let day_of_year = (days % 365) + 1;
-    let month = (day_of_year / 30).min(11) + 1;
-    let day = (day_of_year % 30).max(1);
-
-    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", year, month, day, hours, minutes, seconds)
+    // Real standard calendar conversion
+    if let Some(dt) = Utc.timestamp_opt(epoch_secs as i64, 0).single() {
+        dt.to_rfc3339()
+    } else {
+        Utc::now().to_rfc3339()
+    }
 }
 
 #[cfg(test)]

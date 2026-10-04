@@ -55,11 +55,19 @@ impl LspGhostBridge {
         let prefix_trimmed = params.prefix_code.trim_end();
         let last_line = prefix_trimmed.lines().last().unwrap_or("").trim();
 
-        // 1. Synthesize pattern-based or AST-based ghost completion
-        if last_line.starts_with("pub async fn ") || last_line.starts_with("async function ") {
-            let func_name = extract_function_name(last_line);
+        // 1. Synthesize AST-based ghost completion using `syn` parsing
+        // We do a quick normalization of TS `async function` to Rust `async fn` so syn can parse the identifier
+        let normalized_prefix = prefix_trimmed.replace("async function ", "async fn ").replace("function ", "fn ");
+        
+        if let Ok(item_fn) = syn::parse_str::<syn::ItemFn>(&format!("{}() {{}}", normalized_prefix)) {
+            let func_name = item_fn.sig.ident.to_string();
+            let is_async = item_fn.sig.asyncness.is_some();
             let ghost_body = if params.language_id == "rust" || params.file_path.ends_with(".rs") {
-                format!("() -> Result<(), AppError> {{\n    tracing::info!(\"executing {}\");\n    Ok(())\n}}", func_name)
+                if is_async {
+                    format!("() -> Result<(), AppError> {{\n    tracing::info!(\"executing {}\");\n    Ok(())\n}}", func_name)
+                } else {
+                    format!("() {{\n    tracing::info!(\"executing {}\");\n}}", func_name)
+                }
             } else {
                 format!("(): Promise<void> {{\n    console.log('executing {}');\n}}", func_name)
             };
@@ -70,51 +78,63 @@ impl LspGhostBridge {
                 range_end: (params.line, params.character),
                 confidence: 0.95,
                 source_engine: "GhostAstPredictor".to_string(),
-                latency_us: 12,
+                latency_us: start.elapsed().as_micros() as u64,
             });
-        } else if last_line.contains("match ") || last_line.contains("switch ") {
-            let insert_text = if params.language_id == "rust" || params.file_path.ends_with(".rs") {
-                " {\n        Ok(val) => val,\n        Err(e) => return Err(e.into()),\n    }".to_string()
-            } else {
-                " {\n    case 'SUCCESS': return true;\n    default: return false;\n  }".to_string()
-            };
+        } else if let Ok(expr) = syn::parse_str::<syn::Expr>(&format!("{{ {} {{}} }}", prefix_trimmed)) {
+            let mut is_match = false;
+            if let syn::Expr::Block(block) = expr {
+                if let Some(syn::Stmt::Expr(syn::Expr::Match(_), _)) = block.block.stmts.last() {
+                    is_match = true;
+                }
+            }
+            if is_match || last_line.contains("match ") || last_line.contains("switch ") {
+                let insert_text = if params.language_id == "rust" || params.file_path.ends_with(".rs") {
+                    " {\n        Ok(val) => val,\n        Err(e) => return Err(e.into()),\n    }".to_string()
+                } else {
+                    " {\n    case 'SUCCESS': return true;\n    default: return false;\n  }".to_string()
+                };
 
-            completions.push(LspInlineCompletionItem {
-                insert_text,
-                range_start: (params.line, params.character),
-                range_end: (params.line, params.character),
-                confidence: 0.92,
-                source_engine: "PatternPredictor".to_string(),
-                latency_us: 18,
-            });
-        } else if last_line.contains("let ") || last_line.contains("const ") {
-            let insert_text = if last_line.contains("client") {
-                " = Arc::new(HgbClient::connect().await?);".to_string()
-            } else if last_line.contains("response") {
-                " = client.send_request(req).await?;".to_string()
-            } else {
-                " = Default::default();".to_string()
-            };
+                completions.push(LspInlineCompletionItem {
+                    insert_text,
+                    range_start: (params.line, params.character),
+                    range_end: (params.line, params.character),
+                    confidence: 0.92,
+                    source_engine: "PatternPredictor".to_string(),
+                    latency_us: start.elapsed().as_micros() as u64,
+                });
+            }
+        } 
+        
+        if completions.is_empty() {
+            if last_line.contains("let ") || last_line.contains("const ") {
+                let insert_text = if last_line.contains("client") {
+                    " = Arc::new(HgbClient::connect().await?);".to_string()
+                } else if last_line.contains("response") {
+                    " = client.send_request(req).await?;".to_string()
+                } else {
+                    " = Default::default();".to_string()
+                };
 
-            completions.push(LspInlineCompletionItem {
-                insert_text,
-                range_start: (params.line, params.character),
-                range_end: (params.line, params.character),
-                confidence: 0.88,
-                source_engine: "TokenPredictor".to_string(),
-                latency_us: 15,
-            });
-        } else {
-            // General multi-line fallback continuation
-            let insert_text = "// auto-suggested continuation\nOk(())".to_string();
-            completions.push(LspInlineCompletionItem {
-                insert_text,
-                range_start: (params.line, params.character),
-                range_end: (params.line, params.character),
-                confidence: 0.75,
-                source_engine: "FallbackHeuristic".to_string(),
-                latency_us: 20,
-            });
+                completions.push(LspInlineCompletionItem {
+                    insert_text,
+                    range_start: (params.line, params.character),
+                    range_end: (params.line, params.character),
+                    confidence: 0.88,
+                    source_engine: "TokenPredictor".to_string(),
+                    latency_us: start.elapsed().as_micros() as u64,
+                });
+            } else {
+                // General multi-line fallback continuation
+                let insert_text = "// auto-suggested continuation\nOk(())".to_string();
+                completions.push(LspInlineCompletionItem {
+                    insert_text,
+                    range_start: (params.line, params.character),
+                    range_end: (params.line, params.character),
+                    confidence: 0.75,
+                    source_engine: "FallbackHeuristic".to_string(),
+                    latency_us: start.elapsed().as_micros() as u64,
+                });
+            }
         }
 
         let duration_us = start.elapsed().as_micros() as u64;
@@ -127,16 +147,6 @@ impl LspGhostBridge {
             duration_us,
         }
     }
-}
-
-fn extract_function_name(line: &str) -> String {
-    let parts: Vec<&str> = line.split(|c: char| c.is_whitespace() || c == '(').collect();
-    for i in 0..parts.len() {
-        if (parts[i] == "fn" || parts[i] == "function") && i + 1 < parts.len() {
-            return parts[i + 1].trim().to_string();
-        }
-    }
-    "handler".to_string()
 }
 
 #[cfg(test)]

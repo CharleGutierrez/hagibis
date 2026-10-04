@@ -367,10 +367,10 @@ fn test_terminal_graphics_protocol_and_truecolor_rendering() {
 #[test]
 fn test_cockpit_image_preview_card_in_canvas() {
     let mut state = CockpitState::new();
-    state.add_image_preview("Authentication Modal Mockup", "assets/login_mockup.png");
+    state.add_image_preview("Authentication Modal Proxyup", "assets/login_proxyup.png");
 
     let rendered = state.render_headless_to_string(100, 35);
-    assert!(rendered.contains("UI Preview: Authentication Modal Mockup") || rendered.contains("Authentication Modal"));
+    assert!(rendered.contains("UI Preview: Authentication Modal Proxyup") || rendered.contains("Authentication Modal"));
     assert!(rendered.contains("Dimensions:") || rendered.contains("Protocol:"));
 }
 

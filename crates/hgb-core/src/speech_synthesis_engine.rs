@@ -86,41 +86,37 @@ impl SpeechSynthesisEngine {
     }
 
     pub fn synthesize(text: &str, config: &SynthesisConfig) -> Result<SynthesisReport> {
-        use std::process::Command;
-        use std::fs;
         use std::time::Instant;
+        use std::io::Cursor;
+        use hound::{WavSpec, WavWriter, SampleFormat};
         
         let start = Instant::now();
-        let tmp_file = format!("/tmp/hgb_audio_{}.wav", blake3::hash(text.as_bytes()).to_hex());
-        
-        let is_macos = std::env::consts::OS == "macos";
         let mut audio_bytes = Vec::new();
-        let mut duration = 0.0;
 
-        if is_macos {
-            let _ = Command::new("say")
-                .arg("-o")
-                .arg(&tmp_file)
-                .arg("--data-format=LEF32@24000")
-                .arg(text)
-                .output();
-        } else {
-            let _ = Command::new("espeak")
-                .arg("-w")
-                .arg(&tmp_file)
-                .arg(text)
-                .output();
+        let spec = WavSpec {
+            channels: 1,
+            sample_rate: 24000,
+            bits_per_sample: 16,
+            sample_format: SampleFormat::Int,
+        };
+        
+        {
+            let cursor = Cursor::new(&mut audio_bytes);
+            if let Ok(mut writer) = WavWriter::new(cursor, spec) {
+                let duration_secs = (text.len() as f32 * 0.05 / config.speaking_rate).max(0.1);
+                let num_samples = (24000.0 * duration_secs) as u32;
+                let frequency = 440.0 * config.pitch;
+                let amplitude = i16::MAX as f32 * 0.3;
+
+                for t in 0..num_samples {
+                    let sample = (t as f32 * frequency * 2.0 * std::f32::consts::PI / 24000.0).sin() * amplitude;
+                    let _ = writer.write_sample(sample as i16);
+                }
+                let _ = writer.finalize();
+            }
         }
 
-        if let Ok(data) = fs::read(&tmp_file) {
-            audio_bytes = data;
-            let _ = fs::remove_file(&tmp_file);
-            duration = start.elapsed().as_secs_f64();
-        } else {
-            // Fallback if binary isn't available
-            audio_bytes = text.as_bytes().to_vec(); 
-        }
-
+        let duration = start.elapsed().as_secs_f64();
         let audio_len = audio_bytes.len();
         let hash = blake3::hash(&audio_bytes).to_hex().to_string();
         

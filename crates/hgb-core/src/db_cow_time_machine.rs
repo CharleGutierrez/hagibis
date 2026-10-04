@@ -57,8 +57,15 @@ impl DbCowTimeMachine {
         let snap_filename = format!("{}_{}.snap", file_stem, timestamp);
         let snapshot_path = snapshot_dir.join(&snap_filename);
 
-        fs::write(&snapshot_path, &bytes)
+        let status = std::process::Command::new("cp")
+            .arg("--reflink=auto")
+            .arg(db_path)
+            .arg(&snapshot_path)
+            .status()
             .map_err(|e| HgbError::Io(e))?;
+        if !status.success() {
+            return Err(HgbError::Io(std::io::Error::new(std::io::ErrorKind::Other, "CoW copy failed")));
+        }
 
         let record = DbSnapshotRecord {
             snapshot_id: snap_filename,
@@ -94,8 +101,15 @@ impl DbCowTimeMachine {
             )));
         }
 
-        fs::write(target_path, &snap_bytes)
+        let status = std::process::Command::new("cp")
+            .arg("--reflink=auto")
+            .arg(snap_path)
+            .arg(target_path)
+            .status()
             .map_err(|e| HgbError::Io(e))?;
+        if !status.success() {
+            return Err(HgbError::Io(std::io::Error::new(std::io::ErrorKind::Other, "CoW rollback failed")));
+        }
 
         Ok(snap_bytes.len() as u64)
     }

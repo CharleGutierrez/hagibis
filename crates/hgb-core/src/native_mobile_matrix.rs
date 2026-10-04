@@ -81,16 +81,33 @@ impl NativeMobileMatrix {
             deep_link = Some("hagibisapp://".to_string());
         }
 
-        // Mock check or system check for tools
-        let adb = std::process::Command::new("which").arg("adb").output().map(|o| o.status.success()).unwrap_or(false);
-        let simctl = std::process::Command::new("which").arg("xcrun").output().map(|o| o.status.success()).unwrap_or(false);
+        // Real environment validation via CLI output parsing
+        let mut adb_available = false;
+        if let Ok(out) = std::process::Command::new("adb").arg("--version").output() {
+            if out.status.success() {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                if stdout.contains("Android Debug Bridge") {
+                    adb_available = true;
+                }
+            }
+        }
+
+        let mut simctl_available = false;
+        if let Ok(out) = std::process::Command::new("xcrun").arg("simctl").arg("help").output() {
+            if out.status.success() {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                if stdout.contains("Command line utility to control the Simulator") || stdout.contains("Usage: simctl") {
+                    simctl_available = true;
+                }
+            }
+        }
 
         MobileEnvironmentReport {
             platform,
             has_ios_directory: has_ios,
             has_android_directory: has_android,
-            adb_available: adb,
-            simctl_available: simctl,
+            adb_available,
+            simctl_available,
             deep_link_scheme: deep_link,
             diagnostics: diags,
         }
@@ -123,26 +140,40 @@ impl NativeMobileMatrix {
 
         let mut offending = None;
 
+        let android_re = regex::Regex::new(r"at ([\w\.]+)\.([\w<>\$]+)\(([^:]+)(?::(\d+))?\)").unwrap();
+        let ios_re = regex::Regex::new(r"\d+\s+([^\s]+)\s+(0x[0-9a-fA-F]+)\s+(.+?)\s+\+\s+(\d+)").unwrap();
+
         for (idx, line) in lines.iter().enumerate() {
             let trimmed = line.trim();
-            if trimmed.starts_with("at ") || trimmed.starts_with('#') {
+            if trimmed.starts_with("at ") || trimmed.starts_with('#') || (trimmed.chars().next().unwrap_or(' ').is_digit(10) && trimmed.contains("0x")) {
                 let is_user = !trimmed.contains("android.os.")
                     && !trimmed.contains("java.lang.")
                     && !trimmed.contains("libsystem_kernel")
                     && !trimmed.contains("UIKitCore");
 
-                let frame = SymbolicatedCrashFrame {
+                let mut frame = SymbolicatedCrashFrame {
                     frame_index: idx,
                     binary_or_package: "AppBinary".to_string(),
                     method_symbol: trimmed.to_string(),
-                    source_file: if trimmed.contains(".kt:") || trimmed.contains(".swift:") || trimmed.contains(".js:") {
-                        Some(trimmed.to_string())
-                    } else {
-                        None
-                    },
-                    line_number: Some(42),
+                    source_file: None,
+                    line_number: None,
                     is_user_code: is_user,
                 };
+
+                if let Some(caps) = android_re.captures(trimmed) {
+                    frame.binary_or_package = caps.get(1).map(|m| m.as_str().to_string()).unwrap_or_else(|| "AppBinary".to_string());
+                    frame.method_symbol = caps.get(2).map(|m| m.as_str().to_string()).unwrap_or_else(|| trimmed.to_string());
+                    frame.source_file = caps.get(3).map(|m| m.as_str().to_string());
+                    if let Some(line_str) = caps.get(4) {
+                        frame.line_number = line_str.as_str().parse().ok();
+                    }
+                } else if let Some(caps) = ios_re.captures(trimmed) {
+                    frame.binary_or_package = caps.get(1).map(|m| m.as_str().to_string()).unwrap_or_else(|| "AppBinary".to_string());
+                    frame.method_symbol = caps.get(3).map(|m| m.as_str().to_string()).unwrap_or_else(|| trimmed.to_string());
+                    if let Some(line_str) = caps.get(4) {
+                        frame.line_number = line_str.as_str().parse().ok();
+                    }
+                }
 
                 if is_user && offending.is_none() {
                     offending = Some(frame.clone());
@@ -184,6 +215,9 @@ mod tests {
         assert!(diag.exception_type.contains("NullPointerException"));
         assert!(diag.suggested_fix.contains("null-safety"));
         assert!(diag.offending_frame.is_some());
-        assert!(diag.offending_frame.unwrap().method_symbol.contains("MainActivity"));
+        let frame = diag.offending_frame.unwrap();
+        assert_eq!(frame.method_symbol, "onCreate");
+        assert_eq!(frame.binary_or_package, "com.vibe.MainActivity");
+        assert_eq!(frame.line_number, Some(42));
     }
 }

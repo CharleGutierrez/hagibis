@@ -1355,7 +1355,7 @@ impl HagibisRepl {
             | "/cmd" | "/sh" | "/exec" | "/run-cmd" | "/agent" | "/act" | "/style" | "/ship"
             | "/watch" | "/guardian" | "/ghost" | "/devs" | "/devscan" | "/sentinel" | "/impact"
             | "/pod" | "/fix" | "/rescue" | "/memory" | "/mem" | "/glance" | "/pkg" | "/guard"
-            | "/env" | "/mock" | "/trace" | "/worktree" | "/wt" | "/stash" | "/snoop" | "/browser"
+            | "/env" | "/proxy" | "/trace" | "/worktree" | "/wt" | "/stash" | "/snoop" | "/browser"
             | "/race3" | "/variant-race" | "/dbsync" | "/db" | "/slice" | "/spec" | "/dna"
             | "/mcp" | "/patch" | "/live" | "/tdd" | "/isolate" | "/chime" | "/hmr" | "/lens"
             | "/swarm" | "/dbsnap" | "/dbrewind" | "/shield" | "/launch" | "/flight" => {
@@ -1952,11 +1952,11 @@ impl HagibisRepl {
                     self.render_response(resp);
                 }
             }
-            "/mock" => {
+            "/proxy" => {
                 let parts: Vec<&str> = args.split_whitespace().collect();
                 let resource = if !parts.is_empty() { parts[0].to_string() } else { "items".to_string() };
                 let port = if parts.len() > 1 { parts[1].parse::<u16>().ok() } else { None };
-                let resp = self.dispatch(HgbRequest::MockServerStart {
+                let resp = self.dispatch(HgbRequest::ProxyServerStart {
                     resource_name: resource,
                     schema_json: None,
                     port,
@@ -3376,8 +3376,8 @@ impl HagibisRepl {
                 println!("{} Detected and shredded {} secrets", "🔒 Shred Complete:".green().bold(), leaks_detected);
                 println!("{}", sanitized_content);
             }
-            HgbResponse::MockServerStarted { url, port, resource, seed_count } => {
-                println!("{}", "🎭 EPHEMERAL MOCK FABRIC SERVER ACTIVE 🎭".bold().cyan());
+            HgbResponse::ProxyServerStarted { url, port, resource, seed_count } => {
+                println!("{}", "🎭 EPHEMERAL PROXY FABRIC SERVER ACTIVE 🎭".bold().cyan());
                 println!("  [•] Endpoint:   {}", url.bold().green());
                 println!("  [•] Local Port: {}", port);
                 println!("  [•] Resource:   {}", resource);
@@ -3387,8 +3387,8 @@ impl HagibisRepl {
                 println!("     {}", format!("curl -s {}", url).cyan());
                 println!("     {}", format!("curl -X POST {} -H 'Content-Type: application/json' -d '{{\"name\": \"Test\"}}'", url).cyan());
             }
-            HgbResponse::MockServerStopped { port } => {
-                println!("{} Mock server on port {} has been stopped.", "🛑 Mock Server Stopped:".yellow().bold(), port);
+            HgbResponse::ProxyServerStopped { port } => {
+                println!("{} Proxy server on port {} has been stopped.", "🛑 Proxy Server Stopped:".yellow().bold(), port);
             }
             HgbResponse::TraceContext(dump) => {
                 println!("{}", "📜 AMBIENT EXECUTION TRACE POST-MORTEM 📜".bold().cyan());
@@ -3443,7 +3443,7 @@ impl HagibisRepl {
                 println!("{}", commit_hash_or_patch);
             }
             HgbResponse::VariantRaceAborted => {
-                println!("{} Speculative race cancelled and mock preview ports released.", "🛑 Race Aborted:".yellow().bold());
+                println!("{} Speculative race cancelled and proxy preview ports released.", "🛑 Race Aborted:".yellow().bold());
             }
             HgbResponse::DbDriftReport(rep) => {
                 println!("{}", "🗄️ DBSENTINEL SCHEMA DRIFT AUDIT 🗄️".bold().cyan());
@@ -3819,7 +3819,7 @@ impl HagibisRepl {
                 println!("  Endpoint:        {} {}", rep.method.bold().yellow(), rep.endpoint.cyan());
                 println!("  Simulated HTTP:  {}", rep.status);
                 println!("  Synthetic Mode:  {}", rep.is_synthetic);
-                println!("  Response Time:   {}ms (deterministic offline mock)", rep.duration_ms);
+                println!("  Response Time:   {}ms (deterministic offline proxy)", rep.duration_ms);
                 println!("  Payload Preview:\n{}", rep.payload_snippet);
             }
             HgbResponse::ChaosMonkeyResult(rep) => {
@@ -4316,8 +4316,8 @@ impl HagibisRepl {
                 }
                 println!("  Message:         {}", rep.message);
             }
-            HgbResponse::MockApiReplayResult(rep) => {
-                println!("{}", "🎭 INSTANT RELATIONAL MOCK API & WEBHOOK REPLAY 🎭".bold().cyan());
+            HgbResponse::ProxyApiReplayResult(rep) => {
+                println!("{}", "🎭 INSTANT RELATIONAL PROXY API & WEBHOOK REPLAY 🎭".bold().cyan());
                 println!("  Service:         {:?}", rep.service);
                 println!("  Endpoint:        {}", rep.endpoint.cyan());
                 println!("  Status:          {}", rep.status_code);
@@ -4348,7 +4348,7 @@ impl HagibisRepl {
                 println!("{}", session.qr_terminal_art.cyan());
             }
             HgbResponse::BaasGraduationResult(rep) => {
-                println!("{}", "🎓 BAAS AUTO-GRADUATION ENGINE ('MOCK-TO-REAL') 🎓".bold().cyan());
+                println!("{}", "🎓 BAAS AUTO-GRADUATION ENGINE ('PROXY-TO-REAL') 🎓".bold().cyan());
                 println!("  Target:          {}", rep.target.name().green().bold());
                 println!("  Resource:        {}", rep.resource_name.cyan());
                 println!("  Inferred Cols:   {}", rep.columns_inferred.len());

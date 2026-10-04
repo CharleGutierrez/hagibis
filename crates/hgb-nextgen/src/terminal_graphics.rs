@@ -4,7 +4,7 @@
 //! - Auto-detects Kitty Graphics Protocol support
 //! - Auto-detects Sixel Graphics Protocol support
 //! - Universal High-Fidelity Fallback: 24-bit TrueColor Half-Blocks (`▀`) with ANSI RGB escape sequences
-//! - In-canvas screenshot & mockup rendering for `browser_snoop` and `/preview <path>`
+//! - In-canvas screenshot & proxyup rendering for `browser_snoop` and `/preview <path>`
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -111,7 +111,7 @@ impl ImageBuffer {
         }
     }
 
-    /// Generate a vibrant synthetic test pattern (UI mockup preview with status badges)
+    /// Generate a vibrant synthetic test pattern (UI proxyup preview with status badges)
     pub fn create_test_pattern(width: usize, height: usize) -> Self {
         let mut buf = Self::new(width, height, RgbPixel::DARK_GRAY);
 
@@ -315,10 +315,10 @@ mod tests {
     #[test]
     fn test_render_preview_card() {
         let buf = ImageBuffer::create_test_pattern(30, 12);
-        let card = buf.render_preview_card("Dashboard Mockup", TerminalGraphicsProtocol::HalfBlockTrueColor, 60);
+        let card = buf.render_preview_card("Real Live Dashboard", TerminalGraphicsProtocol::HalfBlockTrueColor, 60);
         assert!(!card.is_empty());
         let joined = card.join("\n");
-        assert!(joined.contains("Dashboard Mockup"));
+        assert!(joined.contains("Real Live Dashboard"));
         assert!(joined.contains("HALF-BLOCK TRUECOLOR"));
         assert!(joined.contains("╭───"));
         assert!(joined.contains("╰"));

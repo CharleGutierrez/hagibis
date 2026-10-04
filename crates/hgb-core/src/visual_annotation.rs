@@ -229,34 +229,50 @@ impl VisualAnnotationParser {
                 }
             };
 
-            let (comp_name, source_file, line_no) = match matched_comp {
-                Some((c, f, l)) => (c.clone(), f.clone(), *l),
-                None => (
-                    "InteractiveCanvasView".to_string(),
-                    "src/components/Canvas.tsx".to_string(),
-                    18,
-                ),
+            let matched_comp_result = match matched_comp {
+                Some((c, f, l)) => Some((c.clone(), f.clone(), *l)),
+                None => {
+                    // Find closest component by distance or default to first
+                    if !components.is_empty() {
+                        let first = &components[0];
+                        Some((first.0.clone(), first.1.clone(), first.2))
+                    } else {
+                        None
+                    }
+                }
             };
 
-            let directive = format!(
-                "Modify <{}> in {}:{} to satisfy annotation '{}': {}",
-                comp_name, source_file, line_no, ann.label, ann.intent_prompt
-            );
+            if let Some((comp_name, source_file, line_no)) = matched_comp_result {
+                let directive = format!(
+                    "Modify <{}> in {}:{} to satisfy annotation '{}': {}",
+                    comp_name, source_file, line_no, ann.label, ann.intent_prompt
+                );
 
-            bindings.push(ComponentSpatialBinding {
-                annotation_id: ann.id.clone(),
-                component_name: comp_name.clone(),
-                source_file: source_file.clone(),
-                line_number: line_no,
-                spatial_relation: "spatial_focus_match".to_string(),
-                prompt_directive: directive.clone(),
-            });
+                bindings.push(ComponentSpatialBinding {
+                    annotation_id: ann.id.clone(),
+                    component_name: comp_name.clone(),
+                    source_file: source_file.clone(),
+                    line_number: line_no,
+                    spatial_relation: "spatial_focus_match".to_string(),
+                    prompt_directive: directive.clone(),
+                });
 
-            prompt_sections.push(format!(
-                "- [{} @ (x:{:.1}, y:{:.1}, w:{:.1}, h:{:.1})]: Bound to `<{}>` ({}). Prompt: \"{}\"",
-                ann.id, ann.coords.x, ann.coords.y, ann.coords.width, ann.coords.height,
-                comp_name, source_file, ann.intent_prompt
-            ));
+                prompt_sections.push(format!(
+                    "- [{} @ (x:{:.1}, y:{:.1}, w:{:.1}, h:{:.1})]: Bound to `<{}>` ({}). Prompt: \"{}\"",
+                    ann.id, ann.coords.x, ann.coords.y, ann.coords.width, ann.coords.height,
+                    comp_name, source_file, ann.intent_prompt
+                ));
+            } else {
+                let directive = format!(
+                    "Apply annotation '{}': {}",
+                    ann.label, ann.intent_prompt
+                );
+                prompt_sections.push(format!(
+                    "- [{} @ (x:{:.1}, y:{:.1}, w:{:.1}, h:{:.1})]: Bound to `Global Scope`. Prompt: \"{}\"",
+                    ann.id, ann.coords.x, ann.coords.y, ann.coords.width, ann.coords.height,
+                    ann.intent_prompt
+                ));
+            }
         }
 
         let multimodal_prompt = format!(
@@ -345,12 +361,6 @@ fn scan_workspace_components(workspace: &Path) -> Vec<(String, String, usize)> {
                 }
             }
         }
-    }
-
-    if results.is_empty() {
-        results.push(("HeaderNav".to_string(), "src/components/HeaderNav.tsx".to_string(), 12));
-        results.push(("MainDashboard".to_string(), "src/components/MainDashboard.tsx".to_string(), 25));
-        results.push(("FooterBar".to_string(), "src/components/FooterBar.tsx".to_string(), 8));
     }
 
     results

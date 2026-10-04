@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use regex::Regex;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CloakedEntity {
@@ -33,50 +34,57 @@ impl AirgapCloakEngine {
         }
     }
 
-    /// Masks sensitive entities in outbound prompts with deterministic placeholders
+    /// Masks sensitive entities in outbound prompts using real Regex
     pub fn cloak(&mut self, text: &str) -> CloakAuditReport {
         let mut cloaked = text.to_string();
         let mut entities = Vec::new();
 
-        // 1. Scan for API Keys (sk_live_, ghp_, etc.)
-        let words: Vec<&str> = text.split_whitespace().collect();
-        let mut secret_idx = 1;
-        let mut email_idx = 1;
-        let mut ip_idx = 1;
+        // 1. Regex patterns for actual secrets and PII
+        // Using common robust regexes for Stripe, AWS, GitHub, Slack tokens, Email, and IPv4
+        let secret_re = Regex::new(r"(?i)(sk_[0-9a-zA-Z_]+|AKIA[0-9A-Z]{16}|gh[pousr]_[0-9a-zA-Z]{36}|xox[baprs]-[0-9]{10,13}-[0-9a-zA-Z]{24})").unwrap();
+        let email_re = Regex::new(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b").unwrap();
+        let ip_re = Regex::new(r"\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b").unwrap();
 
-        for word in words {
-            let clean_word = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '_' && c != '-' && c != '@' && c != '.');
-            
-            // Check for API Keys
-            if clean_word.starts_with("sk_live_") || clean_word.starts_with("sk_dummy_") || clean_word.starts_with("ghp_") || clean_word.starts_with("xoxb-") {
+        let mut secret_idx = 1;
+        for cap in secret_re.captures_iter(text) {
+            let secret = &cap[0];
+            if !self.token_map.values().any(|v| v == secret) {
                 let placeholder = format!("<CLOAK_SECRET_{}>", secret_idx);
                 secret_idx += 1;
-                self.token_map.insert(placeholder.clone(), clean_word.to_string());
-                cloaked = cloaked.replace(clean_word, &placeholder);
+                self.token_map.insert(placeholder.clone(), secret.to_string());
+                cloaked = cloaked.replace(secret, &placeholder);
                 entities.push(CloakedEntity {
                     placeholder,
-                    original_masked: format!("{}***", &clean_word[..clean_word.len().min(7)]),
+                    original_masked: format!("{}***", &secret[..secret.len().min(7)]),
                     entity_type: "API_SECRET".to_string(),
                 });
             }
-            // Check for Emails
-            else if clean_word.contains('@') && clean_word.contains('.') && !clean_word.starts_with('<') {
+        }
+
+        let mut email_idx = 1;
+        for cap in email_re.captures_iter(text) {
+            let email = &cap[0];
+            if !self.token_map.values().any(|v| v == email) {
                 let placeholder = format!("<CLOAK_EMAIL_{}>", email_idx);
                 email_idx += 1;
-                self.token_map.insert(placeholder.clone(), clean_word.to_string());
-                cloaked = cloaked.replace(clean_word, &placeholder);
+                self.token_map.insert(placeholder.clone(), email.to_string());
+                cloaked = cloaked.replace(email, &placeholder);
                 entities.push(CloakedEntity {
                     placeholder,
                     original_masked: "user@***.com".to_string(),
                     entity_type: "PII_EMAIL".to_string(),
                 });
             }
-            // Check for IPv4 addresses
-            else if clean_word.split('.').count() == 4 && clean_word.split('.').all(|p| p.parse::<u8>().is_ok()) {
+        }
+
+        let mut ip_idx = 1;
+        for cap in ip_re.captures_iter(text) {
+            let ip = &cap[0];
+            if !self.token_map.values().any(|v| v == ip) {
                 let placeholder = format!("<CLOAK_IP_{}>", ip_idx);
                 ip_idx += 1;
-                self.token_map.insert(placeholder.clone(), clean_word.to_string());
-                cloaked = cloaked.replace(clean_word, &placeholder);
+                self.token_map.insert(placeholder.clone(), ip.to_string());
+                cloaked = cloaked.replace(ip, &placeholder);
                 entities.push(CloakedEntity {
                     placeholder,
                     original_masked: "192.168.***.***".to_string(),
@@ -118,7 +126,7 @@ mod tests {
     #[test]
     fn test_airgap_cloak_and_rehydrate() {
         let mut engine = AirgapCloakEngine::new();
-        let prompt = "Connect to 192.168.1.50 using key sk_dummy_981723491823 for admin@corp.internal";
+        let prompt = "Connect to 192.168.1.50 using key secret_key_981723491823981723491823 for admin@corp.internal";
 
         let report = engine.cloak(prompt);
         assert!(!report.clean);
@@ -126,13 +134,12 @@ mod tests {
         assert!(report.cloaked_text.contains("<CLOAK_SECRET_1>"));
         assert!(report.cloaked_text.contains("<CLOAK_EMAIL_1>"));
         assert!(report.cloaked_text.contains("<CLOAK_IP_1>"));
-        assert!(!report.cloaked_text.contains("sk_dummy_981723491823"));
+        assert!(!report.cloaked_text.contains("secret_key_981723491823981723491823"));
 
-        // Simulate AI completion containing the cloaked placeholders
         let ai_response = "const client = init({ host: '<CLOAK_IP_1>', apiKey: '<CLOAK_SECRET_1>', user: '<CLOAK_EMAIL_1>' });";
         let rehydrated = engine.rehydrate(ai_response);
         assert!(rehydrated.contains("192.168.1.50"));
-        assert!(rehydrated.contains("sk_dummy_981723491823"));
+        assert!(rehydrated.contains("secret_key_981723491823981723491823"));
         assert!(rehydrated.contains("admin@corp.internal"));
     }
 }

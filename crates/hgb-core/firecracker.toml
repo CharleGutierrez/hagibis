@@ -1,0 +1,3 @@
+[machine]
+vcpu_count = 2
+mem_size_mib = 1024

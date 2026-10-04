@@ -204,10 +204,22 @@ impl SaasMonetizationFabric {
             };
         }
 
-        // Verify signature token (simulated secure HMAC verification)
-        let is_valid = signature_header.starts_with("t=")
-            || signature_header.starts_with("sha256=")
-            || signature_header.len() >= 16;
+        // Perform REAL HMAC-SHA256 signature verification
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
+
+        type HmacSha256 = Hmac<Sha256>;
+
+        let is_valid = if let Ok(mut mac) = HmacSha256::new_from_slice(webhook_secret.as_bytes()) {
+            mac.update(payload.as_bytes());
+            let result = mac.finalize().into_bytes();
+            let computed_hex = hex::encode(result);
+            
+            // Allow matching direct hex, "sha256=", or "t=...,v1=..." formats
+            signature_header.contains(&computed_hex)
+        } else {
+            false
+        };
 
         if is_valid {
             processed.insert(event_id.clone());
@@ -567,22 +579,31 @@ module.exports = router;
 mod tests {
     use super::*;
 
+    fn compute_sig(payload: &str, secret: &str) -> String {
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
+        let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
+        mac.update(payload.as_bytes());
+        hex::encode(mac.finalize().into_bytes())
+    }
+
     #[test]
     fn test_saas_webhook_verification_and_idempotency() {
         let fabric = SaasMonetizationFabric::new();
         let payload = r#"{"id": "evt_test_12345", "type": "checkout.session.completed", "livemode": false}"#;
         let secret = "whsec_test_secret";
-        let sig = "t=1600000000,v1=abc123def4567890";
+        let computed = compute_sig(payload, secret);
+        let sig = format!("t=1600000000,v1={}", computed);
 
         // First verification
-        let res1 = fabric.verify_webhook(SaasProvider::Stripe, payload, sig, secret);
+        let res1 = fabric.verify_webhook(SaasProvider::Stripe, payload, &sig, secret);
         assert!(res1.valid);
         assert_eq!(res1.event_id, "evt_test_12345");
         assert_eq!(res1.event_type, "checkout.session.completed");
         assert!(!res1.is_duplicate);
 
         // Second verification with identical event ID should be flagged duplicate
-        let res2 = fabric.verify_webhook(SaasProvider::Stripe, payload, sig, secret);
+        let res2 = fabric.verify_webhook(SaasProvider::Stripe, payload, &sig, secret);
         assert!(res2.valid);
         assert!(res2.is_duplicate);
         assert!(res2.error.unwrap().contains("idempotent skip"));
@@ -627,7 +648,11 @@ mod tests {
 
         // Test GCash webhook verification
         let payload = r#"{"data": {"id": "src_gcash_998877", "attributes": {"type": "source.chargeable"}}}"#;
-        let res = fabric.verify_webhook(SaasProvider::GCashPayMongo, payload, "te=123,li=abc1234567890def", "sec_123");
+        let secret = "sec_123";
+        let computed = compute_sig(payload, secret);
+        let sig = format!("te=123,li={}", computed);
+
+        let res = fabric.verify_webhook(SaasProvider::GCashPayMongo, payload, &sig, secret);
         assert!(res.valid);
         assert_eq!(res.event_id, "src_gcash_998877");
         assert_eq!(res.event_type, "source.chargeable");
@@ -653,7 +678,11 @@ mod tests {
 
         // Test Maya webhook verification
         let payload = r#"{"id": "maya_checkout_112233", "status": "PAYMENT_SUCCESS", "isPaid": true, "amount": 500.0}"#;
-        let res = fabric.verify_webhook(SaasProvider::MayaCheckout, payload, "t=1234567890,sig=validtoken123456", "sec_maya_123");
+        let secret = "sec_maya_123";
+        let computed = compute_sig(payload, secret);
+        let sig = format!("t=1234567890,sig={}", computed);
+
+        let res = fabric.verify_webhook(SaasProvider::MayaCheckout, payload, &sig, secret);
         assert!(res.valid);
         assert_eq!(res.event_id, "maya_checkout_112233");
         assert_eq!(res.event_type, "PAYMENT_SUCCESS");

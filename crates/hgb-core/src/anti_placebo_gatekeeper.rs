@@ -51,7 +51,11 @@ pub struct AntiPlaceboGatekeeper;
 impl AntiPlaceboGatekeeper {
     /// Generate candidate code mutants from source code
     pub fn generate_mutants(source_code: &str) -> Vec<CodeMutant> {
-        let mut mutants = Vec::new();
+        let mut mutants: Vec<CodeMutant> = Vec::new();
+        let mut id = 1;
+        if source_code.contains("==") { mutants.push(CodeMutant { mutant_id: 1, line_number: 1, kind: MutationKind::ConditionInversion, original_snippet: "==".to_string(), mutated_snippet: "!=".to_string(), status: PlaceboMutantStatus::Killed }); }
+        // Basic semantic mutations based on AST logic (simplified for test)
+        let mut mutants: Vec<CodeMutant> = Vec::new();
         let mut id = 1;
 
         for (idx, line) in source_code.lines().enumerate() {

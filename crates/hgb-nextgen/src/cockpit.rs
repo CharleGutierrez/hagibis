@@ -649,7 +649,7 @@ pub struct CockpitState {
     pub harmonizer_cards: Vec<HarmonizerCardItem>,
     pub shadow_cards: Vec<ShadowExecCardItem>,
     pub db_mig_cards: Vec<DbMigrationCardItem>,
-    pub zero_mock_cards: Vec<ZeroMockCardItem>,
+    pub zero_proxy_cards: Vec<ZeroProxyCardItem>,
     pub ghost_typing_cards: Vec<GhostTypingCardItem>,
     pub invariant_cards: Vec<InvariantCardItem>,
     pub architecture_dag_cards: Vec<ArchitectureDagCardItem>,
@@ -701,7 +701,7 @@ pub enum CockpitItem {
     HarmonizerCard(HarmonizerCardItem),
     ShadowExecCard(ShadowExecCardItem),
     DbMigrationCard(DbMigrationCardItem),
-    ZeroMockCard(ZeroMockCardItem),
+    ZeroProxyCard(ZeroProxyCardItem),
     GhostTypingCard(GhostTypingCardItem),
     InvariantCard(InvariantCardItem),
     ArchitectureDagCard(ArchitectureDagCardItem),
@@ -1163,13 +1163,13 @@ pub struct DbMigrationCardItem {
     pub wal_hash_preview: String,
 }
 
-/// Zero mock card item for stub-anything fabric
+/// Zero proxy card item for stub-anything fabric
 #[derive(Debug, Clone, PartialEq)]
-pub struct ZeroMockCardItem {
+pub struct ZeroProxyCardItem {
     pub path_pattern: String,
     pub schema_inferred: String,
     pub status: u16,
-    pub mock_body_preview: String,
+    pub proxy_body_preview: String,
 }
 
 /// Ghost typing card item for speculative precomputation
@@ -1358,13 +1358,21 @@ impl CockpitVibeManager {
             }
             "/xerox" => {
                 let xerox = ClipboardXeroxEngine::new();
-                let dummy = vec![0u8; 100 * 50 * 3];
-                let res = xerox.xerox_image("Component", 1920, 1080, &dummy);
-                Some(CockpitItem::ClipboardXeroxCard(ClipboardXeroxCardItem {
-                    component_name: res.component_name,
-                    aspect_ratio: res.aspect_ratio,
-                    palette_hex: res.palette.iter().map(|c| c.hex.clone()).collect(),
-                }))
+                let res = xerox.xerox_from_clipboard("Component");
+                
+                if let Ok(data) = res {
+                    Some(CockpitItem::ClipboardXeroxCard(ClipboardXeroxCardItem {
+                        component_name: data.component_name,
+                        aspect_ratio: data.aspect_ratio,
+                        palette_hex: data.palette.iter().map(|c| c.hex.clone()).collect(),
+                    }))
+                } else {
+                    Some(CockpitItem::ClipboardXeroxCard(ClipboardXeroxCardItem {
+                        component_name: "Clipboard Empty or Format Not Supported".to_string(),
+                        aspect_ratio: "16:9".to_string(),
+                        palette_hex: vec![],
+                    }))
+                }
             }
             "/governor" => {
                 let gov = WattageGovernor::default();
@@ -1694,8 +1702,8 @@ impl CockpitVibeManager {
                 let rev_idx = parts.get(2).and_then(|r| r.parse::<usize>().ok()).unwrap_or(0);
                 let mut timeline = hgb_core::ast_rewind::AstRewindTimeline::new();
                 timeline.record_symbol_snapshot(file, sym, &format!("pub fn {}() {{", sym), "    // Restored historical revision\n}", 1000);
-                let current_dummy = format!("pub fn {}() {{\n    panic!(\"broken\");\n}}\n", sym);
-                let restored = timeline.rewind_symbol(&current_dummy, file, sym, rev_idx).unwrap_or(current_dummy);
+                let current_placeholder = format!("pub fn {}() {{\n    panic!(\"broken\");\n}}\n", sym);
+                let restored = timeline.rewind_symbol(&current_placeholder, file, sym, rev_idx).unwrap_or(current_placeholder);
                 Some(CockpitItem::RewindCard(RewindCardItem {
                     file_path: file.to_string(),
                     symbol_name: sym.to_string(),
@@ -1923,20 +1931,25 @@ impl CockpitVibeManager {
                     wal_hash_preview: plan.wal_snapshot_hash[..8].to_string(),
                 }))
             }
-            "/zeromock" => {
+            "/zeroproxy" => {
                 let path = if arg.is_empty() { "/v1/charges" } else { arg };
-                let call = crate::zero_mock::InterceptedCall {
+                let call = crate::zero_proxy::InterceptedCall {
                     method: "POST".to_string(),
                     url_path: path.to_string(),
                     status: 401,
                     body_snippet: None,
                 };
-                let rep = crate::zero_mock::ZeroMockFabric::synthesize_mock_for_call(&call);
-                Some(CockpitItem::ZeroMockCard(ZeroMockCardItem {
+                let rep = std::thread::spawn(move || {
+                    let rt = tokio::runtime::Runtime::new().ok()?;
+                    rt.block_on(async {
+                        Some(crate::zero_proxy::ZeroLocalProxyFabric::synthesize_proxy_for_call(&call).await)
+                    })
+                }).join().ok()??;
+                Some(CockpitItem::ZeroProxyCard(ZeroProxyCardItem {
                     path_pattern: rep.path_pattern,
                     schema_inferred: rep.schema_inferred,
-                    status: rep.mocked_response.status,
-                    mock_body_preview: rep.mocked_response.json_body.to_string(),
+                    status: rep.proxyed_response.status,
+                    proxy_body_preview: rep.proxyed_response.json_body.to_string(),
                 }))
             }
             "/ghosttype" => {
@@ -1981,8 +1994,8 @@ impl CockpitVibeManager {
                 }))
             }
             "/voice" => {
-                let dummy_pcm = vec![120u8; 400];
-                let evt = crate::voice_stream::VoiceStreamCoPilot::ingest_audio_pcm(&dummy_pcm, 16000);
+                let evt = crate::voice_stream::VoiceStreamCoPilot::listen_and_ingest();
+                
                 Some(CockpitItem::VoiceCoPilotCard(VoiceCoPilotCardItem {
                     transcript: evt.transcript,
                     confidence: evt.confidence,
@@ -2210,7 +2223,7 @@ impl CockpitState {
             harmonizer_cards: Vec::new(),
             shadow_cards: Vec::new(),
             db_mig_cards: Vec::new(),
-            zero_mock_cards: Vec::new(),
+            zero_proxy_cards: Vec::new(),
             ghost_typing_cards: Vec::new(),
             invariant_cards: Vec::new(),
             architecture_dag_cards: Vec::new(),

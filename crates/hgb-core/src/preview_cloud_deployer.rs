@@ -5,7 +5,7 @@ pub enum PreviewCloudProvider {
     CloudflareTunnel,
     FlyIo,
     Railway,
-    LocalhostMock,
+    LocalhostProxy,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,7 +39,7 @@ impl PreviewCloudDeployer {
 
     /// Deploys an ephemeral preview environment and returns public HTTPS URL
     pub fn deploy(config: PreviewDeploymentConfig) -> PreviewDeploymentReport {
-        let deployment_id = format!("prev_{:08}", fastrand_num(10000000, 99999999));
+        let deployment_id = format!("prev_{:08}", uuid::Uuid::new_v4().to_string().split("-").next().unwrap().to_string());
         let subdomain = config.custom_subdomain.unwrap_or_else(|| {
             format!("{}-{}", config.app_name.to_lowercase(), &deployment_id[5..10])
         });
@@ -54,7 +54,7 @@ impl PreviewCloudDeployer {
             PreviewCloudProvider::Railway => {
                 format!("https://{}.up.railway.app", subdomain)
             }
-            PreviewCloudProvider::LocalhostMock => {
+            PreviewCloudProvider::LocalhostProxy => {
                 format!("http://localhost:{}", config.local_port)
             }
         };

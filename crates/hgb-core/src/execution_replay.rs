@@ -32,44 +32,39 @@ pub struct ExecutionReplayEngine {
 
 impl ExecutionReplayEngine {
     pub fn new() -> Self {
-        let mut frames = Vec::new();
-
-        // Simulate flight-recorder frames leading up to an unhandled exception
-        frames.push(ReplayFrame {
-            frame_index: 0,
-            timestamp_ms: 10,
-            event_kind: "HTTP_RECEIVE".to_string(),
-            symbol_location: "server::handle_request".to_string(),
-            heap_allocated_kb: 420,
-            state_snapshot_snippet: "POST /checkout { user_id: 'usr_882', total: 42.00 }".to_string(),
-            is_anomaly: false,
-        });
-
-        frames.push(ReplayFrame {
-            frame_index: 1,
-            timestamp_ms: 25,
-            event_kind: "DB_TRANSACTION_START".to_string(),
-            symbol_location: "db::begin_transaction".to_string(),
-            heap_allocated_kb: 435,
-            state_snapshot_snippet: "BEGIN ISOLATION LEVEL SERIALIZABLE".to_string(),
-            is_anomaly: false,
-        });
-
-        frames.push(ReplayFrame {
-            frame_index: 2,
-            timestamp_ms: 60,
-            event_kind: "NULL_POINTER_EXCEPTION".to_string(),
-            symbol_location: "order::apply_discount_coupon".to_string(),
-            heap_allocated_kb: 512,
-            state_snapshot_snippet: "coupon.expires_at is null: unexpected None in unwrap()".to_string(),
-            is_anomaly: true,
-        });
-
-        Self { frames }
+        Self { frames: Vec::new() }
     }
 
-    pub fn record_frame(&mut self, frame: ReplayFrame) {
-        self.frames.push(frame);
+    pub fn record_frame(&mut self, event_kind: &str, symbol_location: &str, snippet: &str, is_anomaly: bool) {
+        let frame_index = self.frames.len();
+        let timestamp_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        // Real memory fetch if possible, otherwise process stat approximation
+        let heap_allocated_kb = if let Ok(statm) = std::fs::read_to_string("/proc/self/statm") {
+            let parts: Vec<&str> = statm.split_whitespace().collect();
+            if parts.len() > 1 {
+                // RSS is the second field, usually in pages. Multiply by 4 for KB (assuming 4KB pages)
+                parts[1].parse::<usize>().unwrap_or(0) * 4
+            } else {
+                0
+            }
+        } else {
+            // Fallback for non-Linux or failures
+            frame_index * 1024
+        };
+
+        self.frames.push(ReplayFrame {
+            frame_index,
+            timestamp_ms,
+            event_kind: event_kind.to_string(),
+            symbol_location: symbol_location.to_string(),
+            heap_allocated_kb,
+            state_snapshot_snippet: snippet.to_string(),
+            is_anomaly,
+        });
     }
 
     /// Scrubs to a specific historical frame or returns the full flight trace
@@ -78,11 +73,15 @@ impl ExecutionReplayEngine {
         let root_cause = self.frames.iter().find(|f| f.is_anomaly).cloned();
 
         let start = std::time::SystemTime::now();
-        for _ in 0..3 {
-            std::thread::sleep(std::time::Duration::from_millis(2));
+        // Instead of sleeping, do a real search operation to mimic scrub logic cost
+        let mut matching_frames = 0;
+        for frame in &self.frames {
+            if frame.is_anomaly {
+                matching_frames += 1;
+            }
         }
         let delta = start.elapsed().unwrap().as_micros();
-        let diag = format!("{} microseconds", delta);
+        let diag = format!("{} microseconds (found {} anomalies during scrub)", delta, matching_frames);
 
         ExecutionTraceReport {
             trace_id: format!("trace-{}", blake3::hash(format!("{:?}", self.frames.len()).as_bytes()).to_hex()[..8].to_string()),
@@ -107,7 +106,11 @@ mod tests {
 
     #[test]
     fn test_execution_replay_scrubbing_and_anomaly_detection() {
-        let engine = ExecutionReplayEngine::new();
+        let mut engine = ExecutionReplayEngine::new();
+        engine.record_frame("HTTP_RECEIVE", "server::handle_request", "POST /checkout", false);
+        engine.record_frame("DB_TRANSACTION_START", "db::begin_transaction", "BEGIN", false);
+        engine.record_frame("NULL_POINTER_EXCEPTION", "order::apply_discount_coupon", "unexpected None", true);
+
         let report = engine.scrub_to_frame(Some(1));
 
         assert_eq!(report.total_frames, 3);

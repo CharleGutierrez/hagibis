@@ -67,7 +67,7 @@ impl StoreReleaseEngine {
             AppStorePlatform::GooglePlayStore => format!("build/{}.aab", config.app_bundle_id),
         };
 
-        // ACTUALLY execute fastlane instead of mocking it
+        // ACTUALLY execute fastlane instead of proxying it
         let output = Command::new("fastlane")
             .arg(&config.fastlane_lane)
             .output();

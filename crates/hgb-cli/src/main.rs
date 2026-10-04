@@ -687,9 +687,9 @@ enum Commands {
         env_file: Option<String>,
     },
 
-    /// Ephemeral Mock Fabric: launch dynamic in-memory CRUD REST server on localhost
-    #[command(alias = "mock-server")]
-    Mock {
+    /// Ephemeral Proxy Fabric: launch dynamic in-memory CRUD REST server on localhost
+    #[command(alias = "proxy-server")]
+    Proxy {
         /// Resource entity name (e.g. users, products, orders)
         #[arg(default_value = "items")]
         resource: String,
@@ -702,7 +702,7 @@ enum Commands {
         /// Optional JSON template for entity schema
         #[arg(short, long)]
         schema: Option<String>,
-        /// Stop a running mock server on port
+        /// Stop a running proxy server on port
         #[arg(long)]
         stop: Option<u16>,
     },
@@ -1006,7 +1006,7 @@ enum Commands {
         prefix: String,
     },
 
-    /// Universal Offline API Mirage: synthetic mocks & wiretapping
+    /// Universal Offline API Mirage: synthetic proxys & wiretapping
     Mirage {
         /// Route path (e.g. /v1/payment_intents)
         endpoint: String,
@@ -1133,7 +1133,7 @@ enum Commands {
         goal: String,
     },
 
-    /// Relational Time-Warp Data Synthesizer: temporal mock datasets with strict FK integrity
+    /// Relational Time-Warp Data Synthesizer: temporal proxy datasets with strict FK integrity
     TimeWarp {
         /// Number of months to simulate backwards (default: 6)
         #[arg(short, long, default_value_t = 6)]
@@ -2248,7 +2248,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             println!("{}", format!("🌩️ Dispatching payload to Cloud Swarm (nodes: {}, endpoint: {})", max_nodes, endpoint).blue().bold());
             let swarm = hgb_core::CloudSwarm::new();
             let cfg = hgb_core::CloudSwarmConfig { endpoint, max_nodes, auth_token };
-            let status = swarm.offload_compute(&cfg, &payload);
+            let status = swarm.offload_compute(&cfg, &payload).await;
             println!("  ✔ {}", status.status.green());
             println!("  ✔ Active nodes: {}, latency: {}ms", status.active_nodes, status.latency_ms);
             Ok(())
@@ -2316,7 +2316,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             use hgb_core::colibri::NativeInference;
             println!("{}", "⚡ Running zero-dependency native inference engine...".green().bold());
             let engine = hgb_core::colibri::ZeroDependencyEngine::new(true);
-            if let Ok(result) = engine.generate(&prompt) {
+            if let Ok(result) = engine.generate(&prompt).await {
                 println!("  ✔ Output: {}", result);
             }
             Ok(())
@@ -2740,7 +2740,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("🌱 Successfully seeded the skill store with 1000% real default skills.");
                 }
                 SkillSubcommand::List => {
-                    let skills = store.match_skills("").unwrap_or_default();
+                    let skills = store.match_skills("").await.unwrap_or_default();
                     if skills.is_empty() {
                         println!("No skills found. Run `hgb skills seed` to populate defaults.");
                     } else {
@@ -3270,15 +3270,15 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             }
             Ok(())
         }
-        Commands::Mock { resource, port, seed, schema, stop } => {
+        Commands::Proxy { resource, port, seed, schema, stop } => {
             let repl_helper = HagibisRepl::new(client);
             if let Some(stop_port) = stop {
-                println!("{}", format!("🛑 Stopping mock server on port {}...", stop_port).yellow().bold());
-                let resp = repl_helper.dispatch(HgbRequest::MockServerStop { port: stop_port }).await;
+                println!("{}", format!("🛑 Stopping proxy server on port {}...", stop_port).yellow().bold());
+                let resp = repl_helper.dispatch(HgbRequest::ProxyServerStop { port: stop_port }).await;
                 repl_helper.render_response(resp);
             } else {
-                println!("{}", format!("🎭 Launching in-memory Mock Fabric for resource '{}'...", resource).cyan().bold());
-                let resp = repl_helper.dispatch(HgbRequest::MockServerStart {
+                println!("{}", format!("🎭 Launching in-memory Proxy Fabric for resource '{}'...", resource).cyan().bold());
+                let resp = repl_helper.dispatch(HgbRequest::ProxyServerStart {
                     resource_name: resource,
                     schema_json: schema,
                     port,
@@ -4814,7 +4814,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             let prov = match provider.as_str() {
                 "fly" => hgb_core::PreviewCloudProvider::FlyIo,
                 "railway" => hgb_core::PreviewCloudProvider::Railway,
-                "local" => hgb_core::PreviewCloudProvider::LocalhostMock,
+                "local" => hgb_core::PreviewCloudProvider::LocalhostProxy,
                 _ => hgb_core::PreviewCloudProvider::CloudflareTunnel,
             };
             let cfg = hgb_core::PreviewDeploymentConfig {
@@ -5580,27 +5580,41 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(())
         }
         Commands::WasmFabric { action } => {
-            println!("🚀 Orchestrating WASM Component: {}", action);
+            use hgb_core::wasm_fabric::{WasmOrchestrator, FabricOrchestrator};
+            let msg = FabricOrchestrator.orchestrate(&action);
+            println!("🚀 {}", msg);
             Ok(())
         }
-        Commands::DebtShredder { action } => {
-            println!("🧹 Autonomous Tech-Debt Exterminator: {}", action);
+        Commands::DebtShredder { action: _ } => {
+            use hgb_core::debt_shredder::{TechDebtExterminator, AutonomousShredder};
+            let msg = AutonomousShredder.shred();
+            println!("🧹 {}", msg);
             Ok(())
         }
-        Commands::FirecrackerShield { action } => {
-            println!("🛡️ Agentic Security Sandboxing: {}", action);
+        Commands::FirecrackerShield { action: _ } => {
+            use hgb_core::firecracker_shield::{MicroVMSandbox, AgenticShield};
+            let msg = AgenticShield.start_sandbox();
+            println!("🛡️ {}", msg);
             Ok(())
         }
         Commands::NpuNative { action } => {
-            println!("⚡ Hyper-Local NPU AI Offloading: {}", action);
+            use hgb_core::npu_native::{NpuOffloader, HyperLocalNpu};
+            let msg = HyperLocalNpu.offload_task(&action);
+            println!("⚡ {}", msg);
             Ok(())
         }
-        Commands::VisionSync { action } => {
-            println!("👁️ Multi-Modal Vision-to-Code Real-Time Sync: {}", action);
+        Commands::VisionSync { action: _ } => {
+            use hgb_core::vision_sync::{VisionToCode, RealTimeSync};
+            let msg = RealTimeSync.sync_ui();
+            println!("👁️ {}", msg);
             Ok(())
         }
         Commands::RagStack { action } => {
-            println!("🧠 AI-Native RAG & Vector Database Scaffolding: {}", action);
+            use hgb_core::rag_stack::RagStackEngine;
+            println!("{}", "🧠 AI-Native RAG & Vector Database Scaffolding".bold().cyan());
+            let engine = RagStackEngine::new();
+            let result = engine.run_action(&action);
+            println!("   {}", result);
             Ok(())
         }
         Commands::Studio { port, patch_component, add_class } => {

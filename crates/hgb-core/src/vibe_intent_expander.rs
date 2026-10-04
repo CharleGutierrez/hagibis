@@ -1,10 +1,7 @@
-//! # Vibe-to-Spec Intent Expander
-//!
-//! Enriches concise vibe-coder prompts ("dark mode habit tracker with confetti")
-//! into comprehensive design system tokens, typography scales, animation rules,
-//! and component blueprints before code synthesis begins.
-
 use serde::{Deserialize, Serialize};
+use crate::providers::GeminiProvider;
+use crate::traits::HgbProvider;
+use std::error::Error;
 
 /// Expanded design tokens inferred from the user's vibe
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -43,125 +40,73 @@ pub struct ExpandedVibeSpec {
 pub struct VibeIntentExpander;
 
 impl VibeIntentExpander {
-    /// Expand a vague vibe prompt into structured technical tokens
-    pub fn expand(prompt: &str) -> ExpandedVibeSpec {
-        let p = prompt.to_lowercase();
+    /// Expand a vague vibe prompt into structured technical tokens using a real LLM
+    pub async fn expand(prompt: &str) -> Result<ExpandedVibeSpec, Box<dyn Error + Send + Sync>> {
+        let provider = GeminiProvider::auto_discover()
+            .ok_or("No Gemini API key available")?;
 
-        // 1. Incur Theme Tokens
-        let is_cyberpunk = p.contains("cyberpunk") || p.contains("neon");
-        let is_light = p.contains("light mode") || p.contains("clean white") || p.contains("minimal");
-        let is_retro = p.contains("retro") || p.contains("terminal") || p.contains("90s");
+        let system_prompt = r#"You are an AI vibe-coder intent expander. 
+Given a short vibe prompt from the user, you must expand it into a detailed design and technical specification.
+Respond EXACTLY with a raw JSON object matching this schema:
+{
+    "raw_prompt": "the original prompt",
+    "design": {
+        "theme_name": "string",
+        "background": "string",
+        "surface": "string",
+        "primary_accent": "string",
+        "secondary_accent": "string",
+        "text_primary": "string",
+        "text_muted": "string",
+        "border_style": "string",
+        "blur_effect": "string"
+    },
+    "motion": {
+        "transition_curve": "string",
+        "hover_scale": "string",
+        "celebratory_effect": "string or null",
+        "enter_animation": "string"
+    },
+    "inferred_components": ["string"],
+    "recommended_packages": ["string"],
+    "enriched_system_prompt": "string"
+}
+Return ONLY valid JSON without Markdown block formatting."#;
 
-        let design = if is_cyberpunk {
-            DesignTokens {
-                theme_name: "Neon Cyberpunk".to_string(),
-                background: "#05050a".to_string(),
-                surface: "rgba(18, 18, 30, 0.85)".to_string(),
-                primary_accent: "#00f0ff".to_string(),
-                secondary_accent: "#ff007f".to_string(),
-                text_primary: "#f0f8ff".to_string(),
-                text_muted: "#64748b".to_string(),
-                border_style: "1px solid rgba(0, 240, 255, 0.35)".to_string(),
-                blur_effect: "backdrop-blur-md".to_string(),
-            }
-        } else if is_light {
-            DesignTokens {
-                theme_name: "Minimalist Studio".to_string(),
-                background: "#f8fafc".to_string(),
-                surface: "#ffffff".to_string(),
-                primary_accent: "#2563eb".to_string(),
-                secondary_accent: "#10b981".to_string(),
-                text_primary: "#0f172a".to_string(),
-                text_muted: "#64748b".to_string(),
-                border_style: "1px solid #e2e8f0".to_string(),
-                blur_effect: "backdrop-blur-sm".to_string(),
-            }
-        } else if is_retro {
-            DesignTokens {
-                theme_name: "Retro CRT Matrix".to_string(),
-                background: "#0a0a0a".to_string(),
-                surface: "#141414".to_string(),
-                primary_accent: "#22c55e".to_string(),
-                secondary_accent: "#eab308".to_string(),
-                text_primary: "#4ade80".to_string(),
-                text_muted: "#15803d".to_string(),
-                border_style: "1px solid #22c55e".to_string(),
-                blur_effect: "none".to_string(),
-            }
+        let full_prompt = format!("{}\n\nUser Prompt: {}", system_prompt, prompt);
+        let response = provider.complete(&full_prompt, Some("gemini-2.5-flash")).await?;
+
+        let clean = response.trim();
+        let clean = if clean.starts_with("```json") {
+            clean.trim_start_matches("```json").trim_end_matches("```").trim()
+        } else if clean.starts_with("```") {
+            clean.trim_start_matches("```").trim_end_matches("```").trim()
         } else {
-            // Modern Dark Glassmorphism Default
-            DesignTokens {
-                theme_name: "Modern Dark Glass".to_string(),
-                background: "#090d16".to_string(),
-                surface: "rgba(15, 23, 42, 0.75)".to_string(),
-                primary_accent: "#38bdf8".to_string(),
-                secondary_accent: "#818cf8".to_string(),
-                text_primary: "#f8fafc".to_string(),
-                text_muted: "#94a3b8".to_string(),
-                border_style: "1px solid rgba(255, 255, 255, 0.08)".to_string(),
-                blur_effect: "backdrop-blur-xl".to_string(),
-            }
+            clean
         };
 
-        // 2. Incur Motion Tokens
-        let has_confetti = p.contains("confetti") || p.contains("celebrat") || p.contains("streak");
-        let motion = MotionTokens {
-            transition_curve: "cubic-bezier(0.16, 1, 0.3, 1)".to_string(),
-            hover_scale: "transform hover:scale-[1.02] active:scale-[0.98]".to_string(),
-            celebratory_effect: if has_confetti { Some("canvas-confetti-blast".to_string()) } else { None },
-            enter_animation: "animate-in fade-in zoom-in-95 duration-200".to_string(),
-        };
+        let spec: ExpandedVibeSpec = serde_json::from_str(clean)?;
+        Ok(spec)
+    }
+}
 
-        // 3. Inferred Components
-        let mut components = Vec::new();
-        if p.contains("tracker") || p.contains("habit") || p.contains("todo") {
-            components.push("ActivityGrid".to_string());
-            components.push("StreakBadge".to_string());
-            components.push("QuickAddModal".to_string());
-        }
-        if p.contains("chart") || p.contains("dashboard") || p.contains("metric") {
-            components.push("StatCard".to_string());
-            components.push("AreaChartWidget".to_string());
-        }
-        if p.contains("auth") || p.contains("login") {
-            components.push("OAuthButtonGroup".to_string());
-            components.push("SessionGuard".to_string());
-        }
-        if components.is_empty() {
-            components.push("HeaderNav".to_string());
-            components.push("MainCanvas".to_string());
-            components.push("ActionToolbar".to_string());
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::env;
+
+    #[tokio::test]
+    async fn test_vibe_intent_expander_real() {
+        // Only run if we actually have a GEMINI_API_KEY for testing
+        if env::var("GEMINI_API_KEY").is_err() {
+            println!("Skipping real vibe_intent_expander test because GEMINI_API_KEY is not set");
+            return;
         }
 
-        // 4. Recommended Packages
-        let mut packages = vec!["lucide-react".to_string(), "tailwind-merge".to_string()];
-        if has_confetti {
-            packages.push("canvas-confetti".to_string());
-        }
-        if p.contains("animation") || p.contains("framer") {
-            packages.push("framer-motion".to_string());
-        }
-
-        // 5. Synthesize Enriched System Prompt
-        let enriched = format!(
-            "VIBE SPECIFICATION ENRICHMENT:\n- Style Palette: {} (bg: {}, surface: {}, accent: {})\n- Motion: {} with {}\n- Component Hierarchy: {}\n- Target Libraries: {}\n\nImplementation Directive: Generate complete, fully-styled components respecting these aesthetic tokens. Avoid placeholder stubs.",
-            design.theme_name,
-            design.background,
-            design.surface,
-            design.primary_accent,
-            motion.transition_curve,
-            motion.enter_animation,
-            components.join(" -> "),
-            packages.join(", ")
-        );
-
-        ExpandedVibeSpec {
-            raw_prompt: prompt.to_string(),
-            design,
-            motion,
-            inferred_components: components,
-            recommended_packages: packages,
-            enriched_system_prompt: enriched,
-        }
+        let res = VibeIntentExpander::expand("dark mode habit tracker with confetti").await;
+        assert!(res.is_ok(), "Failed to expand vibe intent: {:?}", res.err());
+        let spec = res.unwrap();
+        assert!(spec.design.theme_name.len() > 0);
+        assert!(spec.inferred_components.len() > 0);
     }
 }

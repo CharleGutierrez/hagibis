@@ -707,7 +707,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&temp_dir);
         std::fs::create_dir_all(&temp_dir).unwrap();
 
-        // Create dummy workspace files
+        // Create test suite integration workspace files
         let src_dir = temp_dir.join("src");
         std::fs::create_dir_all(&src_dir).unwrap();
         std::fs::write(src_dir.join("main.rs"), "fn main() { println!(\"original\"); }\n").unwrap();

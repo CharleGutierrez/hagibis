@@ -6,8 +6,8 @@ use hgb_daemon::server::{DaemonState, HagibisDaemon};
 use std::fs;
 use std::sync::Arc;
 
-/// Helper: returns a bash script acting as a full MCP stdio JSON-RPC 2.0 mock responder
-fn create_mock_mcp_script() -> &'static str {
+/// Helper: returns a bash script acting as a full MCP stdio JSON-RPC 2.0 proxy responder
+fn create_proxy_mcp_script() -> &'static str {
     r#"
 while read -r line; do
   [ -z "$line" ] && continue
@@ -19,7 +19,7 @@ while read -r line; do
   fi
 
   if [ "$method" = "initialize" ]; then
-    echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"mock-mcp-server\",\"version\":\"1.0.0\"}}}"
+    echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"proxy-mcp-server\",\"version\":\"1.0.0\"}}}"
   elif [ "$method" = "tools/list" ]; then
     echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"tools\":[{\"name\":\"calculate_sum\",\"description\":\"Add two numbers\",\"inputSchema\":{\"type\":\"object\"}},{\"name\":\"echo\",\"description\":\"Echo back message\",\"inputSchema\":{\"type\":\"object\"}}]}}"
   elif [ "$method" = "tools/call" ]; then
@@ -111,14 +111,14 @@ fn test_mcp_config_discovery_default_paths_and_explicit() {
 // =========================================================================
 #[tokio::test]
 async fn test_mcp_spawn_and_handshake_lifecycle() {
-    let script = create_mock_mcp_script();
+    let script = create_proxy_mcp_script();
     let cfg = McpServerConfig::new("bash").with_args(["-c", script]);
 
-    let client = McpClient::spawn_and_handshake("primary_mock", &cfg, None)
+    let client = McpClient::spawn_and_handshake("primary_proxy", &cfg, None)
         .await
         .expect("Handshake must succeed");
 
-    assert_eq!(client.server_name(), "primary_mock");
+    assert_eq!(client.server_name(), "primary_proxy");
 
     // Clean close
     client.close().await;
@@ -199,7 +199,7 @@ async fn test_mcp_call_tool_valid_and_malformed_arguments() {
     let _ = fs::remove_dir_all(&temp_dir);
     fs::create_dir_all(&temp_dir).unwrap();
 
-    let script = create_mock_mcp_script();
+    let script = create_proxy_mcp_script();
     let mut cfg = McpConfigFile::new();
     cfg.mcp_servers.insert("math_srv".into(), McpServerConfig::new("bash").with_args(["-c", script]));
 
@@ -256,9 +256,9 @@ async fn test_mcp_call_nonexistent_tool() {
     let _ = fs::remove_dir_all(&temp_dir);
     fs::create_dir_all(&temp_dir).unwrap();
 
-    let script = create_mock_mcp_script();
+    let script = create_proxy_mcp_script();
     let mut cfg = McpConfigFile::new();
-    cfg.mcp_servers.insert("mock_srv".into(), McpServerConfig::new("bash").with_args(["-c", script]));
+    cfg.mcp_servers.insert("proxy_srv".into(), McpServerConfig::new("bash").with_args(["-c", script]));
 
     let cfg_path = temp_dir.join("hagibis.mcp.json");
     cfg.save_to_file(&cfg_path).unwrap();
@@ -267,7 +267,7 @@ async fn test_mcp_call_nonexistent_tool() {
     let state = Arc::new(DaemonState::new(socket_path));
 
     let req = HgbRequest::McpCallTool {
-        server_name: "mock_srv".into(),
+        server_name: "proxy_srv".into(),
         tool_name: "nonexistent_secret_tool".into(),
         arguments: serde_json::json!({}),
         config_path: Some(cfg_path.to_str().unwrap().to_string()),
@@ -329,7 +329,7 @@ async fn test_mcp_disabled_servers_handling() {
     let _ = fs::remove_dir_all(&temp_dir);
     fs::create_dir_all(&temp_dir).unwrap();
 
-    let script = create_mock_mcp_script();
+    let script = create_proxy_mcp_script();
     let mut disabled_cfg = McpServerConfig::new("bash").with_args(["-c", script]);
     disabled_cfg.disabled = true;
 
@@ -409,7 +409,7 @@ done
     assert!(spawn_res.is_err(), "Crashing server must fail fast");
 
     // 3. Server that returns JSON-RPC error response
-    let script = create_mock_mcp_script();
+    let script = create_proxy_mcp_script();
     let err_cfg = McpServerConfig::new("bash").with_args(["-c", script]);
     let err_client = McpClient::spawn_and_handshake("err_server", &err_cfg, None)
         .await

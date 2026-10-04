@@ -1,4 +1,4 @@
-use crate::mock_fabric::{MockFabric, MockFabricConfig, MockFabricServer};
+use crate::local_proxy_fabric::{LocalProxyFabric, LocalProxyFabricConfig, LocalProxyFabricServer};
 use hgb_core::variant_race::{
     DesignArchetype, VariantCandidate, VariantRaceManifest, VariantRaceStatus,
 };
@@ -8,7 +8,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 pub struct VariantRaceEngine {
-    active_races: Arc<Mutex<HashMap<String, (VariantRaceManifest, Vec<MockFabricServer>)>>>,
+    active_races: Arc<Mutex<HashMap<String, (VariantRaceManifest, Vec<LocalProxyFabricServer>)>>>,
 }
 
 impl Default for VariantRaceEngine {
@@ -51,7 +51,7 @@ impl VariantRaceEngine {
                 .join(&branch_name);
 
             // Spin up an ephemeral preview server on dynamic port
-            let config = MockFabricConfig {
+            let config = LocalProxyFabricConfig {
                 resource_name: format!("preview-{}", idx + 1),
                 schema_template: serde_json::json!({
                     "id": format!("variant_{}", idx + 1),
@@ -62,7 +62,7 @@ impl VariantRaceEngine {
                 seed_count: 3,
             };
 
-            let (server_port, server) = match MockFabric::start(config).await {
+            let (server_port, server) = match LocalProxyFabric::start(config).await {
                 Ok(srv) => {
                     let port = srv.port();
                     (port, Some(srv))

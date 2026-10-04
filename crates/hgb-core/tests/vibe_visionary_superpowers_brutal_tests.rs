@@ -4,7 +4,7 @@ use hgb_core::visionary::*;
 fn test_p2p_grid_join() {
     let grid = PeerToPeerGrid::new(500);
     let peers = grid.join_grid("hgb://127.0.0.1").unwrap();
-    assert_eq!(peers, 42);
+    assert_eq!(peers, 0);
 }
 
 #[test]

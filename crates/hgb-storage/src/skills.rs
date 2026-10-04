@@ -89,27 +89,48 @@ impl SkillStore {
         Ok(count as usize)
     }
 
-    pub fn match_skills(&self, prompt: &str) -> Result<Vec<SkillRecord>> {
-        let conn = Connection::open(&self.db_path).map_err(|e| HgbError::Execution(e.to_string()))?;
-        let mut stmt = conn.prepare("SELECT name, description, content, tier, triggers FROM skills")
-            .map_err(|e| HgbError::Execution(e.to_string()))?;
+    pub async fn match_skills(&self, prompt: &str) -> Result<Vec<SkillRecord>> {
+        let rows_data = {
+            let conn = Connection::open(&self.db_path).map_err(|e| HgbError::Execution(e.to_string()))?;
+            let mut stmt = conn.prepare("SELECT name, description, content, tier, triggers FROM skills")
+                .map_err(|e| HgbError::Execution(e.to_string()))?;
+            
+            let mut rows = stmt.query([]).map_err(|e| HgbError::Execution(e.to_string()))?;
+            let mut data = Vec::new();
+            while let Some(row) = rows.next().map_err(|e| HgbError::Execution(e.to_string()))? {
+                let name: String = row.get(0).unwrap_or_default();
+                let description: String = row.get(1).unwrap_or_default();
+                let content: String = row.get(2).unwrap_or_default();
+                let tier: String = row.get(3).unwrap_or_default();
+                let triggers_raw: String = row.get(4).unwrap_or_default();
+                let triggers: Vec<String> = serde_json::from_str(&triggers_raw).unwrap_or_default();
+                data.push((name, description, content, tier, triggers));
+            }
+            data
+        };
         
-        let mut rows = stmt.query([]).map_err(|e| HgbError::Execution(e.to_string()))?;
         let mut matched = Vec::new();
         let prompt_lower = prompt.to_lowercase();
+        
+        let provider = hgb_core::providers::OllamaProvider::new(None, None);
+        let prompt_embedding = provider.embed(prompt).await.unwrap_or_else(|_| crate::semantic_telepathy::compute_zero_cost_embedding(prompt));
 
-        while let Some(row) = rows.next().map_err(|e| HgbError::Execution(e.to_string()))? {
-            let triggers_raw: String = row.get(4).unwrap_or_default();
-            let triggers: Vec<String> = serde_json::from_str(&triggers_raw).unwrap_or_default();
+        for (name, description, content, tier, triggers) in rows_data {
+            let skill_text = format!("{} {} {}", name, description, triggers.join(" "));
+            let skill_embedding = provider.embed(&skill_text).await.unwrap_or_else(|_| crate::semantic_telepathy::compute_zero_cost_embedding(&skill_text));
+            let sim = crate::semantic_telepathy::vector_cosine_similarity(&prompt_embedding, &skill_embedding);
             
-            let should_include = triggers.iter().any(|t| prompt_lower.contains(&t.to_lowercase()));
+            let mut should_include = sim > 0.75;
+            if !should_include {
+                should_include = triggers.iter().any(|t| prompt_lower.contains(&t.to_lowercase()));
+            }
             
             if should_include {
                 matched.push(SkillRecord {
-                    name: row.get(0).unwrap_or_default(),
-                    description: row.get(1).unwrap_or_default(),
-                    content: row.get(2).unwrap_or_default(),
-                    tier: row.get(3).unwrap_or_default(),
+                    name,
+                    description,
+                    content,
+                    tier,
                     triggers,
                 });
             }

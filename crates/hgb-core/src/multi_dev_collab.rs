@@ -39,6 +39,7 @@ pub struct CollabSessionState {
 
 pub struct MultiDevCollabEngine {
     state: CollabSessionState,
+    next_peer_counter: usize,
 }
 
 impl MultiDevCollabEngine {
@@ -64,11 +65,13 @@ impl MultiDevCollabEngine {
                 active_intents: Vec::new(),
                 detected_conflicts: Vec::new(),
             },
+            next_peer_counter: 2,
         }
     }
 
     pub fn join_peer(&mut self, username: &str) -> CollabPeer {
-        let peer_id = format!("peer_{:04}", self.state.connected_peers.len() + 1);
+        let peer_id = format!("peer_{:04}", self.next_peer_counter);
+        self.next_peer_counter += 1;
         let peer = CollabPeer {
             peer_id: peer_id.clone(),
             username: username.to_string(),
@@ -154,3 +157,13 @@ mod tests {
         assert_eq!(conflicts2[0].overlapping_lines, (25, 30));
     }
 }
+
+    #[test]
+    fn test_collab_peer_id_robustness() {
+        let mut collab = MultiDevCollabEngine::new("room", "host");
+        let p1 = collab.join_peer("p1");
+        assert_eq!(p1.peer_id, "peer_0002");
+        collab.state.connected_peers.remove(&p1.peer_id);
+        let p2 = collab.join_peer("p2");
+        assert_eq!(p2.peer_id, "peer_0003", "Peer IDs should not collide if someone leaves");
+    }

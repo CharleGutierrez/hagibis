@@ -49,13 +49,13 @@ async fn test_mcp_config_discovery_and_tool_registration() {
     assert_eq!(server_cfg.command, "cat");
     assert_eq!(server_cfg.env.get("TEST_VAR"), Some(&"1".to_string()));
 
-    // 3. Test MCP tool descriptor and mock stdio roundtrip
+    // 3. Test MCP tool descriptor and proxy stdio roundtrip
     let script = r#"
 while read -r line; do
   method=$(echo "$line" | grep -o '"method":"[^"]*"' | cut -d'"' -f4)
   id=$(echo "$line" | grep -o '"id":[0-9]*' | cut -d':' -f2)
   if [ "$method" = "initialize" ]; then
-    echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"mock\",\"version\":\"1.0\"}}}"
+    echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"proxy\",\"version\":\"1.0\"}}}"
   elif [ "$method" = "tools/list" ]; then
     echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"tools\":[{\"name\":\"weather_lookup\",\"description\":\"Look up forecast\",\"inputSchema\":{\"type\":\"object\"}}]}}"
   elif [ "$method" = "tools/call" ]; then
@@ -63,8 +63,8 @@ while read -r line; do
   fi
 done
 "#;
-    let mock_cfg = McpServerConfig::new("bash").with_args(["-c", script]);
-    let client = McpClient::spawn_and_handshake("weather_srv", &mock_cfg, None)
+    let proxy_cfg = McpServerConfig::new("bash").with_args(["-c", script]);
+    let client = McpClient::spawn_and_handshake("weather_srv", &proxy_cfg, None)
         .await
         .expect("MCP spawn and handshake must succeed");
 
@@ -243,7 +243,7 @@ async fn test_verification_gate_invariants_and_integrity_hash() {
     // Create Cargo.toml and src/main.rs
     fs::write(
         temp_dir.join("Cargo.toml"),
-        "[package]\nname = \"dummy-gate\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        "[package]\nname = \"placeholder-gate\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
     ).unwrap();
     fs::create_dir_all(temp_dir.join("src")).unwrap();
     fs::write(
@@ -441,7 +441,7 @@ async fn test_glance_visual_component_synthesis_all_frameworks() {
     fs::create_dir_all(&temp_dir).unwrap();
 
     // Create a 1x1 synthetic PNG image
-    let dummy_png: Vec<u8> = vec![
+    let placeholder_png: Vec<u8> = vec![
         0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // PNG magic
         0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, // IHDR chunk
         0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
@@ -453,7 +453,7 @@ async fn test_glance_visual_component_synthesis_all_frameworks() {
         0x42, 0x60, 0x82,
     ];
     let img_path = temp_dir.join("test_ui.png");
-    fs::write(&img_path, &dummy_png).unwrap();
+    fs::write(&img_path, &placeholder_png).unwrap();
 
     let payload = ImagePayload::load_from_path(&img_path).expect("Payload should load from path");
     assert_eq!(payload.mime_type, "image/png");

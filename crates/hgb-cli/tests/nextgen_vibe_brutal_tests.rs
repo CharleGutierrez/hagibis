@@ -39,14 +39,14 @@ fn create_test_workspace(name: &str) -> PathBuf {
     base
 }
 
-struct TestNextGenMockProvider {
+struct TestNextGenProxyProvider {
     canned_response: String,
 }
 
 #[async_trait]
-impl HgbProvider for TestNextGenMockProvider {
+impl HgbProvider for TestNextGenProxyProvider {
     fn name(&self) -> &str {
-        "nextgen_mock_provider"
+        "nextgen_proxy_provider"
     }
 
     async fn complete(&self, prompt: &str, _model: Option<&str>) -> Result<String> {
@@ -89,7 +89,7 @@ async fn test_pillar1_guardian_engine_continuous_verification_and_ghost_fixes() 
         auto_heal: false,
     };
 
-    let provider = Arc::new(TestNextGenMockProvider {
+    let provider = Arc::new(TestNextGenProxyProvider {
         canned_response: "ok".into(),
     });
 
@@ -149,7 +149,7 @@ async fn test_pillar1_guardian_engine_continuous_verification_and_ghost_fixes() 
 // =========================================================================
 #[tokio::test]
 async fn test_pillar2_devserver_sentinel_port_scanning_and_diagnostic_probes() {
-    // 1. Spawn Mock FastApi Server
+    // 1. Spawn Proxy FastApi Server
     let fastapi_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let fastapi_port = fastapi_listener.local_addr().unwrap().port();
 
@@ -165,7 +165,7 @@ async fn test_pillar2_devserver_sentinel_port_scanning_and_diagnostic_probes() {
         }
     });
 
-    // 2. Spawn Mock Vite Dev Server
+    // 2. Spawn Proxy Vite Dev Server
     let vite_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let vite_port = vite_listener.local_addr().unwrap().port();
 
@@ -274,7 +274,7 @@ async fn test_pillar4_specialist_swarm_pod_dag_orchestration_and_consensus() {
     let ws = create_test_workspace("swarm_pod");
 
     // 1. Success Consensus
-    let success_provider = Arc::new(TestNextGenMockProvider {
+    let success_provider = Arc::new(TestNextGenProxyProvider {
         canned_response: "approved".into(),
     });
 
@@ -297,7 +297,7 @@ async fn test_pillar4_specialist_swarm_pod_dag_orchestration_and_consensus() {
     }
 
     // 2. Rejection Path
-    let rejection_provider = Arc::new(TestNextGenMockProvider {
+    let rejection_provider = Arc::new(TestNextGenProxyProvider {
         canned_response: "REJECT".into(),
     });
     let reject_pod = SwarmPod::new(rejection_provider, ws.clone());

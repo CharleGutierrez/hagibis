@@ -117,52 +117,91 @@ impl PhantomSwarmEngine {
         let concurrency = config.concurrency.clamp(1, 20);
         let reqs_per_bot = config.request_count / concurrency;
 
-        let mut latencies = Vec::with_capacity(config.request_count);
-        let mut status_map: HashMap<u16, usize> = HashMap::new();
-        let mut successful = 0;
-        let mut failed = 0;
+        let mut handles = Vec::new();
 
-        // In simulated/live testing loop
         for _ in 0..concurrency {
-            for _ in 0..reqs_per_bot.max(1) {
-                let req_start = std::time::Instant::now();
-                // Send actual non-blocking probe or fallback simulation
-                let res = self.client.get(&config.target_url)
-                    .timeout(std::time::Duration::from_millis(config.timeout_ms))
-                    .send().await;
-                let elapsed_ms = req_start.elapsed().as_secs_f64() * 1000.0;
-                latencies.push(elapsed_ms);
+            let client = self.client.clone();
+            let target_url = config.target_url.clone();
+            let timeout_ms = config.timeout_ms;
+            let reqs = reqs_per_bot.max(1);
+            let method = config.http_method.clone();
+            let payload = config.payload.clone();
 
-                match res {
-                    Ok(resp) => {
-                        let status = resp.status().as_u16();
-                        *status_map.entry(status).or_insert(0) += 1;
-                        if status < 400 {
-                            successful += 1;
-                        } else {
+            let handle = tokio::spawn(async move {
+                let mut latencies = Vec::with_capacity(reqs);
+                let mut status_map: HashMap<u16, usize> = HashMap::new();
+                let mut successful = 0;
+                let mut failed = 0;
+
+                for _ in 0..reqs {
+                    let req_start = std::time::Instant::now();
+                    
+                    let mut builder = match method.as_str() {
+                        "POST" => client.post(&target_url),
+                        "PUT" => client.put(&target_url),
+                        "DELETE" => client.delete(&target_url),
+                        _ => client.get(&target_url),
+                    };
+
+                    if let Some(p) = &payload {
+                        builder = builder.body(p.clone());
+                    }
+
+                    let res = builder
+                        .timeout(std::time::Duration::from_millis(timeout_ms))
+                        .send().await;
+                        
+                    let elapsed_ms = req_start.elapsed().as_secs_f64() * 1000.0;
+                    latencies.push(elapsed_ms);
+
+                    match res {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            *status_map.entry(status).or_insert(0) += 1;
+                            if status < 400 {
+                                successful += 1;
+                            } else {
+                                failed += 1;
+                            }
+                        }
+                        Err(_) => {
+                            *status_map.entry(503).or_insert(0) += 1;
                             failed += 1;
                         }
                     }
-                    Err(_) => {
-                        // Connection refused or timeout (simulate offline devserver behavior)
-                        *status_map.entry(503).or_insert(0) += 1;
-                        failed += 1;
-                    }
                 }
+                (latencies, status_map, successful, failed)
+            });
+            handles.push(handle);
+        }
+
+        let mut all_latencies = Vec::with_capacity(config.request_count);
+        let mut combined_status_map: HashMap<u16, usize> = HashMap::new();
+        let mut total_successful = 0;
+        let mut total_failed = 0;
+
+        for handle in handles {
+            if let Ok((latencies, status_map, successful, failed)) = handle.await {
+                all_latencies.extend(latencies);
+                for (status, count) in status_map {
+                    *combined_status_map.entry(status).or_insert(0) += count;
+                }
+                total_successful += successful;
+                total_failed += failed;
             }
         }
 
         let total_duration_ms = start.elapsed().as_millis().max(1) as u64;
         let rps = (config.request_count as f64) / (total_duration_ms as f64 / 1000.0);
 
-        let latency_stats = Self::calculate_percentiles(latencies);
+        let latency_stats = Self::calculate_percentiles(all_latencies);
 
         // Detect anomalies
         let mut anomalies = Vec::new();
         if latency_stats.p95_ms > 200.0 {
             anomalies.push(format!("High p95 Latency Spike: {:.2}ms", latency_stats.p95_ms));
         }
-        if let Some(&err_5xx) = status_map.get(&500).or_else(|| status_map.get(&503)) {
+        if let Some(&err_5xx) = combined_status_map.get(&500).or_else(|| combined_status_map.get(&503)) {
             if err_5xx > 0 {
                 anomalies.push(format!("Server Errors Detected: {} requests failed with 5xx", err_5xx));
             }
@@ -172,12 +211,12 @@ impl PhantomSwarmEngine {
             target_url: config.target_url,
             concurrency,
             total_requests: config.request_count,
-            successful_requests: successful,
-            failed_requests: failed,
+            successful_requests: total_successful,
+            failed_requests: total_failed,
             requests_per_second: rps,
             duration_ms: total_duration_ms,
             latency: latency_stats,
-            status_distribution: status_map,
+            status_distribution: combined_status_map,
             anomalies,
         }
     }
@@ -191,24 +230,7 @@ impl PhantomSwarmEngine {
         } else if let Ok(rt) = tokio::runtime::Builder::new_current_thread().enable_all().build() {
             rt.block_on(self.simulate_traffic(config))
         } else {
-            let count = config.request_count.max(1);
-            let mut latencies = Vec::with_capacity(count);
-            for i in 0..count {
-                latencies.push(1.0 + (i as f64 * 0.1));
-            }
-            let latency_stats = Self::calculate_percentiles(latencies);
-            PhantomSwarmReport {
-                target_url: config.target_url,
-                concurrency: config.concurrency,
-                total_requests: count,
-                successful_requests: count,
-                failed_requests: 0,
-                requests_per_second: 1500.0,
-                duration_ms: 10,
-                latency: latency_stats,
-                status_distribution: HashMap::new(),
-                anomalies: Vec::new(),
-            }
+            unreachable!("Could not get or create tokio runtime")
         }
     }
 }

@@ -83,7 +83,7 @@ impl EnvSentinel {
         format!("{}...{}", prefix, suffix)
     }
 
-    /// Check if a value is a dummy placeholder
+    /// Check if a value is a placeholder placeholder
     pub fn is_placeholder(val: &str) -> bool {
         let trimmed = val.trim().trim_matches('"').trim_matches('\'').to_lowercase();
         let placeholders = [

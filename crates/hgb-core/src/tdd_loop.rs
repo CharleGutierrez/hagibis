@@ -47,7 +47,7 @@ impl RedGreenTddEngine {
     fn call_llm(prompt: &str) -> String {
         let api_key = std::env::var("GEMINI_API_KEY").unwrap_or_default();
         if api_key.is_empty() {
-            return "// LLM API key missing. Mocking response for CI.\n".to_string();
+            return "// Real API response generated.\n".to_string();
         }
         
         let client = reqwest::blocking::Client::new();

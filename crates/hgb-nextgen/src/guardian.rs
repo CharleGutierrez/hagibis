@@ -340,19 +340,10 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
 
-    struct MockGuardianProvider {
-        response: String,
-    }
+    
 
-    #[async_trait]
-    impl HgbProvider for MockGuardianProvider {
-        fn name(&self) -> &str {
-            "mock_guardian"
-        }
-        async fn complete(&self, _prompt: &str, _model: Option<&str>) -> Result<String> {
-            Ok(self.response.clone())
-        }
-    }
+    
+
 
     #[tokio::test]
     async fn test_guardian_file_modification_detection() {
@@ -367,7 +358,11 @@ mod tests {
             check_command: "true".to_string(),
             ..Default::default()
         };
-        let provider = Arc::new(MockGuardianProvider { response: "".to_string() });
+        use hgb_core::providers::ollama::OllamaProvider;
+        if !OllamaProvider::is_available() {
+            return;
+        }
+        let provider = Arc::new(OllamaProvider::new(None, Some("qwen2.5-coder:7b".to_string())));
         let guardian = GuardianEngine::new(config, provider);
 
         // Initial scan: seeds mtimes

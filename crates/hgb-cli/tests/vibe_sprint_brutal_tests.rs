@@ -31,14 +31,14 @@ fn create_test_workspace(name: &str) -> PathBuf {
     base
 }
 
-struct TestMockProvider {
+struct TestProxyProvider {
     responses: tokio::sync::Mutex<Vec<String>>,
 }
 
 #[async_trait]
-impl HgbProvider for TestMockProvider {
+impl HgbProvider for TestProxyProvider {
     fn name(&self) -> &str {
-        "test_mock"
+        "test_proxy"
     }
 
     async fn complete(&self, _prompt: &str, _model: Option<&str>) -> Result<String> {
@@ -126,7 +126,7 @@ async fn test_p0_react_agent_full_loop_and_tool_execution() {
     let target_file = ws.join("generated.txt");
 
     // Multi-turn model outputs with tool_call blocks
-    let mock_responses = vec![
+    let proxy_responses = vec![
         format!(
             "Let me create a test artifact.\n```tool_call\n{{\n  \"call_id\": \"step_1\",\n  \"tool_name\": \"write_to_file\",\n  \"arguments\": {{\n    \"TargetFile\": \"{}\",\n    \"CodeContent\": \"initial content line 1\\ninitial content line 2\\n\",\n    \"Overwrite\": true\n  }}\n}}\n```",
             target_file.to_string_lossy()
@@ -138,8 +138,8 @@ async fn test_p0_react_agent_full_loop_and_tool_execution() {
         "All steps succeeded. The file has been written and surgically edited.".to_string(),
     ];
 
-    let provider = Arc::new(TestMockProvider {
-        responses: tokio::sync::Mutex::new(mock_responses),
+    let provider = Arc::new(TestProxyProvider {
+        responses: tokio::sync::Mutex::new(proxy_responses),
     });
 
     let config = AgentLoopConfig {

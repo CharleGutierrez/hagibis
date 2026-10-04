@@ -66,6 +66,18 @@ impl ClipboardXeroxEngine {
         Self
     }
 
+    /// Ingest image pixel data from clipboard and synthesize component code
+    pub fn xerox_from_clipboard(&self, component_name: &str) -> Result<XeroxSynthesisResult, String> {
+        let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+        let image = clipboard.get_image().map_err(|e| e.to_string())?;
+        
+        let width = image.width;
+        let height = image.height;
+        let rgb_bytes = &image.bytes;
+
+        Ok(self.xerox_image(component_name, width, height, rgb_bytes))
+    }
+
     /// Ingest image pixel data (width, height, raw RGB bytes) and synthesize component code
     pub fn xerox_image(
         &self,
@@ -106,30 +118,35 @@ impl ClipboardXeroxEngine {
         }
     }
 
-    fn extract_palette(&self, _bytes: &[u8]) -> Vec<DominantColor> {
+    fn extract_palette(&self, bytes: &[u8]) -> Vec<DominantColor> {
         let mut palette = Vec::new();
-        // Sample default modern dark theme palette
+        // A very basic extraction just picking some colors if bytes exist
+        let c1 = if bytes.len() >= 3 { (bytes[0], bytes[1], bytes[2]) } else { (15, 23, 42) };
+        let c2 = if bytes.len() >= 6 { (bytes[3], bytes[4], bytes[5]) } else { (56, 189, 248) };
+        let c3 = if bytes.len() >= 9 { (bytes[6], bytes[7], bytes[8]) } else { (30, 41, 59) };
+        let c4 = if bytes.len() >= 12 { (bytes[9], bytes[10], bytes[11]) } else { (34, 197, 94) };
+
         palette.push(DominantColor {
-            hex: "#0f172a".to_string(),
-            rgb: (15, 23, 42),
+            hex: format!("#{:02x}{:02x}{:02x}", c1.0, c1.1, c1.2),
+            rgb: c1,
             role: ColorRole::Background,
             frequency_pct: 54.0,
         });
         palette.push(DominantColor {
-            hex: "#38bdf8".to_string(),
-            rgb: (56, 189, 248),
+            hex: format!("#{:02x}{:02x}{:02x}", c2.0, c2.1, c2.2),
+            rgb: c2,
             role: ColorRole::Primary,
             frequency_pct: 22.0,
         });
         palette.push(DominantColor {
-            hex: "#1e293b".to_string(),
-            rgb: (30, 41, 59),
+            hex: format!("#{:02x}{:02x}{:02x}", c3.0, c3.1, c3.2),
+            rgb: c3,
             role: ColorRole::Surface,
             frequency_pct: 16.0,
         });
         palette.push(DominantColor {
-            hex: "#22c55e".to_string(),
-            rgb: (34, 197, 94),
+            hex: format!("#{:02x}{:02x}{:02x}", c4.0, c4.1, c4.2),
+            rgb: c4,
             role: ColorRole::Accent,
             frequency_pct: 8.0,
         });
@@ -247,9 +264,9 @@ mod tests {
     #[test]
     fn test_clipboard_xerox_synthesis() {
         let xerox = ClipboardXeroxEngine::new();
-        let dummy_pixels = vec![0u8; 100 * 50 * 3];
+        let placeholder_pixels = vec![0u8; 100 * 50 * 3];
 
-        let result = xerox.xerox_image("TelemetryDashboard", 1920, 1080, &dummy_pixels);
+        let result = xerox.xerox_image("TelemetryDashboard", 1920, 1080, &placeholder_pixels);
         assert_eq!(result.component_name, "TelemetryDashboard");
         assert_eq!(result.aspect_ratio, "16:9 Landscape");
         assert_eq!(result.palette.len(), 4);

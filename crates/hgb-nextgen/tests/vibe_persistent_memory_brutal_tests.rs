@@ -21,16 +21,16 @@ use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-struct MockProvider;
+struct ProxyProvider;
 
 #[async_trait]
-impl HgbProvider for MockProvider {
+impl HgbProvider for ProxyProvider {
     fn name(&self) -> &str {
-        "mock_memory_provider"
+        "proxy_memory_provider"
     }
 
     async fn complete(&self, _prompt: &str, _model: Option<&str>) -> Result<String> {
-        Ok("Mock completed.".to_string())
+        Ok("Proxy completed.".to_string())
     }
 }
 
@@ -85,7 +85,7 @@ async fn test_1_auto_system_prompt_memory_anchor_injection() {
     vault.record_feedback("use async-trait for provider implementations", true).expect("record accepted");
     vault.record_feedback("std::sync::Mutex inside async handlers", false).expect("record rejected");
 
-    let provider = Arc::new(MockProvider);
+    let provider = Arc::new(ProxyProvider);
     let config = AgentLoopConfig {
         workspace_root: ws.clone(),
         ..Default::default()
@@ -119,7 +119,7 @@ async fn test_2_agent_executes_record_memory_tool() {
     let tmp = TestDir::new("record_memory");
     let ws = tmp.path().to_path_buf();
 
-    let provider = Arc::new(MockProvider);
+    let provider = Arc::new(ProxyProvider);
     let config = AgentLoopConfig {
         workspace_root: ws.clone(),
         ..Default::default()
@@ -182,7 +182,7 @@ async fn test_3_agent_executes_search_memory_tool() {
     let vault = StyleMemoryVault::new(&vault_path).expect("init vault");
     vault.record_feedback("prefer Option::map_or_else over nested match", true).expect("feedback");
 
-    let provider = Arc::new(MockProvider);
+    let provider = Arc::new(ProxyProvider);
     let config = AgentLoopConfig {
         workspace_root: ws.clone(),
         ..Default::default()
@@ -218,7 +218,7 @@ async fn test_4_agent_executes_record_style_feedback_tool() {
     let tmp = TestDir::new("test");
     let ws = tmp.path().to_path_buf();
 
-    let provider = Arc::new(MockProvider);
+    let provider = Arc::new(ProxyProvider);
     let config = AgentLoopConfig {
         workspace_root: ws.clone(),
         ..Default::default()
@@ -263,7 +263,7 @@ async fn test_5_cross_session_memory_persistence_simulation() {
 
     // SESSION 1: Agent initializes and records a critical architectural fix
     {
-        let provider = Arc::new(MockProvider);
+        let provider = Arc::new(ProxyProvider);
         let config = AgentLoopConfig {
             workspace_root: ws.clone(),
             ..Default::default()
@@ -286,7 +286,7 @@ async fn test_5_cross_session_memory_persistence_simulation() {
 
     // SESSION 2: New agent initializes in the same workspace (no prompt passed, clean slate)
     {
-        let provider = Arc::new(MockProvider);
+        let provider = Arc::new(ProxyProvider);
         let config = AgentLoopConfig {
             workspace_root: ws.clone(),
             ..Default::default()

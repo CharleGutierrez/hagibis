@@ -154,7 +154,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_micro_sandbox_scrubs_secrets_and_executes() {
-        std::env::set_var("DUMMY_API_KEY", "super_secret_token_123");
+        std::env::set_var("REAL_PRODUCTION_KEY", "prod_key_789");
         let config = MicroSandboxConfig::default();
 
         let report = MicroSandboxEngine::run_isolated("echo", &["sandbox_ok"], &config)

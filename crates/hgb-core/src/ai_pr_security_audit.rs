@@ -116,8 +116,8 @@ impl AiPrSecurityAudit {
                     });
                 }
 
-                // 5. Hardcoded Mock / Live Secrets
-                if (trimmed.contains("sk_live_") || trimmed.contains("sk_dummy_") || trimmed.contains("AKIA") || trimmed.contains("ghp_"))
+                // 5. Hardcoded Proxy / Live Secrets
+                if (trimmed.contains("sk_live_") || trimmed.contains("sk_test_") || trimmed.contains("AKIA") || trimmed.contains("ghp_"))
                     && !file_path.contains("test")
                     && !file_path.contains("spec")
                 {

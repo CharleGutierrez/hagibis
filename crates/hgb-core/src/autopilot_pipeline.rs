@@ -175,7 +175,7 @@ impl AutopilotPipeline {
             let words: Vec<&str> = raw_text.split_whitespace().collect();
             words.iter().find(|w| w.starts_with('#') || w.starts_with("GH-")).unwrap_or(&"#404").to_string()
         } else {
-            format!("HGB-{:03}", fastrand_num(100, 999))
+            format!("HGB-{:03}", uuid::Uuid::new_v4().to_string().split("-").next().unwrap().to_string())
         };
 
         let mut acceptance_criteria = Vec::new();

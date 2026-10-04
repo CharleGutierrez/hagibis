@@ -83,7 +83,7 @@ impl SpatialCockpitRadar {
             tier: ZoomTier::Atmosphere,
             health_score: 99.5,
             complexity: 30,
-            tags: vec!["wiretapper".to_string(), "mock".to_string()],
+            tags: vec!["wiretapper".to_string(), "proxy".to_string()],
         });
         nodes.push(RadarNode {
             id: "mod-chaos-monkey".to_string(),

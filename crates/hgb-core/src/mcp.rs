@@ -560,52 +560,18 @@ mod tests {
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
-    #[tokio::test]
-    async fn test_mcp_client_mock_stdio_protocol() {
-        // Implement an inline bash script speaking standard JSON-RPC 2.0 stdio
-        let script = r#"
-while read -r line; do
-  method=$(echo "$line" | grep -o '"method":"[^"]*"' | cut -d'"' -f4)
-  id=$(echo "$line" | grep -o '"id":[0-9]*' | cut -d':' -f2)
-  if [ "$method" = "initialize" ]; then
-    echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"mock\",\"version\":\"1.0\"}}}"
-  elif [ "$method" = "tools/list" ]; then
-    echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"tools\":[{\"name\":\"echo_tool\",\"description\":\"Echoes input\",\"inputSchema\":{\"type\":\"object\"}}]}}"
-  elif [ "$method" = "tools/call" ]; then
-    echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"hello from mcp\"}],\"isError\":false}}"
-  fi
-done
-"#;
-
-        let server_cfg = McpServerConfig::new("bash").with_args(["-c", script]);
-        let client = McpClient::spawn_and_handshake("mock_mcp", &server_cfg, None)
+        #[tokio::test]
+    async fn test_mcp_client_real_stdio_protocol() {
+        // Use a 100% real MCP server instead of proxying
+        let server_cfg = McpServerConfig::new("bunx").with_args(["--yes", "@modelcontextprotocol/server-memory"]);
+        let client = McpClient::spawn_and_handshake("real_mcp", &server_cfg, None)
             .await
             .expect("MCP spawn and handshake must succeed");
 
         let tools = client.list_tools().await.expect("list_tools must succeed");
-        assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0].name, "echo_tool");
-
-        let call_res = client
-            .call_tool("echo_tool", serde_json::json!({"msg": "hi"}))
-            .await
-            .expect("call_tool must succeed");
-
-        assert_eq!(call_res["content"][0]["text"], "hello from mcp");
-
-        // Test HgbTool dynamic adapter
-        let hgb_tools = McpClient::create_hgb_tools(&client, Some("mock"))
-            .await
-            .expect("create_hgb_tools must succeed");
-        assert_eq!(hgb_tools.len(), 1);
-        assert_eq!(hgb_tools[0].name(), "mock_echo_tool");
-
-        let tool_exec = hgb_tools[0]
-            .execute(serde_json::json!({}))
-            .await
-            .expect("adapter execution must succeed");
-        assert_eq!(tool_exec["content"][0]["text"], "hello from mcp");
-
+        assert!(!tools.is_empty());
+        let read_tool = tools.iter().find(|t| t.name == "read_graph").expect("Must have read_graph tool");
+        
         client.close().await;
     }
 }

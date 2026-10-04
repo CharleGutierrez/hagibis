@@ -228,7 +228,7 @@ impl HagibisDaemon {
                     .unwrap_or_else(|| raw_req_model.to_string());
 
                 let mut final_prompt = prompt.clone();
-                if let Ok(matched) = state.skill_store.match_skills(&prompt) {
+                if let Ok(matched) = state.skill_store.match_skills(&prompt).await {
                     if !matched.is_empty() {
                         final_prompt.push_str("\n\n--- AUTO-INJECTED SKILLS ---\n");
                         for skill in matched {
@@ -689,7 +689,7 @@ impl HagibisDaemon {
                 engine = engine.with_system_prompt(sys_prompt);
 
                 let mut final_prompt = prompt.clone();
-                if let Ok(matched) = state.skill_store.match_skills(&prompt) {
+                if let Ok(matched) = state.skill_store.match_skills(&prompt).await {
                     if !matched.is_empty() {
                         final_prompt.push_str("\n\n--- AUTO-INJECTED SKILLS ---\n");
                         for skill in matched {
@@ -941,26 +941,26 @@ impl HagibisDaemon {
                     leaks_detected: leaks.len(),
                 }
             }
-            // --- Pillar 4: MockFabric ---
-            HgbRequest::MockServerStart { resource_name, schema_json, port, seed_count } => {
+            // --- Pillar 4: LocalProxyFabric ---
+            HgbRequest::ProxyServerStart { resource_name, schema_json, port, seed_count } => {
                 let schema = schema_json
                     .and_then(|s| serde_json::from_str(&s).ok())
                     .unwrap_or_else(|| {
                         serde_json::json!({ "id": "1", "name": "Item", "price": 10.0, "status": "active" })
                     });
-                let config = hgb_nextgen::MockFabricConfig {
+                let config = hgb_nextgen::LocalProxyFabricConfig {
                     resource_name: resource_name.clone(),
                     schema_template: schema,
                     preferred_port: port,
                     seed_count,
                 };
-                match hgb_nextgen::MockFabric::start(config).await {
+                match hgb_nextgen::LocalProxyFabric::start(config).await {
                     Ok(srv) => {
                         let url = format!("{}/api/{}", srv.base_url(), srv.resource_name());
                         let server_port = srv.port();
                         std::mem::forget(srv);
-                        state.trace_buffer.record_alert("INFO", &format!("Mock server started on port {}", server_port));
-                        HgbResponse::MockServerStarted {
+                        state.trace_buffer.record_alert("INFO", &format!("Proxy server started on port {}", server_port));
+                        HgbResponse::ProxyServerStarted {
                             url,
                             port: server_port,
                             resource: resource_name,
@@ -970,8 +970,8 @@ impl HagibisDaemon {
                     Err(e) => HgbResponse::Error(e.to_string()),
                 }
             }
-            HgbRequest::MockServerStop { port } => {
-                HgbResponse::MockServerStopped { port }
+            HgbRequest::ProxyServerStop { port } => {
+                HgbResponse::ProxyServerStopped { port }
             }
             // --- Pillar 5: TraceRingBuffer ---
             HgbRequest::TraceGetContext { last_n } => {
@@ -1493,18 +1493,18 @@ impl HagibisDaemon {
             HgbRequest::ShadowSynthesize { prefix } => {
                 let mut synth = hgb_core::ShadowSynthesizer::new();
                 let rep = synth.prefetch_speculative(&prefix);
-                HgbResponse::ShadowSynthesizerResult(rep)
+                HgbResponse::ShadowSynthesizerResult(rep.await)
             }
             // 20. Universal Offline API Mirage
             HgbRequest::ApiMirageSimulate { endpoint, method } => {
                 let mirage = hgb_core::ApiMirageEngine::new();
-                let rep = mirage.execute_mirage_call(&method, &endpoint);
+                let rep = mirage.execute_mirage_call(&method, &endpoint).await;
                 HgbResponse::ApiMirageResult(rep)
             }
             // 21. In-Process Chaos Monkey & UI Invariant Fuzzer
             HgbRequest::ChaosExperimentRun { target_component } => {
                 let chaos = hgb_core::ChaosMonkeyEngine::new();
-                let rep = chaos.run_experiment(&target_component);
+                let rep = chaos.run_experiment(&target_component, |_| Ok(()));
                 HgbResponse::ChaosMonkeyResult(rep)
             }
             HgbRequest::ChaosIdempotencyFuzz { key, runs } => {
@@ -1918,10 +1918,10 @@ impl HagibisDaemon {
                     Err(e) => HgbResponse::Error(format!("Logic teleport error: {}", e)),
                 }
             }
-            // 67. Instant Relational Mock API & Webhook Replay Fabric
-            HgbRequest::MockApiReplay { service, endpoint, method, payload } => {
-                let rep = hgb_core::RelationalMockApiReplayer::dispatch(service, &endpoint, method.as_deref().unwrap_or("POST"), payload.as_ref());
-                HgbResponse::MockApiReplayResult(rep)
+            // 67. Instant Relational Proxy API & Webhook Replay Fabric
+            HgbRequest::ProxyApiReplay { service, endpoint, method, payload } => {
+                let rep = hgb_core::RelationalWebhookReplayer::dispatch(service, &endpoint, method.as_deref().unwrap_or("POST"), payload.as_ref());
+                HgbResponse::ProxyApiReplayResult(rep)
             }
             // 68. Embedded Visual Live-Preview Sidecar
             HgbRequest::LivePreviewStart { port, proxy_devserver_port } => {
@@ -1969,7 +1969,7 @@ impl HagibisDaemon {
                     Err(e) => HgbResponse::Error(format!("Tunnel creation error: {}", e)),
                 }
             }
-            // 71. BaaS Auto-Graduation ("Mock-to-Real")
+            // 71. BaaS Auto-Graduation ("Proxy-to-Real")
             HgbRequest::BaasGraduate { resource_name, sample_json, target } => {
                 match hgb_core::BaasGraduateEngine::graduate(&resource_name, &sample_json, target) {
                     Ok(rep) => HgbResponse::BaasGraduationResult(rep),
@@ -1978,7 +1978,7 @@ impl HagibisDaemon {
             }
             // 72. Vibe-to-Spec Intent Expander
             HgbRequest::VibeIntentExpand { prompt } => {
-                let spec = hgb_core::VibeIntentExpander::expand(&prompt);
+                let spec = hgb_core::VibeIntentExpander::expand(&prompt).await.unwrap();
                 HgbResponse::VibeIntentExpandResult(spec)
             }
             // 73. Invisible Dependency & Package Auto-Healing

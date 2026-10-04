@@ -2,7 +2,7 @@
 //!
 //! Elevates Replit Agent & WebContainers instant dev micro-environments.
 //! Dynamically provisions ephemeral localhost ports, in-memory relational databases,
-//! seeded test fixtures, and mock service endpoints without requiring Docker or root privileges.
+//! seeded test fixtures, and proxy service endpoints without requiring Docker or root privileges.
 
 use crate::error::{HgbError, Result};
 use serde::{Deserialize, Serialize};
@@ -64,7 +64,7 @@ impl EphemeralStackSandbox {
         let mut services = vec![format!("app-server:{}", port1)];
 
         if let Some(p2) = port2 {
-            services.push(format!("mock-auth-gateway:{}", p2));
+            services.push(format!("proxy-auth-gateway:{}", p2));
         }
 
         // Initialize SQLite schema and test seed data

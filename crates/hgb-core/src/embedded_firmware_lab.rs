@@ -58,9 +58,54 @@ pub struct EmbeddedFirmwareEngine;
 
 impl EmbeddedFirmwareEngine {
     pub fn check_firmware(code_snippet: &str, config: &EmbeddedCheckConfig) -> Result<EmbeddedCheckReport> {
-        let is_no_std = code_snippet.contains("#![no_std]") || config.no_std;
-        let flash_bytes = (code_snippet.len() * 12).min(config.max_flash_bytes);
-        let ram_bytes = (code_snippet.len() * 4).min(config.max_ram_bytes);
+        let mut is_no_std = config.no_std;
+        let mut flash_bytes = 0;
+        let mut ram_bytes = 0;
+
+        if let Ok(file) = syn::parse_file(code_snippet) {
+            for attr in &file.attrs {
+                if attr.meta.path().is_ident("no_std") {
+                    is_no_std = true;
+                }
+            }
+
+            for item in &file.items {
+                match item {
+                    syn::Item::Fn(f) => {
+                        flash_bytes += 256; 
+                        flash_bytes += f.block.stmts.len() * 16;
+                    },
+                    syn::Item::Struct(s) => {
+                        ram_bytes += s.fields.len() * 8;
+                        flash_bytes += s.fields.len() * 4;
+                    },
+                    syn::Item::Static(_) => {
+                        ram_bytes += 128;
+                        flash_bytes += 32;
+                    },
+                    syn::Item::Enum(e) => {
+                        ram_bytes += 4;
+                        flash_bytes += e.variants.len() * 12;
+                    },
+                    syn::Item::Const(_) => {
+                        flash_bytes += 64;
+                    },
+                    _ => {
+                        flash_bytes += 16;
+                    }
+                }
+            }
+        } else {
+            // Fallback for partial/invalid code snippet
+            flash_bytes = (code_snippet.len() * 12).min(config.max_flash_bytes);
+            ram_bytes = (code_snippet.len() * 4).min(config.max_ram_bytes);
+            if code_snippet.contains("#![no_std]") {
+                is_no_std = true;
+            }
+        }
+
+        flash_bytes = flash_bytes.min(config.max_flash_bytes);
+        ram_bytes = ram_bytes.min(config.max_ram_bytes);
 
         let flash_pct = (flash_bytes as f64 / config.max_flash_bytes as f64) * 100.0;
         let ram_pct = (ram_bytes as f64 / config.max_ram_bytes as f64) * 100.0;

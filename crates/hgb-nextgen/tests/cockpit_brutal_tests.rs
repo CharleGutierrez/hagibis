@@ -961,7 +961,7 @@ async fn test_brutal_prompt_processing_animation_and_cancel() {
     assert!(state.conversation.iter().any(|c| c.content.contains("cancelled by user")));
 
     // 6. Test submit_current_prompt
-    state.model_pill = "mock-standalone-model".to_string();
+    state.model_pill = "proxy-standalone-model".to_string();
     state.prompt_input = "calculate fibonacci(40)".to_string();
     let rx = state.submit_current_prompt();
     assert!(rx.is_some(), "submit_current_prompt should return background receiver");
