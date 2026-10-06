@@ -35,50 +35,22 @@ impl SimdVectorIndex {
         }
     }
 
-    /// High-speed 8-way unrolled f32 dot product (auto-vectorizes to AVX2/NEON)
+    /// High-speed SIMD vector dot product accelerated by Zig @Vector(8, f32) AVX2/FMA kernel
     pub fn dot_product_simd(a: &[f32], b: &[f32]) -> f32 {
         let len = a.len().min(b.len());
-        let chunks = len / 8;
-        let mut sum0 = 0.0f32;
-        let mut sum1 = 0.0f32;
-        let mut sum2 = 0.0f32;
-        let mut sum3 = 0.0f32;
-        let mut sum4 = 0.0f32;
-        let mut sum5 = 0.0f32;
-        let mut sum6 = 0.0f32;
-        let mut sum7 = 0.0f32;
-
-        for i in 0..chunks {
-            let idx = i * 8;
-            sum0 += a[idx] * b[idx];
-            sum1 += a[idx + 1] * b[idx + 1];
-            sum2 += a[idx + 2] * b[idx + 2];
-            sum3 += a[idx + 3] * b[idx + 3];
-            sum4 += a[idx + 4] * b[idx + 4];
-            sum5 += a[idx + 5] * b[idx + 5];
-            sum6 += a[idx + 6] * b[idx + 6];
-            sum7 += a[idx + 7] * b[idx + 7];
+        if len == 0 {
+            return 0.0;
         }
-
-        let mut remainder = 0.0f32;
-        for i in (chunks * 8)..len {
-            remainder += a[i] * b[i];
-        }
-
-        sum0 + sum1 + sum2 + sum3 + sum4 + sum5 + sum6 + sum7 + remainder
+        hgb_core::zig_accelerate::simd_dot_product(&a[..len], &b[..len])
     }
 
-    /// Computes cosine similarity between two vectors
+    /// Computes cosine similarity between two vectors accelerated by Zig SIMD kernel
     pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-        let dot = Self::dot_product_simd(a, b);
-        let norm_a = Self::dot_product_simd(a, a).sqrt();
-        let norm_b = Self::dot_product_simd(b, b).sqrt();
-
-        if norm_a == 0.0 || norm_b == 0.0 {
-            0.0
-        } else {
-            (dot / (norm_a * norm_b)).clamp(-1.0, 1.0)
+        let len = a.len().min(b.len());
+        if len == 0 {
+            return 0.0;
         }
+        hgb_core::zig_accelerate::simd_cosine_similarity(&a[..len], &b[..len]).clamp(-1.0, 1.0)
     }
 
     /// Fast deterministic normalized embedding synthesis (for zero-latency offline indexing)

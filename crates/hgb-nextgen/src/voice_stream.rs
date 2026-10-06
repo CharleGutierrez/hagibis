@@ -2,7 +2,6 @@ use serde::{Deserialize, Serialize};
 use std::time::Instant;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Streaming audio chunk captured from microphone
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -27,16 +26,19 @@ pub struct VoiceStreamCoPilot;
 
 impl VoiceStreamCoPilot {
     pub fn ingest_audio_pcm(pcm_bytes: &[u8], _sample_rate: u32) -> VoiceTranscriptionEvent {
-        // Compute RMS from PCM bytes
-        let mut sum_sq: u64 = 0;
-        let mut sample_count = 0;
+        let mut pcm_i16 = Vec::with_capacity(pcm_bytes.len() / 2);
         for chunk in pcm_bytes.chunks_exact(2) {
-            let sample = i16::from_le_bytes([chunk[0], chunk[1]]);
-            sum_sq += (sample as i64 * sample as i64) as u64;
-            sample_count += 1;
+            pcm_i16.push(i16::from_le_bytes([chunk[0], chunk[1]]));
         }
+        let sample_count = pcm_i16.len();
         let rms = if sample_count > 0 {
-            ((sum_sq / sample_count as u64) as f64).sqrt()
+            let (rms_val, _) = hgb_core::zig_accelerate::dsp_analyze_frame(&pcm_i16);
+            let fft_len = if sample_count >= 1024 { 1024 } else if sample_count >= 512 { 512 } else { 0 };
+            if fft_len > 0 {
+                let f32_samples: Vec<f32> = pcm_i16[0..fft_len].iter().map(|&x| (x as f32) / 32768.0).collect();
+                let _mags = hgb_core::zig_accelerate::dsp_fft_magnitude(&f32_samples);
+            }
+            (rms_val * 32768.0) as f64
         } else {
             0.0
         };
@@ -68,8 +70,7 @@ impl VoiceStreamCoPilot {
         let t0 = Instant::now();
         let host = cpal::default_host();
         let mut transcript = String::new();
-        let mut is_speech = false;
-        let mut pcm_buffer: Arc<Mutex<Vec<i16>>> = Arc::new(Mutex::new(Vec::new()));
+        let pcm_buffer: Arc<Mutex<Vec<i16>>> = Arc::new(Mutex::new(Vec::new()));
 
         if let Some(device) = host.default_input_device() {
             if let Ok(config) = device.default_input_config() {
@@ -106,21 +107,23 @@ impl VoiceStreamCoPilot {
             }
         }
         
-        // Compute RMS
+        // Compute RMS using Zig Accelerator
         let buf = pcm_buffer.lock().unwrap();
-        let mut sum_sq: u64 = 0;
         let sample_count = buf.len();
-        for &sample in buf.iter() {
-            sum_sq += (sample as i64 * sample as i64) as u64;
-        }
         
         let rms = if sample_count > 0 {
-            ((sum_sq / sample_count as u64) as f64).sqrt()
+            let (rms_val, _) = hgb_core::zig_accelerate::dsp_analyze_frame(&buf);
+            let fft_len = if sample_count >= 1024 { 1024 } else if sample_count >= 512 { 512 } else { 0 };
+            if fft_len > 0 {
+                let f32_samples: Vec<f32> = buf[0..fft_len].iter().map(|&x| (x as f32) / 32768.0).collect();
+                let _mags = hgb_core::zig_accelerate::dsp_fft_magnitude(&f32_samples);
+            }
+            (rms_val * 32768.0) as f64
         } else {
             0.0
         };
 
-        is_speech = rms > 500.0; // simple threshold
+        let is_speech = rms > 500.0; // simple threshold
         if is_speech {
             if cfg!(test) || std::env::var("HGB_TEST_MODE").is_ok() {
                 transcript = "refactor microkernel to sub-100 microsecond latency and run companion tests".to_string();

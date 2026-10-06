@@ -30,7 +30,8 @@ def assemble_masterclass_pdf():
     print("=" * 70)
 
     # Primary and secondary targets
-    target_primary = "/home/dyna/TGS Projects/hagibis/HAGIBIS_VIBE_CODING_MASTERCLASS.pdf"
+    repo_root = os.path.abspath(os.path.join(scratch_dir, "..", ".."))
+    target_primary = os.path.join(repo_root, "HAGIBIS_VIBE_CODING_MASTERCLASS.pdf")
     target_scratch = os.path.join(scratch_dir, "HAGIBIS_VIBE_CODING_MASTERCLASS.pdf")
 
     # Determine writable target
@@ -52,7 +53,7 @@ def assemble_masterclass_pdf():
     story.extend(build_cockpit_chapter())
     story.append(PageBreak())
 
-    print("[4/7] Building Chapter 4: The 87 Sovereign Superpowers Technical Reference...")
+    print("[4/7] Building Chapter 4: The 125 Sovereign Superpowers Technical Reference...")
     story.extend(build_superpowers_chapter())
     story.append(PageBreak())
 
@@ -118,7 +119,7 @@ def assemble_masterclass_pdf():
     print(f"  ✔ File Size: {file_size_mb:.2f} MB ({file_size_kb:.1f} KB)")
     print(f"  ✔ Compilation Time: {elapsed:.2f} seconds")
     print(f"  ✔ Mascot Illustrations: 4 Embedded (Cover, Architecture, Superpowers, Scenarios)")
-    print(f"  ✔ Sovereign Superpowers: 87 Fully Documented with Signatures")
+    print(f"  ✔ Sovereign Superpowers: 125 Fully Documented with Signatures")
     print(f"  ✔ Production Tutorials: 5 Complete End-to-End Guides")
     print(f"  ✔ Real-World Scenarios: 500 Concrete Playbooks across 10 Domains")
     print("=" * 70)

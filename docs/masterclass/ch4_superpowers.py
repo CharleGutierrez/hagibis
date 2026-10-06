@@ -288,18 +288,138 @@ SUPERPOWERS_DATA = [
      "Reduces enterprise LLM operational costs by up to 80% while maintaining maximum reasoning quality."),
     (87, "Zero-Cookie Privacy Funnel Analytics", "PrivacyFunnelQuery / Scaffold", "hgb funnel / /funnel",
      "Scaffolds cookieless, GDPR-compliant edge analytics funnel tracking visitors from landing page through activation to paid conversion.",
-     "Gain complete funnel visibility without cookie banners or third-party tracking scripts.")
+     "Gain complete funnel visibility without cookie banners or third-party tracking scripts."),
+
+    # --- TIER 8: THE SOVEREIGN FRONTIER & COMPETITIVE HEGEMONY (88-102) ---
+    (88, "Zero-Downtime Rails & ActiveRecord Intelligence", "RailsDetect / RailsLintMigration", "hgb rails / /rails",
+     "Deep Ruby on Rails application detection, zero-downtime ActiveRecord migration safety linter, schema introspection, and N+1 query detection.",
+     "Audit database migrations and schema locks before pushing Rails changes to production."),
+    (89, "Persistent Project Coordinator & Cross-Session ADR Manager", "ProjectRecordAdr / ProjectStatus", "hgb project / /project",
+     "Cross-session persistent task queues, automated Architecture Decision Record (ADR) lifecycle management, and milestone handoffs.",
+     "Preserve high-level architectural intent and decision rationale across distributed developer sessions."),
+    (90, "3-Tier Dynamic Rules Auto-Engine", "RulesEvaluate / RulesAttach", "hgb rules-engine / /rules-engine",
+     "High-signal contextual rules evaluation spanning Always-on baseline directives, auto-attached glob patterns, and manual @-rule invocations.",
+     "Enforce codebase-specific guidelines dynamically without bloating token context windows."),
+    (91, "Autonomous Ticket-to-PR Autopilot Pipeline", "AutopilotRun", "hgb autopilot / /autopilot",
+     "Autonomous development loop: ingests issues/prompts, creates isolated worktrees, computes impact plans, synthesizes changes, and verifies tests.",
+     "Transform feature requests directly into verified, passing GitHub pull requests in a single command."),
+    (92, "Agent Decision Explainer & Trust Gap Solver", "ExplainDecision", "hgb explain / /explain",
+     "Solves the developer trust gap with AST-grounded decision explanations, trade-off matrices, rejected alternative logs, and automated ADR synthesis.",
+     "Understand exactly why the agent chose a specific design pattern or implementation approach."),
+    (93, "Blake3 Merkle Collaborative Codebase Index", "SmartIndexSnapshot / SmartIndexDiff", "hgb smart-index / /smart-index",
+     "Hardware-accelerated Blake3 cryptographic Merkle tree representation of the workspace for O(k log N) differential change detection.",
+     "Calculate repository blast radiuses and sub-millisecond AST differences across giant monorepos."),
+    (94, "Canary Rollout Health Sentry & Anomaly Rollback Sentinel", "RolloutMonitor / RolloutRollback", "hgb rollout / /rollout",
+     "Real-time canary deployment health monitor computing statistical z-score latency anomalies, error rate spikes, and triggering automated rollbacks.",
+     "Safeguard mission-critical deployments with autonomous statistical telemetry sentinels."),
+    (95, "AI-PR Adversarial Security & Vulnerability Auditor", "PrAuditScan", "hgb pr-audit / /pr-audit",
+     "Specialized security audit scanner targeting LLM-generated code vulnerabilities: prompt injection vectors, unsafe eval, IDOR leaks, and SQLi.",
+     "Run adversarial security scans on AI-generated PRs before code reaches staging or production."),
+    (96, "Ephemeral Cloud Preview Deployment & Vanity HTTPS Tunnel", "PreviewCloudDeploy", "hgb preview-cloud / /preview-cloud",
+     "Instant isolated ephemeral preview deployments with unique vanity URLs, custom subdomain routing, and automated TTL resource teardown.",
+     "Spin up production-identical cloud previews to share with team stakeholders in seconds."),
+    (97, "Multi-Dev Real-Time Collaboration & Patch Collision Arbiter", "CollabJoin / CollabSubmitIntent", "hgb collab / /collab",
+     "Peer-to-peer developer collaboration engine with live cursor tracking, ephemeral presence broadcasting, and speculative patch intent overlap detection.",
+     "Code simultaneously on the same project with remote teammates without merge collision friction."),
+    (98, "Prompt Engineering A/B Workspace & FinOps Leaderboard", "PromptLabBenchmark", "hgb prompt-lab / /prompt-lab",
+     "Prompt A/B evaluation testbed benchmarking multiple system prompts across models with latency, token consumption, and output quality metrics.",
+     "A/B test prompt variants empirically to find the lowest-cost, highest-accuracy configuration."),
+    (99, "Polyglot Framework Intelligence Packs", "LangPackInspect", "hgb lang-pack / /lang-pack",
+     "Pluggable language and framework intelligence engines for Rails, FastAPI, Next.js, Go Fiber, and Spring Boot with automatic project detection.",
+     "Equip the agent with framework-idiomatic conventions and code scaffolding rules automatically."),
+    (100, "Cross-Platform Native Mobile Dev & Stack Symbolicator", "NativeMobileDetect / NativeMobileDiagnoseCrash", "hgb native-mobile / /native-mobile",
+     "React Native and Flutter mobile intelligence with platform-native crash stack trace demangling, Android ProGuard / iOS dSYM symbolication.",
+     "Debug mobile crashes down to the exact source line and native assembly frame."),
+    (101, "Session FinOps Hard Budget Envelope & Cost Circuit Breaker", "BudgetStatus / BudgetSetLimit", "hgb budget / /budget",
+     "Real-time token cost accounting with configurable spending caps, automated model tier degradation, and kernel-level budget circuit breakers.",
+     "Enforce hard spending ceilings on cloud LLMs to prevent runaway API billing surprises."),
+    (102, "Zero-Latency VS Code Extension Microkernel Bridge", "VscodeExtBridge", "hgb vscode-ext / /vscode-ext",
+     "High-speed IPC bridge connecting VS Code / Cursor editors directly to the hgbd Unix domain socket with zero-overhead command dispatch.",
+     "Drive the full power of Hagibis directly inside your VS Code or Cursor editor sidecar."),
+
+    # --- TIER 9: THE AUTONOMOUS SUBSTRATE & COMPETITIVE HEGEMONY (103-117) ---
+    (103, "Headless CI/CD & Unix Pipe Streamer", "CiExecute", "hgb ci / /ci",
+     "Claude Code parity non-TTY execution participating in Unix pipelines (cat issue.txt | hgb ci --json), structured JSONL logging, and GitHub Actions.",
+     "Embed Hagibis directly into GitHub Actions or GitLab CI/CD pipelines for automated PR fixes."),
+    (104, "Interactive Plan Mode & Blueprint Approver", "PlanModeInspect / PlanModeApprove", "hgb plan / /plan",
+     "GitHub Copilot Plan Mode parity inspect-before-execute blueprint generation with dry-run diffs, step-by-step sign-off, and token impact budgets.",
+     "Review and approve the exact architectural plan before the agent touches a single line of code."),
+    (105, "Universal Issue Ingestor", "TicketIngest", "hgb ticket / /ticket",
+     "Devin & Copilot parity issue parser supporting GitHub, Linear (ENG-123), Jira (PROJ-456), and Markdown with acceptance criteria extraction.",
+     "Paste an issue link or ticket ID to immediately initialize a targeted feature implementation branch."),
+    (106, "Persistent Project Memory & Context Profiles", "ProfileGet / ProfilePatchConventions", "hgb profile / /profile",
+     "Windsurf Cascade parity project profiles (.hgb/profile.toml) preserving architectural conventions, test runners, and developer memory across restarts.",
+     "Never re-explain your testing framework or coding preferences between development sessions."),
+    (107, "Automated Git Pre-Commit / Pre-Push Security Guardrails", "HookInstall / HookRunPreCommit", "hgb hook / /hook",
+     "Cursor BugBot parity zero-latency Git hooks blocking secret leaks, destructive SQL commands, and slopsquatting packages before commit.",
+     "Intercept accidental API key commits and risky database migrations in zero microseconds."),
+    (108, "Style Guide & Architectural DNA Harvester", "ConventionsHarvest", "hgb conventions / /conventions",
+     "Ingests STYLE_GUIDE.md, .editorconfig, CONTRIBUTING.md, and linter configs into an ultra-compact, token-compressed system prompt DNA block.",
+     "Harmonize all agent-generated code with your team's exact formatting and architectural style."),
+    (109, "Parallel Multi-Session Autopilot Worktree Swarm", "QueueEnqueue / QueueQuery", "hgb queue / /queue",
+     "Devin parity parallel multi-agent task runner orchestrating N independent sessions across isolated Git worktrees without index lock contention.",
+     "Run 5 autonomous feature implementations concurrently without Git index conflicts."),
+    (110, "Agentic PR Code Reviewer & Inline Diff Commenter", "ReviewDiff", "hgb review / /review",
+     "Cursor BugBot parity autonomous line-by-line diff reviewer detecting thread blocking, unsafe unwraps, and emitting inline review suggestions.",
+     "Get an instant, exhaustive code review with security and performance audits before opening a PR."),
+    (111, "Autonomous SWE-Bench & Coding Rigor Harness", "SweetBenchHarness", "hgb benchmark / /benchmark",
+     "Standardized SWE-Bench Lite and production invariant benchmark harness tracking pass@1, token FinOps, and execution latency.",
+     "Benchmark local and cloud model coding capabilities against standardized real-world software issues."),
+    (112, "90-Second MVP Full-Stack Synthesizer", "QuickstartSynthesize", "hgb quickstart / /quickstart",
+     "Bolt.new & Lovable parity description-to-working-app generator scaffolding complete Next.js/Axum/FastAPI projects with routes, UI, and auth in seconds.",
+     "Go from idea to a working full-stack production application with auth and styling in under 90 seconds."),
+    (113, "Decentralized Community Agent Fleet & Plugin Marketplace", "RegistrySearch / RegistryInstall", "hgb registry / /registry",
+     "OpenHands parity decentralized catalog for searching, verifying, and dispatching specialized micro-agents with Blake3 integrity fingerprints.",
+     "Install specialized verified community plugins and domain-expert agents with cryptographic security."),
+    (114, "Blake3 Cryptographic AI Code Authorship Ledger", "ProvenanceAudit", "hgb authorship / /authorship",
+     "Tamper-proof, line-level Blake3 cryptographic Merkle ledger attributing code authorship between humans and AI models for corporate compliance.",
+     "Verify legal copyright provenance and intellectual property attribution for all generated code."),
+    (115, "Encrypted Remote Daemon Tunnel & Cockpit Steering", "RemoteTunnelConnect", "hgb remote / /remote",
+     "Claude Code Remote parity secure authenticated tunnel steering remote hgbd instances over cloud VMs, developer boxes, or GPU clusters.",
+     "Control powerful remote server daemons directly from your lightweight local laptop terminal."),
+    (116, "Unified Multi-Channel Observation Bus", "ObserveQueryRecent", "hgb observe / /observe",
+     "Windsurf Cascade parity synchronous event bus unifying terminal stdout/stderr, CDP browser console/network, and filesystem notifications into a real-time stream.",
+     "Give the agent holistic, multi-modal awareness across your terminal, browser, and disk."),
+    (117, "Zero-Config Managed Full-Stack Preset Fabric", "StackWireup", "hgb stack / /stack",
+     "Lovable parity one-command integration linking Supabase (Auth/DB), Stripe (Billing/Webhooks), Tailwind/shadcn UI, and Cloudflare Workers (Edge).",
+     "Scaffold and link production databases, payment gateways, and edge hosting with zero configuration."),
+
+    # --- TIER 10: THE SOVEREIGN ZENITH & FRONTIER HEGEMONY (118-125) ---
+    (118, "Recursive Self-Evolution & Autonomous DPO Distillation Engine", "EvolveDistill", "hgb evolve / /evolve",
+     "Autonomous multi-generation evolution loop evaluating compiler feedback, generating preference datasets (Chosen vs. Rejected pairs) for local model alignment (DPO/ORPO).",
+     "Continuously distill winning code patterns into local fine-tuning data to make your models smarter."),
+    (119, "OS-Level Desktop Computer-Use & Multi-Modal Window Sentry", "DesktopInspect / DesktopActionExecute", "hgb desktop / /desktop",
+     "Multi-modal OS interaction engine inspecting window hierarchies, coordinates, and dispatching surgical OS mouse clicks, keyboard text, and screenshots.",
+     "Automate end-to-end desktop applications and GUI workflows beyond the browser viewport."),
+    (120, "Formal Mathematical Verification & SMT Solver Proof Engine", "VerifyProofSmt", "hgb verify-proof / /verify-proof",
+     "Translates code safety properties into SMT-LIB2 / Z3 / CVC5 formulas, mathematically proving absence of integer overflows, slice bounds violations, and deadlocks.",
+     "Mathematically prove the correctness of safety-critical algorithms with automated theorem provers."),
+    (121, "Enterprise Distributed Monorepo Hypergraph & Build Cache", "MonorepoAnalyze / MonorepoBlastRadius", "hgb monorepo / /monorepo",
+     "Constructs high-performance package dependency hypergraphs across giant monorepos, calculating exact blast radiuses and saving up to 70% CI/CD compute time.",
+     "Accelerate giant monorepo build pipelines by executing only the minimal required set of tasks."),
+    (122, "Embedded Firmware, Microcontroller & HDL Lab", "EmbeddedCheck", "hgb embedded / /embedded",
+     "Bare-metal #![no_std] Rust and FreeRTOS task safety verification for ARM Cortex-M, ESP32, RISC-V, and AVR microcontrollers, with Verilog/VHDL linting.",
+     "Build rock-solid embedded firmware and hardware description designs with static safety guarantees."),
+    (123, "Native App Store Release & Fastlane Orchestrator", "StoreReleaseRun", "hgb store-release / /store",
+     "End-to-end multi-platform deployment pipeline orchestrating Fastlane lanes, code signing verification, IPA/AAB bundle builds, and automated store submissions.",
+     "Automate iOS App Store and Google Play Store build signing and distribution in a single step."),
+    (124, "Local Neural Speech Synthesis Engine", "SpeechSynthesize / SpeechListVoices", "hgb tts / /speak",
+     "100% offline, zero-latency neural TTS synthesis engine powered by local Kokoro/Piper models, producing phonetic transcripts and Blake3 cryptographic audio hashes.",
+     "Enjoy crystal-clear, high-fidelity neural voice synthesis completely offline with zero API fees."),
+    (125, "Interactive Visual WYSIWYG Web Canvas Studio", "StudioStart / StudioApplyPatch", "hgb studio / /studio",
+     "Real-time bi-directional visual canvas connecting DOM elements, component trees, and AST code with hot CSS and style synchronization over a local web studio port.",
+     "Design and refine frontend user interfaces visually with instant bidirectional code synchronization.")
 ]
 
 def build_superpowers_chapter():
     styles = get_masterclass_styles()
     story = []
 
-    story.append(Paragraph("Chapter 4: The 87 Sovereign Superpowers Technical Reference", styles['ChapterHeading']))
+    story.append(Paragraph("Chapter 4: The 125 Sovereign Superpowers Technical Reference", styles['ChapterHeading']))
     story.append(make_divider(color=CYAN_ACCENT, thickness=1.5, space_before=2, space_after=8))
 
     story.append(Paragraph(
-        "Hagibis equips developers with <b>87 Sovereign Superpowers</b>—an exhaustive suite of systems-grade tools "
+        "Hagibis equips developers with <b>125 Sovereign Superpowers</b>—an exhaustive suite of systems-grade tools "
         "designed to eliminate boilerplate, eradicate bugs, accelerate deployment, and preserve creative flow state. "
         "Each superpower is implemented as a native microkernel module within <code>hgb-core</code> and exposed via both "
         "CLI subcommands and Cockpit slash commands.",
@@ -308,14 +428,14 @@ def build_superpowers_chapter():
     story.append(Spacer(1, 4))
 
     # Superpowers Image
-    sp_img_path = "/home/dyna/TGS Projects/hagibis/docs/images/talaria_superpowers.jpg"
+    sp_img_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "images", "talaria_superpowers.jpg"))
     if os.path.exists(sp_img_path):
         img = RLImage(sp_img_path, width=490, height=273)
         img.hAlign = 'CENTER'
         story.append(img)
         story.append(Spacer(1, 4))
         story.append(Paragraph(
-            "<font color='#64748b'><b>Figure 4.1:</b> The 87 Sovereign Superpowers Cockpit — Seven Tiers of Autonomous Developer Capabilities.</font>",
+            "<font color='#64748b'><b>Figure 4.1:</b> The 125 Sovereign Superpowers Cockpit — Ten Tiers of Autonomous Developer Capabilities.</font>",
             styles['ScenarioMeta']
         ))
     story.append(Spacer(1, 6))
@@ -323,7 +443,7 @@ def build_superpowers_chapter():
     # Table of Superpowers
     story.append(Paragraph("4.1 Exhaustive Superpowers Reference Directory", styles['SectionHeading']))
     story.append(Paragraph(
-        "The following directory details all 87 superpowers across their seven sovereign tiers:",
+        "The following directory details all 125 superpowers across their ten sovereign tiers:",
         styles['Body']
     ))
     story.append(Spacer(1, 4))
@@ -345,6 +465,12 @@ def build_superpowers_chapter():
             tier_title = "Tier 6: God-Tier Monetization, Voice &amp; Viral Growth (Superpowers 79–83)"
         elif num == 84:
             tier_title = "Tier 7: Day-2 Sovereign Scale &amp; FinOps Operations (Superpowers 84–87)"
+        elif num == 88:
+            tier_title = "Tier 8: The Sovereign Frontier &amp; Competitive Hegemony (Superpowers 88–102)"
+        elif num == 103:
+            tier_title = "Tier 9: The Autonomous Substrate &amp; Systems Fabric (Superpowers 103–117)"
+        elif num == 118:
+            tier_title = "Tier 10: The Sovereign Zenith &amp; Frontier Hegemony (Superpowers 118–125)"
         else:
             tier_title = ""
 

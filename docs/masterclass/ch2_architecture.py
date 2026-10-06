@@ -29,7 +29,7 @@ def build_architecture_chapter():
     ))
     story.append(Spacer(1, 4))
 
-    arch_img_path = "/home/dyna/TGS Projects/hagibis/docs/images/talaria_architecture.jpg"
+    arch_img_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "images", "talaria_architecture.jpg"))
     if os.path.exists(arch_img_path):
         img = RLImage(arch_img_path, width=490, height=273)
         img.hAlign = 'CENTER'
@@ -86,7 +86,7 @@ pub enum HgbRequest {
     VibeRace { prompt: String, target_dir: Option<String> },
     CdpTeleportResolve { selector: String },
     DbCowSnapshotCreate { db_path: String, description: String },
-    // ... 87 Sovereign Superpowers Enum Variants
+    // ... 125 Sovereign Superpowers Enum Variants
 }
 
 // Client UDS Dispatch (crates/hgb-cli/src/client.rs)

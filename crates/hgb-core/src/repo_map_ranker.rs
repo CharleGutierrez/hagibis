@@ -89,49 +89,48 @@ impl RepoSymbolGraph {
             .insert(from_key.to_string());
     }
 
-    /// Compute PageRank scores using power iteration
+    /// Compute PageRank scores using power iteration accelerated by Zig CSR engine
     pub fn compute_pagerank(&mut self, iterations: usize, damping_factor: f64) {
         let n = self.symbols.len();
         if n == 0 {
             return;
         }
 
-        let initial_score = 1.0 / (n as f64);
-        let mut scores: HashMap<String, f64> = self
-            .symbols
-            .keys()
-            .map(|k| (k.clone(), initial_score))
+        let mut node_keys: Vec<String> = self.symbols.keys().cloned().collect();
+        node_keys.sort();
+        let key_to_idx: HashMap<&str, usize> = node_keys
+            .iter()
+            .enumerate()
+            .map(|(i, k)| (k.as_str(), i))
             .collect();
 
-        for _ in 0..iterations {
-            let mut next_scores = HashMap::new();
-            let base_score = (1.0 - damping_factor) / (n as f64);
+        let mut row_offsets = Vec::with_capacity(n + 1);
+        let mut col_indices = Vec::new();
 
-            for (node, _) in &self.symbols {
-                let mut incoming_sum = 0.0;
-                if let Some(in_nodes) = self.incoming.get(node) {
-                    for in_node in in_nodes {
-                        let out_count = self
-                            .outgoing
-                            .get(in_node)
-                            .map(|s| s.len())
-                            .unwrap_or(1)
-                            .max(1);
-                        let in_score = scores.get(in_node).copied().unwrap_or(0.0);
-                        incoming_sum += in_score / (out_count as f64);
+        for key in &node_keys {
+            row_offsets.push(col_indices.len() as u32);
+            if let Some(out_nodes) = self.outgoing.get(key) {
+                for out_node in out_nodes {
+                    if let Some(&v) = key_to_idx.get(out_node.as_str()) {
+                        col_indices.push(v as u32);
                     }
                 }
-                next_scores.insert(node.clone(), base_score + damping_factor * incoming_sum);
             }
-            scores = next_scores;
         }
+        row_offsets.push(col_indices.len() as u32);
 
-        // Assign rank scores back to symbols (scaled for readability)
-        for (key, sym) in self.symbols.iter_mut() {
-            if let Some(&score) = scores.get(key) {
-                // Public items get an architectural boost
+        let scores = crate::zig_accelerate::pagerank_csr(
+            n,
+            &row_offsets,
+            &col_indices,
+            iterations,
+            damping_factor,
+        );
+
+        for (i, key) in node_keys.iter().enumerate() {
+            if let Some(sym) = self.symbols.get_mut(key) {
                 let pub_boost = if sym.is_public { 1.25 } else { 1.0 };
-                sym.rank_score = score * (n as f64) * pub_boost;
+                sym.rank_score = scores[i] * (n as f64) * pub_boost;
             }
         }
     }
@@ -429,5 +428,44 @@ impl RepoMapRanker {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_zig_pagerank_computation() {
+        let mut graph = RepoSymbolGraph::new();
+
+        graph.add_symbol(RankedSymbol {
+            name: "Server".to_string(),
+            kind: RankedSymbolKind::Struct,
+            relative_path: "src/server.rs".to_string(),
+            line_number: 10,
+            signature: "pub struct Server".to_string(),
+            is_public: true,
+            rank_score: 1.0,
+        });
+
+        graph.add_symbol(RankedSymbol {
+            name: "Router".to_string(),
+            kind: RankedSymbolKind::Struct,
+            relative_path: "src/router.rs".to_string(),
+            line_number: 20,
+            signature: "pub struct Router".to_string(),
+            is_public: true,
+            rank_score: 1.0,
+        });
+
+        graph.add_reference("src/server.rs::Server", "src/router.rs::Router");
+
+        graph.compute_pagerank(10, 0.85);
+
+        let router = graph.symbols.get("src/router.rs::Router").unwrap();
+        let server = graph.symbols.get("src/server.rs::Server").unwrap();
+        assert!(router.rank_score > 0.0);
+        assert!(server.rank_score > 0.0);
     }
 }

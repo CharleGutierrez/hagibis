@@ -46,6 +46,7 @@ pub struct LlmCostReport {
 #[derive(Debug, Clone)]
 pub struct LlmCostGateway {
     cache: Arc<Mutex<HashMap<String, String>>>,
+    semantic_index: Arc<Mutex<Vec<(std::collections::HashSet<String>, String)>>>,
     metrics: Arc<Mutex<GatewaySpendMetrics>>,
 }
 
@@ -59,6 +60,7 @@ impl LlmCostGateway {
     pub fn new(daily_budget_usd: f64) -> Self {
         Self {
             cache: Arc::new(Mutex::new(HashMap::new())),
+            semantic_index: Arc::new(Mutex::new(Vec::new())),
             metrics: Arc::new(Mutex::new(GatewaySpendMetrics {
                 total_queries_processed: 0,
                 cache_hits: 0,
@@ -82,11 +84,32 @@ impl LlmCostGateway {
         let key = blake3::hash(normalized.as_bytes()).to_hex().to_string();
 
         let mut cache_guard = self.cache.lock().unwrap();
+        let mut sem_guard = self.semantic_index.lock().unwrap();
         let mut metrics_guard = self.metrics.lock().unwrap();
         metrics_guard.total_queries_processed += 1;
 
-        // 1. Check Semantic Cache
-        if let Some(cached) = cache_guard.get(&key) {
+        // 1. Check Exact Semantic Hash Cache
+        let cached_hit = if let Some(cached) = cache_guard.get(&key) {
+            Some((cached.clone(), "Exact normalized prompt match"))
+        } else {
+            // Check Token Set Jaccard Semantic Similarity
+            let req_tokens = self.extract_semantic_tokens(&req.prompt);
+            let mut best_match = None;
+            for (stored_tokens, cached_resp) in sem_guard.iter() {
+                let inter = req_tokens.intersection(stored_tokens).count();
+                let union = req_tokens.union(stored_tokens).count();
+                if union > 0 && inter >= 3 {
+                    let jaccard = inter as f32 / union as f32;
+                    if jaccard >= 0.70 {
+                        best_match = Some((cached_resp.clone(), "High Jaccard semantic token similarity match"));
+                        break;
+                    }
+                }
+            }
+            best_match
+        };
+
+        if let Some((cached, hit_reason)) = cached_hit {
             metrics_guard.cache_hits += 1;
             metrics_guard.total_saved_usd += 0.005; // saved ~$0.005 per cache hit
             metrics_guard.cache_hit_ratio =
@@ -95,9 +118,9 @@ impl LlmCostGateway {
             let decision = LlmGatewayRoutingDecision {
                 selected_model: "semantic-cache-hit".into(),
                 is_cached: true,
-                cached_response: Some(cached.clone()),
+                cached_response: Some(cached),
                 estimated_cost_usd: 0.0,
-                routing_reason: "Prompt matched cached semantic hash; served from memory instantly.".into(),
+                routing_reason: format!("Prompt matched cached response ({}).", hit_reason),
                 latency_estimate_ms: 1,
             };
 
@@ -154,10 +177,15 @@ impl LlmCostGateway {
             metrics_guard.cache_hits as f32 / metrics_guard.total_queries_processed as f32;
 
         // Auto-seed cache with synthesized completion for subsequent replay
+        let response_text = format!("// Synthesized cached response by {}", model);
         cache_guard.insert(
             key,
-            format!("// Synthesized cached response by {}", model),
+            response_text.clone(),
         );
+        sem_guard.push((
+            self.extract_semantic_tokens(&req.prompt),
+            response_text,
+        ));
 
         let decision = LlmGatewayRoutingDecision {
             selected_model: model,
@@ -172,6 +200,19 @@ impl LlmCostGateway {
             decision,
             metrics: metrics_guard.clone(),
         }
+    }
+
+    fn extract_semantic_tokens(&self, p: &str) -> std::collections::HashSet<String> {
+        let stop_words: std::collections::HashSet<&'static str> = [
+            "the", "a", "an", "is", "in", "it", "to", "for", "of", "and", "or", "as", "at",
+            "be", "this", "that", "which", "with", "what", "how", "please", "can", "you",
+        ].iter().cloned().collect();
+
+        p.to_lowercase()
+            .split_whitespace()
+            .map(|w| w.chars().filter(|c| c.is_alphanumeric()).collect::<String>())
+            .filter(|w| w.len() > 1 && !stop_words.contains(w.as_str()))
+            .collect()
     }
 
     fn normalize_prompt(&self, p: &str) -> String {

@@ -148,26 +148,60 @@ impl ShadowDbStressFuzzer {
              CREATE TABLE subscriptions (id TEXT PRIMARY KEY, user_id TEXT, status TEXT, stripe_sub_id TEXT);"
         );
 
-        if !schema.contains("INDEX") && schema.contains("user_id") {
-            bottlenecks.push("Unindexed foreign key: subscriptions.user_id causes full table scan on join".into());
-            indexes.push(IndexRecommendation {
-                table: "subscriptions".into(),
-                column: "user_id".into(),
-                reason: "Eliminates full table scans during user subscription lookup".into(),
-                sql_migration: "CREATE INDEX idx_subscriptions_user_id ON subscriptions(user_id);".into(),
-                estimated_speedup_factor: 14.5,
-            });
-        }
+        // Dynamically parse tables and column definitions from schema SQL (handles both single-line and multi-line schemas)
+        for stmt in schema.split(';') {
+            let trimmed = stmt.trim();
+            if let Some(pos) = trimmed.to_uppercase().find("CREATE TABLE") {
+                let rest = trimmed[pos + 12..].trim();
+                if let Some(paren_start) = rest.find('(') {
+                    let table_name = rest[..paren_start].trim().trim_matches(|c| c == '"' || c == '`' || c == ' ').to_string();
+                    let cols_part = rest[paren_start + 1..].trim_end_matches(')').trim();
 
-        if !schema.contains("CREATE INDEX") && schema.contains("email") {
-            bottlenecks.push("Unindexed unique lookup: users.email can degrade auth throughput".into());
-            indexes.push(IndexRecommendation {
-                table: "users".into(),
-                column: "email".into(),
-                reason: "Enforces index-scan lookups on user login and checkout webhook lookups".into(),
-                sql_migration: "CREATE UNIQUE INDEX idx_users_email ON users(email);".into(),
-                estimated_speedup_factor: 22.0,
-            });
+                    for col_def in cols_part.split(',') {
+                        let trimmed_col = col_def.trim();
+                        if trimmed_col.is_empty() {
+                            continue;
+                        }
+
+                        let col_name = trimmed_col.split_whitespace().next().unwrap_or("").trim_matches(|c| c == '"' || c == '`');
+                        if col_name.is_empty() || col_name.to_uppercase() == "CONSTRAINT" || col_name.to_uppercase() == "PRIMARY" {
+                            continue;
+                        }
+
+                        // Identify foreign key pattern (*_id) without existing index
+                        if col_name.ends_with("_id") && col_name != "id" {
+                            let index_name = format!("idx_{}_{}", table_name, col_name);
+                            if !schema.contains(&index_name) && !schema.contains(&format!("ON {}({})", table_name, col_name)) {
+                                bottlenecks.push(format!("Unindexed foreign key: {}.{} causes full table scan on join", table_name, col_name));
+                                indexes.push(IndexRecommendation {
+                                    table: table_name.clone(),
+                                    column: col_name.to_string(),
+                                    reason: format!("Eliminates full table scans during {}.{} join lookups", table_name, col_name),
+                                    sql_migration: format!("CREATE INDEX {} ON {}({});", index_name, table_name, col_name),
+                                    estimated_speedup_factor: 14.5,
+                                });
+                            }
+                        }
+
+                        // Identify high-cardinality unique lookup candidates (email, slug, username, token)
+                        if (col_name == "email" || col_name == "slug" || col_name == "username" || col_name == "token")
+                            && !trimmed_col.to_uppercase().contains("PRIMARY KEY")
+                        {
+                            let index_name = format!("idx_{}_{}", table_name, col_name);
+                            if !schema.contains(&index_name) {
+                                bottlenecks.push(format!("Unindexed lookup column: {}.{} can degrade query throughput", table_name, col_name));
+                                indexes.push(IndexRecommendation {
+                                    table: table_name.clone(),
+                                    column: col_name.to_string(),
+                                    reason: format!("Enforces fast B-Tree index lookups for {}.{}", table_name, col_name),
+                                    sql_migration: format!("CREATE INDEX {} ON {}({});", index_name, table_name, col_name),
+                                    estimated_speedup_factor: 22.0,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         (bottlenecks, indexes)

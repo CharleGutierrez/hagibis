@@ -48,13 +48,20 @@ impl WorktreeQueueEngine {
         f(guard.as_mut().unwrap())
     }
 
-    /// Enqueues a batch of autonomous tasks across isolated worktrees
+    /// Enqueues a batch of autonomous tasks across isolated worktrees, creating real git worktrees when in a repo
     pub fn enqueue(tasks: &[String], concurrency: usize) -> Result<WorktreeQueueReport, HgbError> {
         let max_conc = if concurrency == 0 { 4 } else { concurrency };
         let timestamp = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
+
+        // Check if inside a genuine git repository
+        let is_git_repo = std::process::Command::new("git")
+            .args(&["rev-parse", "--is-inside-work-tree"])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
 
         Self::with_jobs(|jobs| {
             for (idx, task) in tasks.iter().enumerate() {
@@ -67,10 +74,19 @@ impl WorktreeQueueEngine {
                     .to_lowercase();
 
                 let target_branch = format!("hgb/autopilot-{}", if slug.is_empty() { "task" } else { &slug });
+                let worktree_rel = format!(".hgb/worktrees/{}", job_id);
 
-                let status = if jobs.len() < max_conc {
+                let status = if jobs.iter().filter(|j| matches!(j.status, WorktreeJobStatus::Running { .. })).count() < max_conc {
+                    if is_git_repo {
+                        let _ = std::fs::create_dir_all(".hgb/worktrees");
+                        // Execute genuine git worktree creation: git worktree add -B <target_branch> <worktree_rel> HEAD
+                        let _ = std::process::Command::new("git")
+                            .args(&["worktree", "add", "-B", &target_branch, &worktree_rel, "HEAD"])
+                            .output();
+                    }
+
                     WorktreeJobStatus::Running {
-                        worktree_path: format!(".hgb/worktrees/{}", job_id),
+                        worktree_path: worktree_rel,
                         start_secs: timestamp,
                     }
                 } else {
@@ -106,5 +122,25 @@ impl WorktreeQueueEngine {
                 jobs: jobs.clone(),
             })
         })
+    }
+
+    /// Prunes completed or stale git worktrees from disk
+    pub fn prune() -> Result<usize, HgbError> {
+        let _ = std::process::Command::new("git")
+            .args(&["worktree", "prune"])
+            .output();
+
+        Self::with_jobs(|jobs| {
+            let initial = jobs.len();
+            jobs.retain(|j| matches!(j.status, WorktreeJobStatus::Running { .. } | WorktreeJobStatus::Queued));
+            Ok(initial - jobs.len())
+        })
+    }
+
+    /// Clears the queue state (useful for test resets)
+    pub fn clear() {
+        Self::with_jobs(|jobs| {
+            jobs.clear();
+        });
     }
 }

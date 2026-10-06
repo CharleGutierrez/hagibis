@@ -51,35 +51,15 @@ impl LiveTunnelManager {
         }
     }
 
-    /// Generates a terminal-friendly pseudo-QR matrix using Unicode half-blocks (▄, █, ▀, space)
+    /// Generates a terminal-friendly QR matrix using Unicode half-blocks (▄, █, ▀, space)
     pub fn render_qr_half_blocks(url: &str) -> String {
-        let hash = blake3::hash(url.as_bytes());
-        let hex = hash.to_hex();
-        let bytes = hex.as_bytes();
-
-        let mut lines = Vec::new();
-        lines.push("┌──────────────────────────────────┐".to_string());
-        lines.push("│  █▀▀▀▀▀█ ▄ ▄▀▄  █▀▀▀▀▀█  │".to_string());
-        lines.push("│  █ ███ █ █▀█ █  █ ███ █  │".to_string());
-        lines.push("│  █▀▀▀▀▀█ █ ▄▀▄  █▀▀▀▀▀█  │".to_string());
-
-        for chunk in bytes.chunks(8).take(3) {
-            let mut row = String::from("│  ");
-            for b in chunk {
-                match b % 4 {
-                    0 => row.push('█'),
-                    1 => row.push('▀'),
-                    2 => row.push('▄'),
-                    _ => row.push(' '),
-                }
-            }
-            row.push_str(" ▄█▀ █▄  │");
-            lines.push(row);
+        if let Ok(code) = qrcode::QrCode::new(url.as_bytes()) {
+            code.render::<qrcode::render::unicode::Dense1x2>()
+                .quiet_zone(true)
+                .build()
+        } else {
+            format!("┌──────────────────────────────────┐\n│ [QR Code: {}]\n└──────────────────────────────────┘", url)
         }
-
-        lines.push("│  ▀▀▀▀▀▀▀ ▀   ▀  ▀▀▀▀▀▀▀  │".to_string());
-        lines.push("└──────────────────────────────────┘".to_string());
-        lines.join("\n")
     }
 
     /// Spawns an ephemeral preview session for a local port
@@ -91,25 +71,12 @@ impl LiveTunnelManager {
         let public_url = format!("https://{}.hgb.live/?port={}", &session_id, local_port);
         let qr = Self::render_qr_half_blocks(&public_url);
         
-        // --- 100% REAL PHYSICAL TUNNEL DETACHED PROCESS SPAWN ---
-        // We will spawn a background ping simulating a keep-alive tunnel
-        // and record its physical PID to disk.
-        if let Ok(mut child) = std::process::Command::new("ping")
-            .arg("localhost")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-        {
-            let pid = child.id();
-            let _ = std::fs::write("/tmp/live_tunnel.pid", pid.to_string());
-            
-            // Just spawn another thread to kill it after 1 sec so we don't leak pings during tests
-            std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_millis(500));
-                let _ = child.kill();
-            });
-        }
-        // --------------------------------------------------------
+        // Verify whether the target devserver is actually listening on localhost
+        let port_listening = std::net::TcpStream::connect_timeout(
+            &std::net::SocketAddr::from(([127, 0, 0, 1], local_port)),
+            std::time::Duration::from_millis(150),
+        ).is_ok();
+        let _ = std::fs::write("/tmp/live_tunnel.status", format!("port_{}_active: {}", local_port, port_listening));
 
         let session = LiveTunnelSession {
             session_id: session_id.clone(),

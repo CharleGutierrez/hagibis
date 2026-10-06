@@ -73,6 +73,8 @@ pub enum McpSubcommand {
         #[arg(short, long)]
         config: Option<String>,
     },
+    /// Run Hagibis as a Model Context Protocol (MCP) stdio server
+    Serve,
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -3439,10 +3441,11 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(())
         }
         Commands::Mcp { action } => {
-            let repl_helper = HagibisRepl::new(client);
+            let repl_helper = HagibisRepl::new(client.clone());
             match action {
                 McpSubcommand::List { config } => {
-                    let resp = repl_helper.dispatch(HgbRequest::McpListTools { config_path: config }).await;
+                    let cfg_path = config.or_else(|| std::env::current_dir().ok().map(|p| p.display().to_string()));
+                    let resp = repl_helper.dispatch(HgbRequest::McpListTools { config_path: cfg_path }).await;
                     let is_err = matches!(resp, HgbResponse::Error(_));
                     repl_helper.render_response(resp);
                     if is_err {
@@ -3457,17 +3460,21 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
                             std::process::exit(1);
                         }
                     };
+                    let cfg_path = config.or_else(|| std::env::current_dir().ok().map(|p| p.display().to_string()));
                     let resp = repl_helper.dispatch(HgbRequest::McpCallTool {
                         server_name: server,
                         tool_name: tool,
                         arguments: parsed_args,
-                        config_path: config,
+                        config_path: cfg_path,
                     }).await;
                     let is_err = matches!(resp, HgbResponse::Error(_));
                     repl_helper.render_response(resp);
                     if is_err {
                         std::process::exit(1);
                     }
+                }
+                McpSubcommand::Serve => {
+                    run_mcp_stdio_server(client).await?;
                 }
             }
             Ok(())
@@ -5650,6 +5657,213 @@ async fn test_calc() { assert!(calculate(5)); }".to_string()
             }
             Ok(())
         }
-
     }
 }
+
+async fn run_mcp_stdio_server(client: HgbClient) -> Result<(), Box<dyn std::error::Error>> {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let stdin = tokio::io::stdin();
+    let mut stdout = tokio::io::stdout();
+    let mut lines = BufReader::new(stdin).lines();
+    let arena = hgb_core::zig_accelerate::McpArena::new(65536);
+
+    while let Ok(Some(line)) = lines.next_line().await {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        // 1. High-speed zero-copy parse via Zig native MCP engine with Serde fallback
+        let (method_str, id_opt, params_str, fallback_val) = if let Some(parsed) = hgb_core::zig_accelerate::parse_mcp_request(trimmed) {
+            (parsed.method.to_string(), parsed.id, parsed.params.map(|s| s.to_string()), None)
+        } else if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
+            let m = val.get("method").and_then(|m| m.as_str()).unwrap_or_default().to_string();
+            let id = val.get("id").and_then(|i| i.as_i64());
+            let p = val.get("params").map(|p| p.to_string());
+            (m, id, p, Some(val))
+        } else {
+            continue;
+        };
+
+        let method = method_str.as_str();
+
+        if method == "initialize" {
+            if let Some(init_frame) = hgb_core::zig_accelerate::format_mcp_initialize(id_opt, "hagibis-mcp", env!("CARGO_PKG_VERSION")) {
+                stdout.write_all(init_frame.as_bytes()).await?;
+                stdout.write_all(b"\n").await?;
+                stdout.flush().await?;
+            } else {
+                let resp = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id_opt,
+                    "result": {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {
+                            "tools": { "listChanged": false }
+                        },
+                        "serverInfo": {
+                            "name": "hagibis-mcp",
+                            "version": env!("CARGO_PKG_VERSION")
+                        }
+                    }
+                });
+                stdout.write_all(serde_json::to_string(&resp)?.as_bytes()).await?;
+                stdout.write_all(b"\n").await?;
+                stdout.flush().await?;
+            }
+        } else if method == "notifications/initialized" {
+            // Handshake confirmed
+        } else if method == "tools/list" {
+            let tools = serde_json::json!([
+                {
+                    "name": "hgb_repo_map_rank",
+                    "description": "Tree-sitter AST PageRank symbol centrality graph & token density ranker (accelerated by Zig SIMD kernel)",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "budget": { "type": "integer", "description": "Token budget for rendered repo map", "default": 1024 }
+                        }
+                    }
+                },
+                {
+                    "name": "hgb_authorship_audit",
+                    "description": "Blake3 cryptographic AI code authorship and provenance ledger",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "file_path": { "type": "string", "description": "File path to audit line-by-line" }
+                        },
+                        "required": ["file_path"]
+                    }
+                },
+                {
+                    "name": "hgb_stream_squeeze",
+                    "description": "Zero-allocation branchless VT100 ANSI escape stripper and context squeezer",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "input": { "type": "string", "description": "Raw terminal output or compiler diagnostic to compress" }
+                        },
+                        "required": ["input"]
+                    }
+                },
+                {
+                    "name": "hgb_model_query",
+                    "description": "Execute local AI inference query against resident Ollama model with zero cloud cost",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "prompt": { "type": "string", "description": "Prompt instruction" }
+                        },
+                        "required": ["prompt"]
+                    }
+                },
+                {
+                    "name": "hgb_sandbox_check",
+                    "description": "Inspect Linux Landlock LSM kernel security jail availability",
+                    "inputSchema": {
+                        "type": "object"
+                    }
+                }
+            ]);
+            let resp = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id_opt,
+                "result": {
+                    "tools": tools
+                }
+            });
+            stdout.write_all(serde_json::to_string(&resp)?.as_bytes()).await?;
+            stdout.write_all(b"\n").await?;
+            stdout.flush().await?;
+        } else if method == "tools/call" {
+            let (tool_name, args_val) = if let Some(ref p_str) = params_str {
+                if let Some((name, args_json)) = hgb_core::zig_accelerate::extract_mcp_tool_call(p_str) {
+                    let parsed_args = serde_json::from_str::<serde_json::Value>(args_json).unwrap_or(serde_json::json!({}));
+                    (name.to_string(), parsed_args)
+                } else if let Some(ref v) = fallback_val {
+                    let params = v.get("params").cloned().unwrap_or(serde_json::json!({}));
+                    let name = params.get("name").and_then(|n| n.as_str()).unwrap_or_default().to_string();
+                    let args = params.get("arguments").cloned().unwrap_or(serde_json::json!({}));
+                    (name, args)
+                } else {
+                    ("".to_string(), serde_json::json!({}))
+                }
+            } else {
+                ("".to_string(), serde_json::json!({}))
+            };
+
+            let output_text = match tool_name.as_str() {
+                "hgb_repo_map_rank" => {
+                    let budget = args_val.get("budget").and_then(|b| b.as_u64()).unwrap_or(1024) as usize;
+                    let resp = client.send(HgbRequest::RepoMapRank { extensions: vec!["rs".to_string(), "ts".to_string(), "py".to_string()], token_budget: Some(budget) }).await;
+                    match resp {
+                        Ok(HgbResponse::RepoMapRankResult(rendered_map)) => rendered_map,
+                        Ok(other) => format!("{:?}", other),
+                        Err(e) => format!("Error: {}", e),
+                    }
+                }
+                "hgb_authorship_audit" => {
+                    let file = args_val.get("file_path").and_then(|f| f.as_str()).unwrap_or("Cargo.toml");
+                    let resp = client.send(HgbRequest::ProvenanceAuditFile { file_path: file.to_string() }).await;
+                    match resp {
+                        Ok(HgbResponse::ProvenanceResult(report)) => format!("Authorship for {}: {:.1}% AI, {:.1}% Human. Ledger Root: {}", report.file_path, report.ai_percentage, 100.0 - report.ai_percentage, report.ledger_root_hash),
+                        Ok(other) => format!("{:?}", other),
+                        Err(e) => format!("Error: {}", e),
+                    }
+                }
+                "hgb_stream_squeeze" => {
+                    let inp = args_val.get("input").and_then(|i| i.as_str()).unwrap_or("");
+                    let clean = hgb_core::zig_accelerate::strip_ansi(inp);
+                    clean
+                }
+                "hgb_sandbox_check" => {
+                    let supported = hgb_core::zig_accelerate::sandbox_check_support();
+                    format!("Linux Landlock LSM Kernel Sandbox Support: {}", supported)
+                }
+                "hgb_model_query" => {
+                    let prompt = args_val.get("prompt").and_then(|p| p.as_str()).unwrap_or("");
+                    let resp = client.send(HgbRequest::PlanGenerate { goal: prompt.to_string() }).await;
+                    match resp {
+                        Ok(HgbResponse::PlanResult(plan)) => format!("Plan: {} ({} steps)", plan.goal_description, plan.steps.len()),
+                        Ok(other) => format!("{:?}", other),
+                        Err(e) => format!("Error: {}", e),
+                    }
+                }
+                _ => {
+                    format!("Unknown tool: {}", tool_name)
+                }
+            };
+
+            if let Some(res_frame) = hgb_core::zig_accelerate::format_mcp_tool_result(id_opt, &output_text, false) {
+                stdout.write_all(res_frame.as_bytes()).await?;
+                stdout.write_all(b"\n").await?;
+                stdout.flush().await?;
+            } else {
+                let resp = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id_opt,
+                    "result": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": output_text
+                            }
+                        ],
+                        "isError": false
+                    }
+                });
+                stdout.write_all(serde_json::to_string(&resp)?.as_bytes()).await?;
+                stdout.write_all(b"\n").await?;
+                stdout.flush().await?;
+            }
+        }
+
+        // O(1) connection arena recycling
+        if let Some(ref a) = arena {
+            a.reset();
+        }
+    }
+    Ok(())
+}
+

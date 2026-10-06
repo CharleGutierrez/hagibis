@@ -200,6 +200,58 @@ impl SelectivePatcher {
 
         format!("Diff Summary: {} hunk(s), +{} line(s), -{} line(s)", hunks.len(), additions, deletions)
     }
+
+    /// Accelerated Myers Diff & LCS similarity between original and modified text buffers
+    pub fn compute_content_similarity(text_a: &str, text_b: &str) -> f32 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let hashes_a: Vec<u64> = text_a
+            .lines()
+            .map(|l| {
+                let mut h = DefaultHasher::new();
+                l.hash(&mut h);
+                h.finish()
+            })
+            .collect();
+
+        let hashes_b: Vec<u64> = text_b
+            .lines()
+            .map(|l| {
+                let mut h = DefaultHasher::new();
+                l.hash(&mut h);
+                h.finish()
+            })
+            .collect();
+
+        hgb_core::zig_accelerate::myers_lcs_similarity(&hashes_a, &hashes_b)
+    }
+
+    /// Accelerated Myers Diff distance (edit distance) between line sequences
+    pub fn compute_diff_distance(lines_a: &[&str], lines_b: &[&str]) -> usize {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let hashes_a: Vec<u64> = lines_a
+            .iter()
+            .map(|l| {
+                let mut h = DefaultHasher::new();
+                l.hash(&mut h);
+                h.finish()
+            })
+            .collect();
+
+        let hashes_b: Vec<u64> = lines_b
+            .iter()
+            .map(|l| {
+                let mut h = DefaultHasher::new();
+                l.hash(&mut h);
+                h.finish()
+            })
+            .collect();
+
+        hgb_core::zig_accelerate::myers_diff_distance(&hashes_a, &hashes_b)
+    }
 }
 
 #[cfg(test)]
@@ -246,5 +298,18 @@ mod tests {
         let orig = "fn test() {\n    let a = 1;\n}\n";
         let patched = SelectivePatcher::apply_accepted_hunks(orig, &hunks).unwrap();
         assert_eq!(patched, orig);
+    }
+
+    #[test]
+    fn test_zig_accelerated_myers_diff() {
+        let original = "fn main() {\n    println!(\"hello\");\n}\n";
+        let modified = "fn main() {\n    println!(\"world\");\n}\n";
+        let sim = SelectivePatcher::compute_content_similarity(original, modified);
+        assert!(sim > 0.5 && sim <= 1.0);
+
+        let lines_a = ["a", "b", "c"];
+        let lines_b = ["a", "x", "c"];
+        let dist = SelectivePatcher::compute_diff_distance(&lines_a, &lines_b);
+        assert_eq!(dist, 2);
     }
 }

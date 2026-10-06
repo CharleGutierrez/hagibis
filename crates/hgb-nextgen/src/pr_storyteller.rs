@@ -69,13 +69,61 @@ Respond ONLY with a JSON array:
         let mut commits = serde_json::from_str::<Vec<AtomicCommit>>(json_str).unwrap_or_else(|_| vec![]);
         
         if commits.is_empty() {
-            commits.push(AtomicCommit {
-                commit_type: "feat".to_string(),
-                scope: "vibe".to_string(),
-                message: "autonomous swarm state progression".to_string(),
-                files: files.to_vec(),
-                adr_ref: None,
-            });
+            // Deterministic conventional file-type categorization
+            let mut feats = Vec::new();
+            let mut tests = Vec::new();
+            let mut docs = Vec::new();
+            let mut chores = Vec::new();
+
+            for f in files {
+                let lower = f.to_lowercase();
+                if lower.contains("test") || lower.ends_with("_test.rs") || lower.starts_with("tests/") {
+                    tests.push(f.clone());
+                } else if lower.ends_with(".md") || lower.contains("docs/") {
+                    docs.push(f.clone());
+                } else if lower.ends_with(".toml") || lower.ends_with(".json") || lower.ends_with(".lock") || lower.starts_with(".git") {
+                    chores.push(f.clone());
+                } else {
+                    feats.push(f.clone());
+                }
+            }
+
+            if !feats.is_empty() {
+                commits.push(AtomicCommit {
+                    commit_type: "feat".to_string(),
+                    scope: "core".to_string(),
+                    message: "implement core subsystem features".to_string(),
+                    files: feats,
+                    adr_ref: None,
+                });
+            }
+            if !tests.is_empty() {
+                commits.push(AtomicCommit {
+                    commit_type: "test".to_string(),
+                    scope: "suite".to_string(),
+                    message: "add verification test suites".to_string(),
+                    files: tests,
+                    adr_ref: None,
+                });
+            }
+            if !docs.is_empty() {
+                commits.push(AtomicCommit {
+                    commit_type: "docs".to_string(),
+                    scope: "readme".to_string(),
+                    message: "update documentation and architecture notes".to_string(),
+                    files: docs,
+                    adr_ref: None,
+                });
+            }
+            if !chores.is_empty() {
+                commits.push(AtomicCommit {
+                    commit_type: "chore".to_string(),
+                    scope: "build".to_string(),
+                    message: "update manifest dependencies and configuration".to_string(),
+                    files: chores,
+                    adr_ref: None,
+                });
+            }
         }
 
         commits

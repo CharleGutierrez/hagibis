@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 
+#[derive(Clone)]
 pub struct HgbClient {
     socket_path: PathBuf,
 }

@@ -24,39 +24,13 @@ pub struct ShareTunnelEngine;
 impl ShareTunnelEngine {
     /// Renders a terminal-friendly, high-contrast QR code using Unicode half-blocks (▄, █, ▀, space)
     pub fn generate_ascii_qr(url: &str) -> String {
-        let hash = blake3::hash(url.as_bytes());
-        let hex = hash.to_hex();
-        let bytes = hex.as_bytes();
-
-        let mut lines = Vec::new();
-        lines.push("  ┌────────────────────────────────────────┐".to_string());
-        lines.push("  │  ████████  ▄▄▄  ▀▀▀  ▄▄▄  ████████  │".to_string());
-        lines.push("  │  █      █  ███  █▀█  ███  █      █  │".to_string());
-        lines.push("  │  █ ████ █  █▄█  ▀█▀  █▄█  █ ████ █  │".to_string());
-        lines.push("  │  █      █  ▀▀▀  ▄▄▄  ▀▀▀  █      █  │".to_string());
-        lines.push("  │  ████████  █ █  █ █  █ █  ████████  │".to_string());
-
-        // Middle randomized deterministic matrix rows
-        for chunk in bytes.chunks(6).take(4) {
-            let mut row = String::from("  │  ");
-            for b in chunk {
-                match b % 5 {
-                    0 => row.push_str("██"),
-                    1 => row.push_str("▀▀"),
-                    2 => row.push_str("▄▄"),
-                    3 => row.push_str("█▄"),
-                    _ => row.push_str("  "),
-                }
-            }
-            row.push_str("  ▄█▀ █▄  │");
-            lines.push(row);
+        if let Ok(code) = qrcode::QrCode::new(url.as_bytes()) {
+            code.render::<qrcode::render::unicode::Dense1x2>()
+                .quiet_zone(true)
+                .build()
+        } else {
+            format!("  ┌────────────────────────────────────────┐\n  │ [QR Encoding Failed for {}]\n  └────────────────────────────────────────┘", url)
         }
-
-        lines.push("  │  ████████  ▄ ▄  █ █  ▄ ▄  ██  ▄ █   │".to_string());
-        lines.push("  │  █      █  ███  ▀▀▀  ███  ▄▄  █▀   │".to_string());
-        lines.push("  │  ████████  ▀ ▀  ▀▀▀  ▀ ▀  ██  ███  │".to_string());
-        lines.push("  └────────────────────────────────────────┘".to_string());
-        lines.join("\n")
     }
 
     /// Spawns a public share session for a local port

@@ -59,11 +59,7 @@ impl MerkleTree {
     }
 
     pub fn hash_pair(left: &str, right: &str) -> String {
-        let mut h = Hasher::new();
-        h.update(b"HGB_MERKLE_NODE:");
-        h.update(left.as_bytes());
-        h.update(right.as_bytes());
-        h.finalize().to_hex().to_string()
+        hgb_core::zig_accelerate::blake3_node_pair_hex(left, right)
     }
 
     pub fn generate_proof(&self, index: usize) -> Option<MerkleProof> {

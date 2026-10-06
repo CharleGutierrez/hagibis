@@ -24,71 +24,9 @@ pub fn detect_local_ip() -> String {
     "127.0.0.1".to_string()
 }
 
-/// Galois Field GF(2^8) arithmetic with generator poly 0x11d (x^8 + x^4 + x^3 + x^2 + 1)
-struct Gf256 {
-    exp: [u8; 512],
-    log: [u8; 256],
-}
-
-impl Gf256 {
-    fn new() -> Self {
-        let mut exp = [0u8; 512];
-        let mut log = [0u8; 256];
-        let mut x = 1u16;
-        for i in 0..255 {
-            exp[i] = x as u8;
-            exp[i + 255] = x as u8;
-            log[x as usize] = i as u8;
-            x <<= 1;
-            if (x & 0x100) != 0 {
-                x ^= 0x11d;
-            }
-        }
-        exp[510] = exp[0];
-        exp[511] = exp[1];
-        Self { exp, log }
-    }
-
-    fn mul(&self, a: u8, b: u8) -> u8 {
-        if a == 0 || b == 0 {
-            0
-        } else {
-            let idx = (self.log[a as usize] as usize) + (self.log[b as usize] as usize);
-            self.exp[idx]
-        }
-    }
-}
-
-/// Generate Reed-Solomon error correction codewords
+/// Reed-Solomon error correction codewords calculated via Zig comptime Galois Field GF(2^8) engine
 fn calculate_rs_ecc(data: &[u8], ecc_count: usize) -> Vec<u8> {
-    let gf = Gf256::new();
-
-    // Compute generator polynomial: g(x) = (x - alpha^0)(x - alpha^1)...(x - alpha^(ecc-1))
-    let mut gen = vec![1u8];
-    for i in 0..ecc_count {
-        let root = gf.exp[i];
-        let mut next_gen = vec![0u8; gen.len() + 1];
-        for (j, &coeff) in gen.iter().enumerate() {
-            next_gen[j] ^= gf.mul(coeff, root);
-            next_gen[j + 1] ^= coeff;
-        }
-        gen = next_gen;
-    }
-
-    // Polynomial long division of data * x^ecc by gen
-    let mut remainder = vec![0u8; ecc_count];
-    for &byte in data {
-        let factor = byte ^ remainder[0];
-        remainder.remove(0);
-        remainder.push(0);
-        if factor != 0 {
-            for j in 0..ecc_count {
-                remainder[j] ^= gf.mul(gen[j], factor);
-            }
-        }
-    }
-
-    remainder
+    hgb_core::zig_accelerate::gf256_rs_encode(data, ecc_count)
 }
 
 /// A 2D QR Bit Matrix

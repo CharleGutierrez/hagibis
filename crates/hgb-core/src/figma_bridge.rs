@@ -135,42 +135,81 @@ impl FigmaDesignBridge {
         let width = 640.0;
         let height = 360.0;
 
-        let clean_snippet = markup
-            .replace('<', "&lt;")
-            .replace('>', "&gt;")
-            .replace('&', "&amp;");
+        // Extract text content or basic classes from markup
+        let mut clean_text = markup.to_string();
+        if let Some(start) = markup.find('>') {
+            if let Some(end) = markup.rfind('<') {
+                if end > start {
+                    clean_text = markup[start + 1..end].trim().to_string();
+                }
+            }
+        }
+        if clean_text.is_empty() {
+            clean_text = component_name.to_string();
+        }
+
+        let is_primary = markup.contains("bg-cyan") || markup.contains("primary") || markup.contains("Pro");
+        let accent_color = if is_primary { "#06b6d4" } else { "#8b5cf6" };
 
         let svg = format!(
             r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" width="{w}" height="{h}">
   <defs>
-    <linearGradient id="hgb-bg" x1="0%" y1="0%" x2="100%" y2="100%">
+    <linearGradient id="hgb-bg-{name}" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" stop-color="#0f172a" />
       <stop offset="100%" stop-color="#1e293b" />
     </linearGradient>
+    <filter id="hgb-glow-{name}" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="{accent}" flood-opacity="0.35"/>
+    </filter>
   </defs>
-  <rect width="100%" height="100%" rx="16" fill="url(#hgb-bg)" stroke="#38bdf8" stroke-width="1.5"/>
-  <text x="32" y="56" fill="#38bdf8" font-family="Inter, sans-serif" font-weight="700" font-size="20">
-    Figma Frame: {name}
+  <!-- Background Artboard Card Frame -->
+  <rect x="16" y="16" width="{card_w}" height="{card_h}" rx="16" fill="url(#hgb-bg-{name})" stroke="{accent}" stroke-width="2" filter="url(#hgb-glow-{name})"/>
+  <!-- Component Badge Pill Vector -->
+  <rect x="40" y="40" width="120" height="28" rx="14" fill="{accent}" fill-opacity="0.2" stroke="{accent}" stroke-width="1"/>
+  <text x="100" y="58" text-anchor="middle" fill="{accent}" font-family="Inter, sans-serif" font-weight="700" font-size="12" letter-spacing="0.5">FIGMA COMPONENT</text>
+  <!-- Component Header Title -->
+  <text x="40" y="104" fill="#f8fafc" font-family="Inter, sans-serif" font-weight="800" font-size="24">
+    {name}
   </text>
-  <foreignObject x="32" y="80" width="{inner_w}" height="{inner_h}">
-    <div xmlns="http://www.w3.org/1999/xhtml" style="color: #f8fafc; font-family: sans-serif; font-size: 14px;">
-      <pre style="white-space: pre-wrap;">{snippet}</pre>
-    </div>
-  </foreignObject>
+  <!-- Synthesized Body Vector Text -->
+  <text x="40" y="140" fill="#94a3b8" font-family="Inter, sans-serif" font-weight="400" font-size="14">
+    {body_text}
+  </text>
+  <!-- Vector Status Chip -->
+  <g transform="translate(40, 180)">
+    <rect width="180" height="40" rx="8" fill="{accent}" />
+    <path d="M12 20 L18 26 L28 14" stroke="#000" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="40" y="25" fill="#000" font-family="Inter, sans-serif" font-weight="700" font-size="13">Vector Verified</text>
+  </g>
 </svg>"##,
             w = width,
             h = height,
             name = component_name,
-            inner_w = width - 64.0,
-            inner_h = height - 100.0,
-            snippet = clean_snippet
+            card_w = width - 32.0,
+            card_h = height - 32.0,
+            accent = accent_color,
+            body_text = clean_text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
         );
 
         let figma_json = serde_json::json!({
             "name": component_name,
             "type": "FRAME",
             "blendMode": "PASS_THROUGH",
-            "children": [],
+            "children": [
+                {
+                    "name": "BackgroundCard",
+                    "type": "RECTANGLE",
+                    "absoluteBoundingBox": { "x": 16.0, "y": 16.0, "width": width - 32.0, "height": height - 32.0 },
+                    "cornerRadius": 16.0,
+                    "fills": [{ "type": "SOLID", "color": { "r": 0.06, "g": 0.09, "b": 0.16, "a": 1.0 } }]
+                },
+                {
+                    "name": component_name,
+                    "type": "TEXT",
+                    "characters": clean_text,
+                    "style": { "fontFamily": "Inter", "fontSize": 24.0, "fontWeight": 800 }
+                }
+            ],
             "absoluteBoundingBox": {
                 "x": 0.0,
                 "y": 0.0,
@@ -256,29 +295,124 @@ module.exports = {{
     ) -> (FigmaTokenSet, Vec<FigmaComponentNode>) {
         if let Ok(val) = serde_json::from_str::<serde_json::Value>(raw_json) {
             let mut colors = Vec::new();
+            let mut typography = Vec::new();
+            let mut extracted_nodes = Vec::new();
+
+            // 1. Parse styles from top-level styles map
             if let Some(styles) = val.get("styles").and_then(|s| s.as_object()) {
                 for (k, _) in styles {
                     colors.push(ColorToken {
                         name: k.clone(),
-                        hex: "#3b82f6".into(),
+                        hex: "#06b6d4".into(),
                         opacity: 1.0,
                     });
                 }
             }
 
-            if colors.is_empty() {
+            // 2. Recursive visitor for Figma document tree
+            fn visit_node(
+                node_val: &serde_json::Value,
+                colors: &mut Vec<ColorToken>,
+                typography: &mut Vec<TypographyToken>,
+                nodes: &mut Vec<FigmaComponentNode>,
+            ) {
+                let node_id = node_val.get("id").and_then(|v| v.as_str()).unwrap_or("0:0").to_string();
+                let name = node_val.get("name").and_then(|v| v.as_str()).unwrap_or("FigmaNode").to_string();
+                let node_type = node_val.get("type").and_then(|v| v.as_str()).unwrap_or("FRAME").to_string();
+
+                let (w, h) = if let Some(bbox) = node_val.get("absoluteBoundingBox") {
+                    let bw = bbox.get("width").and_then(|v| v.as_f64()).unwrap_or(320.0) as f32;
+                    let bh = bbox.get("height").and_then(|v| v.as_f64()).unwrap_or(180.0) as f32;
+                    (bw, bh)
+                } else {
+                    (320.0, 180.0)
+                };
+
+                // Extract solid color fills
+                if let Some(fills) = node_val.get("fills").and_then(|f| f.as_array()) {
+                    for (i, fill) in fills.iter().enumerate() {
+                        if fill.get("type").and_then(|t| t.as_str()) == Some("SOLID") {
+                            if let Some(c) = fill.get("color") {
+                                let r = c.get("r").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                                let g = c.get("g").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                                let b = c.get("b").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                                let hex = format!("#{:02x}{:02x}{:02x}", (r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8);
+                                colors.push(ColorToken {
+                                    name: format!("{}-fill-{}", name.to_lowercase().replace(' ', "-"), i + 1),
+                                    hex,
+                                    opacity: 1.0,
+                                });
+                            }
+                        }
+                    }
+                }
+
+                // Extract typography
+                if let Some(style) = node_val.get("style") {
+                    let font_family = style.get("fontFamily").and_then(|v| v.as_str()).unwrap_or("Inter").to_string();
+                    let font_size = style.get("fontSize").and_then(|v| v.as_f64()).unwrap_or(16.0) as f32;
+                    let font_weight = style.get("fontWeight").and_then(|v| v.as_u64()).unwrap_or(400) as u16;
+                    let line_height = style.get("lineHeightPx").and_then(|v| v.as_f64()).unwrap_or(24.0) as f32;
+                    typography.push(TypographyToken {
+                        name: format!("{}-typo", name.to_lowercase().replace(' ', "-")),
+                        font_family,
+                        font_size_px: font_size,
+                        font_weight,
+                        line_height_px: line_height,
+                    });
+                }
+
+                let mut child_nodes = Vec::new();
+                if let Some(children) = node_val.get("children").and_then(|c| c.as_array()) {
+                    for child in children {
+                        visit_node(child, colors, typography, &mut child_nodes);
+                    }
+                }
+
+                let mut tailwind_classes = vec!["relative".to_string(), "box-border".to_string()];
+                if node_type == "FRAME" || node_type == "COMPONENT" {
+                    tailwind_classes.push("flex".to_string());
+                    tailwind_classes.push("flex-col".to_string());
+                    tailwind_classes.push("p-6".to_string());
+                    tailwind_classes.push("rounded-xl".to_string());
+                }
+
+                nodes.push(FigmaComponentNode {
+                    id: node_id,
+                    name,
+                    node_type,
+                    width: w,
+                    height: h,
+                    tailwind_classes,
+                    children: child_nodes,
+                });
+            }
+
+            if let Some(doc) = val.get("document").or_else(|| val.get("nodes")) {
+                visit_node(doc, &mut colors, &mut typography, &mut extracted_nodes);
+            }
+
+            if colors.is_empty() && extracted_nodes.is_empty() {
                 return self.default_fallback_tokens_and_components("parsed_figma");
             }
 
             let tokens = FigmaTokenSet {
-                colors,
-                typography: vec![TypographyToken {
-                    name: "heading-1".into(),
-                    font_family: "Inter".into(),
-                    font_size_px: 32.0,
-                    font_weight: 700,
-                    line_height_px: 40.0,
-                }],
+                colors: if colors.is_empty() {
+                    vec![ColorToken { name: "figma-brand".into(), hex: "#06b6d4".into(), opacity: 1.0 }]
+                } else {
+                    colors
+                },
+                typography: if typography.is_empty() {
+                    vec![TypographyToken {
+                        name: "heading-1".into(),
+                        font_family: "Inter".into(),
+                        font_size_px: 32.0,
+                        font_weight: 700,
+                        line_height_px: 40.0,
+                    }]
+                } else {
+                    typography
+                },
                 radii: vec![SpacingToken {
                     name: "rounded-card".into(),
                     value_px: 12.0,
@@ -286,23 +420,27 @@ module.exports = {{
                 shadows: vec!["0 10px 15px -3px rgba(0, 0, 0, 0.1)".into()],
             };
 
-            let node = FigmaComponentNode {
-                id: "1:2".into(),
-                name: "HeroSection".into(),
-                node_type: "FRAME".into(),
-                width: 1200.0,
-                height: 600.0,
-                tailwind_classes: vec![
-                    "flex".into(),
-                    "flex-col".into(),
-                    "p-8".into(),
-                    "bg-slate-900".into(),
-                    "text-white".into(),
-                ],
-                children: vec![],
+            let components = if extracted_nodes.is_empty() {
+                vec![FigmaComponentNode {
+                    id: "1:2".into(),
+                    name: "HeroSection".into(),
+                    node_type: "FRAME".into(),
+                    width: 1200.0,
+                    height: 600.0,
+                    tailwind_classes: vec![
+                        "flex".into(),
+                        "flex-col".into(),
+                        "p-8".into(),
+                        "bg-slate-900".into(),
+                        "text-white".into(),
+                    ],
+                    children: vec![],
+                }]
+            } else {
+                extracted_nodes
             };
 
-            (tokens, vec![node])
+            (tokens, components)
         } else {
             self.default_fallback_tokens_and_components("default")
         }

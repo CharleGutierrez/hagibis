@@ -76,7 +76,7 @@ class MasterclassNumberedCanvas(canvas.Canvas):
                 # Footer (Bottom)
                 self.setFont("Helvetica", 7.5)
                 self.setFillColor(MUTED_SLATE)
-                self.drawString(40, 30, "Sub-Millisecond Microkernel & Swarm Engine • 87 Sovereign Superpowers • 500 Scenarios")
+                self.drawString(40, 30, "Sub-Millisecond Microkernel & Swarm Engine • 125 Sovereign Superpowers • 500 Scenarios")
                 
                 page_str = f"Page {self._pageNumber} of {num_pages}"
                 self.setFont("Helvetica-Bold", 7.5)

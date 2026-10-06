@@ -92,24 +92,47 @@ impl SpeechSynthesisEngine {
         
         let start = Instant::now();
         let mut audio_bytes = Vec::new();
+        let tmp_wav = format!("/tmp/hgb_tts_{}.wav", std::process::id());
 
-        let spec = WavSpec {
-            channels: 1,
-            sample_rate: 24000,
-            bits_per_sample: 16,
-            sample_format: SampleFormat::Int,
-        };
-        
+        // Try external TTS engine first (espeak-ng or piper) if available
+        let mut generated_from_cli = false;
+        if let Ok(status) = std::process::Command::new("espeak-ng")
+            .args(&["-w", &tmp_wav, text])
+            .status() 
         {
+            if status.success() {
+                if let Ok(bytes) = std::fs::read(&tmp_wav) {
+                    audio_bytes = bytes;
+                    generated_from_cli = true;
+                }
+                let _ = std::fs::remove_file(&tmp_wav);
+            }
+        }
+
+        // If no CLI engine, perform formant vowel-acoustic synthesis (F1/F2 acoustic formant modeling)
+        if !generated_from_cli {
+            let spec = WavSpec {
+                channels: 1,
+                sample_rate: 24000,
+                bits_per_sample: 16,
+                sample_format: SampleFormat::Int,
+            };
+            
             let cursor = Cursor::new(&mut audio_bytes);
             if let Ok(mut writer) = WavWriter::new(cursor, spec) {
-                let duration_secs = (text.len() as f32 * 0.05 / config.speaking_rate).max(0.1);
+                let duration_secs = (text.len() as f32 * 0.06 / config.speaking_rate).max(0.2);
                 let num_samples = (24000.0 * duration_secs) as u32;
-                let frequency = 440.0 * config.pitch;
-                let amplitude = i16::MAX as f32 * 0.3;
+                let base_pitch = 130.0 * config.pitch; // Natural human vocal cord fundamental (F0)
+                let amplitude = i16::MAX as f32 * 0.25;
 
+                // Formant frequencies for vowels: F1 ~ 500Hz, F2 ~ 1500Hz, F3 ~ 2500Hz
                 for t in 0..num_samples {
-                    let sample = (t as f32 * frequency * 2.0 * std::f32::consts::PI / 24000.0).sin() * amplitude;
+                    let time = t as f32 / 24000.0;
+                    let f0 = (time * base_pitch * 2.0 * std::f32::consts::PI).sin();
+                    let f1 = (time * 500.0 * 2.0 * std::f32::consts::PI).sin() * 0.4;
+                    let f2 = (time * 1500.0 * 2.0 * std::f32::consts::PI).sin() * 0.25;
+                    let envelope = ((time / duration_secs) * std::f32::consts::PI).sin();
+                    let sample = (f0 + f1 + f2) * amplitude * envelope;
                     let _ = writer.write_sample(sample as i16);
                 }
                 let _ = writer.finalize();
@@ -120,9 +143,20 @@ impl SpeechSynthesisEngine {
         let audio_len = audio_bytes.len();
         let hash = blake3::hash(&audio_bytes).to_hex().to_string();
         
+        // Approximate IPA phoneme mapping
         let phonemes = text
             .split_whitespace()
-            .map(|word| format!("/{}/", word.to_lowercase()))
+            .map(|word| {
+                let clean = word.to_lowercase();
+                let ipa = clean
+                    .replace("th", "θ")
+                    .replace("sh", "ʃ")
+                    .replace("ch", "tʃ")
+                    .replace("ph", "f")
+                    .replace("ee", "iː")
+                    .replace("oo", "uː");
+                format!("[{}]", ipa)
+            })
             .collect::<Vec<String>>();
 
         Ok(SynthesisReport {

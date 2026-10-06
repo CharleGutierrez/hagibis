@@ -173,7 +173,22 @@ impl StreamSqueezer {
 
     /// Strip ANSI escape codes (colors, cursor movements, erase line)
     pub fn strip_ansi_codes(input: &str) -> String {
-        let ansi_re = Regex::new(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])").unwrap();
-        ansi_re.replace_all(input, "").to_string()
+        crate::zig_accelerate::strip_ansi(input)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_stream_squeezer_strip_ansi_and_squeeze() {
+        let raw = "\x1b[31merror: could not compile `foo`\x1b[0m\nwarning: unused var\n";
+        let clean = StreamSqueezer::strip_ansi_codes(raw);
+        assert_eq!(clean, "error: could not compile `foo`\nwarning: unused var\n");
+
+        let digest = StreamSqueezer::squeeze(raw, 500);
+        assert_eq!(digest.errors.len(), 1);
+        assert_eq!(digest.errors[0], "error: could not compile `foo`");
     }
 }

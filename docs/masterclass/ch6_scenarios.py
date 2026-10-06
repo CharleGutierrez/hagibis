@@ -318,7 +318,7 @@ def build_scenarios_chapter():
     story.append(Spacer(1, 4))
 
     # Scenarios Image
-    sc_img_path = "/home/dyna/TGS Projects/hagibis/docs/images/talaria_scenarios.jpg"
+    sc_img_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "images", "talaria_scenarios.jpg"))
     if os.path.exists(sc_img_path):
         img = RLImage(sc_img_path, width=490, height=273)
         img.hAlign = 'CENTER'

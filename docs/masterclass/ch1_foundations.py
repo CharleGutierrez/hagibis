@@ -23,10 +23,10 @@ def build_cover_and_foundations():
     story.append(Spacer(1, 10))
     story.append(Paragraph("🪽 THE SOVEREIGN VIBE CODING MASTERCLASS 🪽", styles['CoverSubtitle']))
     story.append(Paragraph("HAGIBIS & HAGIBIS DAEMON", styles['CoverTitle']))
-    story.append(Paragraph("<b>The Sub-Millisecond Systems Microkernel, Swarm Engine &amp; 87 Sovereign Superpowers</b>", styles['CoverSubtitle']))
+    story.append(Paragraph("<b>The Sub-Millisecond Systems Microkernel, Swarm Engine &amp; 125 Sovereign Superpowers</b>", styles['CoverSubtitle']))
     story.append(Spacer(1, 5))
 
-    cover_img_path = "/home/dyna/TGS Projects/hagibis/docs/images/talaria_cover.jpg"
+    cover_img_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "images", "talaria_cover.jpg"))
     if os.path.exists(cover_img_path):
         img = RLImage(cover_img_path, width=280, height=280)
         img.hAlign = 'CENTER'
@@ -53,7 +53,7 @@ def build_cover_and_foundations():
             Paragraph("<b>Checkpoints:</b> &lt;10µs CoW WAL Time Machine", styles['TableCell']),
         ],
         [
-            Paragraph("<b>Sovereign Superpowers:</b> 87 Fully Verified", styles['TableCell']),
+            Paragraph("<b>Sovereign Superpowers:</b> 125 Fully Verified", styles['TableCell']),
             Paragraph("<b>Real-World Scenarios:</b> 500 Concrete Playbooks", styles['TableCell']),
             Paragraph("<b>Edition:</b> Sovereign Edition 1.0 (2026)", styles['TableCell']),
         ]
@@ -82,7 +82,7 @@ def build_cover_and_foundations():
     story.append(Paragraph(
         "This masterclass is the definitive systems and pedagogical reference manual for <b>Hagibis (hgb)</b> "
         "and the <b>Hagibis Resident Daemon (hgbd)</b>. It guides developers through the architecture, interactive tooling, "
-        "all 87 sovereign capabilities, five real-world tutorials, and exactly 500 production scenarios.",
+        "all 125 sovereign capabilities, five real-world tutorials, and exactly 500 production scenarios.",
         styles['Body']
     ))
     story.append(Spacer(1, 4))
@@ -115,8 +115,8 @@ def build_cover_and_foundations():
         ],
         [
             Paragraph("<b>Chapter 4</b>", styles['TableCellBold']),
-            Paragraph("The 87 Sovereign Superpowers Technical Reference", styles['TableCell']),
-            Paragraph("Comprehensive signatures, flags, inputs/outputs, and mechanics across 7 sovereign tiers.", styles['TableCell'])
+            Paragraph("The 125 Sovereign Superpowers Technical Reference", styles['TableCell']),
+            Paragraph("Comprehensive signatures, flags, inputs/outputs, and mechanics across 10 sovereign tiers.", styles['TableCell'])
         ],
         [
             Paragraph("<b>Chapter 5</b>", styles['TableCellBold']),
@@ -174,7 +174,7 @@ def build_cover_and_foundations():
     ))
     story.append(Paragraph(
         "<b>Hagibis is the Winged Sandal of the modern Vibe Coder.</b> By building a resident systems-grade microkernel in pure Rust, "
-        "operating with 12-microsecond Unix Domain Socket IPC, and providing 87 sovereign developer superpowers, Hagibis moves "
+        "operating with 12-microsecond Unix Domain Socket IPC, and providing 125 sovereign developer superpowers, Hagibis moves "
         "faster than your doubts. When you code with Hagibis, you don't wait for your tools—your tools run ahead of your imagination.",
         styles['Body']
     ))

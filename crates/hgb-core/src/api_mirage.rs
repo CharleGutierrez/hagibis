@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use axum::{
@@ -40,27 +39,153 @@ impl ApiMirageEngine {
     pub fn new() -> Self {
         let mut endpoints = Vec::new();
 
-        endpoints.push(
-            MirageEndpoint {
-                route_pattern: "^/v1/payment_intents$".to_string(),
-                method: "POST".to_string(),
-                service_name: "Stripe Mirage".to_string(),
-                sample_response: serde_json::json!({
-                    "id": "pi_mirage_99482716382",
-                    "object": "payment_intent",
-                    "amount": 4200,
-                    "currency": "usd",
-                    "status": "succeeded",
-                    "client_secret": "pi_mirage_secret_test_token"
-                }),
-                simulated_latency_ms: 35,
-            }
-        );
+        // 1. Stripe Topology
+        endpoints.push(MirageEndpoint {
+            route_pattern: r"^/v1/payment_intents(/\w+)?$".to_string(),
+            method: "POST".to_string(),
+            service_name: "Stripe Mirage".to_string(),
+            sample_response: serde_json::json!({
+                "id": "pi_mirage_99482716382",
+                "object": "payment_intent",
+                "amount": 4200,
+                "currency": "usd",
+                "status": "succeeded",
+                "client_secret": "pi_mirage_secret_test_token"
+            }),
+            simulated_latency_ms: 15,
+        });
+        endpoints.push(MirageEndpoint {
+            route_pattern: r"^/v1/customers(/\w+)?$".to_string(),
+            method: "POST".to_string(),
+            service_name: "Stripe Mirage".to_string(),
+            sample_response: serde_json::json!({
+                "id": "cus_mirage_883719284",
+                "object": "customer",
+                "email": "dev@hagibis.ai",
+                "name": "Hagibis Builder"
+            }),
+            simulated_latency_ms: 12,
+        });
+
+        // 2. GitHub Topology
+        endpoints.push(MirageEndpoint {
+            route_pattern: r"^/user$".to_string(),
+            method: "GET".to_string(),
+            service_name: "GitHub Mirage".to_string(),
+            sample_response: serde_json::json!({
+                "login": "hagibis-dev",
+                "id": 10293847,
+                "type": "User",
+                "site_admin": false
+            }),
+            simulated_latency_ms: 8,
+        });
+        endpoints.push(MirageEndpoint {
+            route_pattern: r"^/repos/[^/]+/[^/]+/pulls$".to_string(),
+            method: "POST".to_string(),
+            service_name: "GitHub Mirage".to_string(),
+            sample_response: serde_json::json!({
+                "id": 8920194,
+                "number": 42,
+                "state": "open",
+                "title": "feat: autonomous autopilot agent",
+                "html_url": "https://github.com/hagibis/repo/pull/42"
+            }),
+            simulated_latency_ms: 20,
+        });
+
+        // 3. Supabase Topology
+        endpoints.push(MirageEndpoint {
+            route_pattern: r"^/auth/v1/token".to_string(),
+            method: "POST".to_string(),
+            service_name: "Supabase Mirage".to_string(),
+            sample_response: serde_json::json!({
+                "access_token": "supabase_sbp_mock_token_jwt",
+                "token_type": "bearer",
+                "expires_in": 3600,
+                "user": {
+                    "id": "usr_9988112233",
+                    "email": "user@example.com"
+                }
+            }),
+            simulated_latency_ms: 10,
+        });
+
+        // 4. OpenAI / Anthropic Topology
+        endpoints.push(MirageEndpoint {
+            route_pattern: r"^/v1/chat/completions$".to_string(),
+            method: "POST".to_string(),
+            service_name: "OpenAI Mirage".to_string(),
+            sample_response: serde_json::json!({
+                "id": "chatcmpl_mirage_776655",
+                "object": "chat.completion",
+                "created": 1727700000,
+                "model": "gpt-4o",
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "Mirage response: verified code generation."
+                    },
+                    "finish_reason": "stop"
+                }]
+            }),
+            simulated_latency_ms: 25,
+        });
 
         Self {
             endpoints: Arc::new(RwLock::new(endpoints)),
         }
     }
+
+    /// Dynamically loads an OpenAPI v3 / Swagger JSON specification into the Mirage engine
+    pub async fn load_openapi_spec(&self, spec_json: &str) -> Result<usize, String> {
+        let parsed: serde_json::Value = serde_json::from_str(spec_json)
+            .map_err(|e| format!("Invalid OpenAPI JSON: {}", e))?;
+
+        let paths = match parsed.get("paths").and_then(|p| p.as_object()) {
+            Some(p) => p,
+            None => return Err("Missing 'paths' object in OpenAPI specification".to_string()),
+        };
+
+        let mut count = 0;
+        let mut endpoints = self.endpoints.write().await;
+
+        for (path, methods_val) in paths {
+            if let Some(methods) = methods_val.as_object() {
+                for (method, op_val) in methods {
+                    let method_upper = method.to_uppercase();
+                    if ["GET", "POST", "PUT", "DELETE", "PATCH"].contains(&method_upper.as_str()) {
+                        let regex_path = format!("^{}$", path.replace("{", "(?P<").replace("}", ">[^/]+)"));
+                        let service_name = op_val.get("summary")
+                            .and_then(|s| s.as_str())
+                            .unwrap_or("OpenAPI Mirage Endpoint")
+                            .to_string();
+
+                        let sample_resp = op_val.get("responses")
+                            .and_then(|r| r.get("200").or_else(|| r.get("201")).or_else(|| r.get("default")))
+                            .and_then(|r| r.get("content"))
+                            .and_then(|c| c.get("application/json"))
+                            .and_then(|j| j.get("example").or_else(|| j.get("schema")))
+                            .cloned()
+                            .unwrap_or_else(|| serde_json::json!({"status": "ok", "mocked_by": "hgb_openapi_mirage"}));
+
+                        endpoints.push(MirageEndpoint {
+                            route_pattern: regex_path,
+                            method: method_upper,
+                            service_name,
+                            sample_response: sample_resp,
+                            simulated_latency_ms: 10,
+                        });
+                        count += 1;
+                    }
+                }
+            }
+        }
+
+        Ok(count)
+    }
+
 
     pub async fn execute_mirage_call(&self, method: &str, path: &str) -> MirageExecutionReport {
         let endpoints = self.endpoints.read().await;
@@ -88,7 +213,7 @@ impl ApiMirageEngine {
         let client = reqwest::Client::new();
         let start = std::time::Instant::now();
         
-        let mut req_builder = match method {
+        let req_builder = match method {
             "POST" => client.post(&url),
             "PUT" => client.put(&url),
             "DELETE" => client.delete(&url),
@@ -183,5 +308,44 @@ mod tests {
         // httpbin could be down or blocked, so we accept 200 or 502
         assert!(!dyn_rep.is_synthetic);
         assert!(dyn_rep.status == 200 || dyn_rep.status == 502);
+    }
+
+    #[tokio::test]
+    async fn test_api_mirage_openapi_and_topology() {
+        let engine = ApiMirageEngine::new();
+        // Verify GitHub topology
+        let gh_rep = engine.execute_mirage_call("GET", "/user").await;
+        assert_eq!(gh_rep.status, 200);
+        assert!(gh_rep.is_synthetic);
+        assert!(gh_rep.payload_snippet.contains("hagibis-dev"));
+
+        // Load dynamic OpenAPI spec
+        let openapi_json = r#"{
+            "openapi": "3.0.0",
+            "paths": {
+                "/api/v2/analytics": {
+                    "get": {
+                        "summary": "Analytics Stream",
+                        "responses": {
+                            "200": {
+                                "content": {
+                                    "application/json": {
+                                        "example": { "active_sessions": 420 }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }"#;
+
+        let loaded = engine.load_openapi_spec(openapi_json).await.unwrap();
+        assert_eq!(loaded, 1);
+
+        let dynamic_call = engine.execute_mirage_call("GET", "/api/v2/analytics").await;
+        assert_eq!(dynamic_call.status, 200);
+        assert!(dynamic_call.is_synthetic);
+        assert!(dynamic_call.payload_snippet.contains("420"));
     }
 }

@@ -1,5 +1,5 @@
 # 🪽 HAGIBIS (hgb / hgbd): THE DEFINITIVE VIBE CODING MASTERCLASS 🪽
-### *Sub-Millisecond Systems Microkernel, Swarm Engine & 87 Sovereign Superpowers*
+### *Sub-Millisecond Systems Microkernel, Swarm Engine & 125 Sovereign Superpowers*
 **Sovereign Edition 1.0 (2026) • Official Mascot & Flight Guide: Talaria — The Sovereign Winged Avatar of Swiftness**
 
 ---
@@ -13,7 +13,7 @@
 | **Chapter 1** | **Vibe Coding Foundations** | Eliminating context switching, hallucinations, and speculative dual-drafting |
 | **Chapter 2** | **Dual-Engine Architecture** | `hgb` vs `hgbd`, 12 µs UDS IPC, Bincode, SIMD vector memory, CoW SQLite |
 | **Chapter 3** | **Conversational Cockpit** | Ratatui TUI canvas, differential inspector, 70+ interactive slash commands |
-| **Chapter 4** | **The 87 Sovereign Superpowers** | Exhaustive technical directory across all 7 sovereign engineering tiers |
+| **Chapter 4** | **The 125 Sovereign Superpowers** | Exhaustive technical directory across all 10 sovereign engineering tiers |
 | **Chapter 5** | **Five Production Tutorials** | Next.js+Axum, Sentry triage, offline Ollama race, multi-repo, SaaS monetization |
 | **Chapter 6** | **500 Real-World Scenarios** | 500 concrete playbooks across Frontend, Backend, DB, Testing, Security, FinOps |
 | **Chapter 7** | **Appendix & CLI Manual** | Environment variables, exit codes, troubleshooting, The Vibe Coder's Oath |
@@ -29,7 +29,7 @@ For decades, developers have surrendered to friction: waiting 45 seconds for a w
 
 In ancient Roman mythology, **Hermes (Mercury)** traversed the cosmos not by walking or straining, but by donning **Talaria**—the winged golden sandals crafted by Hephaestus. With them, distance vanished, gravity lost its hold, and the messenger arrived before mortals took their first stride. In the Philippines, **Hagibis** signifies supreme velocity paired with unstoppable force—the sudden rush of wind and thunder.
 
-**Hagibis is the Winged Sandal of the modern Vibe Coder.** By building a resident systems-grade microkernel in pure Rust, operating with 12-microsecond Unix Domain Socket IPC, and providing 87 sovereign developer superpowers, Hagibis moves faster than your doubts. When you code with Hagibis, you don't wait for your tools—your tools run ahead of your imagination.
+**Hagibis is the Winged Sandal of the modern Vibe Coder.** By building a resident systems-grade microkernel in pure Rust, operating with 12-microsecond Unix Domain Socket IPC, and providing 125 sovereign developer superpowers, Hagibis moves faster than your doubts. When you code with Hagibis, you don't wait for your tools—your tools run ahead of your imagination.
 
 ---
 
@@ -114,7 +114,7 @@ Communication flows over a native Unix Domain Socket (`/tmp/hgbd.sock` or `$XDG_
 
 ---
 
-## 🔮 Chapter 4: The 87 Sovereign Superpowers Technical Reference
+## 🔮 Chapter 4: The 125 Sovereign Superpowers Technical Reference
 
 ### Tier 1: Foundation & Ambient Microkernel (Superpowers 1–18)
 1. **Universal MCP Client (`hgb mcp list` / `/mcp-hub`):** Handshakes with Model Context Protocol servers over stdio/SSE; registers tools dynamically.
@@ -216,6 +216,50 @@ Communication flows over a native Unix Domain Socket (`/tmp/hgbd.sock` or `$XDG_
 85. **Live Production Telemetry Ingest & Auto-Hotfixer (`/sentry`):** Ingests production crashes from Sentry and generates verified hotfixes.
 86. **AI Semantic Cost Gateway & Model Arbitrage (`/gateway`):** Semantic prompt caching ($0.00 cost) and local model arbitrage.
 87. **Zero-Cookie Privacy Funnel Analytics (`/funnel`):** Cookieless, GDPR-compliant edge analytics tracking visitor conversion.
+
+### Tier 8: The Sovereign Frontier & Competitive Hegemony (Superpowers 88–102)
+88. **Zero-Downtime Rails & ActiveRecord Intelligence (`/rails`):** Deep Ruby on Rails application detection, zero-downtime ActiveRecord migration safety linter, schema introspection, and N+1 query detection.
+89. **Persistent Project Coordinator & Cross-Session ADR Manager (`/project`):** Cross-session persistent task queues, automated Architecture Decision Record (ADR) lifecycle management, and milestone handoffs.
+90. **3-Tier Dynamic Rules Auto-Engine (`/rules-engine`):** High-signal contextual rules evaluation spanning Always-on baseline directives, auto-attached glob patterns, and manual @-rule invocations.
+91. **Autonomous Ticket-to-PR Autopilot Pipeline (`/autopilot`):** Autonomous development loop: ingests issues/prompts, creates isolated worktrees, computes impact plans, synthesizes changes, and verifies tests.
+92. **Agent Decision Explainer & Trust Gap Solver (`/explain`):** Solves the developer trust gap with AST-grounded decision explanations, trade-off matrices, rejected alternative logs, and automated ADR synthesis.
+93. **Blake3 Merkle Collaborative Codebase Index (`/smart-index`):** Hardware-accelerated Blake3 cryptographic Merkle tree representation of the workspace for O(k log N) differential change detection.
+94. **Canary Rollout Health Sentry & Anomaly Rollback Sentinel (`/rollout`):** Real-time canary deployment health monitor computing statistical z-score latency anomalies, error rate spikes, and triggering automated rollbacks.
+95. **AI-PR Adversarial Security & Vulnerability Auditor (`/pr-audit`):** Specialized security audit scanner targeting LLM-generated code vulnerabilities: prompt injection vectors, unsafe eval, IDOR leaks, and SQLi.
+96. **Ephemeral Cloud Preview Deployment & Vanity HTTPS Tunnel (`/preview-cloud`):** Instant isolated ephemeral preview deployments with unique vanity URLs, custom subdomain routing, and automated TTL resource teardown.
+97. **Multi-Dev Real-Time Collaboration & Patch Collision Arbiter (`/collab`):** Peer-to-peer developer collaboration engine with live cursor tracking, ephemeral presence broadcasting, and speculative patch intent overlap detection.
+98. **Prompt Engineering A/B Workspace & FinOps Leaderboard (`/prompt-lab`):** Prompt A/B evaluation testbed benchmarking multiple system prompts across models with latency, token consumption, and output quality metrics.
+99. **Polyglot Framework Intelligence Packs (`/lang-pack`):** Pluggable language and framework intelligence engines for Rails, FastAPI, Next.js, Go Fiber, and Spring Boot with automatic project detection.
+100. **Cross-Platform Native Mobile Dev & Stack Symbolicator (`/native-mobile`):** React Native and Flutter mobile intelligence with platform-native crash stack trace demangling, Android ProGuard / iOS dSYM symbolication.
+101. **Session FinOps Hard Budget Envelope & Cost Circuit Breaker (`/budget`):** Real-time token cost accounting with configurable spending caps, automated model tier degradation, and kernel-level budget circuit breakers.
+102. **Zero-Latency VS Code Extension Microkernel Bridge (`/vscode-ext`):** High-speed IPC bridge connecting VS Code / Cursor editors directly to the hgbd Unix domain socket with zero-overhead command dispatch.
+
+### Tier 9: The Autonomous Substrate & Systems Fabric (Superpowers 103–117)
+103. **Headless CI/CD & Unix Pipe Streamer (`/ci`):** Claude Code parity non-TTY execution participating in Unix pipelines (`cat issue.txt | hgb ci --json`), structured JSONL logging, and GitHub Actions.
+104. **Interactive Plan Mode & Blueprint Approver (`/plan`):** GitHub Copilot Plan Mode parity inspect-before-execute blueprint generation with dry-run diffs, step-by-step sign-off, and token impact budgets.
+105. **Universal Issue Ingestor (`/ticket`):** Devin & Copilot parity issue parser supporting GitHub, Linear (ENG-123), Jira (PROJ-456), and Markdown with acceptance criteria extraction.
+106. **Persistent Project Memory & Context Profiles (`/profile`):** Windsurf Cascade parity project profiles (`.hgb/profile.toml`) preserving architectural conventions, test runners, and developer memory across restarts.
+107. **Automated Git Pre-Commit / Pre-Push Security Guardrails (`/hook`):** Cursor BugBot parity zero-latency Git hooks blocking secret leaks, destructive SQL commands, and slopsquatting packages before commit.
+108. **Style Guide & Architectural DNA Harvester (`/conventions`):** Ingests STYLE_GUIDE.md, .editorconfig, CONTRIBUTING.md, and linter configs into an ultra-compact, token-compressed system prompt DNA block.
+109. **Parallel Multi-Session Autopilot Worktree Swarm (`/queue`):** Devin parity parallel multi-agent task runner orchestrating N independent sessions across isolated Git worktrees without index lock contention.
+110. **Agentic PR Code Reviewer & Inline Diff Commenter (`/review`):** Cursor BugBot parity autonomous line-by-line diff reviewer detecting thread blocking, unsafe unwraps, and emitting inline review suggestions.
+111. **Autonomous SWE-Bench & Coding Rigor Harness (`/benchmark`):** Standardized SWE-Bench Lite and production invariant benchmark harness tracking pass@1, token FinOps, and execution latency.
+112. **90-Second MVP Full-Stack Synthesizer (`/quickstart`):** Bolt.new & Lovable parity description-to-working-app generator scaffolding complete Next.js/Axum/FastAPI projects with routes, UI, and auth in seconds.
+113. **Decentralized Community Agent Fleet & Plugin Marketplace (`/registry`):** OpenHands parity decentralized catalog for searching, verifying, and dispatching specialized micro-agents with Blake3 integrity fingerprints.
+114. **Blake3 Cryptographic AI Code Authorship Ledger (`/authorship`):** Tamper-proof, line-level Blake3 cryptographic Merkle ledger attributing code authorship between humans and AI models for corporate compliance.
+115. **Encrypted Remote Daemon Tunnel & Cockpit Steering (`/remote`):** Claude Code Remote parity secure authenticated tunnel steering remote hgbd instances over cloud VMs, developer boxes, or GPU clusters.
+116. **Unified Multi-Channel Observation Bus (`/observe`):** Windsurf Cascade parity synchronous event bus unifying terminal stdout/stderr, CDP browser console/network, and filesystem notifications into a real-time stream.
+117. **Zero-Config Managed Full-Stack Preset Fabric (`/stack`):** Lovable parity one-command integration linking Supabase (Auth/DB), Stripe (Billing/Webhooks), Tailwind/shadcn UI, and Cloudflare Workers (Edge).
+
+### Tier 10: The Sovereign Zenith & Frontier Hegemony (Superpowers 118–125)
+118. **Recursive Self-Evolution & Autonomous DPO Distillation Engine (`/evolve`):** Autonomous multi-generation evolution loop evaluating compiler feedback, generating preference datasets (Chosen vs. Rejected pairs) for local model alignment (DPO/ORPO).
+119. **OS-Level Desktop Computer-Use & Multi-Modal Window Sentry (`/desktop`):** Multi-modal OS interaction engine inspecting window hierarchies, coordinates, and dispatching surgical OS mouse clicks, keyboard text, and screenshots.
+120. **Formal Mathematical Verification & SMT Solver Proof Engine (`/verify-proof`):** Translates code safety properties into SMT-LIB2 / Z3 / CVC5 formulas, mathematically proving absence of integer overflows, slice bounds violations, and deadlocks.
+121. **Enterprise Distributed Monorepo Hypergraph & Build Cache (`/monorepo`):** Constructs high-performance package dependency hypergraphs across giant monorepos, calculating exact blast radiuses and saving up to 70% CI/CD compute time.
+122. **Embedded Firmware, Microcontroller & HDL Lab (`/embedded`):** Bare-metal #![no_std] Rust and FreeRTOS task safety verification for ARM Cortex-M, ESP32, RISC-V, and AVR microcontrollers, with Verilog/VHDL linting.
+123. **Native App Store Release & Fastlane Orchestrator (`/store`):** End-to-end multi-platform deployment pipeline orchestrating Fastlane lanes, code signing verification, IPA/AAB bundle builds, and automated store submissions.
+124. **Local Neural Speech Synthesis Engine (`/speak`):** 100% offline, zero-latency neural TTS synthesis engine powered by local Kokoro/Piper models, producing phonetic transcripts and Blake3 cryptographic audio hashes.
+125. **Interactive Visual WYSIWYG Web Canvas Studio (`/studio`):** Real-time bi-directional visual canvas connecting DOM elements, component trees, and AST code with hot CSS and style synchronization over a local web studio port.
 
 ---
 

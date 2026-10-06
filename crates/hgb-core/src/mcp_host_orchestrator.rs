@@ -56,12 +56,30 @@ impl McpHostOrchestrator {
     /// Auto-discover MCP configs from .hgb, .cursor, or .claude directories
     pub async fn auto_discover(&self) -> Result<usize> {
         let mut discovered_count = 0;
-        let candidates = [
+        let mut candidates = vec![
             self.workspace_root.join(".hgb").join("mcp.json"),
             self.workspace_root.join(".hgb_mcp.json"),
+            self.workspace_root.join("hagibis.mcp.json"),
             self.workspace_root.join(".cursor").join("mcp.json"),
             self.workspace_root.join(".claude").join("mcp.json"),
         ];
+
+        if let Ok(cwd) = std::env::current_dir() {
+            if cwd != self.workspace_root {
+                candidates.push(cwd.join(".hgb").join("mcp.json"));
+                candidates.push(cwd.join(".hgb_mcp.json"));
+                candidates.push(cwd.join("hagibis.mcp.json"));
+                candidates.push(cwd.join(".cursor").join("mcp.json"));
+                candidates.push(cwd.join(".claude").join("mcp.json"));
+            }
+        }
+
+        if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+            candidates.push(home.join(".hgb").join("mcp.json"));
+            candidates.push(home.join(".hgb_mcp.json"));
+            candidates.push(home.join(".cursor").join("mcp.json"));
+            candidates.push(home.join(".claude").join("mcp.json"));
+        }
 
         for path in &candidates {
             if path.exists() {

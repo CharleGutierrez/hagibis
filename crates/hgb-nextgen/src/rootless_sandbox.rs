@@ -97,6 +97,11 @@ impl RootlessSandboxEngine {
         let jail_dir = std::env::temp_dir().join(format!("hgb_jail_{}_{}", std::process::id(), nanos));
         let _ = fs::create_dir_all(&jail_dir);
 
+        if hgb_core::zig_accelerate::sandbox_check_support() {
+            let dir_str = workspace.to_string_lossy().to_string();
+            let _ = hgb_core::zig_accelerate::sandbox_apply_landlock(&dir_str);
+        }
+
         // 3. Configure sanitized environment
         let mut envs = HashMap::new();
         envs.insert("TMPDIR".to_string(), jail_dir.to_string_lossy().to_string());
