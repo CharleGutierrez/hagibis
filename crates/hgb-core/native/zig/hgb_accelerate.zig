@@ -596,6 +596,26 @@ const LANDLOCK_ADD_RULE = 445;
 const LANDLOCK_RESTRICT_SELF = 446;
 const PR_SET_NO_NEW_PRIVS = 38;
 
+const LANDLOCK_RULE_PATH_BENEATH: usize = 1;
+
+const LANDLOCK_ACCESS_FS_EXECUTE: u64 = 1 << 0;
+const LANDLOCK_ACCESS_FS_WRITE_FILE: u64 = 1 << 1;
+const LANDLOCK_ACCESS_FS_READ_FILE: u64 = 1 << 2;
+const LANDLOCK_ACCESS_FS_READ_DIR: u64 = 1 << 3;
+const LANDLOCK_ACCESS_FS_REMOVE_DIR: u64 = 1 << 4;
+const LANDLOCK_ACCESS_FS_REMOVE_FILE: u64 = 1 << 5;
+const LANDLOCK_ACCESS_FS_MAKE_CHAR: u64 = 1 << 6;
+const LANDLOCK_ACCESS_FS_MAKE_DIR: u64 = 1 << 7;
+const LANDLOCK_ACCESS_FS_MAKE_REG: u64 = 1 << 8;
+const LANDLOCK_ACCESS_FS_MAKE_SOCK: u64 = 1 << 9;
+const LANDLOCK_ACCESS_FS_MAKE_FIFO: u64 = 1 << 10;
+const LANDLOCK_ACCESS_FS_MAKE_BLOCK: u64 = 1 << 11;
+const LANDLOCK_ACCESS_FS_MAKE_SYM: u64 = 1 << 12;
+
+const LANDLOCK_FS_ALL: u64 = 0x1FFF; // All 13 FS access rights in ABI v1
+const LANDLOCK_FS_READ_EXEC: u64 = LANDLOCK_ACCESS_FS_EXECUTE | LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_FS_READ_DIR; // 0x0D = 13
+const LANDLOCK_FS_DEV: u64 = LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_FS_WRITE_FILE; // 0x06 for pseudo-devices
+
 const landlock_ruleset_attr = extern struct {
     handled_access_fs: u64,
 };
@@ -605,9 +625,37 @@ const landlock_path_beneath_attr = extern struct {
     parent_fd: i32,
 };
 
+fn landlock_add_path(ruleset_fd: usize, path: []const u8, access: u64) void {
+    if (path.len == 0 or path.len >= 4096) return;
+    var path_buf: [4096]u8 = undefined;
+    @memcpy(path_buf[0..path.len], path);
+    path_buf[path.len] = 0;
+
+    const dir_fd = std.os.linux.syscall3(
+        std.os.linux.SYS.openat,
+        @as(usize, @bitCast(@as(isize, -100))), // AT_FDCWD
+        @intFromPtr(&path_buf),
+        0, // O_RDONLY
+    );
+    if (@as(isize, @bitCast(dir_fd)) >= 0) {
+        var path_attr = landlock_path_beneath_attr{
+            .allowed_access = access,
+            .parent_fd = @as(i32, @intCast(dir_fd)),
+        };
+        _ = std.os.linux.syscall4(
+            @as(std.os.linux.syscalls.X64, @enumFromInt(LANDLOCK_ADD_RULE)),
+            ruleset_fd,
+            LANDLOCK_RULE_PATH_BENEATH,
+            @intFromPtr(&path_attr),
+            0,
+        );
+        _ = std.os.linux.syscall1(std.os.linux.SYS.close, dir_fd);
+    }
+}
+
 export fn hgb_zig_sandbox_check_support() callconv(.C) bool {
     const version = std.os.linux.syscall3(@as(std.os.linux.syscalls.X64, @enumFromInt(444)), 0, 0, 1);
-    return version > 0;
+    return @as(isize, @bitCast(version)) > 0;
 }
 
 export fn hgb_zig_sandbox_apply_landlock(allowed_dir: [*]const u8, len: usize) callconv(.C) i32 {
@@ -636,6 +684,61 @@ export fn hgb_zig_sandbox_apply_landlock(allowed_dir: [*]const u8, len: usize) c
     _ = std.os.linux.syscall1(std.os.linux.SYS.close, fd);
     
     return @as(i32, @intCast(ret));
+}
+
+export fn hgb_zig_sandbox_apply_landlock_jail(
+    workspace_ptr: [*]const u8,
+    ws_len: usize,
+    jail_ptr: [*]const u8,
+    jail_len: usize,
+) callconv(.C) i32 {
+    // 1. Create Landlock ruleset handling all standard filesystem access rights (0x1FFF)
+    var attr = landlock_ruleset_attr{ .handled_access_fs = LANDLOCK_FS_ALL };
+    const fd = std.os.linux.syscall3(
+        @as(std.os.linux.syscalls.X64, @enumFromInt(LANDLOCK_CREATE_RULESET)),
+        @intFromPtr(&attr),
+        @sizeOf(landlock_ruleset_attr),
+        0,
+    );
+    if (@as(isize, @bitCast(fd)) < 0) {
+        return @as(i32, @intCast(@as(isize, @bitCast(fd))));
+    }
+
+    // 2. Allow Read+Execute on system paths: /usr, /lib, /lib64, /bin, /etc
+    const sys_paths = [_][]const u8{ "/usr", "/lib", "/lib64", "/bin", "/etc" };
+    for (sys_paths) |sp| {
+        landlock_add_path(fd, sp, LANDLOCK_FS_READ_EXEC);
+    }
+
+    // Allow /dev for standard pseudo-devices (/dev/null, /dev/zero, /dev/urandom)
+    landlock_add_path(fd, "/dev", LANDLOCK_FS_DEV);
+
+    // 3. Allow Read+Write ONLY on workspace
+    if (ws_len > 0) {
+        landlock_add_path(fd, workspace_ptr[0..ws_len], LANDLOCK_FS_ALL);
+    }
+
+    // 4. Allow Read+Write ONLY on ephemeral jail_dir
+    if (jail_len > 0) {
+        landlock_add_path(fd, jail_ptr[0..jail_len], LANDLOCK_FS_ALL);
+    }
+
+    // 5. Enforce PR_SET_NO_NEW_PRIVS before restricting
+    const prctl_ret = std.os.linux.syscall5(std.os.linux.SYS.prctl, PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
+    if (@as(isize, @bitCast(prctl_ret)) < 0) {
+        _ = std.os.linux.syscall1(std.os.linux.SYS.close, fd);
+        return @as(i32, @intCast(@as(isize, @bitCast(prctl_ret))));
+    }
+
+    // 6. Restrict self with Landlock LSM ruleset
+    const restrict_ret = std.os.linux.syscall2(
+        @as(std.os.linux.syscalls.X64, @enumFromInt(LANDLOCK_RESTRICT_SELF)),
+        fd,
+        0,
+    );
+    _ = std.os.linux.syscall1(std.os.linux.SYS.close, fd);
+
+    return @as(i32, @intCast(@as(isize, @bitCast(restrict_ret))));
 }
 
 export fn hgb_zig_merkle_root(leaf_hashes_ptr: [*]const u8, leaf_count: usize, out_root: [*]u8) callconv(.C) void {

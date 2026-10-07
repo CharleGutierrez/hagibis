@@ -97,16 +97,12 @@ impl RootlessSandboxEngine {
         let jail_dir = std::env::temp_dir().join(format!("hgb_jail_{}_{}", std::process::id(), nanos));
         let _ = fs::create_dir_all(&jail_dir);
 
-        if hgb_core::zig_accelerate::sandbox_check_support() {
-            let dir_str = workspace.to_string_lossy().to_string();
-            let _ = hgb_core::zig_accelerate::sandbox_apply_landlock(&dir_str);
-        }
-
         // 3. Configure sanitized environment
         let mut envs = HashMap::new();
         envs.insert("TMPDIR".to_string(), jail_dir.to_string_lossy().to_string());
         envs.insert("HOME".to_string(), jail_dir.to_string_lossy().to_string());
         envs.insert("HGB_SANDBOXED".to_string(), "1".to_string());
+        envs.insert("HGB_JAIL_DIR".to_string(), jail_dir.to_string_lossy().to_string());
 
         let cmd_opts = CommandOptions {
             cwd: Some(workspace.to_path_buf()),
@@ -116,7 +112,7 @@ impl RootlessSandboxEngine {
             wait_ms_before_async: None,
         };
 
-        // 4. Run through AgyCrud
+        // 4. Run through AgyCrud (child pre_exec hook applies hardware Landlock LSM jail)
         let res = AgyCrud::run_command(cmd, Some(workspace), cmd_opts).await?;
         let elapsed = t0.elapsed().as_millis() as u64;
 
@@ -133,5 +129,66 @@ impl RootlessSandboxEngine {
             duration_ms: elapsed,
             ephemeral_jail_dir: Some(jail_dir),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[tokio::test]
+    async fn test_rootless_sandbox_landlock_jail_confinement() {
+        let temp_dir = std::env::temp_dir();
+        let test_id = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+
+        let ws_dir = temp_dir.join(format!("hgb_test_ws_{}", test_id));
+        let outside_dir = temp_dir.join(format!("hgb_test_outside_{}", test_id));
+        fs::create_dir_all(&ws_dir).expect("create ws");
+        fs::create_dir_all(&outside_dir).expect("create outside dir");
+
+        let allowed_file = ws_dir.join("allowed.txt");
+        let forbidden_file = outside_dir.join("secret_data.txt");
+        fs::write(&allowed_file, "ALLOWED_PAYLOAD").expect("write allowed");
+        fs::write(&forbidden_file, "SECRET_FORBIDDEN_PAYLOAD").expect("write forbidden");
+
+        let config = SandboxConfig {
+            allowed_workspace: ws_dir.clone(),
+            ..Default::default()
+        };
+
+        // 1. Reading allowed file in workspace must SUCCEED
+        let cmd_allowed = format!("cat {}", allowed_file.display());
+        let res_allowed = RootlessSandboxEngine::execute_sandboxed(&cmd_allowed, &ws_dir, &config)
+            .await
+            .expect("exec allowed");
+        assert_eq!(res_allowed.exit_code, 0, "Reading allowed file must succeed");
+        assert!(res_allowed.stdout.contains("ALLOWED_PAYLOAD"));
+
+        // 2. Reading forbidden file outside workspace must be BLOCKED by Landlock LSM
+        let cmd_forbidden = format!("cat {}", forbidden_file.display());
+        let res_forbidden = RootlessSandboxEngine::execute_sandboxed(&cmd_forbidden, &ws_dir, &config)
+            .await
+            .expect("exec forbidden");
+
+        if hgb_core::zig_accelerate::sandbox_check_support() {
+            assert_ne!(res_forbidden.exit_code, 0, "Reading outside forbidden file must fail under Landlock");
+            assert!(
+                res_forbidden.stderr.contains("Permission denied"),
+                "Stderr should report 'Permission denied' from kernel Landlock LSM, got: {}",
+                res_forbidden.stderr
+            );
+        }
+
+        // 3. Parent process remains UNCONFINED and can freely read both files
+        let parent_read = fs::read_to_string(&forbidden_file).expect("parent read forbidden");
+        assert_eq!(parent_read, "SECRET_FORBIDDEN_PAYLOAD");
+
+        // Cleanup
+        let _ = fs::remove_dir_all(&ws_dir);
+        let _ = fs::remove_dir_all(&outside_dir);
     }
 }

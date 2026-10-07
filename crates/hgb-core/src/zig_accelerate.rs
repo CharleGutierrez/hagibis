@@ -325,6 +325,12 @@ extern "C" {
     fn hgb_zig_dsp_fft_magnitude(samples: *const f32, n: usize, out_magnitudes: *mut f32);
     fn hgb_zig_sandbox_check_support() -> bool;
     fn hgb_zig_sandbox_apply_landlock(allowed_dir: *const u8, len: usize) -> i32;
+    fn hgb_zig_sandbox_apply_landlock_jail(
+        workspace_ptr: *const u8,
+        ws_len: usize,
+        jail_ptr: *const u8,
+        jail_len: usize,
+    ) -> i32;
     fn hgb_zig_merkle_root(leaf_hashes_ptr: *const u8, leaf_count: usize, out_root: *mut u8);
     fn hgb_zig_blake3_node_pair(left: *const u8, left_len: usize, right: *const u8, right_len: usize, out_hex: *mut u8);
     fn hgb_zig_dsp_resample(in_samples: *const i16, in_len: usize, in_rate: u32, out_samples: *mut i16, out_cap: usize, out_rate: u32) -> usize;
@@ -374,6 +380,20 @@ pub fn sandbox_check_support() -> bool {
 pub fn sandbox_apply_landlock(allowed_dir: &str) -> Result<(), i32> {
     let c_str = allowed_dir.as_bytes();
     let ret = unsafe { hgb_zig_sandbox_apply_landlock(c_str.as_ptr(), c_str.len()) };
+    if ret == 0 { Ok(()) } else { Err(ret) }
+}
+
+pub fn sandbox_apply_landlock_jail(workspace: &str, jail_dir: &str) -> Result<(), i32> {
+    let ws_bytes = workspace.as_bytes();
+    let jail_bytes = jail_dir.as_bytes();
+    let ret = unsafe {
+        hgb_zig_sandbox_apply_landlock_jail(
+            ws_bytes.as_ptr(),
+            ws_bytes.len(),
+            jail_bytes.as_ptr(),
+            jail_bytes.len(),
+        )
+    };
     if ret == 0 { Ok(()) } else { Err(ret) }
 }
 

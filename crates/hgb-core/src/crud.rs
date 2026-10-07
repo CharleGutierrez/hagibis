@@ -308,6 +308,38 @@ impl AgyCrud {
             process.env(k, v);
         }
 
+        let is_sandboxed = options
+            .env
+            .get("HGB_SANDBOXED")
+            .map(|v| v == "1")
+            .unwrap_or(false)
+            || std::env::var("HGB_SANDBOXED")
+                .map(|v| v == "1")
+                .unwrap_or(false);
+
+        #[cfg(unix)]
+        if is_sandboxed {
+            let ws_str = target_cwd.to_string_lossy().to_string();
+            let jail_str = options
+                .env
+                .get("HGB_JAIL_DIR")
+                .cloned()
+                .or_else(|| options.env.get("TMPDIR").cloned())
+                .unwrap_or_else(|| std::env::temp_dir().to_string_lossy().to_string());
+
+            unsafe {
+                process.pre_exec(move || {
+                    if crate::zig_accelerate::sandbox_check_support() {
+                        let res = crate::zig_accelerate::sandbox_apply_landlock_jail(&ws_str, &jail_str);
+                        if let Err(code) = res {
+                            return Err(std::io::Error::from_raw_os_error(code.abs()));
+                        }
+                    }
+                    Ok(())
+                });
+            }
+        }
+
         let child = process.spawn().map_err(|e| {
             HgbError::Execution(format!(
                 "Failed to spawn child process for command '{}': {}",
