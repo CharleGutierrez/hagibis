@@ -142,6 +142,9 @@ pub struct ShmRingBuffer {
     ptr: *mut c_void,
 }
 
+unsafe impl Send for ShmRingBuffer {}
+unsafe impl Sync for ShmRingBuffer {}
+
 impl ShmRingBuffer {
     pub fn new(ptr: *mut c_void, capacity: usize) -> Self {
         unsafe { hgb_zig_shm_init_header(ptr, capacity) };
@@ -160,6 +163,85 @@ impl ShmRingBuffer {
 
     pub fn available(&self) -> usize {
         unsafe { hgb_zig_shm_available(self.ptr) }
+    }
+}
+
+/// High-level POSIX Shared Memory IPC Channel backed by Zig lock-free SPSC Ring Buffer
+pub struct ShmRingChannel {
+    _mmap: Option<memmap2::MmapMut>,
+    ring: ShmRingBuffer,
+    pub path: Option<std::path::PathBuf>,
+}
+
+unsafe impl Send for ShmRingChannel {}
+unsafe impl Sync for ShmRingChannel {}
+
+impl ShmRingChannel {
+    /// Creates or recreates a POSIX shared memory ring buffer backing file at `path` (e.g. `/dev/shm/hgb_ring`).
+    pub fn create_posix_shm<P: AsRef<std::path::Path>>(path: P, capacity: usize) -> Result<Self, std::io::Error> {
+        let path_buf = path.as_ref().to_path_buf();
+        let total_size = 256 + capacity;
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path_buf)?;
+        file.set_len(total_size as u64)?;
+
+        let mut mmap = unsafe { memmap2::MmapMut::map_mut(&file)? };
+        let ptr = mmap.as_mut_ptr() as *mut std::ffi::c_void;
+        let ring = ShmRingBuffer::new(ptr, capacity);
+
+        Ok(Self {
+            _mmap: Some(mmap),
+            ring,
+            path: Some(path_buf),
+        })
+    }
+
+    /// Attaches to an existing POSIX shared memory ring buffer without reinitializing the header.
+    pub fn attach_posix_shm<P: AsRef<std::path::Path>>(path: P) -> Result<Self, std::io::Error> {
+        let path_buf = path.as_ref().to_path_buf();
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path_buf)?;
+        let mut mmap = unsafe { memmap2::MmapMut::map_mut(&file)? };
+        let ptr = mmap.as_mut_ptr() as *mut std::ffi::c_void;
+        let ring = ShmRingBuffer { ptr };
+
+        Ok(Self {
+            _mmap: Some(mmap),
+            ring,
+            path: Some(path_buf),
+        })
+    }
+
+    /// Creates an anonymous in-memory SPSC ring channel.
+    pub fn new_in_memory(capacity: usize) -> Result<Self, std::io::Error> {
+        let total_size = 256 + capacity;
+        let mut mmap = memmap2::MmapMut::map_anon(total_size)?;
+        let ptr = mmap.as_mut_ptr() as *mut std::ffi::c_void;
+        let ring = ShmRingBuffer::new(ptr, capacity);
+
+        Ok(Self {
+            _mmap: Some(mmap),
+            ring,
+            path: None,
+        })
+    }
+
+    pub fn push(&self, data: &[u8]) -> bool {
+        self.ring.push(data)
+    }
+
+    pub fn pop(&self, out_buf: &mut [u8]) -> Option<usize> {
+        self.ring.pop(out_buf)
+    }
+
+    pub fn available(&self) -> usize {
+        self.ring.available()
     }
 }
 
@@ -679,3 +761,162 @@ mod phase5_tests {
         assert!(ptr2.is_some());
     }
 }
+
+// --- Phase 1 to 5 Native Zig Bindings ---
+
+#[link(name = "hgb_accelerate", kind = "static")]
+extern "C" {
+    fn hgb_zig_vector_batch_cosine(query: *const f32, matrix: *const f32, n_vectors: usize, dim: usize, out_scores: *mut f32);
+    fn hgb_zig_vector_top_k(scores: *const f32, n_vectors: usize, top_k: usize, out_indices: *mut usize, out_scores: *mut f32) -> usize;
+    fn hgb_zig_simd_find_newlines(data: *const u8, len: usize, out_offsets: *mut usize, out_cap: usize) -> usize;
+    fn hgb_zig_csr_graph_get_neighbors(row_offsets: *const u32, col_indices: *const u32, num_nodes: usize, node: u32, out_buf: *mut u32, out_cap: usize) -> usize;
+    fn hgb_zig_vad_classify_frame(samples: *const i16, len: usize, sample_rate: u32, out_confidence: *mut f32) -> bool;
+    fn hgb_zig_synth_earcon(earcon_type: u32, sample_rate: u32, out_buf: *mut i16, out_cap: usize, out_len: *mut usize) -> bool;
+}
+
+pub fn vector_batch_cosine(query: &[f32], matrix: &[f32], dim: usize) -> Vec<f32> {
+    if query.len() != dim || matrix.is_empty() || dim == 0 {
+        return Vec::new();
+    }
+    let n_vectors = matrix.len() / dim;
+    let mut scores = vec![0.0f32; n_vectors];
+    unsafe {
+        hgb_zig_vector_batch_cosine(query.as_ptr(), matrix.as_ptr(), n_vectors, dim, scores.as_mut_ptr());
+    }
+    scores
+}
+
+pub fn vector_top_k(scores: &[f32], top_k: usize) -> Vec<(usize, f32)> {
+    if scores.is_empty() || top_k == 0 {
+        return Vec::new();
+    }
+    let actual_k = top_k.min(scores.len()).min(128);
+    let mut out_indices = vec![0usize; actual_k];
+    let mut out_scores = vec![0.0f32; actual_k];
+    let count = unsafe {
+        hgb_zig_vector_top_k(scores.as_ptr(), scores.len(), actual_k, out_indices.as_mut_ptr(), out_scores.as_mut_ptr())
+    };
+    let mut results = Vec::with_capacity(count);
+    for i in 0..count {
+        results.push((out_indices[i], out_scores[i]));
+    }
+    results
+}
+
+pub fn simd_find_newlines(data: &[u8]) -> Vec<usize> {
+    if data.is_empty() {
+        return Vec::new();
+    }
+    let mut offsets = vec![0usize; data.len()];
+    let count = unsafe {
+        hgb_zig_simd_find_newlines(data.as_ptr(), data.len(), offsets.as_mut_ptr(), offsets.len())
+    };
+    offsets.truncate(count);
+    offsets
+}
+
+pub fn csr_graph_neighbors(row_offsets: &[u32], col_indices: &[u32], node: u32) -> Vec<u32> {
+    if row_offsets.is_empty() || (node as usize) + 1 >= row_offsets.len() {
+        return Vec::new();
+    }
+    let max_possible = (row_offsets[(node as usize) + 1] - row_offsets[node as usize]) as usize;
+    let mut out = vec![0u32; max_possible];
+    let count = unsafe {
+        hgb_zig_csr_graph_get_neighbors(row_offsets.as_ptr(), col_indices.as_ptr(), row_offsets.len() - 1, node, out.as_mut_ptr(), out.len())
+    };
+    out.truncate(count);
+    out
+}
+
+pub fn vad_classify_frame(samples: &[i16], sample_rate: u32) -> (bool, f32) {
+    if samples.is_empty() {
+        return (false, 0.0);
+    }
+    let mut confidence = 0.0f32;
+    let is_speech = unsafe {
+        hgb_zig_vad_classify_frame(samples.as_ptr(), samples.len(), sample_rate, &mut confidence)
+    };
+    (is_speech, confidence)
+}
+
+pub fn synth_earcon(earcon_type: u32, sample_rate: u32) -> Vec<i16> {
+    let mut out = vec![0i16; (sample_rate as usize) / 2];
+    let mut out_len = 0;
+    let ok = unsafe {
+        hgb_zig_synth_earcon(earcon_type, sample_rate, out.as_mut_ptr(), out.len(), &mut out_len)
+    };
+    if ok {
+        out.truncate(out_len);
+        out
+    } else {
+        Vec::new()
+    }
+}
+
+#[cfg(test)]
+mod phase6_tests {
+    use super::*;
+
+    #[test]
+    fn test_vector_batch_cosine_and_top_k() {
+        let dim = 8;
+        let query = vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let matrix = vec![
+            1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, // Identical (score 1.0)
+            0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, // Orthogonal (score 0.0)
+            0.707, 0.707, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, // 45 deg (score ~0.707)
+        ];
+        let scores = vector_batch_cosine(&query, &matrix, dim);
+        assert_eq!(scores.len(), 3);
+        assert!((scores[0] - 1.0).abs() < 1e-4);
+        assert!((scores[1] - 0.0).abs() < 1e-4);
+        assert!((scores[2] - 0.707).abs() < 1e-2);
+
+        let top = vector_top_k(&scores, 2);
+        assert_eq!(top.len(), 2);
+    }
+
+    #[test]
+    fn test_simd_find_newlines() {
+        let text = b"hello\nworld\nfrom\nzig\n";
+        let newlines = simd_find_newlines(text);
+        assert_eq!(newlines, vec![5, 11, 16, 20]);
+    }
+
+    #[test]
+    fn test_csr_graph() {
+        let row_offsets = vec![0, 2, 3, 4];
+        let col_indices = vec![1, 2, 0, 1];
+        let neighbors = csr_graph_neighbors(&row_offsets, &col_indices, 0);
+        assert_eq!(neighbors, vec![1, 2]);
+    }
+
+    #[test]
+    fn test_vad_and_earcon() {
+        let silence = vec![0i16; 160]; // 10ms at 16kHz
+        let (is_speech, conf) = vad_classify_frame(&silence, 16000);
+        assert!(!is_speech);
+        assert_eq!(conf, 0.0);
+
+        let earcon0 = synth_earcon(0, 16000);
+        assert!(!earcon0.is_empty());
+        let earcon3 = synth_earcon(3, 16000);
+        assert!(!earcon3.is_empty());
+    }
+
+    #[test]
+    fn test_shm_channel() {
+        let channel = ShmRingChannel::new_in_memory(1024).expect("create anon ring");
+        assert_eq!(channel.available(), 0);
+        let msg = b"HAGIBIS_ZERO_COPY_PAYLOAD";
+        assert!(channel.push(msg));
+        assert_eq!(channel.available(), msg.len());
+
+        let mut buf = vec![0u8; 128];
+        let n = channel.pop(&mut buf).expect("pop msg");
+        assert_eq!(n, msg.len());
+        assert_eq!(&buf[..n], msg);
+        assert_eq!(channel.available(), 0);
+    }
+}
+

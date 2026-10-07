@@ -740,8 +740,300 @@ export fn hgb_zig_dsp_resample(in_samples: [*]const i16, in_len: usize, in_rate:
     return target_len;
 }
 
+// --- Phase 1: Batch SIMD Cosine Search & Top-K Min-Heap ---
+
+export fn hgb_zig_vector_batch_cosine(
+    query_ptr: [*]const f32,
+    matrix_ptr: [*]const f32,
+    n_vectors: usize,
+    dim: usize,
+    out_scores: [*]f32,
+) callconv(.C) void {
+    if (n_vectors == 0 or dim == 0) return;
+    const q = query_ptr[0..dim];
+
+    var q_sum_sq: f32 = 0.0;
+    var i: usize = 0;
+    while (i + 8 <= dim) : (i += 8) {
+        const v: @Vector(8, f32) = q[i..][0..8].*;
+        q_sum_sq += @reduce(.Add, v * v);
+    }
+    while (i < dim) : (i += 1) {
+        q_sum_sq += q[i] * q[i];
+    }
+    const q_norm = @sqrt(q_sum_sq);
+    if (q_norm == 0.0) {
+        for (0..n_vectors) |idx| out_scores[idx] = 0.0;
+        return;
+    }
+
+    for (0..n_vectors) |row_idx| {
+        const row = matrix_ptr[row_idx * dim .. (row_idx + 1) * dim];
+        var dot: f32 = 0.0;
+        var row_sum_sq: f32 = 0.0;
+        var j: usize = 0;
+        while (j + 8 <= dim) : (j += 8) {
+            const vq: @Vector(8, f32) = q[j..][0..8].*;
+            const vr: @Vector(8, f32) = row[j..][0..8].*;
+            dot += @reduce(.Add, vq * vr);
+            row_sum_sq += @reduce(.Add, vr * vr);
+        }
+        while (j < dim) : (j += 1) {
+            dot += q[j] * row[j];
+            row_sum_sq += row[j] * row[j];
+        }
+        const row_norm = @sqrt(row_sum_sq);
+        if (row_norm == 0.0) {
+            out_scores[row_idx] = 0.0;
+        } else {
+            const score = dot / (q_norm * row_norm);
+            out_scores[row_idx] = std.math.clamp(score, -1.0, 1.0);
+        }
+    }
+}
+
+fn min_heap_sift_down(indices: *[128]usize, scores: *[128]f32, root_idx: usize, len: usize) void {
+    var curr = root_idx;
+    while (2 * curr + 1 < len) {
+        var smallest = curr;
+        const left = 2 * curr + 1;
+        const right = 2 * curr + 2;
+
+        if (scores[left] < scores[smallest]) {
+            smallest = left;
+        }
+        if (right < len and scores[right] < scores[smallest]) {
+            smallest = right;
+        }
+        if (smallest == curr) break;
+
+        const tmp_sc = scores[curr];
+        scores[curr] = scores[smallest];
+        scores[smallest] = tmp_sc;
+
+        const tmp_idx = indices[curr];
+        indices[curr] = indices[smallest];
+        indices[smallest] = tmp_idx;
+
+        curr = smallest;
+    }
+}
+
+export fn hgb_zig_vector_top_k(
+    scores_ptr: [*]const f32,
+    n_vectors: usize,
+    top_k: usize,
+    out_indices: [*]usize,
+    out_scores: [*]f32,
+) callconv(.C) usize {
+    if (n_vectors == 0 or top_k == 0) return 0;
+    const actual_k = @min(top_k, n_vectors);
+    if (actual_k > 128) return 0;
+
+    var heap_indices: [128]usize = undefined;
+    var heap_scores: [128]f32 = undefined;
+
+    for (0..actual_k) |idx| {
+        heap_indices[idx] = idx;
+        heap_scores[idx] = scores_ptr[idx];
+    }
+
+    var p = (actual_k / 2);
+    while (p > 0) {
+        p -= 1;
+        min_heap_sift_down(&heap_indices, &heap_scores, p, actual_k);
+    }
+
+    for (actual_k..n_vectors) |idx| {
+        const sc = scores_ptr[idx];
+        if (sc > heap_scores[0]) {
+            heap_scores[0] = sc;
+            heap_indices[0] = idx;
+            min_heap_sift_down(&heap_indices, &heap_scores, 0, actual_k);
+        }
+    }
+
+    for (0..actual_k) |idx| {
+        out_indices[idx] = heap_indices[idx];
+        out_scores[idx] = heap_scores[idx];
+    }
+    return actual_k;
+}
+
+// --- Phase 4: CSR Graph & SIMD Token Slicer ---
+
+export fn hgb_zig_simd_find_newlines(
+    data_ptr: [*]const u8,
+    len: usize,
+    out_offsets: [*]usize,
+    out_cap: usize,
+) callconv(.C) usize {
+    if (len == 0 or out_cap == 0) return 0;
+    var count: usize = 0;
+    var i: usize = 0;
+
+    const nl_vec: @Vector(32, u8) = @splat('\n');
+    while (i + 32 <= len and count + 32 <= out_cap) : (i += 32) {
+        const chunk: @Vector(32, u8) = data_ptr[i..][0..32].*;
+        const mask = chunk == nl_vec;
+        for (0..32) |k| {
+            if (mask[k]) {
+                out_offsets[count] = i + k;
+                count += 1;
+            }
+        }
+    }
+    while (i < len and count < out_cap) : (i += 1) {
+        if (data_ptr[i] == '\n') {
+            out_offsets[count] = i;
+            count += 1;
+        }
+    }
+    return count;
+}
+
+export fn hgb_zig_csr_graph_get_neighbors(
+    row_offsets_ptr: [*]const u32,
+    col_indices_ptr: [*]const u32,
+    num_nodes: usize,
+    node: u32,
+    out_buf: [*]u32,
+    out_cap: usize,
+) callconv(.C) usize {
+    if (node >= num_nodes or out_cap == 0) return 0;
+    const start = row_offsets_ptr[node];
+    const end = row_offsets_ptr[node + 1];
+    if (end <= start) return 0;
+    const count = @min(end - start, out_cap);
+    for (0..count) |i| {
+        out_buf[i] = col_indices_ptr[start + i];
+    }
+    return count;
+}
+
+// --- Phase 5: Audio VAD & Zero-Alloc Earcon Synthesizer ---
+
+export fn hgb_zig_vad_classify_frame(
+    samples: [*]const i16,
+    len: usize,
+    sample_rate: u32,
+    out_confidence: *f32,
+) callconv(.C) bool {
+    _ = sample_rate;
+    if (len == 0) {
+        out_confidence.* = 0.0;
+        return false;
+    }
+
+    var sum_sq: f64 = 0.0;
+    var zcr_count: usize = 0;
+    var prev_sign: bool = samples[0] >= 0;
+
+    for (0..len) |i| {
+        const s = @as(f64, @floatFromInt(samples[i])) / 32768.0;
+        sum_sq += s * s;
+        const curr_sign = samples[i] >= 0;
+        if (curr_sign != prev_sign) {
+            zcr_count += 1;
+            prev_sign = curr_sign;
+        }
+    }
+
+    const rms = @as(f32, @floatCast(@sqrt(sum_sq / @as(f64, @floatFromInt(len)))));
+    const zcr = @as(f32, @floatFromInt(zcr_count)) / @as(f32, @floatFromInt(len));
+
+    const conf = if (rms > 0.02 and zcr >= 0.01 and zcr <= 0.35)
+        @min(rms * 4.0, 1.0)
+    else
+        @min(rms * 0.5, 1.0);
+
+    out_confidence.* = conf;
+    return conf >= 0.25;
+}
+
+export fn hgb_zig_synth_earcon(
+    earcon_type: u32,
+    sample_rate: u32,
+    out_buf: [*]i16,
+    out_cap: usize,
+    out_len: *usize,
+) callconv(.C) bool {
+    if (out_cap == 0 or sample_rate == 0) {
+        out_len.* = 0;
+        return false;
+    }
+    const sr = @as(f32, @floatFromInt(sample_rate));
+
+    var total_samples: usize = 0;
+    if (earcon_type == 0) {
+        const n1 = @min(@as(usize, @intFromFloat(0.08 * sr)), out_cap);
+        const n2 = @min(@as(usize, @intFromFloat(0.08 * sr)), out_cap - n1);
+        for (0..n1) |i| {
+            const t = @as(f32, @floatFromInt(i));
+            const env = 1.0 - (t / @as(f32, @floatFromInt(n1)));
+            const s = @sin(t * 523.25 * 2.0 * std.math.pi / sr) * env * 12000.0;
+            out_buf[i] = @as(i16, @intFromFloat(s));
+        }
+        for (0..n2) |i| {
+            const t = @as(f32, @floatFromInt(i));
+            const env = 1.0 - (t / @as(f32, @floatFromInt(n2)));
+            const s = @sin(t * 783.99 * 2.0 * std.math.pi / sr) * env * 12000.0;
+            out_buf[n1 + i] = @as(i16, @intFromFloat(s));
+        }
+        total_samples = n1 + n2;
+    } else if (earcon_type == 1) {
+        const freq = [_]f32{ 523.25, 659.25, 783.99, 1046.50 };
+        const dur = @min(@as(usize, @intFromFloat(0.05 * sr)), out_cap / 4);
+        for (0..4) |step| {
+            const offset = step * dur;
+            if (offset + dur > out_cap) break;
+            for (0..dur) |i| {
+                const t = @as(f32, @floatFromInt(i));
+                const env = 1.0 - (t / @as(f32, @floatFromInt(dur)));
+                const s = @sin(t * freq[step] * 2.0 * std.math.pi / sr) * env * 14000.0;
+                out_buf[offset + i] = @as(i16, @intFromFloat(s));
+            }
+            total_samples = offset + dur;
+        }
+    } else if (earcon_type == 2) {
+        const dur = @min(@as(usize, @intFromFloat(0.18 * sr)), out_cap);
+        for (0..dur) |i| {
+            const t = @as(f32, @floatFromInt(i));
+            const env = 1.0 - (t / @as(f32, @floatFromInt(dur)));
+            const s1 = @sin(t * 174.61 * 2.0 * std.math.pi / sr);
+            const s2 = @sin(t * 246.94 * 2.0 * std.math.pi / sr);
+            const s = (s1 + s2) * 0.5 * env * 12000.0;
+            out_buf[i] = @as(i16, @intFromFloat(s));
+        }
+        total_samples = dur;
+    } else if (earcon_type == 3) {
+        // BargeInPaused: Falling soft tone A4 (440Hz) -> D4 (293Hz)
+        const dur = @min(@as(usize, @intFromFloat(0.10 * sr)), out_cap);
+        for (0..dur) |i| {
+            const factor = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(dur));
+            const freq = 440.0 - (factor * 146.34);
+            const env = (1.0 - factor) * (1.0 - factor);
+            const s = @sin(@as(f32, @floatFromInt(i)) * freq * 2.0 * std.math.pi / sr) * env * 10000.0;
+            out_buf[i] = @as(i16, @intFromFloat(s));
+        }
+        total_samples = dur;
+    } else {
+        // Subtle click / tick pulse
+        const dur = @min(@as(usize, @intFromFloat(0.04 * sr)), out_cap);
+        for (0..dur) |i| {
+            const factor = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(dur));
+            const s = @sin(@as(f32, @floatFromInt(i)) * 880.0 * 2.0 * std.math.pi / sr) * (1.0 - factor) * 8000.0;
+            out_buf[i] = @as(i16, @intFromFloat(s));
+        }
+        total_samples = dur;
+    }
+
+    out_len.* = total_samples;
+    return true;
+}
 
 pub const mcp = @import("hgb_mcp.zig");
 comptime {
     _ = mcp;
 }
+

@@ -152,84 +152,31 @@ impl ContinuousVoiceDuplex {
             return (self.state, 0.0);
         }
 
-        // Accelerate through bare-metal Zig DSP engine
-        let (rms, zcr) = crate::zig_accelerate::dsp_analyze_frame(samples);
-
-        // Human speech typically has higher RMS energy in the 0.05..0.9 range with moderate ZCR (0.02..0.30)
-        let speech_confidence = if rms > 0.02 && zcr >= 0.01 && zcr <= 0.40 {
-            (rms * 3.5).min(1.0)
-        } else {
-            (rms * 0.5).min(1.0)
-        };
+        // Accelerate through bare-metal Zig VAD classifier engine
+        let (_is_speech, speech_confidence) = crate::zig_accelerate::vad_classify_frame(samples, 16000);
 
         let new_state = self.process_vad_energy(speech_confidence);
         (new_state, speech_confidence)
     }
 
-    /// Synthesizes high-fidelity acoustic feedback earcons as 16-bit PCM waveform samples.
+    /// Synthesizes high-fidelity acoustic feedback earcons as 16-bit PCM waveform samples
+    /// using zero-allocation Zig native oscillator synthesis.
     pub fn synthesize_earcon_pcm(earcon: AcousticEarcon, sample_rate: u32) -> Vec<i16> {
-        let sample_rate = sample_rate.max(8000) as f32;
-        let mut pcm = Vec::new();
+        let sample_rate = sample_rate.max(8000);
+        let type_id = match earcon {
+            AcousticEarcon::WakeWordDetected | AcousticEarcon::IntentUnderstood => 0,
+            AcousticEarcon::DiffAppliedSuccess | AcousticEarcon::SessionStarted => 1,
+            AcousticEarcon::CompilationFailed | AcousticEarcon::RollbackExecuted => 2,
+            AcousticEarcon::BargeInPaused => 3,
+            AcousticEarcon::SessionTerminated => 3,
+        };
 
-        match earcon {
-            AcousticEarcon::IntentUnderstood => {
-                // Rising chime: C5 (523 Hz) -> G5 (784 Hz), total 160ms
-                let notes = [(523.25, 0.08), (783.99, 0.08)];
-                for (freq, dur_s) in notes {
-                    let total = (dur_s * sample_rate) as usize;
-                    for t in 0..total {
-                        let envelope = 1.0 - (t as f32 / total as f32);
-                        let sample = (t as f32 * freq * 2.0 * std::f32::consts::PI / sample_rate).sin() * envelope * 12000.0;
-                        pcm.push(sample as i16);
-                    }
-                }
-            }
-            AcousticEarcon::DiffAppliedSuccess => {
-                // Major arpeggio: C5 (523Hz) -> E5 (659Hz) -> G5 (784Hz) -> C6 (1046Hz), 200ms
-                let notes = [(523.25, 0.05), (659.25, 0.05), (783.99, 0.05), (1046.50, 0.05)];
-                for (freq, dur_s) in notes {
-                    let total = (dur_s * sample_rate) as usize;
-                    for t in 0..total {
-                        let envelope = (1.0 - (t as f32 / total as f32)).powf(1.2);
-                        let sample = (t as f32 * freq * 2.0 * std::f32::consts::PI / sample_rate).sin() * envelope * 14000.0;
-                        pcm.push(sample as i16);
-                    }
-                }
-            }
-            AcousticEarcon::CompilationFailed => {
-                // Tritone dissonance: F3 (174 Hz) + B3 (246 Hz), 240ms
-                let total = (0.24 * sample_rate) as usize;
-                for t in 0..total {
-                    let envelope = 1.0 - (t as f32 / total as f32);
-                    let s1 = (t as f32 * 174.61 * 2.0 * std::f32::consts::PI / sample_rate).sin();
-                    let s2 = (t as f32 * 246.94 * 2.0 * std::f32::consts::PI / sample_rate).sin();
-                    let sample = (s1 + s2) * 0.5 * envelope * 14000.0;
-                    pcm.push(sample as i16);
-                }
-            }
-            AcousticEarcon::BargeInPaused => {
-                // Soft falling drop: A4 (440 Hz) -> D4 (293 Hz), 100ms
-                let total = (0.10 * sample_rate) as usize;
-                for t in 0..total {
-                    let factor = t as f32 / total as f32;
-                    let freq = 440.0 - (factor * 146.34);
-                    let envelope = (1.0 - factor).powf(2.0);
-                    let sample = (t as f32 * freq * 2.0 * std::f32::consts::PI / sample_rate).sin() * envelope * 10000.0;
-                    pcm.push(sample as i16);
-                }
-            }
-            _ => {
-                // Gentle click / pulse
-                let total = (0.04 * sample_rate) as usize;
-                for t in 0..total {
-                    let factor = t as f32 / total as f32;
-                    let sample = (t as f32 * 880.0 * 2.0 * std::f32::consts::PI / sample_rate).sin() * (1.0 - factor) * 8000.0;
-                    pcm.push(sample as i16);
-                }
-            }
+        let pcm = crate::zig_accelerate::synth_earcon(type_id, sample_rate);
+        if !pcm.is_empty() {
+            pcm
+        } else {
+            vec![0i16; (0.04 * sample_rate as f32) as usize]
         }
-
-        pcm
     }
 
     /// Processes an incoming audio chunk / VAD signal.

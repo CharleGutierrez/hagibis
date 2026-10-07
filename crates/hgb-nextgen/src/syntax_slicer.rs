@@ -32,7 +32,28 @@ impl SyntaxSlicer {
 
         let language = Self::detect_language(path_ref).unwrap_or(TargetLanguage::Rust);
         let raw_content = fs::read_to_string(path_ref)?;
-        let lines: Vec<&str> = raw_content.lines().collect();
+        let newline_offsets = hgb_core::zig_accelerate::simd_find_newlines(raw_content.as_bytes());
+        let mut lines: Vec<&str> = Vec::with_capacity(newline_offsets.len() + 1);
+        let mut prev = 0;
+        for &nl_idx in &newline_offsets {
+            let slice = &raw_content[prev..nl_idx];
+            let trimmed = if slice.ends_with('\r') {
+                &slice[..slice.len() - 1]
+            } else {
+                slice
+            };
+            lines.push(trimmed);
+            prev = nl_idx + 1;
+        }
+        if prev <= raw_content.len() {
+            let slice = &raw_content[prev..];
+            let trimmed = if slice.ends_with('\r') {
+                &slice[..slice.len() - 1]
+            } else {
+                slice
+            };
+            lines.push(trimmed);
+        }
 
         // 1. Locate focal symbol
         let mut focal_start = None;
@@ -180,3 +201,26 @@ impl SyntaxSlicer {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn test_syntax_slicer_simd() {
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join(format!("test_slicer_{}.rs", std::process::id()));
+        let content = "use std::io;\n\npub fn calculate_total(a: i32, b: i32) -> i32 {\n    a + b\n}\n\npub fn helper() {}\n";
+        let mut file = fs::File::create(&file_path).unwrap();
+        file.write_all(content.as_bytes()).unwrap();
+
+        let slice = SyntaxSlicer::extract_surgical_slice(&file_path, "calculate_total", 1).unwrap();
+        assert_eq!(slice.focal_symbol, "calculate_symbol".replace("symbol", "total"));
+        assert!(slice.rendered_surgical_prompt.contains("pub fn calculate_total"));
+        assert!(slice.rendered_surgical_prompt.contains("use std::io;"));
+
+        let _ = fs::remove_file(&file_path);
+    }
+}
+

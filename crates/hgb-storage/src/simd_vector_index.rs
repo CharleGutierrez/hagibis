@@ -103,23 +103,35 @@ impl SimdVectorIndex {
         self.records.insert(id.to_string(), rec);
     }
 
-    /// Queries nearest code symbols ranked by cosine similarity
+    /// Queries nearest code symbols ranked by cosine similarity accelerated by Zig SIMD batch kernel & Top-K Min-Heap
     pub fn search(&self, query_vec: &[f32], top_k: usize) -> Vec<SimdSearchMatch> {
-        let mut matches: Vec<SimdSearchMatch> = self
-            .records
-            .values()
-            .map(|r| {
-                let score = Self::cosine_similarity(query_vec, &r.embedding);
-                SimdSearchMatch {
-                    record: r.clone(),
-                    score,
-                }
-            })
-            .collect();
+        if self.records.is_empty() || query_vec.is_empty() || top_k == 0 {
+            return Vec::new();
+        }
 
-        matches.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
-        matches.truncate(top_k);
-        matches
+        let dim = query_vec.len();
+        let record_list: Vec<&SimdVectorRecord> = self.records.values().filter(|r| r.embedding.len() == dim).collect();
+        if record_list.is_empty() {
+            return Vec::new();
+        }
+
+        let mut matrix = Vec::with_capacity(record_list.len() * dim);
+        for r in &record_list {
+            matrix.extend_from_slice(&r.embedding);
+        }
+
+        let scores = hgb_core::zig_accelerate::vector_batch_cosine(query_vec, &matrix, dim);
+        let top_indices = hgb_core::zig_accelerate::vector_top_k(&scores, top_k);
+
+        top_indices
+            .into_iter()
+            .filter_map(|(idx, score)| {
+                record_list.get(idx).map(|r| SimdSearchMatch {
+                    record: (*r).clone(),
+                    score,
+                })
+            })
+            .collect()
     }
 
     /// Incremental cache invalidation when a file is modified

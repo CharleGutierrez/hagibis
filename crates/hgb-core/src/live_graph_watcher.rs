@@ -184,7 +184,18 @@ impl LiveGraphWatcher {
         let fn_re = Regex::new(r"(?m)^\s*(?:pub\s+)?(?:async\s+)?fn\s+([a-zA-Z0-9_]+)").unwrap();
         let struct_re = Regex::new(r"(?m)^\s*(?:pub\s+)?(?:struct|enum|trait|class|interface)\s+([a-zA-Z0-9_]+)").unwrap();
 
-        for (idx, line) in content.lines().enumerate() {
+        let newline_offsets = crate::zig_accelerate::simd_find_newlines(content.as_bytes());
+        let mut lines = Vec::with_capacity(newline_offsets.len() + 1);
+        let mut prev = 0;
+        for &nl_idx in &newline_offsets {
+            lines.push(&content[prev..nl_idx]);
+            prev = nl_idx + 1;
+        }
+        if prev <= content.len() {
+            lines.push(&content[prev..]);
+        }
+
+        for (idx, line) in lines.iter().enumerate() {
             let line_no = idx + 1;
             let trimmed = line.trim();
 
@@ -295,4 +306,127 @@ impl LiveGraphWatcher {
 
         Ok(())
     }
+
+    /// Converts current in-memory symbol index into a Compressed Sparse Row (CSR) graph
+    /// accelerated via Zig cache-line traversal.
+    pub fn to_csr_graph(&self) -> CsrSymbolGraph {
+        let mut symbol_names = Vec::new();
+        let mut symbol_to_id = HashMap::new();
+
+        for name in self.symbol_to_files.keys() {
+            symbol_to_id.insert(name.clone(), symbol_names.len() as u32);
+            symbol_names.push(name.clone());
+        }
+
+        let mut row_offsets = Vec::with_capacity(symbol_names.len() + 1);
+        let mut col_indices = Vec::new();
+
+        row_offsets.push(0);
+
+        for sym in &symbol_names {
+            if let Some(files) = self.symbol_to_files.get(sym) {
+                let mut dep_ids = HashSet::new();
+                for f in files {
+                    if let Some(meta) = self.files.get(f) {
+                        for imp in &meta.imported_symbols {
+                            if let Some(&target_id) = symbol_to_id.get(imp) {
+                                if target_id != *symbol_to_id.get(sym).unwrap() {
+                                    dep_ids.insert(target_id);
+                                }
+                            }
+                        }
+                    }
+                }
+                let mut sorted_deps: Vec<u32> = dep_ids.into_iter().collect();
+                sorted_deps.sort();
+                col_indices.extend(sorted_deps);
+            }
+            row_offsets.push(col_indices.len() as u32);
+        }
+
+        CsrSymbolGraph {
+            symbol_names,
+            symbol_to_id,
+            row_offsets,
+            col_indices,
+        }
+    }
 }
+
+/// Compressed Sparse Row (CSR) Representation of the Symbol Dependency Graph
+///
+/// Compresses the codebase dependency structure into two flat contiguous arrays:
+/// `row_offsets` and `col_indices`, traversed in-place via Zig SIMD cache-line kernels.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CsrSymbolGraph {
+    pub symbol_names: Vec<String>,
+    pub symbol_to_id: HashMap<String, u32>,
+    pub row_offsets: Vec<u32>,
+    pub col_indices: Vec<u32>,
+}
+
+impl CsrSymbolGraph {
+    pub fn new() -> Self {
+        Self {
+            symbol_names: Vec::new(),
+            symbol_to_id: HashMap::new(),
+            row_offsets: vec![0],
+            col_indices: Vec::new(),
+        }
+    }
+
+    /// Retrieve neighbor symbol IDs accelerated via Zig CSR kernel
+    pub fn get_neighbor_ids(&self, node_id: u32) -> Vec<u32> {
+        crate::zig_accelerate::csr_graph_neighbors(&self.row_offsets, &self.col_indices, node_id)
+    }
+
+    /// Retrieve neighbor symbol names directly
+    pub fn get_neighbors(&self, symbol: &str) -> Vec<String> {
+        if let Some(&node_id) = self.symbol_to_id.get(symbol) {
+            let neighbor_ids = self.get_neighbor_ids(node_id);
+            neighbor_ids
+                .into_iter()
+                .filter_map(|id| self.symbol_names.get(id as usize).cloned())
+                .collect()
+        } else {
+            Vec::new()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_csr_symbol_graph_zig_acceleration() {
+        let names = vec!["App".to_string(), "Config".to_string(), "Database".to_string()];
+        let mut symbol_to_id = HashMap::new();
+        for (i, name) in names.iter().enumerate() {
+            symbol_to_id.insert(name.clone(), i as u32);
+        }
+
+        // App (0) -> Config (1), Database (2)
+        // Config (1) -> Database (2)
+        // Database (2) -> none
+        let row_offsets = vec![0, 2, 3, 3];
+        let col_indices = vec![1, 2, 2];
+
+        let graph = CsrSymbolGraph {
+            symbol_names: names,
+            symbol_to_id,
+            row_offsets,
+            col_indices,
+        };
+
+        let app_neighbors = graph.get_neighbors("App");
+        assert_eq!(app_neighbors, vec!["Config", "Database"]);
+
+        let config_neighbors = graph.get_neighbors("Config");
+        assert_eq!(config_neighbors, vec!["Database"]);
+
+        let db_neighbors = graph.get_neighbors("Database");
+        assert!(db_neighbors.is_empty());
+    }
+}
+

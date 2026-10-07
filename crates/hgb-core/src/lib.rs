@@ -368,7 +368,7 @@ pub use stream_squeezer::{SqueezedDigest, StreamSqueezer};
 pub use mutation_fuzzer::{MutantCandidate, MutantStatus, MutationFuzzer, MutationOperator, MutationReport};
 pub use dom_preview_bridge::{BoundingBox, DomElement, DomPreviewBridge};
 pub use mcp_host_orchestrator::{McpHostOrchestrator, McpServerStatus, NamespacedMcpTool};
-pub use live_graph_watcher::{IndexedSymbol, LiveGraphSummary, LiveGraphWatcher};
+pub use live_graph_watcher::{CsrSymbolGraph, IndexedSymbol, LiveGraphSummary, LiveGraphWatcher};
 pub use shell_panic_hook::{ShellFailureCategory, ShellIncident, ShellPanicDiagnosis, ShellPanicHook};
 pub use spec_decomposer::{DecomposedStep, SpecDecomposer, SpecDecompositionReport, StepStatus};
 pub use dynamic_at_context::{AtDirectiveKind, ContextAttachment, DynamicAtContext, ExpandedPromptResult};
