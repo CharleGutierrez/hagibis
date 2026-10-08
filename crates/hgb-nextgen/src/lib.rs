@@ -53,7 +53,12 @@ pub mod ghost_typing;
 pub mod invariant_shield;
 pub mod architecture_dag;
 pub mod voice_stream;
+pub mod inline_diff_engine;
 
+pub use inline_diff_engine::{
+    DiffOpKind, DualBufferOverlay, InlineDiffEngine, InlineDiffLine, InlineDiffMetrics,
+    InlineDiffSpan,
+};
 pub use auto_spec::AutoSpecEngine;
 pub use browser_snoop::BrowserSnoopEngine;
 pub use checkpoint::{FileSnapshotState, RollbackReport, SwarmCheckpoint, SwarmCheckpointManager, SwarmEvent, SwarmWal};

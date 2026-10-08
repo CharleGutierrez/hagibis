@@ -2155,6 +2155,21 @@ enum Commands {
         #[arg(long)]
         add_class: Option<String>,
     },
+
+    /// Visual IDE GUI & Inline Diffing Cockpit (TrueColor ANSI + Myers SES intra-line highlighting)
+    #[command(alias = "diff-ui", alias = "inline-diff")]
+    DiffUi {
+        /// Original / baseline file path (or target file when diffing against git HEAD)
+        original: String,
+        /// Modified file path (optional; defaults to comparing original file on disk against git HEAD)
+        modified: Option<String>,
+        /// Render side-by-side split diff layout instead of unified inline diff
+        #[arg(short, long)]
+        side_by_side: bool,
+        /// Interactive live acceptance cockpit (navigate hunks with Tab to accept, Esc to discard)
+        #[arg(short, long)]
+        interactive: bool,
+    },
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -5657,6 +5672,10 @@ async fn test_calc() { assert!(calculate(5)); }".to_string()
             }
             Ok(())
         }
+        Commands::DiffUi { original, modified, side_by_side, interactive } => {
+            handle_diff_ui(original, modified, side_by_side, interactive).await?;
+            Ok(())
+        }
     }
 }
 
@@ -5866,4 +5885,181 @@ async fn run_mcp_stdio_server(client: HgbClient) -> Result<(), Box<dyn std::erro
     }
     Ok(())
 }
+
+async fn handle_diff_ui(
+    original: String,
+    modified: Option<String>,
+    mut side_by_side: bool,
+    interactive: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use hgb_nextgen::inline_diff_engine::{DualBufferOverlay, InlineDiffEngine};
+    use std::io::Write;
+
+    let target_file_path: Option<std::path::PathBuf>;
+    let orig_text: String;
+    let mod_text: String;
+
+    if let Some(ref mod_path_str) = modified {
+        let orig_path = std::path::Path::new(&original);
+        orig_text = if orig_path.exists() {
+            std::fs::read_to_string(orig_path)?
+        } else {
+            original.clone()
+        };
+
+        let mod_path = std::path::Path::new(mod_path_str);
+        if mod_path.exists() {
+            mod_text = std::fs::read_to_string(mod_path)?;
+            target_file_path = Some(mod_path.to_path_buf());
+        } else {
+            mod_text = mod_path_str.clone();
+            target_file_path = if orig_path.exists() {
+                Some(orig_path.to_path_buf())
+            } else {
+                None
+            };
+        }
+    } else {
+        // Compare single target file on disk against git HEAD
+        let file_path = std::path::Path::new(&original);
+        if !file_path.exists() {
+            eprintln!(
+                "{} Target file '{}' not found on disk.",
+                "Error:".red().bold(),
+                original
+            );
+            return Ok(());
+        }
+        mod_text = std::fs::read_to_string(file_path)?;
+        target_file_path = Some(file_path.to_path_buf());
+
+        // Resolve git repo relative path
+        let rel_cmd = std::process::Command::new("git")
+            .args(["ls-files", "--full-name", &original])
+            .output();
+        let git_rel_path = if let Ok(ref out) = rel_cmd {
+            let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !s.is_empty() {
+                s
+            } else {
+                original.clone()
+            }
+        } else {
+            original.clone()
+        };
+
+        let git_show = std::process::Command::new("git")
+            .args(["show", &format!("HEAD:{}", git_rel_path)])
+            .output();
+
+        if let Ok(show_out) = git_show {
+            if show_out.status.success() {
+                orig_text = String::from_utf8_lossy(&show_out.stdout).to_string();
+            } else {
+                eprintln!(
+                    "{} File '{}' has no HEAD revision in Git. Specify modified file: hgb diff-ui <orig> <mod>",
+                    "Notice:".yellow().bold(),
+                    original
+                );
+                return Ok(());
+            }
+        } else {
+            eprintln!(
+                "{} Git is not available. Specify modified file: hgb diff-ui <orig> <mod>",
+                "Notice:".yellow().bold()
+            );
+            return Ok(());
+        }
+    }
+
+    let mut overlay = DualBufferOverlay::new(original.clone(), orig_text.clone());
+    overlay.set_speculative_content(mod_text.clone());
+
+    if !interactive {
+        let term_width = crossterm::terminal::size().map(|(w, _)| w as usize).unwrap_or(100);
+        let col_width = term_width.saturating_sub(6) / 2;
+        let rendered = if side_by_side {
+            InlineDiffEngine::render_side_by_side(&orig_text, &mod_text, col_width)
+        } else {
+            InlineDiffEngine::render_ansi_inline_diff(&orig_text, &mod_text)
+        };
+        print!("{}", rendered);
+        return Ok(());
+    }
+
+    // Interactive TUI Cockpit Mode
+    println!("{}", "🪽 Hagibis Visual IDE & Inline Diffing Cockpit (Tab to accept, Esc/q to reject, s to toggle split)".cyan().bold());
+    let raw_guard = repl::RawModeGuard::enter()?;
+    let mut stdout = std::io::stdout();
+
+    loop {
+        let term_width = crossterm::terminal::size().map(|(w, _)| w as usize).unwrap_or(100);
+        let col_width = term_width.saturating_sub(6) / 2;
+        let rendered = if side_by_side {
+            InlineDiffEngine::render_side_by_side(&orig_text, &mod_text, col_width)
+        } else {
+            InlineDiffEngine::render_ansi_inline_diff(&orig_text, &mod_text)
+        };
+
+        crossterm::execute!(
+            stdout,
+            crossterm::terminal::Clear(crossterm::terminal::ClearType::All),
+            crossterm::cursor::MoveTo(0, 0)
+        )?;
+
+        write!(stdout, "{}\r\n", rendered)?;
+        write!(
+            stdout,
+            "\x1b[1;38;2;255;215;0m[Tab]\x1b[0m Accept All Changes   \x1b[1;38;2;255;100;100m[Esc / q]\x1b[0m Discard & Exit   \x1b[1;38;2;120;180;255m[s]\x1b[0m Toggle Split/Unified\r\n"
+        )?;
+        stdout.flush()?;
+
+        match crossterm::event::read()? {
+            crossterm::event::Event::Key(key) => {
+                if key.kind == crossterm::event::KeyEventKind::Press {
+                    if key.code == crossterm::event::KeyCode::Char('c')
+                        && key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL)
+                    {
+                        overlay.discard_rejection();
+                        drop(raw_guard);
+                        println!("\r\n{} Aborted by user.", "✘".red().bold());
+                        break;
+                    }
+
+                    match key.code {
+                        crossterm::event::KeyCode::Tab => {
+                            let committed = overlay.commit_tab_acceptance();
+                            drop(raw_guard);
+                            if let Some(ref path) = target_file_path {
+                                std::fs::write(path, committed)?;
+                                println!(
+                                    "\r\n{} Diff accepted and written to '{}' (O(1) pointer swap).",
+                                    "✔".green().bold(),
+                                    path.display()
+                                );
+                            } else {
+                                println!("\r\n{} Changes committed to virtual buffer.", "✔".green().bold());
+                            }
+                            break;
+                        }
+                        crossterm::event::KeyCode::Esc | crossterm::event::KeyCode::Char('q') => {
+                            overlay.discard_rejection();
+                            drop(raw_guard);
+                            println!("\r\n{} Diff discarded. No disk writes performed.", "✘".red().bold());
+                            break;
+                        }
+                        crossterm::event::KeyCode::Char('s') => {
+                            side_by_side = !side_by_side;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
+}
+
 

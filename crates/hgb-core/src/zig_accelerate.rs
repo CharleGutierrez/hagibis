@@ -792,6 +792,28 @@ extern "C" {
     fn hgb_zig_csr_graph_get_neighbors(row_offsets: *const u32, col_indices: *const u32, num_nodes: usize, node: u32, out_buf: *mut u32, out_cap: usize) -> usize;
     fn hgb_zig_vad_classify_frame(samples: *const i16, len: usize, sample_rate: u32, out_confidence: *mut f32) -> bool;
     fn hgb_zig_synth_earcon(earcon_type: u32, sample_rate: u32, out_buf: *mut i16, out_cap: usize, out_len: *mut usize) -> bool;
+    fn hgb_zig_inline_diff_ses(
+        a_hashes: *const u64,
+        a_len: usize,
+        b_hashes: *const u64,
+        b_len: usize,
+        out_ops: *mut u8,
+        out_a_idx: *mut usize,
+        out_b_idx: *mut usize,
+        out_cap: usize,
+        out_count: *mut usize,
+    ) -> bool;
+    fn hgb_zig_inline_diff_chars(
+        a_chars: *const u8,
+        a_len: usize,
+        b_chars: *const u8,
+        b_len: usize,
+        out_ops: *mut u8,
+        out_a_idx: *mut usize,
+        out_b_idx: *mut usize,
+        out_cap: usize,
+        out_count: *mut usize,
+    ) -> bool;
 }
 
 pub fn vector_batch_cosine(query: &[f32], matrix: &[f32], dim: usize) -> Vec<f32> {
@@ -873,6 +895,108 @@ pub fn synth_earcon(earcon_type: u32, sample_rate: u32) -> Vec<i16> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum InlineEditOp {
+    Equal,   // 0
+    Delete,  // 1
+    Insert,  // 2
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct InlineEditItem {
+    pub op: InlineEditOp,
+    pub a_idx: usize,
+    pub b_idx: usize,
+}
+
+pub fn inline_diff_ses(a_hashes: &[u64], b_hashes: &[u64]) -> Vec<InlineEditItem> {
+    let max_ops = a_hashes.len() + b_hashes.len();
+    if max_ops == 0 {
+        return Vec::new();
+    }
+    let mut out_ops = vec![0u8; max_ops];
+    let mut out_a_idx = vec![0usize; max_ops];
+    let mut out_b_idx = vec![0usize; max_ops];
+    let mut count = 0usize;
+
+    let ok = unsafe {
+        hgb_zig_inline_diff_ses(
+            a_hashes.as_ptr(),
+            a_hashes.len(),
+            b_hashes.as_ptr(),
+            b_hashes.len(),
+            out_ops.as_mut_ptr(),
+            out_a_idx.as_mut_ptr(),
+            out_b_idx.as_mut_ptr(),
+            max_ops,
+            &mut count,
+        )
+    };
+
+    if !ok {
+        return Vec::new();
+    }
+
+    let mut result = Vec::with_capacity(count);
+    for i in 0..count {
+        let op = match out_ops[i] {
+            1 => InlineEditOp::Delete,
+            2 => InlineEditOp::Insert,
+            _ => InlineEditOp::Equal,
+        };
+        result.push(InlineEditItem {
+            op,
+            a_idx: out_a_idx[i],
+            b_idx: out_b_idx[i],
+        });
+    }
+    result
+}
+
+pub fn inline_diff_chars(a: &str, b: &str) -> Vec<InlineEditItem> {
+    let max_ops = a.len() + b.len();
+    if max_ops == 0 {
+        return Vec::new();
+    }
+    let mut out_ops = vec![0u8; max_ops];
+    let mut out_a_idx = vec![0usize; max_ops];
+    let mut out_b_idx = vec![0usize; max_ops];
+    let mut count = 0usize;
+
+    let ok = unsafe {
+        hgb_zig_inline_diff_chars(
+            a.as_ptr(),
+            a.len(),
+            b.as_ptr(),
+            b.len(),
+            out_ops.as_mut_ptr(),
+            out_a_idx.as_mut_ptr(),
+            out_b_idx.as_mut_ptr(),
+            max_ops,
+            &mut count,
+        )
+    };
+
+    if !ok {
+        return Vec::new();
+    }
+
+    let mut result = Vec::with_capacity(count);
+    for i in 0..count {
+        let op = match out_ops[i] {
+            1 => InlineEditOp::Delete,
+            2 => InlineEditOp::Insert,
+            _ => InlineEditOp::Equal,
+        };
+        result.push(InlineEditItem {
+            op,
+            a_idx: out_a_idx[i],
+            b_idx: out_b_idx[i],
+        });
+    }
+    result
+}
+
 #[cfg(test)]
 mod phase6_tests {
     use super::*;
@@ -937,6 +1061,28 @@ mod phase6_tests {
         assert_eq!(n, msg.len());
         assert_eq!(&buf[..n], msg);
         assert_eq!(channel.available(), 0);
+    }
+
+    #[test]
+    fn test_inline_diff_ses() {
+        let a = vec![100, 200, 300];
+        let b = vec![100, 250, 300];
+        let diff = inline_diff_ses(&a, &b);
+        assert!(!diff.is_empty());
+        assert_eq!(diff[0].op, InlineEditOp::Equal);
+        assert_eq!(diff[0].a_idx, 0);
+        assert_eq!(diff[0].b_idx, 0);
+    }
+
+    #[test]
+    fn test_inline_diff_chars() {
+        let a = "fn main()";
+        let b = "pub fn main()";
+        let diff = inline_diff_chars(a, b);
+        assert!(!diff.is_empty());
+        // Starts with Insert for "pub "
+        let inserts: Vec<_> = diff.iter().filter(|d| d.op == InlineEditOp::Insert).collect();
+        assert_eq!(inserts.len(), 4);
     }
 }
 

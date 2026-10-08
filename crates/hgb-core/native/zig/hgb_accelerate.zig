@@ -312,6 +312,216 @@ export fn hgb_zig_myers_lcs_similarity(hashes_a: [*]const u64, len_a: usize, has
     return @as(f32, @floatFromInt(lcs)) / @as(f32, @floatFromInt(max_len));
 }
 
+// --- Bare-Metal Myers Shortest Edit Script (SES) Kernel for Inline Diffing ---
+
+fn myers_ses_generic(
+    comptime T: type,
+    a: [*]const T,
+    a_len: usize,
+    b: [*]const T,
+    b_len: usize,
+    out_ops: [*]u8,
+    out_a_idx: [*]usize,
+    out_b_idx: [*]usize,
+    out_cap: usize,
+    out_count: *usize,
+) bool {
+    if (a_len == 0 and b_len == 0) {
+        out_count.* = 0;
+        return true;
+    }
+    if (a_len == 0) {
+        if (b_len > out_cap) return false;
+        for (0..b_len) |j| {
+            out_ops[j] = 2; // Insert
+            out_a_idx[j] = 0;
+            out_b_idx[j] = j;
+        }
+        out_count.* = b_len;
+        return true;
+    }
+    if (b_len == 0) {
+        if (a_len > out_cap) return false;
+        for (0..a_len) |i| {
+            out_ops[i] = 1; // Delete
+            out_a_idx[i] = i;
+            out_b_idx[i] = 0;
+        }
+        out_count.* = a_len;
+        return true;
+    }
+
+    const max_d = a_len + b_len;
+    const stride = 2 * max_d + 1;
+    const total_cells = (max_d + 1) * stride;
+
+    var stack_buf: [32768]isize = undefined;
+    var heap_buf: ?[]isize = null;
+    defer {
+        if (heap_buf) |hb| std.heap.page_allocator.free(hb);
+    }
+
+    const v_history = if (total_cells <= stack_buf.len)
+        stack_buf[0..total_cells]
+    else blk: {
+        heap_buf = std.heap.page_allocator.alloc(isize, total_cells) catch return false;
+        break :blk heap_buf.?;
+    };
+
+    // Initialize d = 0
+    var x: isize = 0;
+    var y: isize = 0;
+    while (x < @as(isize, @intCast(a_len)) and y < @as(isize, @intCast(b_len)) and a[@as(usize, @intCast(x))] == b[@as(usize, @intCast(y))]) {
+        x += 1;
+        y += 1;
+    }
+    v_history[max_d] = x;
+
+    var final_d: usize = 0;
+    if (x >= @as(isize, @intCast(a_len)) and y >= @as(isize, @intCast(b_len))) {
+        final_d = 0;
+    } else {
+        var found = false;
+        var d: usize = 1;
+        while (d <= max_d) : (d += 1) {
+            var k: isize = -@as(isize, @intCast(d));
+            const max_k: isize = @as(isize, @intCast(d));
+            while (k <= max_k) : (k += 2) {
+                var cur_x: isize = 0;
+                if (k == -@as(isize, @intCast(d))) {
+                    cur_x = v_history[(d - 1) * stride + @as(usize, @intCast(k + 1 + @as(isize, @intCast(max_d))))];
+                } else if (k == @as(isize, @intCast(d))) {
+                    cur_x = v_history[(d - 1) * stride + @as(usize, @intCast(k - 1 + @as(isize, @intCast(max_d))))] + 1;
+                } else {
+                    const left = v_history[(d - 1) * stride + @as(usize, @intCast(k - 1 + @as(isize, @intCast(max_d))))];
+                    const right = v_history[(d - 1) * stride + @as(usize, @intCast(k + 1 + @as(isize, @intCast(max_d))))];
+                    if (left < right) {
+                        cur_x = right;
+                    } else {
+                        cur_x = left + 1;
+                    }
+                }
+
+                var cur_y = cur_x - k;
+                while (cur_x < @as(isize, @intCast(a_len)) and cur_y < @as(isize, @intCast(b_len)) and a[@as(usize, @intCast(cur_x))] == b[@as(usize, @intCast(cur_y))]) {
+                    cur_x += 1;
+                    cur_y += 1;
+                }
+
+                v_history[d * stride + @as(usize, @intCast(k + @as(isize, @intCast(max_d))))] = cur_x;
+
+                if (cur_x >= @as(isize, @intCast(a_len)) and cur_y >= @as(isize, @intCast(b_len))) {
+                    final_d = d;
+                    found = true;
+                    break;
+                }
+            }
+            if (found) break;
+        }
+    }
+
+    // Backtrack from (a_len, b_len) to (0, 0)
+    var curr_x: isize = @as(isize, @intCast(a_len));
+    var curr_y: isize = @as(isize, @intCast(b_len));
+    var count: usize = 0;
+
+    var cur_d = final_d;
+    while (cur_d > 0) : (cur_d -= 1) {
+        const k = curr_x - curr_y;
+        var k_prev: isize = undefined;
+        if (k == -@as(isize, @intCast(cur_d))) {
+            k_prev = k + 1;
+        } else if (k == @as(isize, @intCast(cur_d))) {
+            k_prev = k - 1;
+        } else {
+            const left = v_history[(cur_d - 1) * stride + @as(usize, @intCast(k - 1 + @as(isize, @intCast(max_d))))];
+            const right = v_history[(cur_d - 1) * stride + @as(usize, @intCast(k + 1 + @as(isize, @intCast(max_d))))];
+            if (left < right) {
+                k_prev = k + 1;
+            } else {
+                k_prev = k - 1;
+            }
+        }
+
+        const x_prev = v_history[(cur_d - 1) * stride + @as(usize, @intCast(k_prev + @as(isize, @intCast(max_d))))];
+        const y_prev = x_prev - k_prev;
+
+        const is_insert = (k_prev == k + 1);
+        const x_start = if (is_insert) x_prev else x_prev + 1;
+        const y_start = if (is_insert) y_prev + 1 else y_prev;
+
+        while (curr_x > x_start and curr_y > y_start) {
+            curr_x -= 1;
+            curr_y -= 1;
+            if (count >= out_cap) return false;
+            out_ops[count] = 0; // Equal
+            out_a_idx[count] = @as(usize, @intCast(curr_x));
+            out_b_idx[count] = @as(usize, @intCast(curr_y));
+            count += 1;
+        }
+
+        if (count >= out_cap) return false;
+        if (is_insert) {
+            out_ops[count] = 2; // Insert
+            out_a_idx[count] = @as(usize, @intCast(x_prev));
+            out_b_idx[count] = @as(usize, @intCast(y_prev));
+        } else {
+            out_ops[count] = 1; // Delete
+            out_a_idx[count] = @as(usize, @intCast(x_prev));
+            out_b_idx[count] = @as(usize, @intCast(y_prev));
+        }
+        count += 1;
+
+        curr_x = x_prev;
+        curr_y = y_prev;
+    }
+
+    while (curr_x > 0 and curr_y > 0) {
+        curr_x -= 1;
+        curr_y -= 1;
+        if (count >= out_cap) return false;
+        out_ops[count] = 0; // Equal
+        out_a_idx[count] = @as(usize, @intCast(curr_x));
+        out_b_idx[count] = @as(usize, @intCast(curr_y));
+        count += 1;
+    }
+
+    std.mem.reverse(u8, out_ops[0..count]);
+    std.mem.reverse(usize, out_a_idx[0..count]);
+    std.mem.reverse(usize, out_b_idx[0..count]);
+
+    out_count.* = count;
+    return true;
+}
+
+export fn hgb_zig_inline_diff_ses(
+    a_hashes: [*]const u64,
+    a_len: usize,
+    b_hashes: [*]const u64,
+    b_len: usize,
+    out_ops: [*]u8,
+    out_a_idx: [*]usize,
+    out_b_idx: [*]usize,
+    out_cap: usize,
+    out_count: *usize,
+) callconv(.C) bool {
+    return myers_ses_generic(u64, a_hashes, a_len, b_hashes, b_len, out_ops, out_a_idx, out_b_idx, out_cap, out_count);
+}
+
+export fn hgb_zig_inline_diff_chars(
+    a_chars: [*]const u8,
+    a_len: usize,
+    b_chars: [*]const u8,
+    b_len: usize,
+    out_ops: [*]u8,
+    out_a_idx: [*]usize,
+    out_b_idx: [*]usize,
+    out_cap: usize,
+    out_count: *usize,
+) callconv(.C) bool {
+    return myers_ses_generic(u8, a_chars, a_len, b_chars, b_len, out_ops, out_a_idx, out_b_idx, out_cap, out_count);
+}
+
 
 // --- Phase 2: Comptime Galois Field GF(2^8) Reed-Solomon Math ---
 
