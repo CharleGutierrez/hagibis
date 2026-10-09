@@ -106,6 +106,72 @@ pub struct ContextResolution {
     pub sources: Vec<String>,
 }
 
+pub fn get_real_memory_metrics() -> String {
+    let page_size = 4096u64;
+    let self_rss_pages = std::fs::read_to_string("/proc/self/statm")
+        .ok()
+        .and_then(|s| s.split_whitespace().nth(1).and_then(|p| p.parse::<u64>().ok()))
+        .unwrap_or(0);
+    let self_mb = (self_rss_pages * page_size) as f64 / (1024.0 * 1024.0);
+
+    // Check if hgbd daemon is running and get its RSS
+    let mut daemon_mb: Option<f64> = None;
+    if let Ok(entries) = std::fs::read_dir("/proc") {
+        for entry in entries.flatten() {
+            let file_name = entry.file_name();
+            let name_str = file_name.to_string_lossy();
+            if name_str.chars().all(|c| c.is_ascii_digit()) {
+                let comm_path = entry.path().join("comm");
+                if let Ok(comm) = std::fs::read_to_string(&comm_path) {
+                    if comm.trim() == "hgbd" {
+                        let statm_path = entry.path().join("statm");
+                        if let Ok(statm) = std::fs::read_to_string(&statm_path) {
+                            if let Some(pages) = statm.split_whitespace().nth(1).and_then(|p| p.parse::<u64>().ok()) {
+                                daemon_mb = Some((pages * page_size) as f64 / (1024.0 * 1024.0));
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    match daemon_mb {
+        Some(d_mb) => format!("{:.1} MB (proc: {:.1} MB, hgbd: {:.1} MB)", self_mb + d_mb, self_mb, d_mb),
+        None => format!("{:.1} MB (resident RSS)", self_mb),
+    }
+}
+
+pub async fn query_local_llm_status() -> String {
+    let client = reqwest::Client::new();
+    match client.get("http://127.0.0.1:11434/api/tags")
+        .timeout(std::time::Duration::from_millis(600))
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            if let Ok(json) = resp.json::<serde_json::Value>().await {
+                if let Some(models) = json.get("models").and_then(|m| m.as_array()) {
+                    let names: Vec<&str> = models.iter()
+                        .filter_map(|m| m.get("name").and_then(|n| n.as_str()))
+                        .collect();
+                    if !names.is_empty() {
+                        format!("Online ({} models: {})", names.len(), names.join(", "))
+                    } else {
+                        "Online (no models loaded)".to_string()
+                    }
+                } else {
+                    "Online (Ollama)".to_string()
+                }
+            } else {
+                "Online (response parse error)".to_string()
+            }
+        }
+        Err(_) => "Offline / Not Running (run 'ollama serve')".to_string(),
+    }
+}
+
 pub mod commands {
     use super::*;
 
@@ -299,16 +365,11 @@ pub mod commands {
             }
         }
 
-        // Microkernel resident synthesis fallback
-        Ok(CopilotResponse {
-            response: format!("// [Hagibis Microkernel Engine]\n// Processed task: {}\n// Ready for visual inline diffing.", prompt),
-            model: "hagibis-kernel-resident".into(),
-            status: "fallback".into(),
-        })
+        Err("Local LLM service is offline or unreachable at http://127.0.0.1:11434. Please start Ollama ('ollama serve') and ensure 'dynabook-coder:latest' or 'qwen2.5-coder:1.5b' is available.".into())
     }
 
     #[command]
-    pub fn get_diagnostics() -> Result<DiagnosticsResponse, String> {
+    pub async fn get_diagnostics() -> Result<DiagnosticsResponse, String> {
         let has_avx2 = is_x86_feature_detected!("avx2");
         let has_sse41 = is_x86_feature_detected!("sse4.1");
         let simd_label = if has_avx2 {
@@ -319,20 +380,23 @@ pub mod commands {
             "Scalar Optimized (Myers SES)".into()
         };
 
-        let landlock_label = if std::path::Path::new("/sys/kernel/security/lsm").exists() {
-            "Enforced (Kernel LSM Active)".into()
+        let landlock_label = if hgb_core::zig_accelerate::sandbox_check_support() {
+            "Enforced (Linux Landlock LSM Active)".into()
         } else {
-            "Enforced (Linux ABI V1-V5)".into()
+            "Unavailable (Kernel lacks Landlock support)".into()
         };
+
+        let memory_label = get_real_memory_metrics();
+        let llm_label = query_local_llm_status().await;
 
         Ok(DiagnosticsResponse {
             status: "online".into(),
             engine: "Rust 2021 + Native Zig 0.13.0 SIMD".into(),
             myers_ses: simd_label,
-            dual_buffer_overlay: "Active (O(1) pointer swap Tab acceptance)".into(),
-            memory_resident: "1.7 MB (microkernel hgbd)".into(),
+            dual_buffer_overlay: "Active (Dual-buffer overlay with instant commit)".into(),
+            memory_resident: memory_label,
             landlock_confinement: landlock_label,
-            local_llm: "Ollama (dynabook-coder:latest / qwen2.5-coder:1.5b)".into(),
+            local_llm: llm_label,
         })
     }
 
@@ -505,7 +569,7 @@ pub mod commands {
         }
 
         if replacement.is_empty() {
-            replacement = format!("// [Hagibis Inline Edit]\n// Modified: {}\n{}", instruction, selected_text);
+            return Err("Local LLM failed to generate inline edit. Ensure Ollama is running ('ollama serve') and model is available.".into());
         }
 
         // Strip backticks if returned
@@ -661,7 +725,42 @@ pub mod commands {
         }
 
         if prompt.contains("@Codebase") || prompt.contains("@codebase") {
-            sources.push("Project Codebase Index".into());
+            // 1. Extract genuine syn AST symbols from workspace
+            let symbols = IdeAgentEngine::extract_workspace_symbols(&base).await.unwrap_or_default();
+            let mut symbol_summary = String::new();
+            for s in symbols.iter().take(20) {
+                symbol_summary.push_str(&format!("- [{}] {} in {} (L{})\n", s.kind, s.signature, s.file_path, s.line_number));
+            }
+
+            // 2. Extract keywords from prompt for targeted code snippet retrieval
+            let clean_prompt_keywords: Vec<&str> = prompt
+                .split_whitespace()
+                .filter(|w| !w.starts_with('@') && w.len() > 3)
+                .collect();
+
+            let mut snippet_summary = String::new();
+            if !clean_prompt_keywords.is_empty() {
+                for kw in clean_prompt_keywords.iter().take(3) {
+                    if let Ok(search_res) = search_codebase(kw.to_string(), Some(base.to_string_lossy().to_string())).await {
+                        for m in search_res.matches.iter().take(3) {
+                            snippet_summary.push_str(&format!("{}:L{} -> {}\n", m.path, m.line_number, m.line_content));
+                        }
+                    }
+                }
+            }
+
+            let mut codebase_ctx = String::new();
+            if !symbol_summary.is_empty() {
+                codebase_ctx.push_str(&format!("\n[Codebase Outline & Symbols ({} symbols)]:\n{}\n", symbols.len(), symbol_summary));
+            }
+            if !snippet_summary.is_empty() {
+                codebase_ctx.push_str(&format!("[Relevant Code Snippets]:\n{}\n", snippet_summary));
+            }
+
+            if !codebase_ctx.is_empty() {
+                expanded = expanded.replace("@Codebase", &codebase_ctx).replace("@codebase", &codebase_ctx);
+            }
+            sources.push(format!("Project Codebase Index ({} symbols extracted)", symbols.len()));
         }
 
         Ok(ContextResolution {
@@ -774,7 +873,7 @@ pub mod commands {
             } else if !modif.is_empty() {
                 modif
             } else {
-                format!("// [Hagibis Composer: {}]\n{}", prompt, orig)
+                return Err(format!("Local LLM failed to generate updates for '{}'. Ensure Ollama is running ('ollama serve').", file_path));
             };
 
             file_plans.push(ComposerFilePlan {
@@ -864,13 +963,15 @@ mod tests {
     };
     use super::*;
 
-    #[test]
-    fn test_diagnostics_online() {
-        let diag = get_diagnostics().expect("diagnostics should succeed");
+    #[tokio::test]
+    async fn test_diagnostics_online() {
+        let diag = get_diagnostics().await.expect("diagnostics should succeed");
         assert_eq!(diag.status, "online");
         assert!(diag.engine.contains("Rust"));
         assert!(diag.myers_ses.contains("SIMD") || diag.myers_ses.contains("Myers"));
-        assert!(diag.dual_buffer_overlay.contains("O(1)"));
+        assert!(diag.dual_buffer_overlay.contains("Active"));
+        assert!(diag.memory_resident.contains("MB"));
+        assert!(diag.landlock_confinement.contains("Landlock") || diag.landlock_confinement.contains("Unavailable"));
     }
 
     #[test]
@@ -935,9 +1036,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_ask_copilot_fallback_or_ollama() {
-        let resp = ask_copilot("Explain Hagibis microkernel".into(), None).await.expect("copilot call should succeed");
-        assert!(!resp.response.is_empty());
-        assert!(!resp.model.is_empty());
+        match ask_copilot("Explain Hagibis microkernel".into(), None).await {
+            Ok(resp) => {
+                assert!(!resp.response.is_empty());
+                assert!(!resp.model.is_empty());
+            }
+            Err(e) => {
+                assert!(e.contains("Ollama") || e.contains("offline"));
+            }
+        }
     }
 
     #[tokio::test]
@@ -1021,11 +1128,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_context_mentions() {
-        let res = resolve_context_mentions("Check @rules and git status".into(), None)
+        let res = resolve_context_mentions("Check @rules and examine @codebase architecture".into(), None)
             .await
             .expect("context resolution should succeed");
         assert!(!res.expanded_prompt.is_empty());
         assert!(!res.sources.is_empty());
+        assert!(res.expanded_prompt.contains("[Codebase Outline & Symbols"));
+        assert!(res.sources.iter().any(|s| s.contains("Codebase Index")));
     }
 
     #[tokio::test]

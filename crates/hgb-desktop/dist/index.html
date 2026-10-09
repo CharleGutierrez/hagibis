@@ -297,7 +297,7 @@
                 <div id="side-view-container"></div>
                 <div id="composer-container" style="display:none; padding:16px; overflow:auto; height:100%;">
                     <div style="font-weight:700; margin-bottom:10px; font-size:14px; color:#38bdf8;"><i class="fa fa-layer-group"></i> Cursor-Grade Multi-File Composer Orchestrator</div>
-                    <p style="font-size:12px; color:#a1a1aa; margin-bottom:10px;">Plan and execute architectural changes across multiple project files simultaneously with live $O(1)$ DualBuffer reviews.</p>
+                    <p style="font-size:12px; color:#a1a1aa; margin-bottom:10px;">Plan and execute architectural changes across multiple project files simultaneously with DualBuffer reviews.</p>
                     
                     <!-- Autonomous Self-Healing Agent Options -->
                     <div style="display:flex; align-items:center; gap:12px; margin-bottom:12px; background:#18181b; padding:8px 12px; border-radius:6px; border:1px solid #27272a;">
@@ -326,7 +326,7 @@
                 
                 <!-- Floating Speculative Tab Pill -->
                 <div class="floating-pill" id="speculative-pill">
-                    <span onclick="commitTabOverlay()" class="pill-key">Tab Accept Speculative Edit (O(1))</span>
+                    <span onclick="commitTabOverlay()" class="pill-key">Tab Accept Speculative Edit (Instant Commit)</span>
                     <span onclick="previewSpeculativeDiff()" class="pill-key" style="background:#4338ca;">Ctrl+D Diff</span>
                     <span onclick="discardOverlay()" class="pill-key-danger">Esc Reject</span>
                 </div>
@@ -929,7 +929,7 @@
                         </div>
                         <div style="font-size:11px; color:#9ca3af; margin-top:4px;">Landlock LSM Sandbox Active • Sovereign Closed-Loop Verification</div>
                         <div style="margin-top:10px;">
-                            <button class="btn btn-green" onclick="acceptAllComposer()"><i class="fa fa-check-double"></i> Commit Verified Changes (O(1) Swap)</button>
+                            <button class="btn btn-green" onclick="acceptAllComposer()"><i class="fa fa-check-double"></i> Commit Verified Changes to Disk</button>
                         </div>
                     </div>`;
 
@@ -987,7 +987,7 @@
                 let html = `<div style="background:#18181b; padding:12px; border-radius:6px; border:1px solid #27272a; margin-bottom:12px;">
                     <strong>Plan Summary:</strong> ${escapeHtml(res.summary)}
                     <div style="margin-top:8px;">
-                        <button class="btn btn-green" onclick="acceptAllComposer()"><i class="fa fa-check-double"></i> Accept All Files (O(1) Swap)</button>
+                        <button class="btn btn-green" onclick="acceptAllComposer()"><i class="fa fa-check-double"></i> Commit All Files to Disk</button>
                     </div>
                 </div>`;
 
@@ -1040,7 +1040,7 @@
             if (!window.currentComposerPlans) return;
             try {
                 await apiInvoke('commit_composer_plan', { plans: window.currentComposerPlans });
-                alert('All files committed with O(1) buffer pointer swap!');
+                alert('All files successfully committed to disk!');
                 switchView('editor');
                 loadWorkspace();
             } catch (err) {

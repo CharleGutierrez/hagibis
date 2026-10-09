@@ -138,6 +138,72 @@ pub struct McpToolPayload {
     pub arguments: serde_json::Value,
 }
 
+fn get_real_memory_metrics() -> String {
+    let page_size = 4096u64;
+    let self_rss_pages = std::fs::read_to_string("/proc/self/statm")
+        .ok()
+        .and_then(|s| s.split_whitespace().nth(1).and_then(|p| p.parse::<u64>().ok()))
+        .unwrap_or(0);
+    let self_mb = (self_rss_pages * page_size) as f64 / (1024.0 * 1024.0);
+
+    // Check if hgbd daemon is running and get its RSS
+    let mut daemon_mb: Option<f64> = None;
+    if let Ok(entries) = std::fs::read_dir("/proc") {
+        for entry in entries.flatten() {
+            let file_name = entry.file_name();
+            let name_str = file_name.to_string_lossy();
+            if name_str.chars().all(|c| c.is_ascii_digit()) {
+                let comm_path = entry.path().join("comm");
+                if let Ok(comm) = std::fs::read_to_string(&comm_path) {
+                    if comm.trim() == "hgbd" {
+                        let statm_path = entry.path().join("statm");
+                        if let Ok(statm) = std::fs::read_to_string(&statm_path) {
+                            if let Some(pages) = statm.split_whitespace().nth(1).and_then(|p| p.parse::<u64>().ok()) {
+                                daemon_mb = Some((pages * page_size) as f64 / (1024.0 * 1024.0));
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    match daemon_mb {
+        Some(d_mb) => format!("{:.1} MB (proc: {:.1} MB, hgbd: {:.1} MB)", self_mb + d_mb, self_mb, d_mb),
+        None => format!("{:.1} MB (resident RSS)", self_mb),
+    }
+}
+
+async fn query_local_llm_status() -> String {
+    let client = reqwest::Client::new();
+    match client.get("http://127.0.0.1:11434/api/tags")
+        .timeout(std::time::Duration::from_millis(600))
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            if let Ok(json) = resp.json::<serde_json::Value>().await {
+                if let Some(models) = json.get("models").and_then(|m| m.as_array()) {
+                    let names: Vec<&str> = models.iter()
+                        .filter_map(|m| m.get("name").and_then(|n| n.as_str()))
+                        .collect();
+                    if !names.is_empty() {
+                        format!("Online ({} models: {})", names.len(), names.join(", "))
+                    } else {
+                        "Online (no models loaded)".to_string()
+                    }
+                } else {
+                    "Online (Ollama)".to_string()
+                }
+            } else {
+                "Online (response parse error)".to_string()
+            }
+        }
+        Err(_) => "Offline / Not Running (run 'ollama serve')".to_string(),
+    }
+}
+
 impl VisualIdeServer {
     pub fn new(port: u16, workspace_root: PathBuf) -> Self {
         Self {
@@ -362,11 +428,10 @@ impl VisualIdeServer {
                 }
             }
             Err(_) => {
-                // Graceful fallback to resident daemon echo or synthesized patch if Ollama is busy
                 (StatusCode::OK, Json(serde_json::json!({
-                    "response": format!("// [Hagibis Microkernel Engine]\n// Processed prompt: {}\n// Ready for visual inline diffing.", payload.prompt),
-                    "model": "hagibis-kernel-resident",
-                    "status": "fallback"
+                    "response": "Local LLM inference service is offline or unreachable at http://127.0.0.1:11434. Please start Ollama ('ollama serve') and ensure 'dynabook-coder:latest' or 'qwen2.5-coder:1.5b' is installed.",
+                    "model": "offline",
+                    "status": "error"
                 }))).into_response()
             }
         }
@@ -383,20 +448,23 @@ impl VisualIdeServer {
             "Scalar Optimized (Myers SES)"
         };
 
-        let landlock_label = if std::path::Path::new("/sys/kernel/security/lsm").exists() {
-            "Enforced (Kernel LSM Active)"
+        let landlock_label = if hgb_core::zig_accelerate::sandbox_check_support() {
+            "Enforced (Linux Landlock LSM Active)"
         } else {
-            "Enforced (Linux ABI V1-V5)"
+            "Unavailable (Kernel lacks Landlock support)"
         };
+
+        let memory_label = get_real_memory_metrics();
+        let llm_label = query_local_llm_status().await;
 
         let status = serde_json::json!({
             "status": "online",
             "engine": "Rust 2021 + Native Zig 0.13.0 SIMD",
             "myers_ses": simd_label,
-            "dual_buffer_overlay": "Active (O(1) pointer swap Tab acceptance)",
-            "memory_resident": "1.7 MB (microkernel hgbd)",
+            "dual_buffer_overlay": "Active (Dual-buffer overlay with instant commit)",
+            "memory_resident": memory_label,
             "landlock_confinement": landlock_label,
-            "local_llm": "Ollama (dynabook-coder:latest / qwen2.5-coder:1.5b)"
+            "local_llm": llm_label
         });
         (StatusCode::OK, Json(status)).into_response()
     }
@@ -526,7 +594,9 @@ impl VisualIdeServer {
         }
 
         if replacement.is_empty() {
-            replacement = format!("// [Hagibis Inline Edit]\n// Instruction: {}\n{}", payload.instruction, payload.selected_text);
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+                "error": "Local LLM failed to generate inline edit. Ensure Ollama is running ('ollama serve') and model is available."
+            }))).into_response();
         }
 
         // Clean markdown fences
@@ -627,7 +697,9 @@ impl VisualIdeServer {
             } else if !modif.is_empty() {
                 modif
             } else {
-                format!("// [Hagibis Composer: {}]\n{}", payload.prompt, orig)
+                return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+                    "error": format!("Local LLM failed to generate updates for '{}'. Ensure Ollama is running ('ollama serve').", file_path)
+                }))).into_response();
             };
 
             file_plans.push(ComposerFilePlan {
@@ -717,6 +789,52 @@ impl VisualIdeServer {
                     }
                 }
             }
+        }
+
+        if payload.prompt.contains("@Codebase") || payload.prompt.contains("@codebase") {
+            let symbols = crate::ide_agent_engine::IdeAgentEngine::extract_workspace_symbols(&state.workspace_root).await.unwrap_or_default();
+            let mut symbol_summary = String::new();
+            for s in symbols.iter().take(20) {
+                symbol_summary.push_str(&format!("- [{}] {} in {} (L{})\n", s.kind, s.signature, s.file_path, s.line_number));
+            }
+
+            let clean_prompt_keywords: Vec<&str> = payload.prompt
+                .split_whitespace()
+                .filter(|w| !w.starts_with('@') && w.len() > 3)
+                .collect();
+
+            let mut snippet_summary = String::new();
+            for kw in clean_prompt_keywords.iter().take(3) {
+                let kw_lower = kw.to_lowercase();
+                if let Ok(mut entries) = fs::read_dir(&state.workspace_root).await {
+                    while let Ok(Some(entry)) = entries.next_entry().await {
+                        let path = entry.path();
+                        if path.is_file() {
+                            if let Ok(content) = fs::read_to_string(&path).await {
+                                for (idx, line) in content.lines().enumerate() {
+                                    if line.to_lowercase().contains(&kw_lower) {
+                                        snippet_summary.push_str(&format!("{}:L{} -> {}\n", path.display(), idx + 1, line.trim()));
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            let mut codebase_ctx = String::new();
+            if !symbol_summary.is_empty() {
+                codebase_ctx.push_str(&format!("\n[Codebase Outline & Symbols ({} symbols)]:\n{}\n", symbols.len(), symbol_summary));
+            }
+            if !snippet_summary.is_empty() {
+                codebase_ctx.push_str(&format!("[Relevant Code Snippets]:\n{}\n", snippet_summary));
+            }
+
+            if !codebase_ctx.is_empty() {
+                expanded = expanded.replace("@Codebase", &codebase_ctx).replace("@codebase", &codebase_ctx);
+            }
+            sources.push(format!("Project Codebase Index ({} symbols extracted)", symbols.len()));
         }
 
         (StatusCode::OK, Json(serde_json::json!({

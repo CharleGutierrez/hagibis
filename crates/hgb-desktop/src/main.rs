@@ -9,7 +9,22 @@ use tauri::{generate_context, generate_handler, Builder};
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() > 1 {
-        let candidate = std::path::Path::new(&args[1]);
+        let first = &args[1];
+        if first == "--help" || first == "-h" {
+            println!("Hagibis Next-Gen Visual IDE (hgb-desktop)");
+            println!("Usage: hgb-desktop [PATH] [OPTIONS]\n");
+            println!("Options:");
+            println!("  -h, --help       Print help information");
+            println!("  -V, --version    Print version information\n");
+            println!("Arguments:");
+            println!("  [PATH]           Workspace directory or file to open (default: current directory)");
+            return;
+        } else if first == "--version" || first == "-V" {
+            println!("hgb-desktop {}", env!("CARGO_PKG_VERSION"));
+            return;
+        }
+
+        let candidate = std::path::Path::new(first);
         if candidate.exists() {
             if candidate.is_dir() {
                 let _ = std::env::set_current_dir(candidate);
