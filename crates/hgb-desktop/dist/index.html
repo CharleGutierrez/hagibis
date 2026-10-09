@@ -1,0 +1,1132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🪽 Hagibis Visual IDE & Cursor Studio</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root {
+            --bg-dark: #121214;
+            --bg-editor: #18181b;
+            --bg-sidebar: #0f0f11;
+            --border-color: #27272a;
+            --accent-cyan: #06b6d4;
+            --accent-green: #10b981;
+            --accent-red: #ef4444;
+            --accent-indigo: #6366f1;
+            --text-main: #f4f4f5;
+            --text-muted: #a1a1aa;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "JetBrains Mono", monospace; background-color: var(--bg-dark); color: var(--text-main); height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
+        
+        header { height: 42px; background: var(--bg-sidebar); border-bottom: 1px solid var(--border-color); display: flex; align-items: center; justify-content: space-between; padding: 0 14px; user-select: none; }
+        .logo-box { display: flex; align-items: center; gap: 8px; font-weight: 700; color: var(--accent-cyan); letter-spacing: 0.5px; }
+        .badge { background: #083344; color: #22d3ee; font-size: 11px; padding: 2px 8px; border-radius: 9999px; border: 1px solid #0e7490; font-weight: 600; }
+        .badge-rules { background: #312e81; color: #a5b4fc; border: 1px solid #4f46e5; cursor: pointer; }
+        .header-actions { display: flex; align-items: center; gap: 8px; }
+        .btn { background: #27272a; color: var(--text-main); border: 1px solid #3f3f46; padding: 5px 11px; border-radius: 6px; font-size: 12px; cursor: pointer; transition: 0.15s; display: flex; align-items: center; gap: 6px; }
+        .btn:hover { background: #3f3f46; }
+        .btn-primary { background: #0891b2; border-color: #06b6d4; color: #fff; }
+        .btn-primary:hover { background: #06b6d4; }
+        .btn-green { background: #059669; border-color: #10b981; color: #fff; }
+        .btn-green:hover { background: #10b981; }
+        .btn-indigo { background: #4f46e5; border-color: #6366f1; color: #fff; }
+        .btn-indigo:hover { background: #6366f1; }
+        
+        .workspace-grid { display: flex; flex: 1; height: calc(100vh - 42px); overflow: hidden; position: relative; }
+        
+        /* Left Sidebar */
+        .sidebar { width: 260px; background: var(--bg-sidebar); border-right: 1px solid var(--border-color); display: flex; flex-direction: column; }
+        .sidebar-header { padding: 9px 12px; font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; }
+        .file-tree { flex: 1; overflow-y: auto; padding: 6px 0; font-size: 13px; }
+        .tree-item { padding: 4px 12px; cursor: pointer; display: flex; align-items: center; gap: 7px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; user-select: none; border-left: 2px solid transparent; }
+        .tree-item:hover { background: #1e1e24; }
+        .tree-item.active { background: #164e63; color: #67e8f9; font-weight: 600; border-left-color: var(--accent-cyan); }
+        .tree-folder { color: #facc15; }
+        .tree-file { color: #93c5fd; }
+        
+        /* Central Editor Area */
+        .editor-container { flex: 1; display: flex; flex-direction: column; background: var(--bg-editor); position: relative; overflow: hidden; }
+        .editor-tabs-bar { height: 35px; background: #141416; border-bottom: 1px solid var(--border-color); display: flex; align-items: center; padding: 0 4px; overflow-x: auto; gap: 2px; }
+        .file-tab { background: #18181b; border: 1px solid #27272a; border-bottom: none; color: var(--text-muted); padding: 5px 12px; font-size: 12px; cursor: pointer; border-radius: 4px 4px 0 0; display: flex; align-items: center; gap: 6px; user-select: none; }
+        .file-tab.active { background: var(--bg-editor); color: var(--text-main); font-weight: 600; border-top: 2px solid var(--accent-cyan); }
+        .file-tab:hover { color: #fff; }
+        .tab-close { font-size: 11px; margin-left: 4px; border-radius: 2px; padding: 1px 3px; color: #71717a; }
+        .tab-close:hover { color: #ef4444; background: rgba(239, 68, 68, 0.15); }
+        
+        .mode-tabs { height: 32px; background: #18181b; border-bottom: 1px solid var(--border-color); display: flex; align-items: center; padding: 0 8px; gap: 4px; }
+        .mode-btn { background: transparent; border: none; color: var(--text-muted); padding: 4px 10px; font-size: 11px; cursor: pointer; border-radius: 4px; display: flex; align-items: center; gap: 5px; }
+        .mode-btn.active { background: #27272a; color: #fff; font-weight: 600; }
+        
+        .editor-canvas-box { flex: 1; width: 100%; height: calc(100% - 67px); position: relative; }
+        #monaco-root { width: 100%; height: 100%; }
+        #fallback-editor { width: 100%; height: 100%; display: none; background: #18181b; color: #f4f4f5; font-family: "JetBrains Mono", monospace; font-size: 13px; padding: 12px; border: none; outline: none; resize: none; line-height: 1.5; }
+        
+        #diff-view-container { display: none; width: 100%; height: 100%; padding: 14px; overflow: auto; background: #0c0c0e; font-family: "JetBrains Mono", monospace; font-size: 13px; line-height: 1.5; }
+        #side-view-container { display: none; width: 100%; height: 100%; padding: 14px; overflow: auto; background: #0a0a0c; font-family: "JetBrains Mono", monospace; font-size: 12px; line-height: 1.4; white-space: pre; color: #d4d4d8; }
+        
+        /* Myers SES Diff Styling */
+        .diff-banner { padding: 9px 12px; background: #18181b; border: 1px solid #27272a; border-radius: 6px; margin-bottom: 12px; font-size: 12px; color: #a1a1aa; display: flex; align-items: center; justify-content: space-between; }
+        .diff-line { display: flex; white-space: pre-wrap; word-break: break-all; padding: 2px 4px; font-family: "JetBrains Mono", monospace; }
+        .diff-gutter-old, .diff-gutter-new { width: 36px; text-align: right; color: #52525b; user-select: none; padding-right: 8px; flex-shrink: 0; }
+        .diff-marker { width: 16px; text-align: center; font-weight: 700; flex-shrink: 0; }
+        .diff-content { flex: 1; padding-left: 4px; }
+        .diff-del { background: rgba(239, 68, 68, 0.12); color: #fca5a5; }
+        .diff-del .diff-marker { color: #ef4444; }
+        .diff-ins { background: rgba(16, 185, 129, 0.12); color: #6ee7b7; }
+        .diff-ins .diff-marker { color: #10b981; }
+        .diff-span-del { background: rgba(239, 68, 68, 0.45); text-decoration: line-through; font-weight: 700; color: #fff; border-radius: 2px; padding: 0 3px; }
+        .diff-span-ins { background: rgba(16, 185, 129, 0.45); font-weight: 700; color: #fff; border-radius: 2px; padding: 0 3px; }
+        
+        /* Floating Tab Acceptance Notification */
+        .floating-pill { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); background: #18181b; border: 1px solid #06b6d4; padding: 7px 16px; border-radius: 9999px; box-shadow: 0 10px 30px rgba(0,0,0,0.6); display: none; align-items: center; gap: 12px; font-size: 12px; z-index: 100; backdrop-filter: blur(8px); }
+        .pill-key { background: #0891b2; color: #fff; font-weight: 700; padding: 2px 7px; border-radius: 4px; font-size: 11px; cursor: pointer; }
+        .pill-key-danger { background: #dc2626; color: #fff; font-weight: 700; padding: 2px 7px; border-radius: 4px; font-size: 11px; cursor: pointer; }
+        
+        /* Ctrl+K Inline Diff Floating Widget */
+        .inline-ctrl-k-box { position: absolute; top: 50px; left: 50%; transform: translateX(-50%); width: 550px; background: #18181b; border: 1px solid #06b6d4; box-shadow: 0 20px 40px rgba(0,0,0,0.7); border-radius: 8px; z-index: 200; display: none; flex-direction: column; overflow: hidden; }
+        .ctrl-k-header { background: #0f172a; border-bottom: 1px solid #334155; padding: 8px 12px; font-size: 12px; font-weight: 600; color: #38bdf8; display: flex; justify-content: space-between; align-items: center; }
+        .ctrl-k-input { background: #1e293b; border: none; outline: none; padding: 10px 12px; color: #fff; font-size: 13px; font-family: inherit; width: 100%; }
+        .ctrl-k-footer { padding: 6px 12px; background: #0f172a; border-top: 1px solid #334155; font-size: 11px; color: #94a3b8; display: flex; justify-content: space-between; align-items: center; }
+        
+        /* Bottom Terminal Panel */
+        .terminal-panel { height: 180px; background: #09090b; border-top: 1px solid var(--border-color); display: none; flex-direction: column; }
+        .terminal-header { height: 28px; background: #141416; border-bottom: 1px solid var(--border-color); display: flex; align-items: center; justify-content: space-between; padding: 0 10px; font-size: 11px; font-weight: 600; color: #a1a1aa; }
+        .terminal-output { flex: 1; overflow-y: auto; padding: 8px 12px; font-family: "JetBrains Mono", monospace; font-size: 12px; color: #e4e4e7; white-space: pre-wrap; line-height: 1.4; }
+        .terminal-input-row { height: 32px; background: #121214; border-top: 1px solid var(--border-color); display: flex; align-items: center; padding: 0 8px; gap: 6px; }
+        .term-prompt { color: var(--accent-cyan); font-weight: 700; font-size: 12px; font-family: monospace; }
+        .terminal-input { flex: 1; background: transparent; border: none; outline: none; color: #fff; font-family: "JetBrains Mono", monospace; font-size: 12px; }
+        
+        /* Right Side AI Copilot & Composer Panel */
+        .chat-panel { width: 360px; background: var(--bg-sidebar); border-left: 1px solid var(--border-color); display: flex; flex-direction: column; }
+        .chat-header { padding: 10px 12px; font-size: 12px; font-weight: 700; border-bottom: 1px solid var(--border-color); display: flex; align-items: center; justify-content: space-between; color: var(--accent-cyan); }
+        .chat-messages { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+        .chat-bubble { padding: 9px 12px; border-radius: 8px; font-size: 13px; line-height: 1.4; word-break: break-word; }
+        .chat-user { background: #1e293b; color: #e2e8f0; align-self: flex-end; max-width: 90%; }
+        .chat-ai { background: #18181b; border: 1px solid #27272a; color: #f4f4f5; align-self: flex-start; max-width: 98%; }
+        .chat-snippet-box { margin-top: 8px; padding: 8px; background: #09090b; border: 1px solid #27272a; border-radius: 6px; font-family: monospace; font-size: 11px; max-height: 160px; overflow-y: auto; white-space: pre-wrap; }
+        .chat-actions-row { display: flex; gap: 6px; margin-top: 6px; }
+        .chat-input-box { padding: 10px 12px; border-top: 1px solid var(--border-color); display: flex; flex-direction: column; gap: 6px; }
+        .chat-textarea { width: 100%; height: 70px; background: #1e1e24; border: 1px solid #3f3f46; border-radius: 6px; color: #fff; padding: 8px; font-size: 12px; resize: none; outline: none; }
+        .chat-textarea:focus { border-color: var(--accent-cyan); }
+        
+        /* Codebase Search Modal */
+        .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.65); z-index: 300; display: none; align-items: flex-start; justify-content: center; padding-top: 80px; }
+        .modal-content { width: 600px; max-height: 80vh; background: #18181b; border: 1px solid #3f3f46; border-radius: 8px; box-shadow: 0 20px 40px rgba(0,0,0,0.8); display: flex; flex-direction: column; overflow: hidden; }
+        .modal-header { padding: 10px 14px; background: #141416; border-bottom: 1px solid #27272a; font-weight: 600; font-size: 13px; display: flex; justify-content: space-between; align-items: center; }
+        .modal-input { padding: 10px 14px; background: #1f1f23; border: none; border-bottom: 1px solid #27272a; color: #fff; font-size: 13px; outline: none; }
+        .modal-list { flex: 1; overflow-y: auto; padding: 6px 0; }
+        .modal-item { padding: 6px 14px; cursor: pointer; font-size: 12px; display: flex; justify-content: space-between; border-bottom: 1px solid #222226; }
+        .modal-item:hover { background: #27272a; }
+        
+        .dirty-dot { color: #f59e0b; font-weight: bold; margin-right: 4px; display: none; }
+        .tree-del-btn { margin-left: auto; color: #71717a; padding: 2px 5px; display: none; font-size: 11px; border-radius: 3px; }
+        .tree-item:hover .tree-del-btn { display: inline-block; }
+        .tree-del-btn:hover { color: #ef4444; background: rgba(239, 68, 68, 0.15); }
+        .sidebar-actions { display: flex; align-items: center; gap: 8px; }
+        .sidebar-actions i { cursor: pointer; color: #a1a1aa; font-size: 12px; }
+        .sidebar-actions i:hover { color: #38bdf8; }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="logo-box">
+            <span>🪽 HAGIBIS VISUAL IDE</span>
+            <span class="badge" id="tauri-badge">NATIVE TAURI</span>
+            <span class="badge" style="background:#1e1b4b; color:#818cf8; border-color:#4338ca;">ZIG MYERS SES</span>
+            <span class="badge badge-rules" id="rules-badge" onclick="showRules()"><i class="fa fa-scroll"></i> Rules</span>
+        </div>
+        <div class="header-actions">
+            <button class="btn btn-indigo" onclick="openSearchModal()"><i class="fa fa-magnifying-glass"></i> Search (Ctrl+P)</button>
+            <button class="btn btn-primary" onclick="triggerInlineCtrlK()"><i class="fa fa-wand-magic-sparkles"></i> Edit (Ctrl+K)</button>
+            <button class="btn btn-indigo" onclick="switchView('composer')"><i class="fa fa-layer-group"></i> Composer (Ctrl+I)</button>
+            <button class="btn btn-green" onclick="toggleTerminal()"><i class="fa fa-terminal"></i> Terminal (Ctrl+`)</button>
+            <button class="btn btn-primary" onclick="saveActiveFile()"><i class="fa fa-save"></i> Save (Ctrl+S)</button>
+            <button class="btn btn-green" onclick="triggerDiff()"><i class="fa fa-code-compare"></i> Diff</button>
+        </div>
+    </header>
+
+    <div class="workspace-grid">
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <span>Workspace Explorer</span>
+                <div class="sidebar-actions">
+                    <i class="fa fa-file-circle-plus" title="New File" onclick="promptCreateFile()"></i>
+                    <i class="fa fa-folder-plus" title="New Folder" onclick="promptCreateFolder()"></i>
+                    <i class="fa fa-rotate-right" onclick="loadWorkspace()" title="Refresh Explorer"></i>
+                </div>
+            </div>
+            <div class="file-tree" id="tree-root">
+                <div style="padding: 14px; color: #71717a;">Loading workspace...</div>
+            </div>
+            <div style="padding: 10px 12px; border-top: 1px solid #27272a; font-size: 11px; color: #71717a;" id="diag-footer">
+                <div><i class="fa fa-microchip"></i> Loading telemetry...</div>
+            </div>
+        </div>
+
+        <!-- Central Editor Area -->
+        <div class="editor-container">
+            <!-- Multi-Tab Bar -->
+            <div class="editor-tabs-bar" id="editor-tabs-bar"></div>
+            
+            <div class="mode-tabs">
+                <button class="mode-btn active" id="mode-editor" onclick="switchView('editor')"><i class="fa fa-code"></i> Monaco Editor</button>
+                <button class="mode-btn" id="mode-diff" onclick="switchView('diff')"><i class="fa fa-table-columns"></i> Myers SES Diff</button>
+                <button class="mode-btn" id="mode-side" onclick="switchView('side')"><i class="fa fa-columns"></i> Side-by-Side</button>
+                <button class="mode-btn" id="mode-composer" onclick="switchView('composer')"><i class="fa fa-layer-group"></i> Composer Agent</button>
+            </div>
+
+            <div class="editor-canvas-box">
+                <div id="monaco-root"></div>
+                <textarea id="fallback-editor" spellcheck="false"></textarea>
+                <div id="diff-view-container"></div>
+                <div id="side-view-container"></div>
+                <div id="composer-container" style="display:none; padding:16px; overflow:auto; height:100%;">
+                    <div style="font-weight:700; margin-bottom:10px; font-size:14px; color:#38bdf8;"><i class="fa fa-layer-group"></i> Cursor-Grade Multi-File Composer Orchestrator</div>
+                    <p style="font-size:12px; color:#a1a1aa; margin-bottom:14px;">Plan and execute architectural changes across multiple project files simultaneously with live $O(1)$ DualBuffer reviews.</p>
+                    <div style="display:flex; gap:8px; margin-bottom:12px;">
+                        <input type="text" id="composer-prompt" placeholder="E.g. Refactor error handling across core files and sync tests..." style="flex:1; background:#1e1e24; border:1px solid #3f3f46; color:#fff; padding:8px 12px; border-radius:6px; font-size:13px; outline:none;">
+                        <button class="btn btn-primary" onclick="runComposer()"><i class="fa fa-play"></i> Generate Plan</button>
+                    </div>
+                    <div id="composer-results"></div>
+                </div>
+                
+                <!-- Floating Speculative Tab Pill -->
+                <div class="floating-pill" id="speculative-pill">
+                    <span onclick="commitTabOverlay()" class="pill-key">Tab Accept Speculative Edit (O(1))</span>
+                    <span onclick="previewSpeculativeDiff()" class="pill-key" style="background:#4338ca;">Ctrl+D Diff</span>
+                    <span onclick="discardOverlay()" class="pill-key-danger">Esc Reject</span>
+                </div>
+
+                <!-- Floating Ctrl+K Inline Diff Widget -->
+                <div class="inline-ctrl-k-box" id="ctrl-k-widget">
+                    <div class="ctrl-k-header">
+                        <span><i class="fa fa-wand-magic-sparkles"></i> Surgical Inline Edit (Ctrl+K)</span>
+                        <i class="fa fa-xmark" style="cursor:pointer;" onclick="closeCtrlK()"></i>
+                    </div>
+                    <input type="text" class="ctrl-k-input" id="ctrl-k-input" placeholder="Instruct Copilot (e.g. 'Optimize with AVX2 SIMD', 'Add match error handling')..." onkeydown="handleCtrlKKeyDown(event)">
+                    <div class="ctrl-k-footer">
+                        <span>Model: dynabook-coder / qwen2.5-coder</span>
+                        <span>[Enter] Submit &nbsp; [Esc] Cancel</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Bottom Terminal Drawer -->
+            <div class="terminal-panel" id="terminal-drawer">
+                <div class="terminal-header">
+                    <span><i class="fa fa-terminal"></i> Sovereign Microkernel Terminal</span>
+                    <div style="display:flex; gap:8px;">
+                        <span style="cursor:pointer; color:#94a3b8;" onclick="runTermQuick('cargo test')">cargo test</span>
+                        <span style="cursor:pointer; color:#94a3b8;" onclick="runTermQuick('git status')">git status</span>
+                        <span style="cursor:pointer; color:#94a3b8;" onclick="runTermQuick('hgb status')">hgb status</span>
+                        <i class="fa fa-xmark" style="cursor:pointer; margin-left:8px;" onclick="toggleTerminal()"></i>
+                    </div>
+                </div>
+                <div class="terminal-output" id="terminal-output">// Terminal Ready. Enter bash command below.</div>
+                <div class="terminal-input-row">
+                    <span class="term-prompt">$</span>
+                    <input type="text" class="terminal-input" id="term-input" placeholder="Run command..." onkeydown="handleTermInput(event)">
+                    <button class="btn btn-primary" onclick="execTermCommand()"><i class="fa fa-play"></i> Run</button>
+                    <button class="btn btn-green" id="autofix-btn" style="display:none;" onclick="autoFixTerminalError()"><i class="fa fa-wrench"></i> Auto-Fix with Copilot</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Side AI Copilot -->
+        <div class="chat-panel">
+            <div class="chat-header">
+                <div style="display:flex; align-items:center; gap:6px;">
+                    <i class="fa fa-wand-magic-sparkles"></i>
+                    <span>Swarm Copilot</span>
+                </div>
+                <span style="font-size:10px; color:#10b981;" id="model-badge">dynabook-coder</span>
+            </div>
+            <div class="chat-messages" id="chat-stream">
+                <div class="chat-bubble chat-ai">
+                    👋 Welcome to Hagibis Visual IDE! Open any workspace file on the left, press <strong>Ctrl+K</strong> for in-place surgical editing, or use <strong>@Codebase</strong> for project-wide semantic context.
+                </div>
+            </div>
+            <div class="chat-input-box">
+                <textarea class="chat-textarea" id="chat-input" placeholder="Ask Copilot, type @ to mention files, or describe refactoring..."></textarea>
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <button class="btn" style="font-size:11px;" onclick="openSearchModal()"><i class="fa fa-at"></i> Codebase</button>
+                    <button class="btn btn-primary" onclick="sendPrompt()"><i class="fa fa-paper-plane"></i> Send Query</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Codebase Search Modal -->
+    <div class="modal-overlay" id="search-modal" onclick="closeSearchModal(event)">
+        <div class="modal-content" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <span><i class="fa fa-magnifying-glass"></i> Search @Codebase (Symbols & Content)</span>
+                <i class="fa fa-xmark" style="cursor:pointer;" onclick="closeSearchModal()"></i>
+            </div>
+            <input type="text" class="modal-input" id="modal-search-input" placeholder="Type token, function name, or symbol..." oninput="debounceCodeSearch()">
+            <div class="modal-list" id="modal-search-results">
+                <div style="padding:14px; color:#71717a; text-align:center;">Type query to scan workspace...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Monaco AMD Loader -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs/loader.min.js"></script>
+    <script>
+        let editorInstance = null;
+        let isUsingFallback = false;
+        let openTabs = [];
+        let activeTabIdx = -1;
+        let speculativeContent = "";
+        let lastTermStderr = "";
+        let currentRules = "";
+
+        const isTauri = window.__TAURI__ && window.__TAURI__.core;
+        if (!isTauri) {
+            document.getElementById('tauri-badge').innerText = 'HYBRID HTTP';
+            document.getElementById('tauri-badge').style.background = '#3730a3';
+        }
+
+        async function apiInvoke(cmd, args = {}) {
+            if (isTauri) {
+                return await window.__TAURI__.core.invoke(cmd, args);
+            }
+            const routeMap = {
+                'get_workspace_tree': ['/api/workspace', 'GET'],
+                'read_file': [`/api/file?path=${encodeURIComponent(args.path)}`, 'GET'],
+                'save_file': ['/api/save_file', 'POST', args],
+                'create_file': ['/api/create_file', 'POST', args],
+                'create_folder': ['/api/create_folder', 'POST', args],
+                'delete_entry': ['/api/delete_entry', 'POST', args],
+                'rename_entry': ['/api/rename_entry', 'POST', args],
+                'compute_diff': ['/api/diff', 'POST', args],
+                'commit_tab_overlay': ['/api/tab_commit', 'POST', args],
+                'ask_copilot': ['/api/chat', 'POST', args],
+                'get_diagnostics': ['/api/status', 'GET'],
+                'search_codebase': ['/api/search', 'POST', args],
+                'execute_terminal_command': ['/api/terminal', 'POST', args],
+                'load_project_rules': ['/api/rules', 'GET'],
+                'ask_inline_edit': ['/api/inline_edit', 'POST', args],
+                'ask_composer': ['/api/composer', 'POST', args],
+                'commit_composer_plan': ['/api/composer_commit', 'POST', args],
+                'ask_tab_completion': ['/api/tab_completion', 'POST', args],
+                'resolve_context_mentions': ['/api/resolve_context', 'POST', args],
+            };
+            const config = routeMap[cmd];
+            if (!config) throw new Error('Unknown command: ' + cmd);
+            const [url, method, body] = config;
+            const res = await fetch(url, {
+                method,
+                headers: body ? { 'Content-Type': 'application/json' } : undefined,
+                body: body ? JSON.stringify(body) : undefined,
+            });
+            if (cmd === 'read_file') return await res.text();
+            return await res.json();
+        }
+
+        function initEditor() {
+            try {
+                if (typeof require !== 'undefined') {
+                    require.config({ paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs' } });
+                    require(['vs/editor/editor.main'], function () {
+                        editorInstance = monaco.editor.create(document.getElementById('monaco-root'), {
+                            value: '// 🪽 Welcome to Hagibis Visual IDE & Cursor Studio\n// Select a file from the explorer or press Ctrl+P to search @Codebase.\n',
+                            language: 'rust',
+                            theme: 'vs-dark',
+                            automaticLayout: true,
+                            fontSize: 13,
+                            fontFamily: 'JetBrains Mono, monospace',
+                            minimap: { enabled: true },
+                            scrollBeyondLastLine: false,
+                            inlineSuggest: { enabled: true },
+                        });
+
+                        // Register Cursor Tab (Fill-In-The-Middle Predictive Ghost Text)
+                        const supportedLangs = ['rust', 'zig', 'javascript', 'typescript', 'python', 'c', 'cpp', 'json', 'plaintext'];
+                        supportedLangs.forEach(lang => {
+                            monaco.languages.registerInlineCompletionsProvider(lang, {
+                                provideInlineCompletions: async (model, position, context, token) => {
+                                    if (activeTabIdx < 0) return { items: [] };
+                                    const fullText = model.getValue();
+                                    const offset = model.getOffsetAt(position);
+                                    const prefix = fullText.slice(Math.max(0, offset - 800), offset);
+                                    const suffix = fullText.slice(offset, Math.min(fullText.length, offset + 800));
+                                    if (prefix.trim().length < 3) return { items: [] };
+
+                                    try {
+                                        const res = await apiInvoke('ask_tab_completion', {
+                                            path: openTabs[activeTabIdx].path,
+                                            prefix,
+                                            suffix,
+                                        });
+                                        if (res && res.completion && res.completion.trim().length > 0) {
+                                            return {
+                                                items: [{
+                                                    insertText: res.completion,
+                                                    range: new monaco.Range(position.lineNumber, position.column, position.lineNumber, position.column),
+                                                }],
+                                            };
+                                        }
+                                    } catch (err) {
+                                        console.warn('Tab completion error:', err);
+                                    }
+                                    return { items: [] };
+                                },
+                                freeInlineCompletions: () => {},
+                            });
+                        });
+
+                        // Register direct Monaco editor commands for Cursor shortcuts
+                        editorInstance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyK, triggerInlineCtrlK);
+                        editorInstance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyP, openSearchModal);
+                        editorInstance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, saveActiveFile);
+                        editorInstance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyI, () => switchView('composer'));
+                        editorInstance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Backquote, toggleTerminal);
+
+                        editorInstance.onDidChangeModelContent(() => {
+                            if (activeTabIdx >= 0) {
+                                const current = editorInstance.getValue();
+                                openTabs[activeTabIdx].content = current;
+                                openTabs[activeTabIdx].isDirty = (current !== openTabs[activeTabIdx].originalContent);
+                                renderTabs();
+                            }
+                        });
+                        bindGlobalShortcuts();
+                    }, function () {
+                        activateFallbackEditor();
+                    });
+                } else {
+                    activateFallbackEditor();
+                }
+            } catch (e) {
+                activateFallbackEditor();
+            }
+        }
+
+        function activateFallbackEditor() {
+            isUsingFallback = true;
+            document.getElementById('monaco-root').style.display = 'none';
+            const fb = document.getElementById('fallback-editor');
+            fb.style.display = 'block';
+            fb.value = '// 🪽 Hagibis Visual IDE (Offline Editor Mode)\n';
+            fb.addEventListener('input', () => {
+                if (activeTabIdx >= 0) {
+                    const current = fb.value;
+                    openTabs[activeTabIdx].content = current;
+                    openTabs[activeTabIdx].isDirty = (current !== openTabs[activeTabIdx].originalContent);
+                    renderTabs();
+                }
+            });
+            bindGlobalShortcuts();
+        }
+
+        function getEditorContent() {
+            if (isUsingFallback) return document.getElementById('fallback-editor').value;
+            return editorInstance ? editorInstance.getValue() : '';
+        }
+
+        function setEditorContent(content, lang = 'plaintext') {
+            if (isUsingFallback) {
+                document.getElementById('fallback-editor').value = content;
+            } else if (editorInstance) {
+                editorInstance.setValue(content);
+                monaco.editor.setModelLanguage(editorInstance.getModel(), lang);
+            }
+        }
+
+        function getSelectedText() {
+            if (editorInstance && !isUsingFallback) {
+                const sel = editorInstance.getSelection();
+                return editorInstance.getModel().getValueInRange(sel);
+            }
+            return "";
+        }
+
+        // Multi-Tab Management
+        async function openFile(path) {
+            const existingIdx = openTabs.findIndex(t => t.path === path);
+            if (existingIdx >= 0) {
+                switchTab(existingIdx);
+                return;
+            }
+            try {
+                const content = await apiInvoke('read_file', { path });
+                const name = path.split('/').pop();
+                const ext = name.split('.').pop();
+                const langMap = { rs: 'rust', zig: 'zig', js: 'javascript', ts: 'typescript', json: 'json', md: 'markdown', toml: 'ini', py: 'python', c: 'c', cpp: 'cpp' };
+                const lang = langMap[ext] || 'plaintext';
+
+                openTabs.push({
+                    path,
+                    name,
+                    content,
+                    originalContent: content,
+                    lang,
+                    isDirty: false,
+                });
+                renderTabs();
+                switchTab(openTabs.length - 1);
+            } catch (err) {
+                alert('Failed to read file: ' + err);
+            }
+        }
+
+        function renderTabs() {
+            const container = document.getElementById('editor-tabs-bar');
+            container.innerHTML = '';
+            openTabs.forEach((tab, idx) => {
+                const tabEl = document.createElement('div');
+                tabEl.className = 'file-tab' + (idx === activeTabIdx ? ' active' : '');
+                const dot = tab.isDirty ? '<span style="color:#f59e0b; font-weight:bold;">● </span>' : '';
+                tabEl.innerHTML = `${dot}<span>${tab.name}</span><span class="tab-close" onclick="closeTab(${idx}, event)">×</span>`;
+                tabEl.onclick = () => switchTab(idx);
+                container.appendChild(tabEl);
+            });
+        }
+
+        function switchTab(idx) {
+            if (idx < 0 || idx >= openTabs.length) return;
+            activeTabIdx = idx;
+            const tab = openTabs[idx];
+            setEditorContent(tab.content, tab.lang);
+            renderTabs();
+            switchView('editor');
+        }
+
+        function closeTab(idx, e) {
+            e.stopPropagation();
+            openTabs.splice(idx, 1);
+            if (activeTabIdx >= openTabs.length) {
+                activeTabIdx = openTabs.length - 1;
+            }
+            if (activeTabIdx >= 0) {
+                switchTab(activeTabIdx);
+            } else {
+                setEditorContent('// No file open.');
+                renderTabs();
+            }
+        }
+
+        async function saveActiveFile() {
+            if (activeTabIdx < 0) return;
+            const tab = openTabs[activeTabIdx];
+            const content = getEditorContent();
+            try {
+                await apiInvoke('save_file', { path: tab.path, content });
+                tab.originalContent = content;
+                tab.content = content;
+                tab.isDirty = false;
+                renderTabs();
+            } catch (err) {
+                alert('Save failed: ' + err);
+            }
+        }
+
+        // Inline Ctrl+K Surgical Editing
+        function triggerInlineCtrlK() {
+            const widget = document.getElementById('ctrl-k-widget');
+            widget.style.display = 'flex';
+            const input = document.getElementById('ctrl-k-input');
+            input.value = '';
+            input.focus();
+        }
+
+        function closeCtrlK() {
+            document.getElementById('ctrl-k-widget').style.display = 'none';
+        }
+
+        async function handleCtrlKKeyDown(e) {
+            if (e.key === 'Escape') {
+                closeCtrlK();
+            } else if (e.key === 'Enter') {
+                const prompt = e.target.value.trim();
+                if (!prompt || activeTabIdx < 0) return;
+                closeCtrlK();
+
+                const tab = openTabs[activeTabIdx];
+                const selected = getSelectedText() || getEditorContent();
+
+                try {
+                    const diffData = await apiInvoke('ask_inline_edit', {
+                        path: tab.path,
+                        selected_text: selected,
+                        file_context: getEditorContent(),
+                        instruction: prompt,
+                    });
+                    window.currentInlineEditReplacement = diffData.replacement;
+                    window.currentInlineEditSelected = selected;
+                    renderDiff(diffData);
+                    document.getElementById('side-view-container').innerText = diffData.side_by_side;
+                    switchView('diff');
+                } catch (err) {
+                    alert('Inline Edit Error: ' + err);
+                }
+            }
+        }
+
+        // Global Keybindings
+        function bindGlobalShortcuts() {
+            window.addEventListener('keydown', (e) => {
+                if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+                    e.preventDefault();
+                    saveActiveFile();
+                } else if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
+                    e.preventDefault();
+                    triggerInlineCtrlK();
+                } else if ((e.ctrlKey || e.metaKey) && (e.key === 'i' || e.key === 'I')) {
+                    e.preventDefault();
+                    switchView('composer');
+                } else if ((e.ctrlKey || e.metaKey) && (e.key === 'p' || e.key === 'P')) {
+                    e.preventDefault();
+                    openSearchModal();
+                } else if ((e.ctrlKey || e.metaKey) && e.key === '`') {
+                    e.preventDefault();
+                    toggleTerminal();
+                } else if (e.key === 'Tab' && speculativeContent) {
+                    e.preventDefault();
+                    commitTabOverlay();
+                } else if (e.key === 'Escape' && speculativeContent) {
+                    discardOverlay();
+                }
+            });
+        }
+
+        // Codebase Semantic Search Modal
+        function openSearchModal() {
+            document.getElementById('search-modal').style.display = 'flex';
+            const input = document.getElementById('modal-search-input');
+            input.value = '';
+            input.focus();
+        }
+
+        function closeSearchModal() {
+            document.getElementById('search-modal').style.display = 'none';
+        }
+
+        let searchDebounceTimer = null;
+        function debounceCodeSearch() {
+            clearTimeout(searchDebounceTimer);
+            searchDebounceTimer = setTimeout(runCodeSearch, 300);
+        }
+
+        async function runCodeSearch() {
+            const query = document.getElementById('modal-search-input').value.trim();
+            const container = document.getElementById('modal-search-results');
+            if (!query) {
+                container.innerHTML = '<div style="padding:14px; color:#71717a; text-align:center;">Type query to scan workspace...</div>';
+                return;
+            }
+            container.innerHTML = '<div style="padding:14px; color:#a1a1aa; text-align:center;">Scanning codebase...</div>';
+            try {
+                const res = await apiInvoke('search_codebase', { query });
+                if (res.matches.length === 0) {
+                    container.innerHTML = '<div style="padding:14px; color:#71717a; text-align:center;">No matches found.</div>';
+                    return;
+                }
+                let html = '';
+                res.matches.forEach(m => {
+                    const fname = m.path.split('/').pop();
+                    html += `<div class="modal-item" onclick="openFile('${m.path}'); closeSearchModal();">
+                        <span><strong>${fname}</strong>:${m.line_number} <span style="color:#a1a1aa; margin-left:8px;">${escapeHtml(m.line_content)}</span></span>
+                        <span style="color:#06b6d4; font-size:11px;">Open</span>
+                    </div>`;
+                });
+                container.innerHTML = html;
+            } catch (err) {
+                container.innerHTML = `<div style="padding:14px; color:#ef4444; text-align:center;">Search error: ${err}</div>`;
+            }
+        }
+
+        // Bottom Terminal Execution
+        function toggleTerminal() {
+            const drawer = document.getElementById('terminal-drawer');
+            drawer.style.display = (drawer.style.display === 'flex' ? 'none' : 'flex');
+            if (drawer.style.display === 'flex') {
+                document.getElementById('term-input').focus();
+            }
+        }
+
+        function handleTermInput(e) {
+            if (e.key === 'Enter') execTermCommand();
+        }
+
+        function runTermQuick(cmd) {
+            document.getElementById('term-input').value = cmd;
+            execTermCommand();
+        }
+
+        async function execTermCommand() {
+            const input = document.getElementById('term-input');
+            const cmd = input.value.trim();
+            if (!cmd) return;
+            const outputBox = document.getElementById('terminal-output');
+            outputBox.innerText += `\n$ ${cmd}\nRunning...`;
+            outputBox.scrollTop = outputBox.scrollHeight;
+            input.value = '';
+
+            try {
+                const res = await apiInvoke('execute_terminal_command', { command: cmd });
+                const statusStr = res.exit_code === 0 ? '✔ Success (0)' : `✘ Exit Code ${res.exit_code}`;
+                outputBox.innerText += `\n${res.stdout}${res.stderr}\n[${statusStr} in ${res.duration_ms}ms]\n`;
+                outputBox.scrollTop = outputBox.scrollHeight;
+
+                if (res.exit_code !== 0 && res.stderr) {
+                    lastTermStderr = res.stderr;
+                    document.getElementById('autofix-btn').style.display = 'inline-flex';
+                } else {
+                    document.getElementById('autofix-btn').style.display = 'none';
+                }
+            } catch (err) {
+                outputBox.innerText += `\nExecution Error: ${err}\n`;
+            }
+        }
+
+        function autoFixTerminalError() {
+            if (!lastTermStderr) return;
+            const chatInput = document.getElementById('chat-input');
+            chatInput.value = `Fix terminal compiler/runtime error:\n\`\`\`\n${lastTermStderr}\n\`\`\``;
+            sendPrompt();
+        }
+
+        // Composer Multi-File Orchestrator
+        async function runComposer() {
+            const prompt = document.getElementById('composer-prompt').value.trim();
+            if (!prompt) return;
+            const resBox = document.getElementById('composer-results');
+            resBox.innerHTML = '<div style="padding:14px; color:#38bdf8;"><i class="fa fa-spinner fa-spin"></i> Orchestrating multi-file changes with local model...</div>';
+
+            const activeFiles = openTabs.map(t => t.path);
+            try {
+                let resolvedPrompt = prompt;
+                if (prompt.includes('@')) {
+                    try {
+                        const ctxRes = await apiInvoke('resolve_context_mentions', { prompt });
+                        if (ctxRes && ctxRes.expanded_prompt) resolvedPrompt = ctxRes.expanded_prompt;
+                    } catch (e) { console.warn('Context resolution notice:', e); }
+                }
+                const res = await apiInvoke('ask_composer', { prompt: resolvedPrompt, files: activeFiles });
+                let html = `<div style="background:#18181b; padding:12px; border-radius:6px; border:1px solid #27272a; margin-bottom:12px;">
+                    <strong>Plan Summary:</strong> ${escapeHtml(res.summary)}
+                    <div style="margin-top:8px;">
+                        <button class="btn btn-green" onclick="acceptAllComposer()"><i class="fa fa-check-double"></i> Accept All Files (O(1) Swap)</button>
+                    </div>
+                </div>`;
+
+                res.files.forEach((f, idx) => {
+                    const fname = f.path.split('/').pop();
+                    html += `<div style="background:#111827; padding:10px 14px; border-radius:6px; border:1px solid #1f2937; margin-bottom:8px; display:flex; justify-content:space-between; align-items:center;">
+                        <div>
+                            <span style="font-weight:700; color:#60a5fa;">${fname}</span>
+                            <div style="font-size:11px; color:#9ca3af;">${escapeHtml(f.explanation)}</div>
+                        </div>
+                        <div style="display:flex; gap:6px;">
+                            <button class="btn btn-primary" onclick="previewComposerFileDiff(${idx})"><i class="fa fa-code-compare"></i> Diff</button>
+                            <button class="btn btn-green" onclick="commitComposerFile(${idx})"><i class="fa fa-check"></i> Accept</button>
+                        </div>
+                    </div>`;
+                });
+                resBox.innerHTML = html;
+                window.currentComposerPlans = res.files;
+            } catch (err) {
+                resBox.innerHTML = `<div style="color:#ef4444;">Composer Error: ${err}</div>`;
+            }
+        }
+
+        async function previewComposerFileDiff(idx) {
+            if (!window.currentComposerPlans || !window.currentComposerPlans[idx]) return;
+            const plan = window.currentComposerPlans[idx];
+            await openFile(plan.path);
+            try {
+                const diffData = await apiInvoke('compute_diff', {
+                    original: plan.original_content,
+                    modified: plan.modified_content,
+                });
+                window.currentInlineEditReplacement = plan.modified_content;
+                window.currentInlineEditSelected = null;
+                renderDiff(diffData);
+                document.getElementById('side-view-container').innerText = diffData.side_by_side;
+                switchView('diff');
+            } catch (err) {
+                alert('Diff error: ' + err);
+            }
+        }
+
+        async function commitComposerFile(idx) {
+            if (!window.currentComposerPlans || !window.currentComposerPlans[idx]) return;
+            const plan = window.currentComposerPlans[idx];
+            await commitSingleFile(plan.path, plan.original_content, plan.modified_content);
+        }
+
+        async function acceptAllComposer() {
+            if (!window.currentComposerPlans) return;
+            try {
+                await apiInvoke('commit_composer_plan', { plans: window.currentComposerPlans });
+                alert('All files committed with O(1) buffer pointer swap!');
+                switchView('editor');
+                loadWorkspace();
+            } catch (err) {
+                alert('Commit failed: ' + err);
+            }
+        }
+
+        async function commitSingleFile(path, orig, modif) {
+            try {
+                await apiInvoke('commit_tab_overlay', { path, original: orig, speculative: modif });
+                alert('Committed: ' + path.split('/').pop());
+                loadWorkspace();
+            } catch (err) {
+                alert('Commit failed: ' + err);
+            }
+        }
+
+        // Rules inspection
+        async function showRules() {
+            try {
+                const res = await apiInvoke('load_project_rules');
+                alert(`[${res.source}]\n\n${res.rules}`);
+            } catch (err) {
+                alert('Error loading rules: ' + err);
+            }
+        }
+
+        // Switch View
+        function switchView(view) {
+            const editorBox = document.getElementById('monaco-root');
+            const fallbackBox = document.getElementById('fallback-editor');
+            const diffBox = document.getElementById('diff-view-container');
+            const sideBox = document.getElementById('side-view-container');
+            const compBox = document.getElementById('composer-container');
+
+            [document.getElementById('mode-editor'), document.getElementById('mode-diff'), document.getElementById('mode-side'), document.getElementById('mode-composer')].forEach(b => b.classList.remove('active'));
+
+            diffBox.style.display = 'none';
+            sideBox.style.display = 'none';
+            compBox.style.display = 'none';
+            if (isUsingFallback) fallbackBox.style.display = 'none';
+            else editorBox.style.display = 'none';
+
+            if (view === 'editor') {
+                if (isUsingFallback) fallbackBox.style.display = 'block';
+                else editorBox.style.display = 'block';
+                document.getElementById('mode-editor').classList.add('active');
+            } else if (view === 'diff') {
+                diffBox.style.display = 'block';
+                document.getElementById('mode-diff').classList.add('active');
+            } else if (view === 'side') {
+                sideBox.style.display = 'block';
+                document.getElementById('mode-side').classList.add('active');
+            } else if (view === 'composer') {
+                compBox.style.display = 'block';
+                document.getElementById('mode-composer').classList.add('active');
+            }
+        }
+
+        // Myers SES Diff Rendering
+        async function triggerDiff() {
+            if (activeTabIdx < 0) return;
+            const tab = openTabs[activeTabIdx];
+            const modified = getEditorContent();
+            try {
+                const diffData = await apiInvoke('compute_diff', { original: tab.originalContent, modified });
+                renderDiff(diffData);
+                document.getElementById('side-view-container').innerText = diffData.side_by_side;
+                switchView('diff');
+            } catch (err) {
+                alert('Diff calculation failed: ' + err);
+            }
+        }
+
+        function renderDiff(diffData) {
+            const container = document.getElementById('diff-view-container');
+            const m = diffData.metrics;
+            let html = `<div class="diff-banner">
+                <div>
+                    <strong>Zig Myers SES Kernel</strong>: 
+                    <span style="color:#10b981; font-weight:700;">+${m.added_lines}</span> / 
+                    <span style="color:#ef4444; font-weight:700;">-${m.deleted_lines}</span> | 
+                    Similarity: <strong>${(m.similarity_ratio * 100).toFixed(1)}%</strong> | 
+                    Edit Distance: ${m.edit_distance} | Latency: <strong>${m.compute_time_us} µs</strong>
+                </div>
+                <div style="display:flex; gap:6px;">
+                    <button class="btn btn-green" onclick="acceptDiffToEditor()"><i class="fa fa-check"></i> Accept Changes</button>
+                    <button class="btn btn-primary" onclick="switchView('side')"><i class="fa fa-columns"></i> Side-by-Side</button>
+                    <button class="btn" style="background:#dc2626; border-color:#ef4444; color:#fff;" onclick="discardDiff()"><i class="fa fa-xmark"></i> Discard</button>
+                </div>
+            </div>`;
+
+            diffData.lines.forEach(line => {
+                const oldNo = line.old_line_num !== null && line.old_line_num !== undefined ? line.old_line_num : '';
+                const newNo = line.new_line_num !== null && line.new_line_num !== undefined ? line.new_line_num : '';
+                if (line.kind === 'Equal') {
+                    html += `<div class="diff-line">
+                        <div class="diff-gutter-old">${oldNo}</div>
+                        <div class="diff-gutter-new">${newNo}</div>
+                        <div class="diff-marker"> </div>
+                        <div class="diff-content" style="color:#71717a;">${escapeHtml(line.content)}</div>
+                    </div>`;
+                } else if (line.kind === 'Deletion') {
+                    let spansHtml = line.spans.map(s => s.kind === 'Deletion' ? `<span class="diff-span-del">${escapeHtml(s.text)}</span>` : escapeHtml(s.text)).join('');
+                    html += `<div class="diff-line diff-del">
+                        <div class="diff-gutter-old">${oldNo}</div>
+                        <div class="diff-gutter-new"> </div>
+                        <div class="diff-marker">-</div>
+                        <div class="diff-content">${spansHtml}</div>
+                    </div>`;
+                } else if (line.kind === 'Insertion') {
+                    let spansHtml = line.spans.map(s => s.kind === 'Insertion' ? `<span class="diff-span-ins">${escapeHtml(s.text)}</span>` : escapeHtml(s.text)).join('');
+                    html += `<div class="diff-line diff-ins">
+                        <div class="diff-gutter-old"> </div>
+                        <div class="diff-gutter-new">${newNo}</div>
+                        <div class="diff-marker">+</div>
+                        <div class="diff-content">${spansHtml}</div>
+                    </div>`;
+                }
+            });
+            container.innerHTML = html;
+        }
+
+        function acceptDiffToEditor() {
+            if (window.currentInlineEditReplacement !== undefined && activeTabIdx >= 0) {
+                const tab = openTabs[activeTabIdx];
+                const currentFull = getEditorContent();
+                let newContent = window.currentInlineEditReplacement;
+                if (window.currentInlineEditSelected && window.currentInlineEditSelected !== currentFull) {
+                    newContent = currentFull.replace(window.currentInlineEditSelected, window.currentInlineEditReplacement);
+                }
+                setEditorContent(newContent, tab.lang);
+                tab.content = newContent;
+                tab.isDirty = true;
+                renderTabs();
+                switchView('editor');
+            } else {
+                switchView('editor');
+            }
+        }
+
+        function discardDiff() {
+            switchView('editor');
+        }
+
+        // Copilot Chat
+        async function sendPrompt() {
+            const input = document.getElementById('chat-input');
+            const text = input.value.trim();
+            if (!text) return;
+            input.value = '';
+
+            const chatStream = document.getElementById('chat-stream');
+            chatStream.innerHTML += `<div class="chat-bubble chat-user">${escapeHtml(text)}</div>`;
+            chatStream.scrollTop = chatStream.scrollHeight;
+
+            try {
+                let resolvedPrompt = text;
+                if (text.includes('@')) {
+                    try {
+                        const ctxRes = await apiInvoke('resolve_context_mentions', { prompt: text });
+                        if (ctxRes && ctxRes.expanded_prompt) resolvedPrompt = ctxRes.expanded_prompt;
+                    } catch (e) { console.warn('Context resolution notice:', e); }
+                }
+                const data = await apiInvoke('ask_copilot', {
+                    prompt: resolvedPrompt,
+                    context: getEditorContent(),
+                });
+
+                let bubbleHtml = `<div class="chat-bubble chat-ai"><div>${escapeHtml(data.response)}</div>`;
+                const code = extractCodeBlock(data.response);
+                if (code) {
+                    speculativeContent = code;
+                    bubbleHtml += `
+                        <div class="chat-snippet-box">${escapeHtml(code)}</div>
+                        <div class="chat-actions-row">
+                            <button class="btn btn-green" onclick="previewSpeculativeDiff()"><i class="fa fa-code-compare"></i> Preview Diff</button>
+                            <button class="btn btn-primary" onclick="commitTabOverlay()"><i class="fa fa-check"></i> Accept Edit [Tab]</button>
+                        </div>
+                    `;
+                    document.getElementById('speculative-pill').style.display = 'flex';
+                }
+                bubbleHtml += `</div>`;
+
+                chatStream.innerHTML += bubbleHtml;
+                chatStream.scrollTop = chatStream.scrollHeight;
+
+                if (data.model) {
+                    document.getElementById('model-badge').innerText = data.model;
+                }
+            } catch (err) {
+                chatStream.innerHTML += `<div class="chat-bubble chat-ai" style="color:#ef4444;">Error: ${err}</div>`;
+            }
+        }
+
+        async function previewSpeculativeDiff() {
+            if (!speculativeContent || activeTabIdx < 0) return;
+            const tab = openTabs[activeTabIdx];
+            try {
+                const diffData = await apiInvoke('compute_diff', {
+                    original: tab.originalContent,
+                    modified: speculativeContent
+                });
+                renderDiff(diffData);
+                document.getElementById('side-view-container').innerText = diffData.side_by_side;
+                switchView('diff');
+            } catch (err) {
+                alert('Diff error: ' + err);
+            }
+        }
+
+        async function commitTabOverlay() {
+            if (!speculativeContent || activeTabIdx < 0) return;
+            const tab = openTabs[activeTabIdx];
+            try {
+                await apiInvoke('commit_tab_overlay', {
+                    path: tab.path,
+                    original: tab.originalContent,
+                    speculative: speculativeContent
+                });
+                setEditorContent(speculativeContent);
+                tab.originalContent = speculativeContent;
+                tab.content = speculativeContent;
+                tab.isDirty = false;
+                speculativeContent = "";
+                document.getElementById('speculative-pill').style.display = 'none';
+                renderTabs();
+                switchView('editor');
+            } catch (err) {
+                alert('Commit failed: ' + err);
+            }
+        }
+
+        function discardOverlay() {
+            speculativeContent = "";
+            document.getElementById('speculative-pill').style.display = 'none';
+        }
+
+        function extractCodeBlock(text) {
+            const match = text.match(/```(?:\w+)?\n([\s\S]*?)```/);
+            return match ? match[1] : null;
+        }
+
+        function escapeHtml(str) {
+            return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
+
+        // Workspace Tree Explorer
+        async function loadWorkspace() {
+            try {
+                const nodes = await apiInvoke('get_workspace_tree');
+                const container = document.getElementById('tree-root');
+                container.innerHTML = '';
+                renderTree(nodes, container);
+            } catch (err) {
+                console.error('Failed to load workspace tree:', err);
+            }
+        }
+
+        function renderTree(nodes, parentEl) {
+            nodes.forEach(node => {
+                const item = document.createElement('div');
+                item.className = 'tree-item';
+                if (node.is_dir) {
+                    item.innerHTML = `<i class="fa fa-folder tree-folder"></i> <span>${node.name}</span><i class="fa fa-trash tree-del-btn" title="Delete folder" onclick="promptDeleteEntry('${node.path}', event)"></i>`;
+                    const childBox = document.createElement('div');
+                    childBox.style.paddingLeft = '14px';
+                    childBox.style.display = 'block';
+                    item.onclick = (e) => {
+                        e.stopPropagation();
+                        childBox.style.display = childBox.style.display === 'none' ? 'block' : 'none';
+                    };
+                    parentEl.appendChild(item);
+                    if (node.children) {
+                        renderTree(node.children, childBox);
+                        parentEl.appendChild(childBox);
+                    }
+                } else {
+                    const icon = getFileIcon(node.name);
+                    item.innerHTML = `<i class="${icon} tree-file"></i> <span>${node.name}</span><i class="fa fa-trash tree-del-btn" title="Delete file" onclick="promptDeleteEntry('${node.path}', event)"></i>`;
+                    item.onclick = (e) => {
+                        e.stopPropagation();
+                        document.querySelectorAll('.tree-item').forEach(el => el.classList.remove('active'));
+                        item.classList.add('active');
+                        openFile(node.path);
+                    };
+                    parentEl.appendChild(item);
+                }
+            });
+        }
+
+        async function promptCreateFile() {
+            const name = prompt('Enter new file name or path (e.g. src/new_module.rs):');
+            if (!name) return;
+            try {
+                await apiInvoke('create_file', { path: name });
+                await loadWorkspace();
+                openFile(name);
+            } catch (err) {
+                alert('Create file failed: ' + err);
+            }
+        }
+
+        async function promptCreateFolder() {
+            const name = prompt('Enter new directory path (e.g. tests/unit):');
+            if (!name) return;
+            try {
+                await apiInvoke('create_folder', { path: name });
+                await loadWorkspace();
+            } catch (err) {
+                alert('Create folder failed: ' + err);
+            }
+        }
+
+        async function promptDeleteEntry(path, e) {
+            e.stopPropagation();
+            if (!confirm(`Are you sure you want to delete ${path}?`)) return;
+            try {
+                await apiInvoke('delete_entry', { path });
+                const tabIdx = openTabs.findIndex(t => t.path === path);
+                if (tabIdx >= 0) {
+                    openTabs.splice(tabIdx, 1);
+                    if (activeTabIdx >= openTabs.length) activeTabIdx = openTabs.length - 1;
+                    renderTabs();
+                    if (activeTabIdx >= 0) switchTab(activeTabIdx);
+                    else setEditorContent('// No file open.');
+                }
+                await loadWorkspace();
+            } catch (err) {
+                alert('Delete failed: ' + err);
+            }
+        }
+
+        function getFileIcon(name) {
+            if (name.endsWith('.rs')) return 'fa-brands fa-rust';
+            if (name.endsWith('.zig')) return 'fa-solid fa-bolt';
+            if (name.endsWith('.js') || name.endsWith('.ts')) return 'fa-brands fa-js';
+            if (name.endsWith('.toml') || name.endsWith('.json')) return 'fa-solid fa-gear';
+            if (name.endsWith('.md')) return 'fa-regular fa-file-lines';
+            return 'fa-regular fa-file-code';
+        }
+
+        async function loadDiagnostics() {
+            try {
+                const diag = await apiInvoke('get_diagnostics');
+                const footer = document.getElementById('diag-footer');
+                footer.innerHTML = `
+                    <div title="${diag.myers_ses}"><i class="fa fa-microchip"></i> SIMD: ${diag.myers_ses}</div>
+                    <div title="${diag.landlock_confinement}"><i class="fa fa-shield-halved"></i> LSM: ${diag.landlock_confinement}</div>
+                    <div title="${diag.local_llm}"><i class="fa fa-brain"></i> LLM: ${diag.local_llm}</div>
+                    <div><i class="fa fa-memory"></i> RAM: ${diag.memory_resident}</div>
+                `;
+            } catch (err) {
+                console.warn('Diagnostics telemetry failed:', err);
+            }
+        }
+
+        // Initialize Everything
+        initEditor();
+        loadWorkspace();
+        loadDiagnostics();
+    </script>
+</body>
+</html>

@@ -1,0 +1,6 @@
+[env]
+PKG_CONFIG_PATH = { value = "/home/toshiba/.local/sysroot/usr/lib/x86_64-linux-gnu/pkgconfig" }
+LIBRARY_PATH = { value = "/home/toshiba/.local/sysroot/usr/lib/x86_64-linux-gnu" }
+
+[build]
+rustflags = ["-L", "/home/toshiba/.local/sysroot/usr/lib/x86_64-linux-gnu"]

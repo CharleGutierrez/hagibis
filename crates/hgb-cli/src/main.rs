@@ -2157,7 +2157,7 @@ enum Commands {
     },
 
     /// Visual IDE GUI & Inline Diffing Cockpit (TrueColor ANSI + Myers SES intra-line highlighting)
-    #[command(alias = "diff-ui", alias = "inline-diff")]
+    #[command(alias = "inline-diff")]
     DiffUi {
         /// Original / baseline file path (or target file when diffing against git HEAD)
         original: String,
@@ -2169,6 +2169,22 @@ enum Commands {
         /// Interactive live acceptance cockpit (navigate hunks with Tab to accept, Esc to discard)
         #[arg(short, long)]
         interactive: bool,
+    },
+
+    /// Visual IDE GUI & Inline Diffing Cockpit (TrueColor ANSI + Myers SES intra-line highlighting)
+    #[command(alias = "gui", alias = "visual-ide")]
+    Ide {
+        /// Optional workspace directory or file path to open (defaults to current directory)
+        #[arg(value_name = "PATH")]
+        path: Option<std::path::PathBuf>,
+
+        /// Force web server mode (browser UI) instead of native desktop window
+        #[arg(long)]
+        web: bool,
+
+        /// Custom port for browser server mode (default: 4173)
+        #[arg(short, long, default_value_t = 4173)]
+        port: u16,
     },
 }
 
@@ -2218,6 +2234,62 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     if let Commands::Chat = command {
         let mut state = hgb_nextgen::CockpitState::new();
         return state.run_interactive().await.map_err(|e| Box::new(e) as Box<dyn std::error::Error>);
+    }
+
+    if let Commands::Ide { path, web, port } = command {
+        let target_dir = path
+            .as_ref()
+            .map(|p| {
+                if p.is_dir() {
+                    p.clone()
+                } else if let Some(parent) = p.parent() {
+                    if parent.as_os_str().is_empty() {
+                        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+                    } else {
+                        parent.to_path_buf()
+                    }
+                } else {
+                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+                }
+            })
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")));
+
+        let display_present = std::env::var("DISPLAY").is_ok() || std::env::var("WAYLAND_DISPLAY").is_ok();
+        let home_bin = std::env::var("HOME").ok().map(|h| std::path::PathBuf::from(h).join(".cargo/bin/hgb-desktop"));
+        let candidates = [
+            home_bin,
+            Some(std::path::PathBuf::from("/home/toshiba/My AI Project/hagibis/target/release/hgb-desktop")),
+            Some(std::path::PathBuf::from("/home/toshiba/My AI Project/hagibis/target/debug/hgb-desktop")),
+        ];
+        let native_bin = candidates.into_iter().flatten().find(|p| p.is_file());
+
+        if !web && display_present && native_bin.is_some() {
+            let bin_path = native_bin.unwrap();
+            println!("🚀 Launching Hagibis Tauri Visual IDE native desktop window: {:?}", bin_path);
+            let mut cmd = std::process::Command::new(bin_path);
+            cmd.arg(&target_dir).current_dir(&target_dir);
+            let mut child = cmd.spawn()?;
+            let status = child.wait()?;
+            if status.success() {
+                return Ok(());
+            }
+        }
+
+        // High-speed fallback to Axum Visual IDE Server + browser cockpit
+        let server = hgb_nextgen::VisualIdeServer::new(port, target_dir);
+        tokio::spawn(async move {
+            if let Err(e) = server.run().await {
+                eprintln!("Visual IDE Server error: {}", e);
+            }
+        });
+        
+        let url = format!("http://127.0.0.1:{}", port);
+        println!("🚀 Hagibis Visual IDE available at {}", url);
+        if std::process::Command::new("xdg-open").arg(&url).status().is_err() {
+            let _ = std::process::Command::new("firefox").arg("--new-window").arg(&url).status();
+        }
+        tokio::signal::ctrl_c().await?;
+        return Ok(());
     }
 
     if let Commands::Cockpit { headless } = command {
@@ -5675,7 +5747,8 @@ async fn test_calc() { assert!(calculate(5)); }".to_string()
         Commands::DiffUi { original, modified, side_by_side, interactive } => {
             handle_diff_ui(original, modified, side_by_side, interactive).await?;
             Ok(())
-        }
+        },
+        Commands::Ide { .. } => unreachable!(),
     }
 }
 

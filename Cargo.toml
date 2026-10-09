@@ -5,6 +5,7 @@ members = [
     "crates/hgb-nextgen",
     "crates/hgb-daemon",
     "crates/hgb-cli",
+    "crates/hgb-desktop",
 ]
 resolver = "2"
 

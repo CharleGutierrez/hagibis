@@ -30,6 +30,7 @@ cpal = "0.15"
 arboard = "3.4"
 tempfile = "3.10"
 uuid = { version = "1.27.0", features = ["v4"] }
+axum = "0.7"
 
 [dev-dependencies]
 hgb-daemon = { path = "../hgb-daemon" }
