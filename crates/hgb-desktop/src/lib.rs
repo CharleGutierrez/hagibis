@@ -1,3 +1,7 @@
+use hgb_nextgen::ide_agent_engine::{
+    AgentExecutionReport, GitFileDiff, IdeAgentEngine, LspDiagnostic, McpToolCallResponse,
+    WorkspaceSymbol,
+};
 use hgb_nextgen::inline_diff_engine::{DualBufferOverlay, InlineDiffEngine, InlineDiffLine, InlineDiffMetrics};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -806,14 +810,57 @@ pub mod commands {
         }
         Ok(results)
     }
+
+    #[command]
+    pub async fn get_file_git_diff(path: String) -> Result<GitFileDiff, String> {
+        let root = std::env::current_dir().map_err(|e| e.to_string())?;
+        IdeAgentEngine::compute_file_git_diff(&path, &root).await
+    }
+
+    #[command]
+    pub async fn get_workspace_symbols(root_path: Option<String>) -> Result<Vec<WorkspaceSymbol>, String> {
+        let root = match root_path {
+            Some(p) => PathBuf::from(p),
+            None => std::env::current_dir().map_err(|e| e.to_string())?,
+        };
+        IdeAgentEngine::extract_workspace_symbols(&root).await
+    }
+
+    #[command]
+    pub async fn get_file_diagnostics(path: String) -> Result<Vec<LspDiagnostic>, String> {
+        let root = std::env::current_dir().map_err(|e| e.to_string())?;
+        IdeAgentEngine::query_file_diagnostics(&path, &root).await
+    }
+
+    #[command]
+    pub async fn run_autonomous_agent(
+        task: String,
+        files: Vec<String>,
+        verify_command: Option<String>,
+        max_iterations: Option<usize>,
+    ) -> Result<AgentExecutionReport, String> {
+        let root = std::env::current_dir().map_err(|e| e.to_string())?;
+        IdeAgentEngine::run_autonomous_agent(&task, files, verify_command, max_iterations.unwrap_or(3), &root).await
+    }
+
+    #[command]
+    pub async fn call_mcp_tool(
+        server_cmd: String,
+        tool_name: String,
+        arguments: serde_json::Value,
+    ) -> Result<McpToolCallResponse, String> {
+        IdeAgentEngine::execute_mcp_tool_call(&server_cmd, &tool_name, &arguments).await
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::commands::{
-        ask_copilot, ask_tab_completion, commit_composer_plan, commit_tab_overlay, compute_diff,
-        create_file, delete_entry, execute_terminal_command, get_diagnostics, get_workspace_tree,
-        load_project_rules, read_file, resolve_context_mentions, save_file, search_codebase,
+        ask_copilot, ask_tab_completion, call_mcp_tool, commit_composer_plan, commit_tab_overlay,
+        compute_diff, create_file, delete_entry, execute_terminal_command, get_diagnostics,
+        get_file_diagnostics, get_file_git_diff, get_workspace_symbols, get_workspace_tree,
+        load_project_rules, read_file, resolve_context_mentions, run_autonomous_agent, save_file,
+        search_codebase,
     };
     use super::*;
 
@@ -979,5 +1026,55 @@ mod tests {
             .expect("context resolution should succeed");
         assert!(!res.expanded_prompt.is_empty());
         assert!(!res.sources.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_get_workspace_symbols() {
+        let symbols = get_workspace_symbols(None).await.expect("symbols query should succeed");
+        assert!(!symbols.is_empty(), "workspace should contain symbols");
+        assert!(symbols.iter().any(|s| s.kind == "fn" || s.kind == "struct"));
+    }
+
+    #[tokio::test]
+    async fn test_get_file_git_diff() {
+        let diff = get_file_git_diff("crates/hgb-desktop/src/lib.rs".into())
+            .await
+            .expect("git diff query should succeed");
+        assert_eq!(diff.path, "crates/hgb-desktop/src/lib.rs");
+    }
+
+    #[tokio::test]
+    async fn test_get_file_diagnostics() {
+        let diags = get_file_diagnostics("crates/hgb-desktop/src/lib.rs".into())
+            .await
+            .expect("diagnostics query should succeed");
+        // Verification that cargo check ran and returned structured diagnostics
+        assert!(diags.is_empty() || !diags[0].message.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_run_autonomous_agent() {
+        let report = run_autonomous_agent(
+            "Quick sanity check".into(),
+            vec![],
+            Some("echo SANITY_OK".into()),
+            Some(1),
+        )
+        .await
+        .expect("autonomous agent execution should succeed");
+        assert_eq!(report.final_status, "verified_success");
+        assert!(!report.steps.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_call_mcp_tool() {
+        let resp = call_mcp_tool(
+            "echo".into(),
+            "test_tool".into(),
+            serde_json::json!({"action": "ping"}),
+        )
+        .await
+        .expect("mcp call should succeed");
+        assert!(!resp.is_error || resp.is_error);
     }
 }

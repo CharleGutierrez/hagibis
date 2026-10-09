@@ -128,6 +128,100 @@
         .sidebar-actions { display: flex; align-items: center; gap: 8px; }
         .sidebar-actions i { cursor: pointer; color: #a1a1aa; font-size: 12px; }
         .sidebar-actions i:hover { color: #38bdf8; }
+
+        /* Phase 1: Monaco Git Gutter Decorations */
+        .git-gutter-add { border-left: 3px solid #10b981 !important; margin-left: 3px; }
+        .git-gutter-mod { border-left: 3px solid #06b6d4 !important; margin-left: 3px; }
+        .git-gutter-del { border-left: 3px solid #ef4444 !important; margin-left: 3px; }
+
+        /* Phase 1: Split Editor Container */
+        .monaco-split-wrapper { display: flex; width: 100%; height: 100%; position: relative; }
+        .editor-pane-half { flex: 1; height: 100%; position: relative; }
+
+        /* Phase 1: Mention Floating Dropdown */
+        .mention-dropdown {
+            position: fixed;
+            z-index: 500;
+            background: #18181b;
+            border: 1px solid #3f3f46;
+            border-radius: 8px;
+            box-shadow: 0 16px 36px rgba(0,0,0,0.85);
+            width: 320px;
+            max-height: 280px;
+            overflow-y: auto;
+            display: none;
+            flex-direction: column;
+            backdrop-filter: blur(10px);
+        }
+        .mention-item {
+            padding: 8px 12px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 12px;
+            color: #d4d4d8;
+            cursor: pointer;
+            border-bottom: 1px solid #27272a;
+            transition: background 0.1s;
+        }
+        .mention-item:last-child { border-bottom: none; }
+        .mention-item:hover, .mention-item.active {
+            background: #27272a;
+            color: #38bdf8;
+        }
+        .mention-badge {
+            font-size: 10px;
+            font-weight: 700;
+            padding: 2px 6px;
+            border-radius: 4px;
+            background: #083344;
+            color: #22d3ee;
+            margin-left: auto;
+        }
+
+        /* Phase 2: Problems & Diagnostics Drawer */
+        .drawer-tabs { display: flex; align-items: center; background: #141416; border-bottom: 1px solid var(--border-color); }
+        .drawer-tab { padding: 6px 14px; font-size: 11px; font-weight: 600; color: #a1a1aa; cursor: pointer; border-bottom: 2px solid transparent; }
+        .drawer-tab.active { color: #fff; border-bottom-color: var(--accent-cyan); background: #18181b; }
+        .problems-list { flex: 1; overflow-y: auto; padding: 6px 12px; font-family: "JetBrains Mono", monospace; font-size: 12px; }
+        .problem-item { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; padding: 6px 8px; border-radius: 4px; cursor: pointer; border-bottom: 1px solid #1f1f23; }
+        .problem-item:hover { background: #27272a; }
+        .problem-err { color: #ef4444; }
+        .problem-warn { color: #f59e0b; }
+
+        /* Phase 3: Autonomous Agent Step Timeline */
+        .agent-step-card {
+            background: #111827;
+            border: 1px solid #1f2937;
+            border-radius: 6px;
+            padding: 10px 12px;
+            margin-bottom: 8px;
+            font-size: 12px;
+        }
+        .agent-step-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+        .agent-step-thought {
+            font-size: 11px;
+            color: #9ca3af;
+            margin-bottom: 6px;
+        }
+        .agent-step-output {
+            background: #030712;
+            border: 1px solid #1e293b;
+            padding: 6px 8px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 11px;
+            color: #cbd5e1;
+            max-height: 120px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+        }
     </style>
 </head>
 <body>
@@ -140,8 +234,10 @@
         </div>
         <div class="header-actions">
             <button class="btn btn-indigo" onclick="openSearchModal()"><i class="fa fa-magnifying-glass"></i> Search (Ctrl+P)</button>
+            <button class="btn btn-indigo" onclick="openSymbolsModal()"><i class="fa fa-code-branch"></i> Symbols (@)</button>
             <button class="btn btn-primary" onclick="triggerInlineCtrlK()"><i class="fa fa-wand-magic-sparkles"></i> Edit (Ctrl+K)</button>
             <button class="btn btn-indigo" onclick="switchView('composer')"><i class="fa fa-layer-group"></i> Composer (Ctrl+I)</button>
+            <button class="btn" onclick="openMcpModal()"><i class="fa fa-plug"></i> MCP Tools</button>
             <button class="btn btn-green" onclick="toggleTerminal()"><i class="fa fa-terminal"></i> Terminal (Ctrl+`)</button>
             <button class="btn btn-primary" onclick="saveActiveFile()"><i class="fa fa-save"></i> Save (Ctrl+S)</button>
             <button class="btn btn-green" onclick="triggerDiff()"><i class="fa fa-code-compare"></i> Diff</button>
@@ -156,6 +252,7 @@
                 <div class="sidebar-actions">
                     <i class="fa fa-file-circle-plus" title="New File" onclick="promptCreateFile()"></i>
                     <i class="fa fa-folder-plus" title="New Folder" onclick="promptCreateFolder()"></i>
+                    <i class="fa fa-code-branch" title="AST Symbols" onclick="openSymbolsModal()"></i>
                     <i class="fa fa-rotate-right" onclick="loadWorkspace()" title="Refresh Explorer"></i>
                 </div>
             </div>
@@ -174,22 +271,55 @@
             
             <div class="mode-tabs">
                 <button class="mode-btn active" id="mode-editor" onclick="switchView('editor')"><i class="fa fa-code"></i> Monaco Editor</button>
+                <button class="mode-btn" id="mode-split" onclick="toggleSplitEditor()"><i class="fa fa-table-columns"></i> Split Editor</button>
                 <button class="mode-btn" id="mode-diff" onclick="switchView('diff')"><i class="fa fa-table-columns"></i> Myers SES Diff</button>
                 <button class="mode-btn" id="mode-side" onclick="switchView('side')"><i class="fa fa-columns"></i> Side-by-Side</button>
                 <button class="mode-btn" id="mode-composer" onclick="switchView('composer')"><i class="fa fa-layer-group"></i> Composer Agent</button>
+                <button class="mode-btn" id="mode-problems" onclick="toggleProblemsPanel()"><i class="fa fa-triangle-exclamation"></i> Problems <span id="diag-count-badge" class="badge" style="background:#dc2626; color:#fff; display:none; padding:1px 5px; font-size:10px;">0</span></button>
             </div>
 
             <div class="editor-canvas-box">
-                <div id="monaco-root"></div>
+                <div class="monaco-split-wrapper" id="monaco-split-wrapper">
+                    <div id="monaco-root" class="editor-pane-half"></div>
+                    <div id="monaco-split-root" class="editor-pane-half" style="display:none; border-left: 1px solid var(--border-color); flex-direction:column;">
+                        <div style="height:28px; background:#141416; border-bottom:1px solid #27272a; display:flex; justify-content:space-between; align-items:center; padding:0 8px; font-size:11px; color:#a1a1aa;">
+                            <span id="split-filename"><i class="fa fa-file-code"></i> Secondary Monaco Pane</span>
+                            <div style="display:flex; gap:6px;">
+                                <button class="btn" style="padding:2px 6px; font-size:10px;" onclick="loadActiveIntoSplit()">Clone Active</button>
+                                <i class="fa fa-xmark" style="cursor:pointer;" onclick="toggleSplitEditor()"></i>
+                            </div>
+                        </div>
+                        <div id="monaco-split-editor" style="width:100%; height:calc(100% - 28px);"></div>
+                    </div>
+                </div>
                 <textarea id="fallback-editor" spellcheck="false"></textarea>
                 <div id="diff-view-container"></div>
                 <div id="side-view-container"></div>
                 <div id="composer-container" style="display:none; padding:16px; overflow:auto; height:100%;">
                     <div style="font-weight:700; margin-bottom:10px; font-size:14px; color:#38bdf8;"><i class="fa fa-layer-group"></i> Cursor-Grade Multi-File Composer Orchestrator</div>
-                    <p style="font-size:12px; color:#a1a1aa; margin-bottom:14px;">Plan and execute architectural changes across multiple project files simultaneously with live $O(1)$ DualBuffer reviews.</p>
+                    <p style="font-size:12px; color:#a1a1aa; margin-bottom:10px;">Plan and execute architectural changes across multiple project files simultaneously with live $O(1)$ DualBuffer reviews.</p>
+                    
+                    <!-- Autonomous Self-Healing Agent Options -->
+                    <div style="display:flex; align-items:center; gap:12px; margin-bottom:12px; background:#18181b; padding:8px 12px; border-radius:6px; border:1px solid #27272a;">
+                        <label style="display:flex; align-items:center; gap:6px; font-size:12px; cursor:pointer;">
+                            <input type="checkbox" id="composer-agent-mode" checked>
+                            <strong>Autonomous Self-Healing Agent Loop (Landlock LSM)</strong>
+                        </label>
+                        <div style="display:flex; align-items:center; gap:6px; margin-left:auto; font-size:11px;">
+                            <span style="color:#a1a1aa;">Verify Cmd:</span>
+                            <input type="text" id="composer-verify-cmd" value="cargo check --message-format=json --quiet" style="background:#09090b; border:1px solid #3f3f46; color:#fff; padding:3px 8px; border-radius:4px; font-size:11px; width:220px;">
+                            <span style="color:#a1a1aa;">Max Iter:</span>
+                            <select id="composer-max-iter" style="background:#09090b; border:1px solid #3f3f46; color:#fff; padding:3px 6px; border-radius:4px; font-size:11px;">
+                                <option value="1">1</option>
+                                <option value="3" selected>3</option>
+                                <option value="5">5</option>
+                            </select>
+                        </div>
+                    </div>
+
                     <div style="display:flex; gap:8px; margin-bottom:12px;">
                         <input type="text" id="composer-prompt" placeholder="E.g. Refactor error handling across core files and sync tests..." style="flex:1; background:#1e1e24; border:1px solid #3f3f46; color:#fff; padding:8px 12px; border-radius:6px; font-size:13px; outline:none;">
-                        <button class="btn btn-primary" onclick="runComposer()"><i class="fa fa-play"></i> Generate Plan</button>
+                        <button class="btn btn-primary" onclick="runComposer()"><i class="fa fa-play"></i> Run Orchestrator</button>
                     </div>
                     <div id="composer-results"></div>
                 </div>
@@ -215,23 +345,31 @@
                 </div>
             </div>
 
-            <!-- Bottom Terminal Drawer -->
+            <!-- Bottom Multi-Tab Drawer (Terminal & Diagnostics) -->
             <div class="terminal-panel" id="terminal-drawer">
-                <div class="terminal-header">
-                    <span><i class="fa fa-terminal"></i> Sovereign Microkernel Terminal</span>
-                    <div style="display:flex; gap:8px;">
-                        <span style="cursor:pointer; color:#94a3b8;" onclick="runTermQuick('cargo test')">cargo test</span>
-                        <span style="cursor:pointer; color:#94a3b8;" onclick="runTermQuick('git status')">git status</span>
-                        <span style="cursor:pointer; color:#94a3b8;" onclick="runTermQuick('hgb status')">hgb status</span>
-                        <i class="fa fa-xmark" style="cursor:pointer; margin-left:8px;" onclick="toggleTerminal()"></i>
+                <div class="drawer-tabs">
+                    <div class="drawer-tab active" id="tab-term-btn" onclick="switchDrawerTab('term')"><i class="fa fa-terminal"></i> Sovereign Terminal</div>
+                    <div class="drawer-tab" id="tab-problems-btn" onclick="switchDrawerTab('problems')"><i class="fa fa-triangle-exclamation"></i> Problems (<span id="problems-count">0</span>)</div>
+                    <div style="margin-left:auto; display:flex; gap:8px; align-items:center; padding-right:10px;">
+                        <button class="btn btn-primary" style="padding:2px 7px; font-size:10px;" onclick="refreshDiagnostics()"><i class="fa fa-rotate-right"></i> Check Cargo</button>
+                        <span style="cursor:pointer; color:#94a3b8; font-size:11px;" onclick="runTermQuick('cargo test')">cargo test</span>
+                        <span style="cursor:pointer; color:#94a3b8; font-size:11px;" onclick="runTermQuick('git status')">git status</span>
+                        <i class="fa fa-xmark" style="cursor:pointer; color:#a1a1aa; margin-left:6px;" onclick="toggleTerminal()"></i>
                     </div>
                 </div>
-                <div class="terminal-output" id="terminal-output">// Terminal Ready. Enter bash command below.</div>
-                <div class="terminal-input-row">
-                    <span class="term-prompt">$</span>
-                    <input type="text" class="terminal-input" id="term-input" placeholder="Run command..." onkeydown="handleTermInput(event)">
-                    <button class="btn btn-primary" onclick="execTermCommand()"><i class="fa fa-play"></i> Run</button>
-                    <button class="btn btn-green" id="autofix-btn" style="display:none;" onclick="autoFixTerminalError()"><i class="fa fa-wrench"></i> Auto-Fix with Copilot</button>
+                <div id="drawer-term-content" style="display:flex; flex-direction:column; flex:1; height:calc(100% - 28px);">
+                    <div class="terminal-output" id="terminal-output">// Terminal Ready. Enter bash command below.</div>
+                    <div class="terminal-input-row">
+                        <span class="term-prompt">$</span>
+                        <input type="text" class="terminal-input" id="term-input" placeholder="Run command..." onkeydown="handleTermInput(event)">
+                        <button class="btn btn-primary" onclick="execTermCommand()"><i class="fa fa-play"></i> Run</button>
+                        <button class="btn btn-green" id="autofix-btn" style="display:none;" onclick="autoFixTerminalError()"><i class="fa fa-wrench"></i> Auto-Fix with Copilot</button>
+                    </div>
+                </div>
+                <div id="drawer-problems-content" style="display:none; flex-direction:column; flex:1; height:calc(100% - 28px); overflow-y:auto;">
+                    <div class="problems-list" id="problems-list">
+                        <div style="padding:14px; color:#71717a; text-align:center;">No compiler diagnostics. Click 'Check Cargo' to inspect.</div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -272,12 +410,58 @@
                 <div style="padding:14px; color:#71717a; text-align:center;">Type query to scan workspace...</div>
             </div>
         </div>
+    <!-- Mention Floating Dropdown Menu -->
+    <div id="mention-dropdown" class="mention-dropdown"></div>
+
+    <!-- AST Symbols Outline Modal -->
+    <div class="modal-overlay" id="symbols-modal" onclick="closeSymbolsModal(event)">
+        <div class="modal-content" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <span><i class="fa fa-code-branch"></i> Workspace AST Symbol Outline (@Symbols)</span>
+                <i class="fa fa-xmark" style="cursor:pointer;" onclick="closeSymbolsModal()"></i>
+            </div>
+            <input type="text" class="modal-input" id="modal-symbols-input" placeholder="Search function, struct, enum, trait..." oninput="filterSymbolsList()">
+            <div class="modal-list" id="modal-symbols-results">
+                <div style="padding:14px; color:#71717a; text-align:center;">Loading AST symbols...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MCP Tool Caller Modal -->
+    <div class="modal-overlay" id="mcp-modal" onclick="closeMcpModal(event)">
+        <div class="modal-content" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <span><i class="fa fa-plug"></i> Native MCP (Model Context Protocol) Runner</span>
+                <i class="fa fa-xmark" style="cursor:pointer;" onclick="closeMcpModal()"></i>
+            </div>
+            <div style="padding:14px; display:flex; flex-direction:column; gap:10px;">
+                <div>
+                    <label style="font-size:11px; color:#a1a1aa;">Server Subprocess Command:</label>
+                    <input type="text" id="mcp-server-cmd" value="echo" style="width:100%; background:#1e1e24; border:1px solid #3f3f46; color:#fff; padding:6px 10px; border-radius:4px; font-size:12px; margin-top:3px; outline:none;">
+                </div>
+                <div>
+                    <label style="font-size:11px; color:#a1a1aa;">Tool Name:</label>
+                    <input type="text" id="mcp-tool-name" value="ping" style="width:100%; background:#1e1e24; border:1px solid #3f3f46; color:#fff; padding:6px 10px; border-radius:4px; font-size:12px; margin-top:3px; outline:none;">
+                </div>
+                <div>
+                    <label style="font-size:11px; color:#a1a1aa;">Arguments (JSON):</label>
+                    <textarea id="mcp-arguments" style="width:100%; height:70px; background:#1e1e24; border:1px solid #3f3f46; color:#fff; padding:6px 10px; border-radius:4px; font-size:12px; font-family:monospace; margin-top:3px; outline:none;">{"action": "ping", "client": "Hagibis Native IDE"}</textarea>
+                </div>
+                <button class="btn btn-primary" onclick="execMcpTool()"><i class="fa fa-play"></i> Invoke MCP Subprocess</button>
+                <div id="mcp-result-box" style="background:#09090b; border:1px solid #27272a; padding:10px; border-radius:6px; font-family:monospace; font-size:11px; max-height:160px; overflow-y:auto; white-space:pre-wrap; color:#a1a1aa;">// MCP Results will stream here</div>
+            </div>
+        </div>
     </div>
 
     <!-- Monaco AMD Loader -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs/loader.min.js"></script>
     <script>
         let editorInstance = null;
+        let editorInstanceSplit = null;
+        let isSplitOpen = false;
+        let gitGutterDecorations = [];
+        let workspaceSymbolsCache = [];
+        let activeDiagnostics = [];
         let isUsingFallback = false;
         let openTabs = [];
         let activeTabIdx = -1;
@@ -315,6 +499,11 @@
                 'commit_composer_plan': ['/api/composer_commit', 'POST', args],
                 'ask_tab_completion': ['/api/tab_completion', 'POST', args],
                 'resolve_context_mentions': ['/api/resolve_context', 'POST', args],
+                'get_file_git_diff': ['/api/git_diff', 'POST', args],
+                'get_workspace_symbols': ['/api/symbols', 'GET'],
+                'get_file_diagnostics': ['/api/diagnostics', 'POST', args],
+                'run_autonomous_agent': ['/api/autonomous_agent', 'POST', args],
+                'call_mcp_tool': ['/api/mcp_tool', 'POST', args],
             };
             const config = routeMap[cmd];
             if (!config) throw new Error('Unknown command: ' + cmd);
@@ -383,6 +572,7 @@
                         // Register direct Monaco editor commands for Cursor shortcuts
                         editorInstance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyK, triggerInlineCtrlK);
                         editorInstance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyP, openSearchModal);
+                        editorInstance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyO, openSymbolsModal);
                         editorInstance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, saveActiveFile);
                         editorInstance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyI, () => switchView('composer'));
                         editorInstance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Backquote, toggleTerminal);
@@ -393,6 +583,7 @@
                                 openTabs[activeTabIdx].content = current;
                                 openTabs[activeTabIdx].isDirty = (current !== openTabs[activeTabIdx].originalContent);
                                 renderTabs();
+                                debounceUpdateGitGutter();
                             }
                         });
                         bindGlobalShortcuts();
@@ -495,6 +686,9 @@
             setEditorContent(tab.content, tab.lang);
             renderTabs();
             switchView('editor');
+            updateGitGutter(tab.path);
+            refreshDiagnosticsForFile(tab.path);
+            if (isSplitOpen) loadActiveIntoSplit();
         }
 
         function closeTab(idx, e) {
@@ -521,6 +715,8 @@
                 tab.content = content;
                 tab.isDirty = false;
                 renderTabs();
+                updateGitGutter(tab.path);
+                refreshDiagnosticsForFile(tab.path);
             } catch (err) {
                 alert('Save failed: ' + err);
             }
@@ -692,11 +888,90 @@
             sendPrompt();
         }
 
-        // Composer Multi-File Orchestrator
+        // Composer Multi-File Orchestrator & Autonomous Self-Healing Agent
         async function runComposer() {
             const prompt = document.getElementById('composer-prompt').value.trim();
             if (!prompt) return;
             const resBox = document.getElementById('composer-results');
+            const isAgent = document.getElementById('composer-agent-mode') && document.getElementById('composer-agent-mode').checked;
+
+            if (isAgent) {
+                // Phase 3: Autonomous Multi-Step Agent loop
+                const verifyCmd = (document.getElementById('composer-verify-cmd') && document.getElementById('composer-verify-cmd').value.trim()) || 'cargo check --message-format=json --quiet';
+                const maxIter = parseInt(document.getElementById('composer-max-iter').value) || 3;
+                resBox.innerHTML = '<div style="padding:14px; color:#38bdf8;"><i class="fa fa-spinner fa-spin"></i> Executing Autonomous Multi-Step Agent loop (Think -> Speculative Edit -> Verify -> Self-Heal)...</div>';
+
+                const activeFiles = openTabs.map(t => t.path);
+                try {
+                    let resolvedPrompt = prompt;
+                    if (prompt.includes('@')) {
+                        try {
+                            const ctxRes = await apiInvoke('resolve_context_mentions', { prompt });
+                            if (ctxRes && ctxRes.expanded_prompt) resolvedPrompt = ctxRes.expanded_prompt;
+                        } catch (e) { console.warn('Context resolution notice:', e); }
+                    }
+
+                    const report = await apiInvoke('run_autonomous_agent', {
+                        task: resolvedPrompt,
+                        files: activeFiles,
+                        verify_command: verifyCmd,
+                        max_iterations: maxIter,
+                    });
+
+                    const isSuccess = report.final_status === 'verified_success';
+                    const statusColor = isSuccess ? '#10b981' : '#f59e0b';
+                    const statusText = isSuccess ? '✔ Autonomous Self-Healing Verification Succeeded' : '⚠ Max Iterations Reached';
+
+                    let html = `<div style="background:#18181b; padding:12px; border-radius:6px; border:1px solid #27272a; margin-bottom:12px;">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <strong style="color:${statusColor}; font-size:13px;"><i class="fa fa-robot"></i> ${statusText}</strong>
+                            <span class="badge" style="background:#083344; color:#22d3ee;">${report.steps.length} Steps in ${report.iterations} Iterations</span>
+                        </div>
+                        <div style="font-size:11px; color:#9ca3af; margin-top:4px;">Landlock LSM Sandbox Active • Sovereign Closed-Loop Verification</div>
+                        <div style="margin-top:10px;">
+                            <button class="btn btn-green" onclick="acceptAllComposer()"><i class="fa fa-check-double"></i> Commit Verified Changes (O(1) Swap)</button>
+                        </div>
+                    </div>`;
+
+                    html += '<div style="margin-bottom:12px;"><h4 style="font-size:12px; color:#a1a1aa; margin-bottom:6px;">Execution Steps Audit:</h4>';
+                    report.steps.forEach(s => {
+                        const stepSuccess = s.status === 'success';
+                        html += `
+                        <div class="agent-step-card">
+                            <div class="agent-step-header">
+                                <span style="color:#60a5fa;">Step ${s.step_number}: ${escapeHtml(s.action)}</span>
+                                <span class="badge" style="background:${stepSuccess ? '#064e3b' : '#7f1d1d'}; color:${stepSuccess ? '#34d399' : '#f87171'};">${s.status}</span>
+                            </div>
+                            <div class="agent-step-thought">${escapeHtml(s.thought)}</div>
+                            ${s.command_output ? `<div class="agent-step-output">${escapeHtml(s.command_output)}</div>` : ''}
+                        </div>`;
+                    });
+                    html += '</div>';
+
+                    if (report.final_diffs && report.final_diffs.length > 0) {
+                        html += '<h4 style="font-size:12px; color:#a1a1aa; margin-bottom:6px;">Verified File Diffs:</h4>';
+                        report.final_diffs.forEach((f, idx) => {
+                            const fname = f.path.split('/').pop();
+                            html += `<div style="background:#111827; padding:10px 14px; border-radius:6px; border:1px solid #1f2937; margin-bottom:8px; display:flex; justify-content:space-between; align-items:center;">
+                                <div>
+                                    <span style="font-weight:700; color:#60a5fa;">${fname}</span>
+                                    <div style="font-size:11px; color:#9ca3af;">${escapeHtml(f.explanation)}</div>
+                                </div>
+                                <div style="display:flex; gap:6px;">
+                                    <button class="btn btn-primary" onclick="previewComposerFileDiff(${idx})"><i class="fa fa-code-compare"></i> Diff</button>
+                                    <button class="btn btn-green" onclick="commitComposerFile(${idx})"><i class="fa fa-check"></i> Accept</button>
+                                </div>
+                            </div>`;
+                        });
+                        window.currentComposerPlans = report.final_diffs;
+                    }
+                    resBox.innerHTML = html;
+                } catch (err) {
+                    resBox.innerHTML = `<div style="color:#ef4444;">Autonomous Agent Error: ${err}</div>`;
+                }
+                return;
+            }
+
             resBox.innerHTML = '<div style="padding:14px; color:#38bdf8;"><i class="fa fa-spinner fa-spin"></i> Orchestrating multi-file changes with local model...</div>';
 
             const activeFiles = openTabs.map(t => t.path);
@@ -1123,10 +1398,479 @@
             }
         }
 
+        // Phase 1: Git Gutter Indicators
+        let gitGutterTimer = null;
+        function debounceUpdateGitGutter() {
+            clearTimeout(gitGutterTimer);
+            gitGutterTimer = setTimeout(() => {
+                if (activeTabIdx >= 0) {
+                    updateGitGutter(openTabs[activeTabIdx].path);
+                }
+            }, 600);
+        }
+
+        async function updateGitGutter(path) {
+            if (!editorInstance || isUsingFallback || !path) return;
+            try {
+                const diff = await apiInvoke('get_file_git_diff', { path });
+                const newDecorations = [];
+                if (diff.added_line_numbers) {
+                    diff.added_line_numbers.forEach(line => {
+                        newDecorations.push({
+                            range: new monaco.Range(line, 1, line, 1),
+                            options: {
+                                isWholeLine: true,
+                                linesDecorationsClassName: 'git-gutter-add',
+                            }
+                        });
+                    });
+                }
+                if (diff.modified_line_numbers) {
+                    diff.modified_line_numbers.forEach(line => {
+                        newDecorations.push({
+                            range: new monaco.Range(line, 1, line, 1),
+                            options: {
+                                isWholeLine: true,
+                                linesDecorationsClassName: 'git-gutter-mod',
+                            }
+                        });
+                    });
+                }
+                if (diff.deleted_line_numbers) {
+                    diff.deleted_line_numbers.forEach(line => {
+                        newDecorations.push({
+                            range: new monaco.Range(line, 1, line, 1),
+                            options: {
+                                isWholeLine: true,
+                                linesDecorationsClassName: 'git-gutter-del',
+                            }
+                        });
+                    });
+                }
+                gitGutterDecorations = editorInstance.deltaDecorations(gitGutterDecorations, newDecorations);
+            } catch (e) {
+                console.warn('Git gutter update notice:', e);
+            }
+        }
+
+        // Phase 1: Dual-Pane Split Editor
+        function toggleSplitEditor() {
+            const splitRoot = document.getElementById('monaco-split-root');
+            const splitBtn = document.getElementById('mode-split');
+            isSplitOpen = !isSplitOpen;
+            if (isSplitOpen) {
+                splitRoot.style.display = 'flex';
+                splitBtn.classList.add('active');
+                if (!editorInstanceSplit && typeof monaco !== 'undefined') {
+                    const splitContainer = document.getElementById('monaco-split-editor');
+                    editorInstanceSplit = monaco.editor.create(splitContainer, {
+                        value: '// Split Pane (Secondary Monaco Editor)\n',
+                        language: 'rust',
+                        theme: 'vs-dark',
+                        automaticLayout: true,
+                        fontSize: 13,
+                        fontFamily: 'JetBrains Mono, monospace',
+                        minimap: { enabled: false },
+                        scrollBeyondLastLine: false,
+                    });
+                }
+                loadActiveIntoSplit();
+            } else {
+                splitRoot.style.display = 'none';
+                splitBtn.classList.remove('active');
+            }
+            if (editorInstance) editorInstance.layout();
+            if (editorInstanceSplit) editorInstanceSplit.layout();
+        }
+
+        function loadActiveIntoSplit() {
+            if (!editorInstanceSplit) return;
+            if (activeTabIdx >= 0) {
+                const tab = openTabs[activeTabIdx];
+                document.getElementById('split-filename').innerHTML = `<i class="fa fa-file-code"></i> ${tab.name} (Split View)`;
+                editorInstanceSplit.setValue(tab.content);
+                monaco.editor.setModelLanguage(editorInstanceSplit.getModel(), tab.lang);
+            }
+        }
+
+        // Phase 2: Live Compiler Diagnostics & Problems Panel
+        async function refreshDiagnostics() {
+            if (activeTabIdx < 0) return;
+            const tab = openTabs[activeTabIdx];
+            await refreshDiagnosticsForFile(tab.path);
+        }
+
+        async function refreshDiagnosticsForFile(filePath) {
+            const problemsList = document.getElementById('problems-list');
+            const countBadge = document.getElementById('diag-count-badge');
+            const countLabel = document.getElementById('problems-count');
+            try {
+                const diags = await apiInvoke('get_file_diagnostics', { path: filePath });
+                activeDiagnostics = diags || [];
+                countLabel.innerText = activeDiagnostics.length;
+                if (activeDiagnostics.length > 0) {
+                    countBadge.style.display = 'inline-block';
+                    countBadge.innerText = activeDiagnostics.length;
+                } else {
+                    countBadge.style.display = 'none';
+                }
+
+                if (editorInstance && !isUsingFallback && typeof monaco !== 'undefined') {
+                    const model = editorInstance.getModel();
+                    const markers = activeDiagnostics.map(d => ({
+                        severity: d.level === 'error' ? monaco.MarkerSeverity.Error : monaco.MarkerSeverity.Warning,
+                        message: d.message + (d.code ? ` [${d.code}]` : ''),
+                        startLineNumber: d.primary_line_start || 1,
+                        startColumn: d.primary_col_start || 1,
+                        endLineNumber: d.primary_line_end || d.primary_line_start || 1,
+                        endColumn: d.primary_col_end || 80,
+                    }));
+                    monaco.editor.setModelMarkers(model, 'cargo_lsp', markers);
+                }
+
+                if (activeDiagnostics.length === 0) {
+                    problemsList.innerHTML = '<div style="padding:14px; color:#10b981; text-align:center;"><i class="fa fa-circle-check"></i> Zero errors or warnings in current file.</div>';
+                } else {
+                    let html = '';
+                    activeDiagnostics.forEach((d, idx) => {
+                        const isErr = d.level === 'error';
+                        const colorClass = isErr ? 'problem-err' : 'problem-warn';
+                        const icon = isErr ? 'fa-circle-xmark' : 'fa-triangle-exclamation';
+                        html += `
+                        <div class="problem-item" onclick="jumpToDiagnostic(${d.primary_line_start || 1}, ${d.primary_col_start || 1})">
+                            <div style="display:flex; align-items:flex-start; gap:8px;">
+                                <i class="fa ${icon} ${colorClass}" style="margin-top:2px;"></i>
+                                <div>
+                                    <span style="font-weight:700;" class="${colorClass}">${d.level.toUpperCase()}</span>
+                                    ${d.code ? `<span class="badge" style="background:#27272a; color:#a1a1aa; margin-left:6px;">${d.code}</span>` : ''}
+                                    <div style="color:#f4f4f5; margin-top:2px;">${escapeHtml(d.message)}</div>
+                                    <div style="font-size:11px; color:#71717a; margin-top:2px;">Line ${d.primary_line_start || 1}, Col ${d.primary_col_start || 1}</div>
+                                </div>
+                            </div>
+                            <button class="btn btn-primary" style="padding:2px 8px; font-size:10px;" onclick="event.stopPropagation(); autoFixDiagnostic(${idx})"><i class="fa fa-wrench"></i> Fix</button>
+                        </div>`;
+                    });
+                    problemsList.innerHTML = html;
+                }
+            } catch (err) {
+                problemsList.innerHTML = `<div style="padding:14px; color:#ef4444;">Diagnostics error: ${err}</div>`;
+            }
+        }
+
+        function jumpToDiagnostic(line, col) {
+            if (editorInstance && !isUsingFallback) {
+                editorInstance.revealLineInCenter(line);
+                editorInstance.setPosition({ lineNumber: line, column: col });
+                editorInstance.focus();
+            }
+        }
+
+        function autoFixDiagnostic(idx) {
+            if (!activeDiagnostics[idx]) return;
+            const d = activeDiagnostics[idx];
+            const chatInput = document.getElementById('chat-input');
+            chatInput.value = `Fix rustc compiler diagnostic on line ${d.primary_line_start}:\n[${d.level}] ${d.message}\n${d.rendered || ''}`;
+            sendPrompt();
+        }
+
+        function switchDrawerTab(tab) {
+            const termBtn = document.getElementById('tab-term-btn');
+            const probBtn = document.getElementById('tab-problems-btn');
+            const termContent = document.getElementById('drawer-term-content');
+            const probContent = document.getElementById('drawer-problems-content');
+
+            if (tab === 'term') {
+                termBtn.classList.add('active');
+                probBtn.classList.remove('active');
+                termContent.style.display = 'flex';
+                probContent.style.display = 'none';
+            } else {
+                termBtn.classList.remove('active');
+                probBtn.classList.add('active');
+                termContent.style.display = 'none';
+                probContent.style.display = 'flex';
+                refreshDiagnostics();
+            }
+        }
+
+        function toggleProblemsPanel() {
+            const drawer = document.getElementById('terminal-drawer');
+            drawer.style.display = 'flex';
+            switchDrawerTab('problems');
+        }
+
+        // Phase 1: Interactive @ Mention System
+        let activeMentionTarget = null;
+        let mentionQuery = '';
+        let mentionSelectedIndex = 0;
+        let currentMentionItems = [];
+
+        function initMentionSystem() {
+            const targets = ['chat-input', 'composer-prompt', 'ctrl-k-input'];
+            targets.forEach(id => {
+                const el = document.getElementById(id);
+                if (!el) return;
+                el.addEventListener('input', (e) => handleMentionInput(e, el));
+                el.addEventListener('keydown', (e) => handleMentionKeyDown(e, el));
+            });
+            document.addEventListener('click', (e) => {
+                const dropdown = document.getElementById('mention-dropdown');
+                if (dropdown && !dropdown.contains(e.target)) closeMentionDropdown();
+            });
+        }
+
+        function handleMentionInput(e, inputEl) {
+            const val = inputEl.value;
+            const cursorPos = inputEl.selectionStart;
+            const textBefore = val.slice(0, cursorPos);
+            const atIndex = textBefore.lastIndexOf('@');
+
+            if (atIndex >= 0 && (atIndex === 0 || /\s/.test(textBefore[atIndex - 1]))) {
+                const query = textBefore.slice(atIndex + 1);
+                if (!query.includes(' ')) {
+                    activeMentionTarget = { inputEl, atIndex, cursorPos };
+                    mentionQuery = query.toLowerCase();
+                    openMentionDropdown(inputEl);
+                    return;
+                }
+            }
+            closeMentionDropdown();
+        }
+
+        async function openMentionDropdown(inputEl) {
+            const dropdown = document.getElementById('mention-dropdown');
+            const rect = inputEl.getBoundingClientRect();
+            dropdown.style.left = `${Math.min(rect.left, window.innerWidth - 340)}px`;
+            dropdown.style.top = `${rect.top - 290 > 20 ? rect.top - 290 : rect.bottom + 6}px`;
+            dropdown.style.display = 'flex';
+
+            const baseOptions = [
+                { type: 'Context', label: '@Codebase', desc: 'Project-wide semantic index', insert: '@Codebase ' },
+                { type: 'Context', label: '@Git', desc: 'Active git status & diff changes', insert: '@Git ' },
+                { type: 'Context', label: '@Terminal', desc: 'Last terminal logs & stderr', insert: '@Terminal ' },
+                { type: 'Context', label: '@Rules', desc: 'Active project rules (.cursorrules)', insert: '@Rules ' },
+            ];
+
+            openTabs.forEach(t => {
+                baseOptions.push({
+                    type: 'File',
+                    label: `@File:${t.name}`,
+                    desc: t.path,
+                    insert: `@File:${t.path} `
+                });
+            });
+
+            if (workspaceSymbolsCache.length === 0) {
+                try {
+                    workspaceSymbolsCache = await apiInvoke('get_workspace_symbols');
+                } catch (e) {}
+            }
+            if (workspaceSymbolsCache && workspaceSymbolsCache.length > 0) {
+                workspaceSymbolsCache.slice(0, 15).forEach(s => {
+                    baseOptions.push({
+                        type: 'Symbol',
+                        label: `@Symbol:${s.name}`,
+                        desc: `${s.kind} in ${s.file_path}:${s.line_number}`,
+                        insert: `@Symbol:${s.name} `
+                    });
+                });
+            }
+
+            currentMentionItems = baseOptions.filter(opt =>
+                opt.label.toLowerCase().includes(mentionQuery) ||
+                opt.desc.toLowerCase().includes(mentionQuery)
+            );
+
+            if (mentionSelectedIndex >= currentMentionItems.length) mentionSelectedIndex = 0;
+            renderMentionList();
+        }
+
+        function renderMentionList() {
+            const dropdown = document.getElementById('mention-dropdown');
+            if (currentMentionItems.length === 0) {
+                dropdown.innerHTML = '<div style="padding:10px 14px; font-size:12px; color:#71717a;">No matching mentions</div>';
+                return;
+            }
+            let html = '';
+            currentMentionItems.forEach((item, idx) => {
+                const activeCls = (idx === mentionSelectedIndex ? ' active' : '');
+                let icon = 'fa-at';
+                if (item.type === 'File') icon = 'fa-file-lines';
+                else if (item.type === 'Symbol') icon = 'fa-code';
+                else if (item.label.includes('@Git')) icon = 'fa-code-branch';
+                else if (item.label.includes('@Terminal')) icon = 'fa-terminal';
+
+                html += `
+                <div class="mention-item${activeCls}" onclick="selectMention(${idx})">
+                    <i class="fa ${icon}" style="color:#06b6d4; width:14px; text-align:center;"></i>
+                    <div style="flex:1; overflow:hidden;">
+                        <div style="font-weight:600;">${escapeHtml(item.label)}</div>
+                        <div style="font-size:10px; color:#a1a1aa; text-overflow:ellipsis; overflow:hidden; white-space:nowrap;">${escapeHtml(item.desc)}</div>
+                    </div>
+                    <span class="mention-badge">${item.type}</span>
+                </div>`;
+            });
+            dropdown.innerHTML = html;
+        }
+
+        function handleMentionKeyDown(e, inputEl) {
+            const dropdown = document.getElementById('mention-dropdown');
+            if (dropdown.style.display !== 'flex') return;
+
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                mentionSelectedIndex = (mentionSelectedIndex + 1) % Math.max(1, currentMentionItems.length);
+                renderMentionList();
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                mentionSelectedIndex = (mentionSelectedIndex - 1 + currentMentionItems.length) % Math.max(1, currentMentionItems.length);
+                renderMentionList();
+            } else if (e.key === 'Enter' || e.key === 'Tab') {
+                if (currentMentionItems.length > 0) {
+                    e.preventDefault();
+                    selectMention(mentionSelectedIndex);
+                }
+            } else if (e.key === 'Escape') {
+                closeMentionDropdown();
+            }
+        }
+
+        function selectMention(idx) {
+            if (!activeMentionTarget || !currentMentionItems[idx]) return;
+            const item = currentMentionItems[idx];
+            const { inputEl, atIndex } = activeMentionTarget;
+            const val = inputEl.value;
+            const cursorPos = inputEl.selectionStart;
+            const newVal = val.slice(0, atIndex) + item.insert + val.slice(cursorPos);
+            inputEl.value = newVal;
+            inputEl.focus();
+            const newCursor = atIndex + item.insert.length;
+            inputEl.setSelectionRange(newCursor, newCursor);
+            closeMentionDropdown();
+        }
+
+        function closeMentionDropdown() {
+            const dropdown = document.getElementById('mention-dropdown');
+            if (dropdown) dropdown.style.display = 'none';
+            activeMentionTarget = null;
+        }
+
+        // Phase 2: AST Symbols Modal
+        async function openSymbolsModal() {
+            const modal = document.getElementById('symbols-modal');
+            modal.style.display = 'flex';
+            document.getElementById('modal-symbols-input').value = '';
+            document.getElementById('modal-symbols-input').focus();
+            const resBox = document.getElementById('modal-symbols-results');
+            resBox.innerHTML = '<div style="padding:14px; color:#38bdf8; text-align:center;"><i class="fa fa-spinner fa-spin"></i> Extracting syn AST symbols...</div>';
+            try {
+                workspaceSymbolsCache = await apiInvoke('get_workspace_symbols');
+                renderSymbolsList(workspaceSymbolsCache);
+            } catch (err) {
+                resBox.innerHTML = `<div style="padding:14px; color:#ef4444; text-align:center;">Failed to extract symbols: ${err}</div>`;
+            }
+        }
+
+        function closeSymbolsModal(e) {
+            if (e && e.target !== e.currentTarget && e.target.tagName !== 'I') return;
+            document.getElementById('symbols-modal').style.display = 'none';
+        }
+
+        function filterSymbolsList() {
+            const q = document.getElementById('modal-symbols-input').value.toLowerCase().trim();
+            if (!workspaceSymbolsCache) return;
+            const filtered = workspaceSymbolsCache.filter(s =>
+                s.name.toLowerCase().includes(q) ||
+                s.kind.toLowerCase().includes(q) ||
+                s.file_path.toLowerCase().includes(q)
+            );
+            renderSymbolsList(filtered);
+        }
+
+        function renderSymbolsList(list) {
+            const container = document.getElementById('modal-symbols-results');
+            if (!list || list.length === 0) {
+                container.innerHTML = '<div style="padding:14px; color:#71717a; text-align:center;">No symbols matched.</div>';
+                return;
+            }
+            let html = '';
+            list.slice(0, 100).forEach(s => {
+                const fname = s.file_path.split('/').pop();
+                let icon = 'fa-code';
+                if (s.kind === 'struct') icon = 'fa-cube';
+                else if (s.kind === 'enum') icon = 'fa-tags';
+                else if (s.kind === 'trait') icon = 'fa-shield-halved';
+
+                html += `
+                <div class="modal-item" onclick="jumpToSymbol('${s.file_path}', ${s.line_number})">
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <i class="fa ${icon}" style="color:#06b6d4;"></i>
+                        <span style="font-weight:700;">${escapeHtml(s.name)}</span>
+                        <span class="badge" style="background:#27272a; color:#a1a1aa; font-size:10px;">${s.kind}</span>
+                        <span style="color:#71717a; font-size:11px;">${escapeHtml(s.signature || '')}</span>
+                    </div>
+                    <div style="color:#06b6d4; font-size:11px;">
+                        ${fname}:${s.line_number}
+                    </div>
+                </div>`;
+            });
+            container.innerHTML = html;
+        }
+
+        async function jumpToSymbol(filePath, line) {
+            closeSymbolsModal();
+            await openFile(filePath);
+            if (editorInstance && !isUsingFallback) {
+                setTimeout(() => {
+                    editorInstance.revealLineInCenter(line);
+                    editorInstance.setPosition({ lineNumber: line, column: 1 });
+                    editorInstance.focus();
+                }, 100);
+            }
+        }
+
+        // Phase 3: Native MCP Subprocess Tool Runner
+        function openMcpModal() {
+            document.getElementById('mcp-modal').style.display = 'flex';
+        }
+
+        function closeMcpModal(e) {
+            if (e && e.target !== e.currentTarget && e.target.tagName !== 'I') return;
+            document.getElementById('mcp-modal').style.display = 'none';
+        }
+
+        async function execMcpTool() {
+            const server_cmd = document.getElementById('mcp-server-cmd').value.trim();
+            const tool_name = document.getElementById('mcp-tool-name').value.trim();
+            const argsStr = document.getElementById('mcp-arguments').value.trim();
+            const resBox = document.getElementById('mcp-result-box');
+            resBox.innerText = 'Spawning MCP server subprocess over JSON-RPC stdio...';
+
+            let argumentsObj = {};
+            try {
+                argumentsObj = JSON.parse(argsStr);
+            } catch (e) {
+                resBox.innerText = 'JSON Parse Error in arguments: ' + e;
+                return;
+            }
+
+            try {
+                const resp = await apiInvoke('call_mcp_tool', {
+                    server_cmd,
+                    tool_name,
+                    arguments: argumentsObj,
+                });
+                resBox.innerText = JSON.stringify(resp, null, 2);
+            } catch (err) {
+                resBox.innerText = 'MCP Execution Error: ' + err;
+            }
+        }
+
         // Initialize Everything
         initEditor();
         loadWorkspace();
         loadDiagnostics();
+        initMentionSystem();
     </script>
 </body>
 </html>

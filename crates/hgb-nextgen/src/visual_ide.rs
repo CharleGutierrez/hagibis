@@ -113,6 +113,31 @@ pub struct ContextResolutionPayload {
     pub prompt: String,
 }
 
+#[derive(Deserialize)]
+pub struct GitDiffPayload {
+    pub path: String,
+}
+
+#[derive(Deserialize)]
+pub struct DiagnosticsPayload {
+    pub path: String,
+}
+
+#[derive(Deserialize)]
+pub struct AutonomousAgentPayload {
+    pub task: String,
+    pub files: Vec<String>,
+    pub verify_command: Option<String>,
+    pub max_iterations: Option<usize>,
+}
+
+#[derive(Deserialize)]
+pub struct McpToolPayload {
+    pub server_cmd: String,
+    pub tool_name: String,
+    pub arguments: serde_json::Value,
+}
+
 impl VisualIdeServer {
     pub fn new(port: u16, workspace_root: PathBuf) -> Self {
         Self {
@@ -143,6 +168,11 @@ impl VisualIdeServer {
             .route("/api/composer_commit", post(Self::handle_composer_commit))
             .route("/api/tab_completion", post(Self::handle_tab_completion))
             .route("/api/resolve_context", post(Self::handle_resolve_context))
+            .route("/api/git_diff", post(Self::handle_git_diff))
+            .route("/api/symbols", get(Self::handle_symbols))
+            .route("/api/diagnostics", post(Self::handle_diagnostics))
+            .route("/api/autonomous_agent", post(Self::handle_autonomous_agent))
+            .route("/api/mcp_tool", post(Self::handle_mcp_tool))
             .with_state(Arc::new(self.clone()));
 
         let addr = SocketAddr::from(([127, 0, 0, 1], self.port));
@@ -712,6 +742,51 @@ impl VisualIdeServer {
             }
         }
         (StatusCode::OK, Json(results)).into_response()
+    }
+
+    async fn handle_git_diff(State(state): State<Arc<Self>>, Json(payload): Json<GitDiffPayload>) -> impl IntoResponse {
+        match crate::ide_agent_engine::IdeAgentEngine::compute_file_git_diff(&payload.path, &state.workspace_root).await {
+            Ok(diff) => (StatusCode::OK, Json(diff)).into_response(),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+        }
+    }
+
+    async fn handle_symbols(State(state): State<Arc<Self>>) -> impl IntoResponse {
+        match crate::ide_agent_engine::IdeAgentEngine::extract_workspace_symbols(&state.workspace_root).await {
+            Ok(syms) => (StatusCode::OK, Json(syms)).into_response(),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+        }
+    }
+
+    async fn handle_diagnostics(State(state): State<Arc<Self>>, Json(payload): Json<DiagnosticsPayload>) -> impl IntoResponse {
+        match crate::ide_agent_engine::IdeAgentEngine::query_file_diagnostics(&payload.path, &state.workspace_root).await {
+            Ok(diags) => (StatusCode::OK, Json(diags)).into_response(),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+        }
+    }
+
+    async fn handle_autonomous_agent(State(state): State<Arc<Self>>, Json(payload): Json<AutonomousAgentPayload>) -> impl IntoResponse {
+        match crate::ide_agent_engine::IdeAgentEngine::run_autonomous_agent(
+            &payload.task,
+            payload.files,
+            payload.verify_command,
+            payload.max_iterations.unwrap_or(3),
+            &state.workspace_root,
+        ).await {
+            Ok(report) => (StatusCode::OK, Json(report)).into_response(),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+        }
+    }
+
+    async fn handle_mcp_tool(Json(payload): Json<McpToolPayload>) -> impl IntoResponse {
+        match crate::ide_agent_engine::IdeAgentEngine::execute_mcp_tool_call(
+            &payload.server_cmd,
+            &payload.tool_name,
+            &payload.arguments,
+        ).await {
+            Ok(resp) => (StatusCode::OK, Json(resp)).into_response(),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+        }
     }
 }
 

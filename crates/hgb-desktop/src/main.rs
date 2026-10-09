@@ -42,6 +42,11 @@ fn main() {
             commit_composer_plan,
             ask_tab_completion,
             resolve_context_mentions,
+            get_file_git_diff,
+            get_workspace_symbols,
+            get_file_diagnostics,
+            run_autonomous_agent,
+            call_mcp_tool,
         ])
         .run(generate_context!())
         .expect("error while running Hagibis Tauri Visual IDE application");
