@@ -36,6 +36,7 @@ pub struct VisualIdeServer {
     pub pty: Arc<crate::pty_engine::PtyManager>,
     pub fs_watcher: Arc<tokio::sync::Mutex<crate::fs_watcher::WorkspaceFsWatcher>>,
     pub cloud_settings: Arc<tokio::sync::RwLock<crate::cloud_settings::CloudSettings>>,
+    pub agent_loop: Arc<crate::agent_loop::AgentLoopEngine>,
 }
 
 #[derive(Serialize)]
@@ -385,6 +386,7 @@ impl VisualIdeServer {
         let pty = Arc::new(crate::pty_engine::PtyManager::new(workspace_root.clone()));
         let fs_watcher = Arc::new(tokio::sync::Mutex::new(crate::fs_watcher::WorkspaceFsWatcher::new(workspace_root.clone())));
         let cloud_settings = Arc::new(tokio::sync::RwLock::new(crate::cloud_settings::CloudSettings::load_from_disk(None)));
+        let agent_loop = Arc::new(crate::agent_loop::AgentLoopEngine::new(workspace_root.clone()));
 
         Self {
             port,
@@ -397,6 +399,7 @@ impl VisualIdeServer {
             pty,
             fs_watcher,
             cloud_settings,
+            agent_loop,
         }
     }
 
@@ -497,6 +500,22 @@ impl VisualIdeServer {
             // Phase 6C: Cloud LLM & API Key Settings Manager
             .route("/api/settings/models", get(Self::handle_get_cloud_settings).post(Self::handle_update_cloud_settings))
             .route("/api/settings/test_model", post(Self::handle_test_cloud_settings))
+            // Phase 7A: Autonomous Agentic Tool-Use Loop & Permission Gate
+            .route("/api/agent/tools", get(Self::handle_agent_tools))
+            .route("/api/agent/chat_step", post(Self::handle_agent_chat_step))
+            .route("/api/agent/approve_tool", post(Self::handle_agent_approve_tool))
+            .route("/api/agent/auto_approve", post(Self::handle_agent_auto_approve))
+            // Phase 7B: Live Streaming Ghost Diff (Cursor-Style Ctrl+K)
+            .route("/api/inline_edit_stream", post(Self::handle_inline_edit_stream))
+            // Phase 7C: Multi-Tab Persistent Terminals
+            .route("/api/terminal/sessions", get(Self::handle_terminal_sessions_list))
+            .route("/api/terminal/sessions/new", post(Self::handle_terminal_session_new))
+            .route("/api/terminal/sessions/kill", post(Self::handle_terminal_session_kill))
+            // Phase 7D: Git Branch Manager & 3-Way Merge Conflict Resolver
+            .route("/api/git/branches", get(Self::handle_git_branches))
+            .route("/api/git/branch/checkout", post(Self::handle_git_branch_checkout))
+            .route("/api/git/conflicts", get(Self::handle_git_conflicts))
+            .route("/api/git/conflicts/resolve", post(Self::handle_git_conflicts_resolve))
             .layer(axum::middleware::from_fn_with_state(
                 Arc::new(self.clone()),
                 Self::auth_middleware,
@@ -2373,15 +2392,17 @@ impl VisualIdeServer {
         }
     }
 
-    // Phase 6A: Interactive WebSocket PTY Terminal
+    // Phase 6A & 7C: Interactive WebSocket PTY Terminal (Multi-Session)
     async fn handle_pty_ws(
         ws: WebSocketUpgrade,
+        Query(params): Query<HashMap<String, String>>,
         State(state): State<Arc<Self>>,
     ) -> impl IntoResponse {
         let pty = state.pty.clone();
         let root = state.workspace_root.clone();
+        let session_id = params.get("session_id").cloned();
         ws.on_upgrade(move |socket| async move {
-            pty.handle_websocket(socket, Some(root)).await;
+            pty.handle_websocket(socket, Some(root), session_id).await;
         })
     }
 
@@ -2474,6 +2495,442 @@ impl VisualIdeServer {
             Err(e) => (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "success": false, "error": e }))).into_response(),
         }
     }
+
+    // =========================================================================
+    // Phase 7A: Autonomous Agentic Tool-Use Loop & Permission Gate
+    // =========================================================================
+
+    async fn handle_agent_tools(State(state): State<Arc<Self>>) -> impl IntoResponse {
+        let tools = state.agent_loop.get_available_tools();
+        (StatusCode::OK, Json(tools)).into_response()
+    }
+
+    async fn handle_agent_chat_step(
+        State(state): State<Arc<Self>>,
+        Json(req): Json<AgentStepRequest>,
+    ) -> impl IntoResponse {
+        if let Some(aa) = req.auto_approve {
+            state.agent_loop.set_auto_approve(aa);
+        }
+
+        let system_prompt = state.agent_loop.build_agent_system_prompt();
+        let prompt_with_system = format!("User Request: {}", req.prompt);
+
+        let msgs = vec![crate::cloud_settings::ChatMessageItem {
+            role: "user".to_string(),
+            content: prompt_with_system,
+        }];
+
+        let cloud = state.cloud_settings.read().await;
+        match cloud.dispatch_chat(&msgs, Some(&system_prompt)).await {
+            Ok(resp) => {
+                if let Some(call) = crate::agent_loop::AgentLoopEngine::parse_tool_call(&resp) {
+                    if state.agent_loop.requires_approval(&call.name) {
+                        let pending = state.agent_loop.register_pending_approval(&call).await;
+                        (
+                            StatusCode::OK,
+                            Json(serde_json::json!({
+                                "type": "tool_approval_required",
+                                "call_id": pending.call_id,
+                                "tool": pending.tool_name,
+                                "arguments": pending.arguments,
+                                "description": pending.description,
+                                "thought": resp.replace(&format!("```tool_call\n{}\n```", serde_json::to_string_pretty(&call.arguments).unwrap_or_default()), "").trim()
+                            })),
+                        ).into_response()
+                    } else {
+                        let res = state.agent_loop.execute_tool(&call).await;
+                        (
+                            StatusCode::OK,
+                            Json(serde_json::json!({
+                                "type": "tool_executed",
+                                "call_id": res.call_id,
+                                "tool": call.name,
+                                "output": res.output,
+                                "is_error": res.is_error,
+                                "thought": resp.trim()
+                            })),
+                        ).into_response()
+                    }
+                } else {
+                    (
+                        StatusCode::OK,
+                        Json(serde_json::json!({
+                            "type": "message",
+                            "content": resp,
+                            "is_final": true
+                        })),
+                    ).into_response()
+                }
+            }
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "type": "error",
+                    "message": format!("LLM dispatch failed: {}", e)
+                })),
+            ).into_response(),
+        }
+    }
+
+    async fn handle_agent_approve_tool(
+        State(state): State<Arc<Self>>,
+        Json(req): Json<AgentApproveRequest>,
+    ) -> impl IntoResponse {
+        match state.agent_loop.resolve_approval(&req.call_id, req.approved, req.allow_all).await {
+            Ok(res) => (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "call_id": req.call_id,
+                    "output": res.output,
+                    "is_error": res.is_error,
+                    "approved": req.approved
+                })),
+            ).into_response(),
+            Err(e) => (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": e })),
+            ).into_response(),
+        }
+    }
+
+    async fn handle_agent_auto_approve(
+        State(state): State<Arc<Self>>,
+        Json(req): Json<AgentAutoApproveToggle>,
+    ) -> impl IntoResponse {
+        state.agent_loop.set_auto_approve(req.enabled);
+        (
+            StatusCode::OK,
+            Json(serde_json::json!({ "auto_approve": req.enabled })),
+        ).into_response()
+    }
+
+    // =========================================================================
+    // Phase 7B: Live Streaming Ghost Diff (Cursor-Style Ctrl+K)
+    // =========================================================================
+
+    async fn handle_inline_edit_stream(
+        State(state): State<Arc<Self>>,
+        Json(req): Json<InlineEditStreamRequest>,
+    ) -> impl IntoResponse {
+        let full_path = state.workspace_root.join(req.path.trim_start_matches('/'));
+        let orig_content = match fs::read_to_string(&full_path).await {
+            Ok(c) => c,
+            Err(_) => String::new(),
+        };
+
+        let prompt = format!(
+            "Instruction: {}\nTarget file: {}\nOriginal code:\n```\n{}\n```\nProvide ONLY the fully revised code inside a single ``` fenced code block.",
+            req.instruction, req.path, orig_content
+        );
+
+        let msgs = vec![crate::cloud_settings::ChatMessageItem {
+            role: "user".to_string(),
+            content: prompt,
+        }];
+
+        let cloud = state.cloud_settings.read().await;
+        let gen_code = match cloud.dispatch_chat(&msgs, Some("You are an expert AI code editor. Return only revised code in markdown fences.")).await {
+            Ok(txt) => {
+                if txt.contains("```") {
+                    let parts: Vec<&str> = txt.split("```").collect();
+                    if parts.len() >= 2 {
+                        let lines: Vec<&str> = parts[1].lines().collect();
+                        if !lines.is_empty() && (lines[0].starts_with("rust") || lines[0].starts_with("zig") || lines[0].starts_with("js") || lines[0].starts_with("ts") || lines[0].starts_with("python") || lines[0].starts_with("html")) {
+                            lines[1..].join("\n")
+                        } else {
+                            parts[1].to_string()
+                        }
+                    } else {
+                        txt
+                    }
+                } else {
+                    txt
+                }
+            }
+            Err(e) => return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("LLM failed: {}", e) })),
+            ).into_response(),
+        };
+
+        let (lines, metrics) = InlineDiffEngine::compute_inline_diff(&orig_content, &gen_code);
+        (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "original": orig_content,
+                "speculative": gen_code,
+                "metrics": metrics,
+                "lines": lines,
+                "path": req.path
+            })),
+        ).into_response()
+    }
+
+    // =========================================================================
+    // Phase 7C: Multi-Tab Persistent Terminals
+    // =========================================================================
+
+    async fn handle_terminal_sessions_list(State(state): State<Arc<Self>>) -> impl IntoResponse {
+        let list = state.pty.list_sessions().await;
+        (StatusCode::OK, Json(list)).into_response()
+    }
+
+    async fn handle_terminal_session_new(
+        State(state): State<Arc<Self>>,
+        Json(req): Json<TerminalSessionNewReq>,
+    ) -> impl IntoResponse {
+        let meta = state.pty.create_session(req.title).await;
+        (StatusCode::OK, Json(meta)).into_response()
+    }
+
+    async fn handle_terminal_session_kill(
+        State(state): State<Arc<Self>>,
+        Json(req): Json<TerminalSessionKillReq>,
+    ) -> impl IntoResponse {
+        let ok = state.pty.remove_session(&req.session_id).await;
+        (StatusCode::OK, Json(serde_json::json!({ "success": ok, "session_id": req.session_id }))).into_response()
+    }
+
+    // =========================================================================
+    // Phase 7D: Git Branch Manager & 3-Way Merge Conflict Resolver
+    // =========================================================================
+
+    async fn handle_git_branches(State(state): State<Arc<Self>>) -> impl IntoResponse {
+        let out = tokio::process::Command::new("git")
+            .args(["branch", "--all"])
+            .current_dir(&state.workspace_root)
+            .output()
+            .await;
+
+        match out {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let mut current = "main".to_string();
+                let mut branches = Vec::new();
+                let mut remotes = Vec::new();
+
+                for line in stdout.lines() {
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    let is_cur = trimmed.starts_with('*');
+                    let name = trimmed.trim_start_matches('*').trim();
+
+                    if name.starts_with("remotes/") {
+                        remotes.push(name.to_string());
+                    } else {
+                        if is_cur {
+                            current = name.to_string();
+                        }
+                        branches.push(name.to_string());
+                    }
+                }
+
+                (
+                    StatusCode::OK,
+                    Json(serde_json::json!({
+                        "current": current,
+                        "branches": branches,
+                        "remotes": remotes
+                    })),
+                ).into_response()
+            }
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("Failed to inspect branches: {}", e) })),
+            ).into_response(),
+        }
+    }
+
+    async fn handle_git_branch_checkout(
+        State(state): State<Arc<Self>>,
+        Json(req): Json<GitBranchCheckoutReq>,
+    ) -> impl IntoResponse {
+        let mut cmd = tokio::process::Command::new("git");
+        cmd.current_dir(&state.workspace_root);
+
+        if req.create_new {
+            cmd.args(["checkout", "-b", &req.branch]);
+        } else {
+            cmd.args(["checkout", &req.branch]);
+        }
+
+        match cmd.output().await {
+            Ok(out) => {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                let ok = out.status.success();
+                (
+                    if ok { StatusCode::OK } else { StatusCode::BAD_REQUEST },
+                    Json(serde_json::json!({
+                        "success": ok,
+                        "branch": req.branch,
+                        "output": format!("{}{}", stdout, stderr)
+                    })),
+                ).into_response()
+            }
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("Git checkout command failed: {}", e) })),
+            ).into_response(),
+        }
+    }
+
+    async fn handle_git_conflicts(State(state): State<Arc<Self>>) -> impl IntoResponse {
+        let mut conflict_files = Vec::new();
+        let mut stack = vec![state.workspace_root.clone()];
+
+        while let Some(dir) = stack.pop() {
+            if let Ok(mut entries) = fs::read_dir(&dir).await {
+                while let Ok(Some(entry)) = entries.next_entry().await {
+                    let path = entry.path();
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if name.starts_with('.') || name == "target" || name == "node_modules" {
+                        continue;
+                    }
+                    if path.is_dir() {
+                        stack.push(path);
+                    } else if path.is_file() {
+                        if let Ok(content) = fs::read_to_string(&path).await {
+                            if content.contains("<<<<<<<") && content.contains(">>>>>>>") && content.contains("=======") {
+                                if let Ok(rel) = path.strip_prefix(&state.workspace_root) {
+                                    conflict_files.push(rel.to_string_lossy().to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        (
+            StatusCode::OK,
+            Json(serde_json::json!({ "conflict_files": conflict_files })),
+        ).into_response()
+    }
+
+    async fn handle_git_conflicts_resolve(
+        State(state): State<Arc<Self>>,
+        Json(req): Json<GitConflictResolveReq>,
+    ) -> impl IntoResponse {
+        let full_path = state.workspace_root.join(req.path.trim_start_matches('/'));
+        let content = match fs::read_to_string(&full_path).await {
+            Ok(c) => c,
+            Err(e) => return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("Cannot read file: {}", e) })),
+            ).into_response(),
+        };
+
+        // Snapshot checkpoint before resolving
+        {
+            let mut mgr = get_checkpoint_mgr().lock().unwrap();
+            let _ = mgr.snapshot_file(&full_path);
+        }
+
+        let mut resolved_lines = Vec::new();
+        let mut in_conflict = false;
+        let mut in_incoming = false;
+        let mut current_block = Vec::new();
+        let mut incoming_block = Vec::new();
+
+        for line in content.lines() {
+            if line.starts_with("<<<<<<<") {
+                in_conflict = true;
+                in_incoming = false;
+                current_block.clear();
+                incoming_block.clear();
+            } else if in_conflict && line.starts_with("=======") {
+                in_incoming = true;
+            } else if in_conflict && line.starts_with(">>>>>>>") {
+                in_conflict = false;
+                in_incoming = false;
+                match req.resolution.as_str() {
+                    "current" => resolved_lines.extend(current_block.drain(..)),
+                    "incoming" => resolved_lines.extend(incoming_block.drain(..)),
+                    "both" | _ => {
+                        resolved_lines.extend(current_block.drain(..));
+                        resolved_lines.extend(incoming_block.drain(..));
+                    }
+                }
+            } else if in_conflict {
+                if in_incoming {
+                    incoming_block.push(line.to_string());
+                } else {
+                    current_block.push(line.to_string());
+                }
+            } else {
+                resolved_lines.push(line.to_string());
+            }
+        }
+
+        let result_text = resolved_lines.join("\n");
+        match fs::write(&full_path, &result_text).await {
+            Ok(_) => (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "success": true,
+                    "path": req.path,
+                    "resolution": req.resolution
+                })),
+            ).into_response(),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("Failed to write resolved file: {}", e) })),
+            ).into_response(),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct AgentStepRequest {
+    pub prompt: String,
+    pub auto_approve: Option<bool>,
+}
+
+#[derive(Deserialize)]
+pub struct AgentApproveRequest {
+    pub call_id: String,
+    pub approved: bool,
+    #[serde(default)]
+    pub allow_all: bool,
+}
+
+#[derive(Deserialize)]
+pub struct AgentAutoApproveToggle {
+    pub enabled: bool,
+}
+
+#[derive(Deserialize)]
+pub struct InlineEditStreamRequest {
+    pub path: String,
+    pub instruction: String,
+    pub selection: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct TerminalSessionNewReq {
+    pub title: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct TerminalSessionKillReq {
+    pub session_id: String,
+}
+
+#[derive(Deserialize)]
+pub struct GitBranchCheckoutReq {
+    pub branch: String,
+    #[serde(default)]
+    pub create_new: bool,
+}
+
+#[derive(Deserialize)]
+pub struct GitConflictResolveReq {
+    pub path: String,
+    pub resolution: String,
 }
 
 #[derive(Deserialize)]

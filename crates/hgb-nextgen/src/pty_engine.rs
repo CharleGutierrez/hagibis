@@ -2,10 +2,11 @@ use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -16,16 +17,88 @@ pub enum PtyClientMessage {
     Resize { cols: u16, rows: u16 },
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PtySessionMeta {
+    pub id: String,
+    pub title: String,
+    pub created_at: u64,
+}
+
 pub struct PtyManager {
     workspace_root: PathBuf,
+    sessions: Arc<RwLock<HashMap<String, PtySessionMeta>>>,
 }
 
 impl PtyManager {
     pub fn new(workspace_root: PathBuf) -> Self {
-        Self { workspace_root }
+        Self {
+            workspace_root,
+            sessions: Arc::new(RwLock::new(HashMap::new())),
+        }
     }
 
-    pub async fn handle_websocket(self: Arc<Self>, socket: WebSocket, working_dir: Option<PathBuf>) {
+    /// List all currently active terminal sessions
+    pub async fn list_sessions(&self) -> Vec<PtySessionMeta> {
+        let lock = self.sessions.read().await;
+        let mut list: Vec<PtySessionMeta> = lock.values().cloned().collect();
+        list.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+        list
+    }
+
+    /// Register a new terminal session
+    pub async fn create_session(&self, title: Option<String>) -> PtySessionMeta {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let mut lock = self.sessions.write().await;
+        let next_idx = lock.len() + 1;
+        let id = format!("term-{}", next_idx);
+        let session_title = title.unwrap_or_else(|| format!("Terminal {}", next_idx));
+
+        let meta = PtySessionMeta {
+            id: id.clone(),
+            title: session_title,
+            created_at: now,
+        };
+        lock.insert(id, meta.clone());
+        meta
+    }
+
+    /// Remove a terminal session
+    pub async fn remove_session(&self, session_id: &str) -> bool {
+        let mut lock = self.sessions.write().await;
+        lock.remove(session_id).is_some()
+    }
+
+    pub async fn handle_websocket(
+        self: Arc<Self>,
+        socket: WebSocket,
+        working_dir: Option<PathBuf>,
+        session_id: Option<String>,
+    ) {
+        let sid = session_id.unwrap_or_else(|| "default".to_string());
+
+        // Ensure session metadata exists
+        {
+            let mut lock = self.sessions.write().await;
+            if !lock.contains_key(&sid) {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                lock.insert(
+                    sid.clone(),
+                    PtySessionMeta {
+                        id: sid.clone(),
+                        title: sid.clone(),
+                        created_at: now,
+                    },
+                );
+            }
+        }
+
         let dir = working_dir.unwrap_or_else(|| self.workspace_root.clone());
         let pty_system = native_pty_system();
         let pair = match pty_system.openpty(PtySize {
@@ -47,6 +120,7 @@ impl PtyManager {
         cmd.cwd(&dir);
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
+        cmd.env("HGB_TERMINAL_SESSION", &sid);
 
         let mut child = match pair.slave.spawn_command(cmd) {
             Ok(c) => c,
@@ -171,5 +245,22 @@ mod tests {
             }
             _ => panic!("wrong variant"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_pty_multi_session_management() {
+        let mgr = PtyManager::new(PathBuf::from("."));
+        let s1 = mgr.create_session(Some("Server".to_string())).await;
+        let s2 = mgr.create_session(Some("Worker".to_string())).await;
+
+        let list = mgr.list_sessions().await;
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].title, "Server");
+        assert_eq!(list[1].title, "Worker");
+
+        assert!(mgr.remove_session(&s1.id).await);
+        let list2 = mgr.list_sessions().await;
+        assert_eq!(list2.len(), 1);
+        assert_eq!(list2[0].id, s2.id);
     }
 }

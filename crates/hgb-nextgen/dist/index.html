@@ -341,6 +341,34 @@
         .settings-input { background: #18181b; border: 1px solid #3f3f46; color: #fff; padding: 7px 10px; border-radius: 5px; font-size: 12px; outline: none; font-family: inherit; }
         .settings-input:focus { border-color: var(--accent-cyan); }
         .xterm-viewport { overflow-y: auto !important; }
+
+        /* Phase 7A: Autonomous Agentic Tool-Use Loop */
+        .agent-approval-card { background: #1c1917; border: 1px solid #d97706; border-radius: 6px; padding: 10px 12px; margin-top: 6px; display: flex; flex-direction: column; gap: 8px; }
+        .agent-approval-header { display: flex; align-items: center; justify-content: space-between; font-size: 11px; font-weight: 700; color: #f59e0b; }
+        .agent-approval-details { background: #0c0a09; border: 1px solid #292524; border-radius: 4px; padding: 6px 8px; font-family: "JetBrains Mono", monospace; font-size: 11px; color: #e7e5e4; max-height: 140px; overflow-y: auto; white-space: pre-wrap; }
+        .agent-tool-card { background: #141416; border: 1px solid #27272a; border-radius: 6px; padding: 7px 10px; margin-top: 6px; font-size: 11px; }
+        .agent-tool-header { display: flex; align-items: center; justify-content: space-between; cursor: pointer; font-weight: 600; color: #38bdf8; user-select: none; }
+        .agent-tool-output { margin-top: 6px; padding: 6px 8px; background: #09090b; border: 1px solid #1f1f23; border-radius: 4px; font-family: "JetBrains Mono", monospace; font-size: 10px; color: #d4d4d8; white-space: pre-wrap; max-height: 200px; overflow-y: auto; }
+
+        /* Phase 7B: Cursor-Style Live Streaming Ghost Diff */
+        .floating-diff-widget { position: absolute; top: 38px; left: 50%; transform: translateX(-50%); background: #18181b; border: 1px solid #06b6d4; border-radius: 8px; box-shadow: 0 10px 30px rgba(0,0,0,0.85); display: flex; align-items: center; gap: 10px; padding: 6px 14px; z-index: 100; animation: toast-slide-in 0.2s ease; }
+        .monaco-diff-added-line { background-color: rgba(16, 185, 129, 0.2) !important; }
+        .monaco-diff-deleted-line { background-color: rgba(239, 68, 68, 0.2) !important; text-decoration: line-through; }
+        .monaco-diff-gutter-added { background-color: #10b981 !important; width: 4px !important; margin-left: 2px; }
+        .monaco-diff-gutter-deleted { background-color: #ef4444 !important; width: 4px !important; margin-left: 2px; }
+
+        /* Phase 7C: Multi-Tab Persistent Terminals */
+        .term-session-tab { display: flex; align-items: center; gap: 5px; padding: 2px 8px; background: #18181b; border: 1px solid #27272a; border-radius: 4px; font-size: 11px; color: #a1a1aa; cursor: pointer; user-select: none; transition: all 0.15s ease; }
+        .term-session-tab:hover { background: #27272a; color: #fff; }
+        .term-session-tab.active { background: #083344; border-color: #06b6d4; color: #22d3ee; font-weight: 600; }
+        .term-session-close { font-size: 10px; color: #71717a; border-radius: 2px; padding: 0 3px; margin-left: 3px; cursor: pointer; }
+        .term-session-close:hover { color: #ef4444; background: rgba(239, 68, 68, 0.2); }
+
+        /* Phase 7D: Git Branch Manager & 3-Way Merge Conflict Resolver */
+        .merge-conflict-banner { background: #451a03; border-bottom: 1px solid #b45309; padding: 6px 14px; display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: #fef3c7; z-index: 80; }
+        .branch-list-item { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-bottom: 1px solid #1f1f23; cursor: pointer; font-size: 12px; transition: background 0.1s ease; }
+        .branch-list-item:hover { background: #1e1e24; color: #38bdf8; }
+        .branch-list-item.current { background: #083344; color: #22d3ee; font-weight: 600; }
     </style>
 </head>
 <body>
@@ -488,7 +516,7 @@
                 <div class="sidebar-header">
                     <div style="display:flex; align-items:center; gap:6px;">
                         <span>Source Control</span>
-                        <span id="git-branch-badge" class="badge" style="background:#083344; color:#22d3ee; font-size:10px;"><i class="fa fa-code-branch"></i> main</span>
+                        <span id="git-branch-badge" class="badge" style="background:#083344; color:#22d3ee; font-size:10px; cursor:pointer;" onclick="openBranchManagerModal()" title="Switch or create Git branch"><i class="fa fa-code-branch"></i> main</span>
                     </div>
                     <div class="sidebar-actions">
                         <i class="fa fa-rotate-right" onclick="refreshGitStatus()" title="Refresh Git Status"></i>
@@ -688,6 +716,21 @@
                 </div>
             </div>
 
+            <!-- Phase 7D: Git 3-Way Merge Conflict Resolver Banner -->
+            <div id="merge-conflict-banner" class="merge-conflict-banner" style="display:none;">
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <i class="fa fa-triangle-exclamation" style="color:#f59e0b; font-size:14px;"></i>
+                    <span><strong>Merge Conflict Detected</strong> in <span id="conflict-filename" style="font-family:monospace; color:#fff;"></span></span>
+                    <span id="conflict-badge" class="badge" style="background:#78350f; color:#fef3c7;">1 conflict</span>
+                </div>
+                <div style="display:flex; align-items:center; gap:6px;">
+                    <button class="btn btn-primary" style="padding:2px 8px; font-size:11px;" onclick="resolveCurrentConflict('current')"><i class="fa fa-arrow-left"></i> Accept Current (HEAD)</button>
+                    <button class="btn btn-green" style="padding:2px 8px; font-size:11px;" onclick="resolveCurrentConflict('incoming')"><i class="fa fa-arrow-right"></i> Accept Incoming</button>
+                    <button class="btn btn-indigo" style="padding:2px 8px; font-size:11px;" onclick="resolveCurrentConflict('both')"><i class="fa fa-code-merge"></i> Accept Both</button>
+                    <i class="fa fa-xmark" style="cursor:pointer; color:#d97706; margin-left:6px;" onclick="hideConflictBanner()"></i>
+                </div>
+            </div>
+
             <div class="editor-canvas-box">
                 <div class="monaco-split-wrapper" id="monaco-split-wrapper">
                     <div id="monaco-root" class="editor-pane-half"></div>
@@ -753,6 +796,16 @@
                         <span>[Enter] Submit &nbsp; [Esc] Cancel</span>
                     </div>
                 </div>
+
+                <!-- Phase 7B: Floating Ghost Diff Actions Widget -->
+                <div class="floating-diff-widget" id="floating-diff-widget" style="display:none;">
+                    <span style="font-size:11px; font-weight:600; color:#38bdf8; display:flex; align-items:center; gap:6px;">
+                        <i class="fa fa-wand-magic-sparkles"></i> Cursor Ghost Diff: 
+                        <span id="ghost-diff-metrics" style="color:#10b981;">+0 / -0</span>
+                    </span>
+                    <button class="btn btn-green" style="padding:3px 9px; font-size:11px;" onclick="acceptGhostDiff()"><i class="fa fa-check"></i> Tab Accept</button>
+                    <button class="btn" style="padding:3px 9px; font-size:11px;" onclick="rejectGhostDiff()"><i class="fa fa-xmark"></i> Esc Reject</button>
+                </div>
             </div>
 
             <!-- Draggable Resizer for Bottom Drawer -->
@@ -761,7 +814,10 @@
             <!-- Bottom Multi-Tab Drawer (Terminal & Diagnostics) -->
             <div class="terminal-panel" id="terminal-drawer">
                 <div class="drawer-tabs">
-                    <div class="drawer-tab active" id="tab-term-btn" onclick="switchDrawerTab('term')"><i class="fa fa-terminal"></i> Sovereign Terminal <span id="pty-status-badge" class="badge" style="background:#064e3b; color:#6ee7b7; font-size:10px; padding:1px 6px; margin-left:4px;">PTY</span></div>
+                    <div class="drawer-tab active" id="tab-term-btn" onclick="switchDrawerTab('term')"><i class="fa fa-terminal"></i> Terminal</div>
+                    <div id="term-sessions-tabs" style="display:flex; align-items:center; gap:4px; margin-left:4px;"></div>
+                    <button class="btn" style="padding:1px 6px; font-size:10px; margin-left:3px;" onclick="createNewTerminalTab()" title="New PTY Terminal Session"><i class="fa fa-plus"></i></button>
+                    <span id="pty-status-badge" class="badge" style="background:#064e3b; color:#6ee7b7; font-size:10px; padding:1px 6px; margin-left:4px;">PTY</span>
                     <div class="drawer-tab" id="tab-problems-btn" onclick="switchDrawerTab('problems')"><i class="fa fa-triangle-exclamation"></i> Problems (<span id="problems-count">0</span>)</div>
                     <div style="margin-left:auto; display:flex; gap:8px; align-items:center; padding-right:10px;">
                         <button class="btn btn-primary" style="padding:2px 7px; font-size:10px;" onclick="refreshDiagnostics()"><i class="fa fa-rotate-right"></i> Check Cargo</button>
@@ -773,7 +829,9 @@
                     </div>
                 </div>
                 <div id="drawer-term-content" style="display:flex; flex-direction:column; flex:1; height:calc(100% - 28px); min-height:0; position:relative; overflow:hidden;">
-                    <div id="xterm-container" style="flex:1; width:100%; height:100%; min-height:0; background:#09090b; padding:4px 6px; overflow:hidden;"></div>
+                    <div id="xterm-sessions-wrapper" style="flex:1; width:100%; height:100%; min-height:0; background:#09090b; position:relative; overflow:hidden;">
+                        <div id="xterm-container" style="width:100%; height:100%; min-height:0; padding:4px 6px; overflow:hidden;"></div>
+                    </div>
                     <div class="terminal-output" id="terminal-output" style="display:none;">// Terminal Ready. Enter bash command below.</div>
                     <div class="terminal-input-row" style="background:#141416; border-top:1px solid #27272a;">
                         <span class="term-prompt" style="color:#06b6d4; font-weight:700;">PTY $</span>
@@ -814,7 +872,18 @@
                 </div>
             </div>
             <div class="chat-input-box">
-                <textarea class="chat-textarea" id="chat-input" placeholder="Ask Copilot, type @ to mention files, or describe refactoring..."></textarea>
+                <!-- Phase 7A: Autonomous Agentic Tool-Use Loop Controls -->
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:5px; font-size:11px;">
+                    <label style="display:flex; align-items:center; gap:5px; cursor:pointer; color:#38bdf8;" title="Devin / Claude Code Autonomous Tool Execution Loop">
+                        <input type="checkbox" id="agent-loop-mode" style="cursor:pointer;">
+                        <i class="fa fa-robot"></i> <strong>Devin Autonomous Mode</strong>
+                    </label>
+                    <label style="display:flex; align-items:center; gap:4px; cursor:pointer; color:#a1a1aa; font-size:10px;" title="Auto-Approve safe tools without asking">
+                        <input type="checkbox" id="agent-auto-approve">
+                        <span>Auto-Approve</span>
+                    </label>
+                </div>
+                <textarea class="chat-textarea" id="chat-input" placeholder="Ask Copilot or instruct Agent (e.g. 'Audit and fix cargo warnings in agent_loop')..."></textarea>
                 <div style="display:flex; justify-content:space-between; align-items:center;">
                     <button class="btn" style="font-size:11px;" onclick="openSearchModal()"><i class="fa fa-at"></i> Codebase</button>
                     <button class="btn btn-primary" onclick="sendPrompt()"><i class="fa fa-paper-plane"></i> Send Query</button>
@@ -826,7 +895,7 @@
     <!-- 24px Modern Status Bar -->
     <footer class="status-bar" id="status-bar">
         <div class="status-bar-left">
-            <span class="status-bar-item" onclick="handleActivityClick('git')" title="Git Branch">
+            <span class="status-bar-item" onclick="openBranchManagerModal()" title="Git Branch (Click to Switch/Create)">
                 <i class="fa fa-code-branch" style="color:#38bdf8;"></i>
                 <span id="sb-branch-name">main</span>
             </span>
@@ -1158,6 +1227,23 @@
                     <button class="btn" onclick="closeSettingsModal()">Cancel</button>
                     <button class="btn btn-primary" onclick="saveCloudSettings()"><i class="fa fa-floppy-disk"></i> Save Settings</button>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Phase 7D: Git Branch Manager Modal -->
+    <div class="modal-overlay" id="git-branch-modal" onclick="closeBranchManagerModal(event)">
+        <div class="modal-content" onclick="event.stopPropagation()" style="width:520px;">
+            <div class="modal-header">
+                <span><i class="fa fa-code-branch" style="color:#06b6d4;"></i> Git Branch Switcher & Creator</span>
+                <i class="fa fa-xmark" style="cursor:pointer;" onclick="closeBranchManagerModal()"></i>
+            </div>
+            <div style="padding:10px 14px; border-bottom:1px solid #27272a; display:flex; gap:8px;">
+                <input type="text" class="search-text-input" id="branch-create-input" placeholder="Create new branch (e.g. 'feat/simd-perf')..." style="flex:1; background:#18181b; border:1px solid #3f3f46; border-radius:4px; padding:6px 10px; font-size:12px; color:#fff;" onkeydown="handleBranchInputKeyDown(event)">
+                <button class="btn btn-primary" onclick="createAndCheckoutBranch()"><i class="fa fa-plus"></i> New Branch</button>
+            </div>
+            <div class="modal-list" id="branch-list-container" style="max-height:300px;">
+                <div style="padding:14px; color:#71717a; text-align:center;">Loading branches...</div>
             </div>
         </div>
     </div>
@@ -1651,6 +1737,18 @@
                 'get_cloud_settings': ['/api/settings/models', 'GET'],
                 'update_cloud_settings': ['/api/settings/models', 'POST', args],
                 'test_cloud_settings': ['/api/settings/test_model', 'POST', args],
+                'agent_tools': ['/api/agent/tools', 'GET'],
+                'agent_chat_step': ['/api/agent/chat_step', 'POST', args],
+                'agent_approve_tool': ['/api/agent/approve_tool', 'POST', args],
+                'agent_auto_approve': ['/api/agent/auto_approve', 'POST', args],
+                'inline_edit_stream': ['/api/inline_edit_stream', 'POST', args],
+                'terminal_sessions': ['/api/terminal/sessions', 'GET'],
+                'terminal_session_new': ['/api/terminal/sessions/new', 'POST', args],
+                'terminal_session_kill': ['/api/terminal/sessions/kill', 'POST', args],
+                'git_branches': ['/api/git/branches', 'GET'],
+                'git_branch_checkout': ['/api/git/branch/checkout', 'POST', args],
+                'git_conflicts': ['/api/git/conflicts', 'GET'],
+                'git_conflicts_resolve': ['/api/git/conflicts/resolve', 'POST', args],
             };
             const config = routeMap[cmd];
             if (!config) throw new Error('Unknown command: ' + cmd);
@@ -1893,6 +1991,9 @@
             } else if (editorInstance) {
                 editorInstance.setValue(content);
                 monaco.editor.setModelLanguage(editorInstance.getModel(), lang);
+            }
+            if (activeTabIdx >= 0 && openTabs[activeTabIdx] && typeof checkBufferForMergeConflicts === 'function') {
+                checkBufferForMergeConflicts(content, openTabs[activeTabIdx].path);
             }
         }
 
@@ -2143,7 +2244,10 @@
             }
         }
 
-        // Inline Ctrl+K Surgical Editing
+        // Inline Ctrl+K Surgical Editing & Phase 7B Cursor Ghost Diff
+        let activeGhostDiff = null;
+        let ghostDiffDecorations = [];
+
         function triggerInlineCtrlK() {
             const widget = document.getElementById('ctrl-k-widget');
             widget.style.display = 'flex';
@@ -2166,24 +2270,100 @@
 
                 const tab = openTabs[activeTabIdx];
                 const selected = getSelectedText() || getEditorContent();
+                toast.info('Computing Cursor Ghost Diff...');
 
                 try {
-                    const diffData = await apiInvoke('ask_inline_edit', {
+                    const diffData = await apiInvoke('inline_edit_stream', {
                         path: tab.path,
                         selected_text: selected,
                         file_context: getEditorContent(),
                         instruction: prompt,
                         model: getSelectedModel(),
                     });
-                    window.currentInlineEditReplacement = diffData.replacement;
-                    window.currentInlineEditSelected = selected;
-                    renderDiff(diffData);
-                    document.getElementById('side-view-container').innerText = diffData.side_by_side;
-                    switchView('diff');
+
+                    activeGhostDiff = {
+                        path: tab.path,
+                        original: getEditorContent(),
+                        replacement: diffData.replacement,
+                        full_content: diffData.full_content || diffData.replacement,
+                        metrics: diffData.metrics,
+                        diff_lines: diffData.diff_lines || [],
+                    };
+
+                    // Apply full content temporarily to Monaco with diff decorations
+                    if (editorInstance && typeof monaco !== 'undefined') {
+                        setEditorContent(activeGhostDiff.full_content, tab.lang);
+                        
+                        // Compute Monaco decorations for additions
+                        const newDecorations = [];
+                        let lineNo = 1;
+                        for (const dl of activeGhostDiff.diff_lines) {
+                            if (dl.tag === 'Add') {
+                                newDecorations.push({
+                                    range: new monaco.Range(lineNo, 1, lineNo, 1),
+                                    options: {
+                                        isWholeLine: true,
+                                        className: 'monaco-diff-added-line',
+                                        linesDecorationsClassName: 'monaco-diff-gutter-added'
+                                    }
+                                });
+                                lineNo++;
+                            } else if (dl.tag === 'Equal') {
+                                lineNo++;
+                            }
+                        }
+                        ghostDiffDecorations = editorInstance.deltaDecorations(ghostDiffDecorations, newDecorations);
+                    }
+
+                    // Display floating toolbar
+                    const metricsEl = document.getElementById('ghost-diff-metrics');
+                    if (metricsEl && diffData.metrics) {
+                        metricsEl.innerText = `+${diffData.metrics.added_lines} / -${diffData.metrics.deleted_lines}`;
+                    }
+                    const floatWidget = document.getElementById('floating-diff-widget');
+                    if (floatWidget) floatWidget.style.display = 'flex';
+
+                    toast.success(`Ghost diff ready (+${diffData.metrics ? diffData.metrics.added_lines : 0}/-${diffData.metrics ? diffData.metrics.deleted_lines : 0}). Press [Tab] to Accept or [Esc] to Reject.`);
                 } catch (err) {
                     toast.error('Inline Edit Error: ' + err);
                 }
             }
+        }
+
+        async function acceptGhostDiff() {
+            if (!activeGhostDiff || activeTabIdx < 0) return;
+            const tab = openTabs[activeTabIdx];
+            const floatWidget = document.getElementById('floating-diff-widget');
+            if (floatWidget) floatWidget.style.display = 'none';
+
+            if (editorInstance && typeof monaco !== 'undefined') {
+                ghostDiffDecorations = editorInstance.deltaDecorations(ghostDiffDecorations, []);
+            }
+
+            tab.content = activeGhostDiff.full_content;
+            tab.originalContent = activeGhostDiff.full_content;
+            tab.isDirty = false;
+            activeGhostDiff = null;
+
+            renderTabs();
+            await saveActiveFile();
+            toast.success(`Ghost diff committed successfully to ${tab.name}!`);
+        }
+
+        function rejectGhostDiff() {
+            if (!activeGhostDiff || activeTabIdx < 0) return;
+            const tab = openTabs[activeTabIdx];
+            const floatWidget = document.getElementById('floating-diff-widget');
+            if (floatWidget) floatWidget.style.display = 'none';
+
+            if (editorInstance && typeof monaco !== 'undefined') {
+                ghostDiffDecorations = editorInstance.deltaDecorations(ghostDiffDecorations, []);
+                setEditorContent(activeGhostDiff.original, tab.lang);
+            }
+
+            tab.content = activeGhostDiff.original;
+            activeGhostDiff = null;
+            toast.info('Ghost diff discarded.');
         }
 
         // Global Keybindings
@@ -2224,6 +2404,12 @@
                 } else if ((e.ctrlKey || e.metaKey) && e.key === '`') {
                     e.preventDefault();
                     toggleTerminal();
+                } else if (e.key === 'Tab' && activeGhostDiff) {
+                    e.preventDefault();
+                    acceptGhostDiff();
+                } else if (e.key === 'Escape' && activeGhostDiff) {
+                    e.preventDefault();
+                    rejectGhostDiff();
                 } else if (e.key === 'Tab' && speculativeContent) {
                     e.preventDefault();
                     commitTabOverlay();
@@ -2282,24 +2468,70 @@
             }
         }
 
-        // Phase 6A: Interactive Sovereign Terminal (PTY + xterm.js)
-        let ptyTerm = null;
-        let ptyFitAddon = null;
-        let ptyWs = null;
-        let ptyResizeObserver = null;
+        // Phase 7C: Multi-Tab Persistent Terminals (portable-pty Multi-Session Manager)
+        const ptySessions = new Map(); // id -> { id, name, term, fitAddon, ws, containerEl }
+        let activePtySessionId = null;
 
-        function initPtyTerminal(forceRestart = false) {
-            const container = document.getElementById('xterm-container');
-            const badge = document.getElementById('pty-status-badge');
-            if (!container) return;
+        async function initPtyTerminal(forceRestart = false) {
+            const wrapper = document.getElementById('xterm-sessions-wrapper');
+            if (!wrapper) return;
 
-            if (forceRestart && ptyWs) {
-                try { ptyWs.close(); } catch (_) {}
-                ptyWs = null;
+            try {
+                const sessionList = await apiInvoke('terminal_sessions');
+                if (sessionList && sessionList.length > 0) {
+                    for (const s of sessionList) {
+                        if (!ptySessions.has(s.id)) {
+                            setupPtySessionTab(s.id, s.name);
+                        }
+                    }
+                    if (!activePtySessionId || !ptySessions.has(activePtySessionId)) {
+                        switchTerminalSession(sessionList[0].id);
+                    }
+                } else {
+                    const newSess = await apiInvoke('terminal_session_new', { name: 'bash-1' });
+                    setupPtySessionTab(newSess.session_id, newSess.name);
+                    switchTerminalSession(newSess.session_id);
+                }
+            } catch (err) {
+                console.warn('Multi-session PTY init notice:', err);
+                if (!activePtySessionId) {
+                    setupPtySessionTab('default', 'bash-1');
+                    switchTerminalSession('default');
+                }
             }
+        }
 
-            if (!ptyTerm && typeof window.Terminal !== 'undefined') {
-                ptyTerm = new window.Terminal({
+        async function createNewTerminalTab() {
+            try {
+                const count = ptySessions.size + 1;
+                const newSess = await apiInvoke('terminal_session_new', { name: `bash-${count}` });
+                setupPtySessionTab(newSess.session_id, newSess.name);
+                switchTerminalSession(newSess.session_id);
+                toast.success(`Spawned new persistent PTY terminal [${newSess.name}]`);
+            } catch (err) {
+                toast.error('Failed to create terminal session: ' + err);
+            }
+        }
+
+        function setupPtySessionTab(id, name) {
+            if (ptySessions.has(id)) return;
+            const wrapper = document.getElementById('xterm-sessions-wrapper');
+            if (!wrapper) return;
+
+            const sessionContainer = document.createElement('div');
+            sessionContainer.id = `xterm-container-${id}`;
+            sessionContainer.style.width = '100%';
+            sessionContainer.style.height = '100%';
+            sessionContainer.style.minHeight = '0';
+            sessionContainer.style.padding = '4px 6px';
+            sessionContainer.style.overflow = 'hidden';
+            sessionContainer.style.display = 'none';
+            wrapper.appendChild(sessionContainer);
+
+            let term = null;
+            let fitAddon = null;
+            if (typeof window.Terminal !== 'undefined') {
+                term = new window.Terminal({
                     fontFamily: '"JetBrains Mono", Menlo, Monaco, Consolas, monospace',
                     fontSize: 13,
                     cursorBlink: true,
@@ -2329,104 +2561,138 @@
                 });
 
                 if (typeof window.FitAddon !== 'undefined' && window.FitAddon.FitAddon) {
-                    ptyFitAddon = new window.FitAddon.FitAddon();
-                    ptyTerm.loadAddon(ptyFitAddon);
+                    fitAddon = new window.FitAddon.FitAddon();
+                    term.loadAddon(fitAddon);
                 }
 
-                container.innerHTML = '';
-                ptyTerm.open(container);
+                term.open(sessionContainer);
+            }
 
-                if (ptyFitAddon) {
-                    setTimeout(() => { try { ptyFitAddon.fit(); } catch (_) {} }, 50);
-                }
-
-                // Send keystrokes directly to PTY WebSocket
-                ptyTerm.onData(data => {
-                    if (ptyWs && ptyWs.readyState === WebSocket.OPEN) {
-                        ptyWs.send(JSON.stringify({ type: 'input', data }));
+            const wsProto = (window.location.protocol === 'https:') ? 'wss:' : 'ws:';
+            const host = window.location.host || '127.0.0.1:4173';
+            const wsUrl = `${wsProto}//${host}/api/terminal/pty/ws?session_id=${encodeURIComponent(id)}`;
+            let ws = null;
+            try {
+                ws = new WebSocket(wsUrl);
+                ws.onopen = () => {
+                    const badge = document.getElementById('pty-status-badge');
+                    if (badge) {
+                        badge.innerText = 'PTY Online';
+                        badge.style.background = '#064e3b';
+                        badge.style.color = '#6ee7b7';
                     }
-                });
-
-                // Auto-fit on drawer resize
-                if (window.ResizeObserver && !ptyResizeObserver) {
-                    ptyResizeObserver = new ResizeObserver(() => {
-                        if (ptyFitAddon && ptyTerm) {
-                            try {
-                                ptyFitAddon.fit();
-                                if (ptyWs && ptyWs.readyState === WebSocket.OPEN) {
-                                    ptyWs.send(JSON.stringify({ type: 'resize', cols: ptyTerm.cols, rows: ptyTerm.rows }));
-                                }
-                            } catch (_) {}
+                    if (fitAddon && term) {
+                        try { fitAddon.fit(); } catch (_) {}
+                        ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+                    }
+                };
+                ws.onmessage = (e) => {
+                    if (term) term.write(e.data);
+                };
+                ws.onerror = () => {
+                    const badge = document.getElementById('pty-status-badge');
+                    if (badge) {
+                        badge.innerText = 'PTY Error';
+                        badge.style.background = '#450a0a';
+                        badge.style.color = '#fca5a5';
+                    }
+                };
+                if (term) {
+                    term.onData(data => {
+                        if (ws && ws.readyState === WebSocket.OPEN) {
+                            ws.send(JSON.stringify({ type: 'input', data }));
                         }
                     });
-                    ptyResizeObserver.observe(container);
                 }
+            } catch (wsErr) {
+                console.warn('Terminal WS session error:', wsErr);
             }
 
-            if (!ptyWs || ptyWs.readyState === WebSocket.CLOSED || ptyWs.readyState === WebSocket.CLOSING) {
-                if (badge) {
-                    badge.innerText = 'Connecting...';
-                    badge.style.background = '#854d0e';
-                    badge.style.color = '#fef08a';
+            ptySessions.set(id, { id, name, term, fitAddon, ws, containerEl: sessionContainer });
+            renderTerminalSessionsTabs();
+        }
+
+        function switchTerminalSession(id) {
+            if (!ptySessions.has(id)) return;
+            activePtySessionId = id;
+            ptySessions.forEach((sess, sId) => {
+                if (sess.containerEl) {
+                    sess.containerEl.style.display = (sId === id) ? 'block' : 'none';
                 }
-
-                const wsProto = (window.location.protocol === 'https:') ? 'wss:' : 'ws:';
-                const host = window.location.host || '127.0.0.1:4173';
-                const wsUrl = `${wsProto}//${host}/api/terminal/pty/ws`;
-
-                try {
-                    ptyWs = new WebSocket(wsUrl);
-
-                    ptyWs.onopen = () => {
-                        if (badge) {
-                            badge.innerText = 'PTY Online';
-                            badge.style.background = '#064e3b';
-                            badge.style.color = '#6ee7b7';
+            });
+            const active = ptySessions.get(id);
+            if (active && active.fitAddon) {
+                setTimeout(() => {
+                    try {
+                        active.fitAddon.fit();
+                        if (active.ws && active.ws.readyState === WebSocket.OPEN && active.term) {
+                            active.ws.send(JSON.stringify({ type: 'resize', cols: active.term.cols, rows: active.term.rows }));
                         }
-                        if (ptyFitAddon && ptyTerm) {
-                            try { ptyFitAddon.fit(); } catch (_) {}
-                            ptyWs.send(JSON.stringify({ type: 'resize', cols: ptyTerm.cols, rows: ptyTerm.rows }));
-                        }
-                    };
-
-                    ptyWs.onmessage = (event) => {
-                        if (ptyTerm) {
-                            ptyTerm.write(event.data);
-                        } else {
-                            const outputBox = document.getElementById('terminal-output');
-                            if (outputBox) outputBox.innerText += event.data;
-                        }
-                    };
-
-                    ptyWs.onclose = () => {
-                        if (badge) {
-                            badge.innerText = 'Disconnected';
-                            badge.style.background = '#450a0a';
-                            badge.style.color = '#fca5a5';
-                        }
-                    };
-
-                    ptyWs.onerror = () => {
-                        if (badge) {
-                            badge.innerText = 'PTY Error';
-                            badge.style.background = '#450a0a';
-                            badge.style.color = '#fca5a5';
-                        }
-                    };
-                } catch (err) {
-                    console.warn('PTY WebSocket initialization warning:', err);
-                }
+                        if (active.term) active.term.focus();
+                    } catch (_) {}
+                }, 30);
             }
+            renderTerminalSessionsTabs();
+        }
+
+        async function killTerminalSession(id, e) {
+            if (e) e.stopPropagation();
+            const sess = ptySessions.get(id);
+            if (!sess) return;
+            try {
+                if (sess.ws) { try { sess.ws.close(); } catch (_) {} }
+                if (sess.term) { try { sess.term.dispose(); } catch (_) {} }
+                if (sess.containerEl && sess.containerEl.parentNode) {
+                    sess.containerEl.parentNode.removeChild(sess.containerEl);
+                }
+                ptySessions.delete(id);
+                await apiInvoke('terminal_session_kill', { session_id: id });
+                toast.info(`Terminal session ${sess.name} closed`);
+            } catch (err) {
+                console.warn('Kill terminal session notice:', err);
+            }
+
+            if (activePtySessionId === id) {
+                const remaining = Array.from(ptySessions.keys());
+                if (remaining.length > 0) {
+                    switchTerminalSession(remaining[0]);
+                } else {
+                    createNewTerminalTab();
+                }
+            } else {
+                renderTerminalSessionsTabs();
+            }
+        }
+
+        function renderTerminalSessionsTabs() {
+            const tabsContainer = document.getElementById('term-sessions-tabs');
+            if (!tabsContainer) return;
+            tabsContainer.innerHTML = '';
+            ptySessions.forEach((sess, id) => {
+                const isActive = (id === activePtySessionId);
+                const tabEl = document.createElement('div');
+                tabEl.className = `term-session-tab ${isActive ? 'active' : ''}`;
+                tabEl.onclick = () => switchTerminalSession(id);
+                tabEl.innerHTML = `<span><i class="fa fa-terminal" style="font-size:9px;"></i> ${escapeHtml(sess.name)}</span>
+                    <span class="term-session-close" onclick="killTerminalSession('${id}', event)" title="Close Terminal Session">&times;</span>`;
+                tabsContainer.appendChild(tabEl);
+            });
         }
 
         function restartPtyTerminal() {
-            if (ptyTerm) ptyTerm.clear();
+            if (activePtySessionId) {
+                const sess = ptySessions.get(activePtySessionId);
+                if (sess && sess.term) sess.term.clear();
+            }
             initPtyTerminal(true);
-            toast.info('PTY Shell process restarted.');
+            toast.info('PTY Shell processes refreshed.');
         }
 
         function clearPtyTerminal() {
-            if (ptyTerm) ptyTerm.clear();
+            if (activePtySessionId) {
+                const sess = ptySessions.get(activePtySessionId);
+                if (sess && sess.term) sess.term.clear();
+            }
             const outputBox = document.getElementById('terminal-output');
             if (outputBox) outputBox.innerText = '';
         }
@@ -2447,13 +2713,16 @@
                 switchDrawerTab('term');
                 initPtyTerminal();
                 setTimeout(() => {
-                    if (ptyFitAddon) {
-                        try { ptyFitAddon.fit(); } catch (_) {}
-                        if (ptyWs && ptyWs.readyState === WebSocket.OPEN && ptyTerm) {
-                            ptyWs.send(JSON.stringify({ type: 'resize', cols: ptyTerm.cols, rows: ptyTerm.rows }));
+                    if (activePtySessionId) {
+                        const sess = ptySessions.get(activePtySessionId);
+                        if (sess && sess.fitAddon) {
+                            try { sess.fitAddon.fit(); } catch (_) {}
+                            if (sess.ws && sess.ws.readyState === WebSocket.OPEN && sess.term) {
+                                sess.ws.send(JSON.stringify({ type: 'resize', cols: sess.term.cols, rows: sess.term.rows }));
+                            }
+                            if (sess.term) sess.term.focus();
                         }
                     }
-                    if (ptyTerm) ptyTerm.focus();
                 }, 50);
             }
             if (editorInstance) editorInstance.layout();
@@ -3286,12 +3555,334 @@
             }
         }
 
+        // Phase 7A: Autonomous Agentic Tool-Use Loop (Devin / Claude Code Mode)
+        let pendingApprovalResolver = null;
+
+        function handleToolApproval(approvalId, allow, allowAll) {
+            const card = document.getElementById(`approval-card-${approvalId}`);
+            if (card) {
+                card.innerHTML = `<div style="font-size:11px; color:${allow ? '#10b981' : '#ef4444'};">
+                    <i class="fa fa-${allow ? 'check' : 'xmark'}"></i> ${allow ? (allowAll ? 'Allowed for all session tools' : 'Approved execution') : 'Permission Denied'}
+                </div>`;
+            }
+            if (allowAll) {
+                const autoCb = document.getElementById('agent-auto-approve');
+                if (autoCb) autoCb.checked = true;
+            }
+            apiInvoke('agent_approve_tool', { approval_id: approvalId, allow, allow_all: allowAll })
+                .then(res => {
+                    if (pendingApprovalResolver) {
+                        const resolve = pendingApprovalResolver;
+                        pendingApprovalResolver = null;
+                        resolve(res);
+                    }
+                })
+                .catch(err => {
+                    toast.error('Approval error: ' + err);
+                    if (pendingApprovalResolver) {
+                        const resolve = pendingApprovalResolver;
+                        pendingApprovalResolver = null;
+                        resolve(null);
+                    }
+                });
+        }
+
+        async function runAutonomousAgentLoop(userPrompt) {
+            const chatStream = document.getElementById('chat-stream');
+            let isAutoApprove = document.getElementById('agent-auto-approve')?.checked || false;
+            let currentFile = (activeTabIdx >= 0 && openTabs[activeTabIdx]) ? openTabs[activeTabIdx].path : null;
+
+            const bubbleId = 'agent_bubble_' + Date.now();
+            const bubbleHtml = `<div class="chat-bubble chat-ai" id="${bubbleId}">
+                <div style="display:flex; align-items:center; gap:6px; margin-bottom:6px; font-size:11px; color:#38bdf8; font-weight:700;">
+                    <i class="fa fa-robot"></i> Devin Autonomous Agent
+                    <span class="badge" style="background:#083344; color:#22d3ee; font-size:9px;">Tool Loop</span>
+                </div>
+                <div class="agent-timeline" id="${bubbleId}_timeline"></div>
+                <div class="stream-body typing-cursor" style="margin-top:6px;">Thinking and analyzing tools...</div>
+            </div>`;
+            chatStream.innerHTML += bubbleHtml;
+            chatStream.scrollTop = chatStream.scrollHeight;
+
+            const bubbleEl = document.getElementById(bubbleId);
+            const timelineEl = document.getElementById(`${bubbleId}_timeline`);
+            const bodyEl = bubbleEl.querySelector('.stream-body');
+
+            let stepIdx = 0;
+            const maxSteps = 15;
+            let finished = false;
+
+            while (!finished && stepIdx < maxSteps) {
+                stepIdx++;
+                isAutoApprove = document.getElementById('agent-auto-approve')?.checked || false;
+
+                try {
+                    const stepRes = await apiInvoke('agent_chat_step', {
+                        prompt: userPrompt,
+                        step_idx: stepIdx,
+                        auto_approve: isAutoApprove,
+                        active_file: currentFile,
+                        model: getSelectedModel()
+                    });
+
+                    // 1. If approval required, pause and await user decision
+                    if (stepRes.requires_approval && stepRes.approval_id) {
+                        bodyEl.classList.remove('typing-cursor');
+                        bodyEl.innerText = stepRes.agent_message || 'Agent requested tool execution permission:';
+                        
+                        const appCard = document.createElement('div');
+                        appCard.id = `approval-card-${stepRes.approval_id}`;
+                        appCard.className = 'agent-approval-card';
+                        appCard.innerHTML = `
+                            <div class="agent-approval-header">
+                                <span><i class="fa fa-shield-halved"></i> Tool Permission Gate: <strong>${escapeHtml(stepRes.tool_name || '')}</strong></span>
+                                <span class="badge" style="background:#78350f; color:#fef3c7;">Approval Required</span>
+                            </div>
+                            <div class="agent-approval-details">${escapeHtml(stepRes.tool_arguments || '')}</div>
+                            <div style="display:flex; gap:6px; margin-top:4px;">
+                                <button class="btn btn-green" style="padding:2px 8px; font-size:11px;" onclick="handleToolApproval('${stepRes.approval_id}', true, false)"><i class="fa fa-check"></i> Allow Once</button>
+                                <button class="btn btn-indigo" style="padding:2px 8px; font-size:11px;" onclick="handleToolApproval('${stepRes.approval_id}', true, true)"><i class="fa fa-bolt"></i> Allow All</button>
+                                <button class="btn" style="padding:2px 8px; font-size:11px; color:#ef4444; border-color:#ef4444;" onclick="handleToolApproval('${stepRes.approval_id}', false, false)"><i class="fa fa-xmark"></i> Deny</button>
+                            </div>
+                        `;
+                        timelineEl.appendChild(appCard);
+                        chatStream.scrollTop = chatStream.scrollHeight;
+
+                        await new Promise(resolve => {
+                            pendingApprovalResolver = resolve;
+                        });
+
+                        bodyEl.classList.add('typing-cursor');
+                        bodyEl.innerText = 'Executing approved tool...';
+                    }
+
+                    // 2. Render tool execution output card
+                    if (stepRes.tool_executed) {
+                        const toolCard = document.createElement('div');
+                        toolCard.className = 'agent-tool-card';
+                        const toggleId = `tool_out_${Date.now()}_${stepIdx}`;
+                        toolCard.innerHTML = `
+                            <div class="agent-tool-header" onclick="document.getElementById('${toggleId}').style.display = (document.getElementById('${toggleId}').style.display === 'none' ? 'block' : 'none')">
+                                <span><i class="fa fa-wrench"></i> Tool Executed: <strong>${escapeHtml(stepRes.tool_name || '')}</strong></span>
+                                <span style="font-size:10px; color:#10b981;">Result Available <i class="fa fa-chevron-down" style="font-size:9px;"></i></span>
+                            </div>
+                            <div class="agent-tool-output" id="${toggleId}" style="display:none;">${escapeHtml(stepRes.tool_result || '(No output)')}</div>
+                        `;
+                        timelineEl.appendChild(toolCard);
+                        chatStream.scrollTop = chatStream.scrollHeight;
+
+                        if (stepRes.tool_name === 'file_write' || stepRes.tool_name === 'file_patch') {
+                            loadWorkspace();
+                            if (activeTabIdx >= 0 && openTabs[activeTabIdx]) {
+                                const activePath = openTabs[activeTabIdx].path;
+                                apiInvoke('read_file', { path: activePath }).then(c => {
+                                    setEditorContent(c, openTabs[activeTabIdx].lang);
+                                }).catch(_ => {});
+                            }
+                        }
+                    }
+
+                    // 3. Check if loop is finished
+                    if (stepRes.is_finished) {
+                        finished = true;
+                        bodyEl.classList.remove('typing-cursor');
+                        bodyEl.innerText = stepRes.final_answer || stepRes.agent_message || 'Task completed successfully.';
+                        
+                        if (activeChatSession) {
+                            activeChatSession.messages.push({
+                                role: 'assistant',
+                                content: `[Devin Loop (${stepIdx} steps)] ${stepRes.final_answer || stepRes.agent_message || ''}`,
+                                timestamp_utc: new Date().toISOString()
+                            });
+                            apiInvoke('save_chat_session', { session: activeChatSession, root_path: null }).catch(_ => {});
+                        }
+                        toast.success(`Devin Agent loop finished in ${stepIdx} steps!`);
+                    } else if (stepRes.agent_message) {
+                        bodyEl.innerText = stepRes.agent_message;
+                    }
+                } catch (err) {
+                    bodyEl.classList.remove('typing-cursor');
+                    bodyEl.innerHTML = `<span style="color:#ef4444;"><i class="fa fa-circle-exclamation"></i> Agent Loop Error: ${err}</span>`;
+                    finished = true;
+                }
+            }
+
+            bodyEl.classList.remove('typing-cursor');
+            chatStream.scrollTop = chatStream.scrollHeight;
+        }
+
+        // Phase 7D: Git Branch Manager
+        let currentGitBranches = [];
+
+        async function openBranchManagerModal() {
+            const modal = document.getElementById('git-branch-modal');
+            const list = document.getElementById('branch-list-container');
+            const inp = document.getElementById('branch-create-input');
+            if (!modal) return;
+            modal.style.display = 'flex';
+            if (inp) { inp.value = ''; inp.focus(); }
+            if (list) list.innerHTML = '<div style="padding:14px; color:#71717a; text-align:center;">Loading git branches...</div>';
+
+            try {
+                const res = await apiInvoke('git_branches');
+                currentGitBranches = res.branches || [];
+                const current = res.current || 'main';
+                
+                const bBadge = document.getElementById('git-branch-badge');
+                if (bBadge) bBadge.innerHTML = `<i class="fa fa-code-branch"></i> ${escapeHtml(current)}`;
+                const sbBranch = document.getElementById('sb-branch-name');
+                if (sbBranch) sbBranch.innerText = current;
+
+                if (!list) return;
+                if (currentGitBranches.length === 0) {
+                    list.innerHTML = '<div style="padding:14px; color:#71717a; text-align:center;">No git branches found.</div>';
+                    return;
+                }
+
+                let html = '';
+                for (const b of currentGitBranches) {
+                    const isCur = (b === current);
+                    html += `<div class="branch-list-item ${isCur ? 'current' : ''}" onclick="switchGitBranch('${escapeHtml(b)}')">
+                        <span><i class="fa fa-${isCur ? 'check' : 'code-branch'}" style="color:${isCur ? '#22d3ee' : '#71717a'}; margin-right:6px;"></i> ${escapeHtml(b)}</span>
+                        ${isCur ? '<span class="badge" style="background:#083344; color:#22d3ee; font-size:9px;">Active</span>' : '<span style="font-size:11px; color:#a1a1aa;">Checkout</span>'}
+                    </div>`;
+                }
+                list.innerHTML = html;
+            } catch (err) {
+                if (list) list.innerHTML = `<div style="padding:14px; color:#ef4444; text-align:center;">Failed to list branches: ${err}</div>`;
+            }
+        }
+
+        function closeBranchManagerModal(e) {
+            if (e && e.target !== e.currentTarget) return;
+            const modal = document.getElementById('git-branch-modal');
+            if (modal) modal.style.display = 'none';
+        }
+
+        async function switchGitBranch(branchName) {
+            try {
+                toast.info(`Checking out branch: ${branchName}...`);
+                const res = await apiInvoke('git_branch_checkout', { branch: branchName, create_new: false });
+                closeBranchManagerModal();
+                toast.success(`Switched to branch: ${res.current_branch}`);
+                await refreshGitStatus();
+                loadWorkspace();
+            } catch (err) {
+                toast.error('Branch checkout failed: ' + err);
+            }
+        }
+
+        async function createAndCheckoutBranch() {
+            const inp = document.getElementById('branch-create-input');
+            const name = inp ? inp.value.trim() : '';
+            if (!name) {
+                toast.warn('Please enter a valid branch name');
+                return;
+            }
+            try {
+                toast.info(`Creating and checking out branch: ${name}...`);
+                const res = await apiInvoke('git_branch_checkout', { branch: name, create_new: true });
+                closeBranchManagerModal();
+                toast.success(`Created & checked out branch: ${res.current_branch}`);
+                await refreshGitStatus();
+                loadWorkspace();
+            } catch (err) {
+                toast.error('Create branch failed: ' + err);
+            }
+        }
+
+        function handleBranchInputKeyDown(e) {
+            if (e.key === 'Enter') {
+                createAndCheckoutBranch();
+            } else if (e.key === 'Escape') {
+                closeBranchManagerModal();
+            }
+        }
+
+        // Phase 7D: 3-Way Merge Conflict Resolver
+        let currentConflictedFile = null;
+
+        function checkBufferForMergeConflicts(content, filePath) {
+            const banner = document.getElementById('merge-conflict-banner');
+            if (!content || typeof content !== 'string') {
+                if (banner) banner.style.display = 'none';
+                return;
+            }
+
+            const hasConflict = content.includes('<<<<<<< ') && content.includes('=======') && content.includes('>>>>>>> ');
+            if (hasConflict) {
+                currentConflictedFile = filePath;
+                const matches = (content.match(/<<<<<<< /g) || []).length;
+                if (banner) {
+                    banner.style.display = 'flex';
+                    const fileEl = document.getElementById('conflict-filename');
+                    if (fileEl) fileEl.innerText = filePath ? filePath.split('/').pop() : 'buffer';
+                    const badgeEl = document.getElementById('conflict-badge');
+                    if (badgeEl) badgeEl.innerText = `${matches} conflict${matches > 1 ? 's' : ''}`;
+                }
+            } else {
+                if (banner && currentConflictedFile === filePath) {
+                    banner.style.display = 'none';
+                }
+            }
+        }
+
+        function hideConflictBanner() {
+            const banner = document.getElementById('merge-conflict-banner');
+            if (banner) banner.style.display = 'none';
+        }
+
+        async function resolveCurrentConflict(strategy) {
+            if (!currentConflictedFile && activeTabIdx >= 0) {
+                currentConflictedFile = openTabs[activeTabIdx].path;
+            }
+            if (!currentConflictedFile) return;
+
+            try {
+                toast.info(`Resolving conflict via '${strategy}' strategy...`);
+                await apiInvoke('git_conflicts_resolve', {
+                    path: currentConflictedFile,
+                    strategy: strategy
+                });
+                
+                hideConflictBanner();
+                toast.success(`Conflict resolved cleanly via ${strategy}!`);
+
+                const updated = await apiInvoke('read_file', { path: currentConflictedFile });
+                if (activeTabIdx >= 0 && openTabs[activeTabIdx].path === currentConflictedFile) {
+                    setEditorContent(updated, openTabs[activeTabIdx].lang);
+                    openTabs[activeTabIdx].content = updated;
+                    openTabs[activeTabIdx].originalContent = updated;
+                    openTabs[activeTabIdx].isDirty = false;
+                    renderTabs();
+                }
+                await refreshGitStatus();
+            } catch (err) {
+                toast.error('Conflict resolution failed: ' + err);
+            }
+        }
+
         // Copilot Chat with Streaming & Multi-Turn History
         async function sendPrompt() {
             const input = document.getElementById('chat-input');
             const text = input.value.trim();
             if (!text || isCopilotStreaming) return;
             input.value = '';
+
+            const isAgentLoop = document.getElementById('agent-loop-mode')?.checked || false;
+            if (isAgentLoop) {
+                const chatStream = document.getElementById('chat-stream');
+                chatStream.innerHTML += `<div class="chat-bubble chat-user">${escapeHtml(text)}</div>`;
+                chatStream.scrollTop = chatStream.scrollHeight;
+                if (activeChatSession) {
+                    activeChatSession.messages.push({
+                        role: 'user',
+                        content: text,
+                        timestamp_utc: new Date().toISOString()
+                    });
+                }
+                return await runAutonomousAgentLoop(text);
+            }
 
             const chatStream = document.getElementById('chat-stream');
             chatStream.innerHTML += `<div class="chat-bubble chat-user">${escapeHtml(text)}</div>`;

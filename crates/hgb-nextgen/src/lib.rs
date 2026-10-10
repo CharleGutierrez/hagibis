@@ -63,6 +63,7 @@ pub mod worktree_swarm;
 pub mod pty_engine;
 pub mod fs_watcher;
 pub mod cloud_settings;
+pub mod agent_loop;
 
 pub use visual_ide::VisualIdeServer;
 pub use inline_diff_engine::{
