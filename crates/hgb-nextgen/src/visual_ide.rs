@@ -33,6 +33,9 @@ pub struct VisualIdeServer {
     pub semantic_index: Arc<crate::semantic_index::SemanticCodebaseIndex>,
     pub dap: Arc<crate::dap_engine::DapEngine>,
     pub swarm: Arc<crate::worktree_swarm::WorktreeSwarmManager>,
+    pub pty: Arc<crate::pty_engine::PtyManager>,
+    pub fs_watcher: Arc<tokio::sync::Mutex<crate::fs_watcher::WorkspaceFsWatcher>>,
+    pub cloud_settings: Arc<tokio::sync::RwLock<crate::cloud_settings::CloudSettings>>,
 }
 
 #[derive(Serialize)]
@@ -379,6 +382,9 @@ impl VisualIdeServer {
         let semantic_index = Arc::new(crate::semantic_index::SemanticCodebaseIndex::new(workspace_root.clone()));
         let dap = Arc::new(crate::dap_engine::DapEngine::new(workspace_root.clone()));
         let swarm = Arc::new(crate::worktree_swarm::WorktreeSwarmManager::new(workspace_root.clone()));
+        let pty = Arc::new(crate::pty_engine::PtyManager::new(workspace_root.clone()));
+        let fs_watcher = Arc::new(tokio::sync::Mutex::new(crate::fs_watcher::WorkspaceFsWatcher::new(workspace_root.clone())));
+        let cloud_settings = Arc::new(tokio::sync::RwLock::new(crate::cloud_settings::CloudSettings::load_from_disk(None)));
 
         Self {
             port,
@@ -388,6 +394,9 @@ impl VisualIdeServer {
             semantic_index,
             dap,
             swarm,
+            pty,
+            fs_watcher,
+            cloud_settings,
         }
     }
 
@@ -401,6 +410,15 @@ impl VisualIdeServer {
         let sem_idx = self.semantic_index.clone();
         tokio::spawn(async move {
             let _ = sem_idx.index_workspace().await;
+        });
+
+        // Kick off background live filesystem watcher
+        let watcher_mutex = self.fs_watcher.clone();
+        tokio::spawn(async move {
+            let mut w = watcher_mutex.lock().await;
+            if let Err(e) = w.start_watching() {
+                eprintln!("Workspace filesystem watcher notice: {}", e);
+            }
         });
 
         let app = Router::new()
@@ -472,6 +490,13 @@ impl VisualIdeServer {
             .route("/api/swarm/spawn", post(Self::handle_swarm_spawn))
             .route("/api/swarm/tasks", get(Self::handle_swarm_tasks))
             .route("/api/swarm/merge", post(Self::handle_swarm_merge))
+            // Phase 6A: Interactive WebSocket PTY Terminal
+            .route("/api/terminal/pty/ws", get(Self::handle_pty_ws))
+            // Phase 6B: Live Workspace File System Watcher Stream
+            .route("/api/fs/events/ws", get(Self::handle_fs_events_ws))
+            // Phase 6C: Cloud LLM & API Key Settings Manager
+            .route("/api/settings/models", get(Self::handle_get_cloud_settings).post(Self::handle_update_cloud_settings))
+            .route("/api/settings/test_model", post(Self::handle_test_cloud_settings))
             .layer(axum::middleware::from_fn_with_state(
                 Arc::new(self.clone()),
                 Self::auth_middleware,
@@ -677,9 +702,7 @@ impl VisualIdeServer {
         }
     }
 
-    async fn handle_chat(Json(payload): Json<ChatPayload>) -> impl IntoResponse {
-        // Connect to local Ollama inference service (dynabook-coder or qwen2.5-coder:1.5b)
-        let client = reqwest::Client::new();
+    async fn handle_chat(State(state): State<Arc<Self>>, Json(payload): Json<ChatPayload>) -> impl IntoResponse {
         let prompt_clone = payload.prompt.clone();
         let prompt_full = if let Some(ctx) = payload.context {
             format!("Code Context:\n```\n{}\n```\n\nTask: {}\nProvide direct, surgical code corrections.", ctx, prompt_clone)
@@ -687,22 +710,23 @@ impl VisualIdeServer {
             prompt_clone
         };
 
-        let ollama_req = serde_json::json!({
-            "model": "dynabook-coder:latest",
-            "prompt": prompt_full,
-            "stream": false
-        });
+        let cloud = state.cloud_settings.read().await;
+        let msgs = vec![crate::cloud_settings::ChatMessageItem {
+            role: "user".to_string(),
+            content: prompt_full.clone(),
+        }];
 
-        let resp_result = client.post("http://127.0.0.1:11434/api/generate")
-            .json(&ollama_req)
-            .timeout(std::time::Duration::from_secs(30))
-            .send()
-            .await;
-
-        let final_resp = match resp_result {
-            Ok(resp) => Ok((resp, "dynabook-coder:latest")),
-            Err(_) => {
-                // Secondary attempt with qwen2.5-coder:1.5b
+        match cloud.dispatch_chat(&msgs, Some("You are Hagibis Visual Copilot, an expert AI pair-programmer.")).await {
+            Ok(text) => {
+                (StatusCode::OK, Json(serde_json::json!({
+                    "response": text,
+                    "model": cloud.active_model,
+                    "provider": cloud.active_provider,
+                    "status": "success"
+                }))).into_response()
+            }
+            Err(e) => {
+                let client = reqwest::Client::new();
                 let fallback_req = serde_json::json!({
                     "model": "qwen2.5-coder:1.5b",
                     "prompt": format!("Task: {}\nProvide direct, surgical code corrections.", payload.prompt),
@@ -713,34 +737,20 @@ impl VisualIdeServer {
                     .timeout(std::time::Duration::from_secs(15))
                     .send()
                     .await {
-                    Ok(r) => Ok((r, "qwen2.5-coder:1.5b")),
-                    Err(e) => Err(e),
+                    Ok(r) => {
+                        if let Ok(json) = r.json::<serde_json::Value>().await {
+                            let text = json.get("response").and_then(|v| v.as_str()).unwrap_or("No response content");
+                            (StatusCode::OK, Json(serde_json::json!({
+                                "response": text,
+                                "model": "qwen2.5-coder:1.5b",
+                                "status": "success"
+                            }))).into_response()
+                        } else {
+                            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e }))).into_response()
+                        }
+                    }
+                    Err(_) => (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": e }))).into_response(),
                 }
-            }
-        };
-
-        match final_resp {
-            Ok((resp, model_name)) => {
-                if let Ok(json) = resp.json::<serde_json::Value>().await {
-                    let text = json.get("response").and_then(|v| v.as_str()).unwrap_or("No response content");
-                    (StatusCode::OK, Json(serde_json::json!({
-                        "response": text,
-                        "model": model_name,
-                        "status": "success"
-                    }))).into_response()
-                } else {
-                    (StatusCode::OK, Json(serde_json::json!({
-                        "response": "Error parsing model output",
-                        "status": "parse_error"
-                    }))).into_response()
-                }
-            }
-            Err(_) => {
-                (StatusCode::OK, Json(serde_json::json!({
-                    "response": "Local LLM inference service is offline or unreachable at http://127.0.0.1:11434. Please start Ollama ('ollama serve') and ensure 'dynabook-coder:latest' or 'qwen2.5-coder:1.5b' is installed.",
-                    "model": "offline",
-                    "status": "error"
-                }))).into_response()
             }
         }
     }
@@ -1323,11 +1333,14 @@ impl VisualIdeServer {
         }
     }
 
-    async fn handle_get_models() -> impl IntoResponse {
+    async fn handle_get_models(State(state): State<Arc<Self>>) -> impl IntoResponse {
         let mut list = Vec::new();
+        let cloud = state.cloud_settings.read().await;
+
         // Ollama
+        let ollama_url = cloud.ollama_base_url.clone().unwrap_or_else(|| "http://127.0.0.1:11434".to_string());
         let client = reqwest::Client::new();
-        if let Ok(resp) = client.get("http://127.0.0.1:11434/api/tags").timeout(std::time::Duration::from_millis(600)).send().await {
+        if let Ok(resp) = client.get(format!("{}/api/tags", ollama_url.trim_end_matches('/'))).timeout(std::time::Duration::from_millis(600)).send().await {
             if let Ok(json) = resp.json::<serde_json::Value>().await {
                 if let Some(models) = json.get("models").and_then(|m| m.as_array()) {
                     for m in models {
@@ -1344,15 +1357,9 @@ impl VisualIdeServer {
                 }
             }
         }
-        // Cloud keys
-        if std::env::var("ANTHROPIC_API_KEY").is_ok() {
-            list.push(serde_json::json!({
-                "id": "claude-3-7-sonnet-20250219",
-                "name": "Claude 3.7 Sonnet (Anthropic)",
-                "provider": "Anthropic",
-                "is_local": false,
-                "context_window": 200000
-            }));
+
+        // Anthropic
+        if cloud.anthropic_api_key.is_some() || std::env::var("ANTHROPIC_API_KEY").is_ok() {
             list.push(serde_json::json!({
                 "id": "claude-3-5-sonnet-20241022",
                 "name": "Claude 3.5 Sonnet (Anthropic)",
@@ -1360,8 +1367,17 @@ impl VisualIdeServer {
                 "is_local": false,
                 "context_window": 200000
             }));
+            list.push(serde_json::json!({
+                "id": "claude-3-7-sonnet-20250219",
+                "name": "Claude 3.7 Sonnet (Anthropic)",
+                "provider": "Anthropic",
+                "is_local": false,
+                "context_window": 200000
+            }));
         }
-        if std::env::var("OPENAI_API_KEY").is_ok() {
+
+        // OpenAI
+        if cloud.openai_api_key.is_some() || std::env::var("OPENAI_API_KEY").is_ok() {
             list.push(serde_json::json!({
                 "id": "gpt-4o",
                 "name": "GPT-4o (OpenAI)",
@@ -1370,14 +1386,34 @@ impl VisualIdeServer {
                 "context_window": 128000
             }));
             list.push(serde_json::json!({
-                "id": "o3-mini",
-                "name": "o3-mini Reasoning (OpenAI)",
+                "id": "gpt-4o-mini",
+                "name": "GPT-4o Mini (OpenAI)",
                 "provider": "OpenAI",
                 "is_local": false,
-                "context_window": 200000
+                "context_window": 128000
             }));
         }
-        if std::env::var("DEEPSEEK_API_KEY").is_ok() {
+
+        // Gemini
+        if cloud.gemini_api_key.is_some() || std::env::var("GEMINI_API_KEY").is_ok() {
+            list.push(serde_json::json!({
+                "id": "gemini-1.5-pro",
+                "name": "Gemini 1.5 Pro (Google Gemini)",
+                "provider": "Gemini",
+                "is_local": false,
+                "context_window": 1000000
+            }));
+            list.push(serde_json::json!({
+                "id": "gemini-1.5-flash",
+                "name": "Gemini 1.5 Flash (Google Gemini)",
+                "provider": "Gemini",
+                "is_local": false,
+                "context_window": 1000000
+            }));
+        }
+
+        // DeepSeek
+        if cloud.deepseek_api_key.is_some() || std::env::var("DEEPSEEK_API_KEY").is_ok() {
             list.push(serde_json::json!({
                 "id": "deepseek-chat",
                 "name": "DeepSeek-V3",
@@ -1393,6 +1429,25 @@ impl VisualIdeServer {
                 "context_window": 64000
             }));
         }
+
+        // Default local entries if list is empty
+        if list.is_empty() {
+            list.push(serde_json::json!({
+                "id": "dynabook-coder:latest",
+                "name": "dynabook-coder (Local)",
+                "provider": "Ollama (Local)",
+                "is_local": true,
+                "context_window": 32768
+            }));
+            list.push(serde_json::json!({
+                "id": "qwen2.5-coder:1.5b",
+                "name": "qwen2.5-coder:1.5b (Local)",
+                "provider": "Ollama (Local)",
+                "is_local": true,
+                "context_window": 32768
+            }));
+        }
+
         (StatusCode::OK, Json(list)).into_response()
     }
 
@@ -2317,6 +2372,108 @@ impl VisualIdeServer {
             Err(e) => (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "success": false, "error": e }))).into_response(),
         }
     }
+
+    // Phase 6A: Interactive WebSocket PTY Terminal
+    async fn handle_pty_ws(
+        ws: WebSocketUpgrade,
+        State(state): State<Arc<Self>>,
+    ) -> impl IntoResponse {
+        let pty = state.pty.clone();
+        let root = state.workspace_root.clone();
+        ws.on_upgrade(move |socket| async move {
+            pty.handle_websocket(socket, Some(root)).await;
+        })
+    }
+
+    // Phase 6B: Live Workspace File System Watcher Stream
+    async fn handle_fs_events_ws(
+        ws: WebSocketUpgrade,
+        State(state): State<Arc<Self>>,
+    ) -> impl IntoResponse {
+        let mut rx = {
+            let w = state.fs_watcher.lock().await;
+            w.subscribe()
+        };
+        ws.on_upgrade(move |mut socket| async move {
+            while let Ok(event) = rx.recv().await {
+                if let Ok(json) = serde_json::to_string(&event) {
+                    if socket.send(Message::Text(json)).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        })
+    }
+
+    // Phase 6C: Cloud LLM & API Key Settings Manager
+    async fn handle_get_cloud_settings(State(state): State<Arc<Self>>) -> impl IntoResponse {
+        let settings = state.cloud_settings.read().await;
+        (StatusCode::OK, Json(settings.to_masked()))
+    }
+
+    async fn handle_update_cloud_settings(
+        State(state): State<Arc<Self>>,
+        Json(payload): Json<crate::cloud_settings::CloudSettings>,
+    ) -> impl IntoResponse {
+        let mut settings = state.cloud_settings.write().await;
+        let mut updated = payload;
+        if let Some(ref k) = updated.anthropic_api_key {
+            if k.contains("...") {
+                updated.anthropic_api_key = settings.anthropic_api_key.clone();
+            }
+        }
+        if let Some(ref k) = updated.openai_api_key {
+            if k.contains("...") {
+                updated.openai_api_key = settings.openai_api_key.clone();
+            }
+        }
+        if let Some(ref k) = updated.gemini_api_key {
+            if k.contains("...") {
+                updated.gemini_api_key = settings.gemini_api_key.clone();
+            }
+        }
+        if let Some(ref k) = updated.deepseek_api_key {
+            if k.contains("...") {
+                updated.deepseek_api_key = settings.deepseek_api_key.clone();
+            }
+        }
+        if let Err(e) = updated.save_to_disk(None) {
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e }))).into_response();
+        }
+        *settings = updated;
+        (StatusCode::OK, Json(settings.to_masked())).into_response()
+    }
+
+    async fn handle_test_cloud_settings(
+        State(state): State<Arc<Self>>,
+        Json(payload): Json<TestModelPayload>,
+    ) -> impl IntoResponse {
+        let mut test_settings = {
+            let current = state.cloud_settings.read().await;
+            current.clone()
+        };
+        test_settings.active_provider = payload.provider.clone();
+        test_settings.active_model = payload.model.clone();
+        if let Some(key) = payload.api_key {
+            if !key.contains("...") && !key.trim().is_empty() {
+                match payload.provider.as_str() {
+                    "anthropic" => test_settings.anthropic_api_key = Some(key),
+                    "openai" => test_settings.openai_api_key = Some(key),
+                    "gemini" => test_settings.gemini_api_key = Some(key),
+                    "deepseek" => test_settings.deepseek_api_key = Some(key),
+                    _ => {}
+                }
+            }
+        }
+        let msgs = vec![crate::cloud_settings::ChatMessageItem {
+            role: "user".to_string(),
+            content: "Ping. Respond with OK.".to_string(),
+        }];
+        match test_settings.dispatch_chat(&msgs, Some("You are a connection test bot.")).await {
+            Ok(reply) => (StatusCode::OK, Json(serde_json::json!({ "success": true, "reply": reply.trim() }))).into_response(),
+            Err(e) => (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "success": false, "error": e }))).into_response(),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -2329,6 +2486,13 @@ pub struct LspCompletionPayload {
 #[derive(Deserialize)]
 pub struct AuthVerifyPayload {
     pub token: String,
+}
+
+#[derive(Deserialize)]
+pub struct TestModelPayload {
+    pub provider: String,
+    pub model: String,
+    pub api_key: Option<String>,
 }
 
 #[derive(Deserialize)]

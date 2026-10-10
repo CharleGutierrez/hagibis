@@ -5,6 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>🪽 Hagibis Visual IDE & Cursor Studio</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Phase 6A: Real Interactive Sovereign Terminal (xterm.js + fit addon) -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
     <style>
         :root {
             --bg-dark: #121214;
@@ -327,6 +331,16 @@
         .zig-metric-card { background: #141416; border: 1px solid #27272a; border-radius: 6px; padding: 10px 12px; margin-bottom: 8px; }
         .zig-metric-header { font-size: 11px; color: #a1a1aa; text-transform: uppercase; font-weight: 700; display: flex; justify-content: space-between; margin-bottom: 4px; }
         .zig-metric-val { font-size: 14px; font-weight: 700; color: #22d3ee; font-family: "JetBrains Mono", monospace; }
+
+        /* Phase 6A & 6C: Settings Modal & xterm additions */
+        .settings-tab-btn { background: transparent; border: none; color: #a1a1aa; font-size: 12px; padding: 9px 12px; border-radius: 6px; cursor: pointer; text-align: left; display: flex; align-items: center; gap: 8px; width: 100%; transition: all 0.15s ease; }
+        .settings-tab-btn:hover { background: #27272a; color: #fff; }
+        .settings-tab-btn.active { background: #1e293b; color: #38bdf8; font-weight: 600; border-left: 3px solid #0284c7; }
+        .settings-group { display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px; }
+        .settings-label { font-size: 11px; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px; }
+        .settings-input { background: #18181b; border: 1px solid #3f3f46; color: #fff; padding: 7px 10px; border-radius: 5px; font-size: 12px; outline: none; font-family: inherit; }
+        .settings-input:focus { border-color: var(--accent-cyan); }
+        .xterm-viewport { overflow-y: auto !important; }
     </style>
 </head>
 <body>
@@ -352,6 +366,7 @@
             <button class="btn btn-green" onclick="toggleTerminal()"><i class="fa fa-terminal"></i> Terminal (Ctrl+`)</button>
             <button class="btn btn-primary" onclick="saveActiveFile()"><i class="fa fa-save"></i> Save (Ctrl+S)</button>
             <button class="btn btn-green" onclick="triggerDiff()"><i class="fa fa-code-compare"></i> Diff</button>
+            <button class="btn" onclick="openSettingsModal()" title="Cloud LLM Models & API Keys Settings"><i class="fa fa-gear"></i> Settings</button>
             <button class="btn" onclick="openShortcutsModal()" title="Keyboard Shortcuts (?)"><i class="fa fa-circle-question"></i></button>
         </div>
     </header>
@@ -387,6 +402,9 @@
                 </button>
             </div>
             <div class="activity-bar-group">
+                <button class="activity-btn" onclick="openSettingsModal()" title="Cloud LLM Models & API Keys Settings" id="act-btn-settings">
+                    <i class="fa fa-gear"></i>
+                </button>
                 <button class="activity-btn" onclick="openCommandPalette()" title="Command Palette (Ctrl+Shift+P / F1)">
                     <i class="fa fa-terminal"></i>
                 </button>
@@ -743,21 +761,24 @@
             <!-- Bottom Multi-Tab Drawer (Terminal & Diagnostics) -->
             <div class="terminal-panel" id="terminal-drawer">
                 <div class="drawer-tabs">
-                    <div class="drawer-tab active" id="tab-term-btn" onclick="switchDrawerTab('term')"><i class="fa fa-terminal"></i> Sovereign Terminal</div>
+                    <div class="drawer-tab active" id="tab-term-btn" onclick="switchDrawerTab('term')"><i class="fa fa-terminal"></i> Sovereign Terminal <span id="pty-status-badge" class="badge" style="background:#064e3b; color:#6ee7b7; font-size:10px; padding:1px 6px; margin-left:4px;">PTY</span></div>
                     <div class="drawer-tab" id="tab-problems-btn" onclick="switchDrawerTab('problems')"><i class="fa fa-triangle-exclamation"></i> Problems (<span id="problems-count">0</span>)</div>
                     <div style="margin-left:auto; display:flex; gap:8px; align-items:center; padding-right:10px;">
                         <button class="btn btn-primary" style="padding:2px 7px; font-size:10px;" onclick="refreshDiagnostics()"><i class="fa fa-rotate-right"></i> Check Cargo</button>
+                        <button class="btn" style="padding:2px 6px; font-size:10px;" onclick="restartPtyTerminal()" title="Restart PTY Shell Process"><i class="fa fa-rotate"></i> Restart</button>
+                        <button class="btn" style="padding:2px 6px; font-size:10px;" onclick="clearPtyTerminal()" title="Clear Terminal Screen"><i class="fa fa-broom"></i> Clear</button>
                         <span style="cursor:pointer; color:#94a3b8; font-size:11px;" onclick="runTermQuick('cargo test')">cargo test</span>
                         <span style="cursor:pointer; color:#94a3b8; font-size:11px;" onclick="runTermQuick('git status')">git status</span>
                         <i class="fa fa-xmark" style="cursor:pointer; color:#a1a1aa; margin-left:6px;" onclick="toggleTerminal()"></i>
                     </div>
                 </div>
-                <div id="drawer-term-content" style="display:flex; flex-direction:column; flex:1; height:calc(100% - 28px);">
-                    <div class="terminal-output" id="terminal-output">// Terminal Ready. Enter bash command below.</div>
-                    <div class="terminal-input-row">
-                        <span class="term-prompt">$</span>
-                        <input type="text" class="terminal-input" id="term-input" placeholder="Run command..." onkeydown="handleTermInput(event)">
-                        <button class="btn btn-primary" onclick="execTermCommand()"><i class="fa fa-play"></i> Run</button>
+                <div id="drawer-term-content" style="display:flex; flex-direction:column; flex:1; height:calc(100% - 28px); min-height:0; position:relative; overflow:hidden;">
+                    <div id="xterm-container" style="flex:1; width:100%; height:100%; min-height:0; background:#09090b; padding:4px 6px; overflow:hidden;"></div>
+                    <div class="terminal-output" id="terminal-output" style="display:none;">// Terminal Ready. Enter bash command below.</div>
+                    <div class="terminal-input-row" style="background:#141416; border-top:1px solid #27272a;">
+                        <span class="term-prompt" style="color:#06b6d4; font-weight:700;">PTY $</span>
+                        <input type="text" class="terminal-input" id="term-input" placeholder="Type command into interactive PTY shell or interact with terminal above..." onkeydown="handleTermInput(event)">
+                        <button class="btn btn-primary" onclick="execTermCommand()"><i class="fa fa-play"></i> Send</button>
                         <button class="btn btn-green" id="autofix-btn" style="display:none;" onclick="autoFixTerminalError()"><i class="fa fa-wrench"></i> Auto-Fix with Copilot</button>
                     </div>
                 </div>
@@ -958,6 +979,184 @@
                 <input type="password" id="auth-token-input" placeholder="Enter security token (e.g. hgb-...)" style="width:100%; padding:10px 12px; background:#1e293b; border:1px solid #334155; border-radius:6px; color:#f8fafc; font-family:monospace; font-size:13px; outline:none;" onkeydown="if(event.key==='Enter') verifyAndSubmitAuthToken();">
                 <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:16px;">
                     <button class="btn btn-primary" onclick="verifyAndSubmitAuthToken()" style="background:#0284c7; border-color:#0369a1; padding:8px 16px;"><i class="fa fa-unlock"></i> Unlock IDE</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Phase 6C: Visual Cloud LLM & API Key Settings Manager Modal -->
+    <div class="modal-overlay" id="settings-modal" onclick="closeSettingsModal(event)">
+        <div class="modal-content" style="width:720px; max-height:85vh;" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <span><i class="fa fa-gear" style="color:#06b6d4;"></i> LLM & Cloud API Settings</span>
+                <i class="fa fa-xmark" style="cursor:pointer;" onclick="closeSettingsModal()"></i>
+            </div>
+            <div style="display:flex; flex:1; min-height:430px; overflow:hidden;">
+                <!-- Left Nav Tabs -->
+                <div style="width:170px; background:#141416; border-right:1px solid #27272a; padding:10px 6px; display:flex; flex-direction:column; gap:4px;">
+                    <button class="settings-tab-btn active" id="cfg-nav-general" onclick="switchSettingsTab('general')">
+                        <i class="fa fa-sliders" style="width:16px;"></i> General
+                    </button>
+                    <button class="settings-tab-btn" id="cfg-nav-anthropic" onclick="switchSettingsTab('anthropic')">
+                        <i class="fa fa-bolt" style="color:#d97706; width:16px;"></i> Anthropic
+                    </button>
+                    <button class="settings-tab-btn" id="cfg-nav-openai" onclick="switchSettingsTab('openai')">
+                        <i class="fa fa-brain" style="color:#10b981; width:16px;"></i> OpenAI
+                    </button>
+                    <button class="settings-tab-btn" id="cfg-nav-gemini" onclick="switchSettingsTab('gemini')">
+                        <i class="fa fa-gem" style="color:#38bdf8; width:16px;"></i> Google Gemini
+                    </button>
+                    <button class="settings-tab-btn" id="cfg-nav-deepseek" onclick="switchSettingsTab('deepseek')">
+                        <i class="fa fa-rocket" style="color:#818cf8; width:16px;"></i> DeepSeek
+                    </button>
+                    <button class="settings-tab-btn" id="cfg-nav-ollama" onclick="switchSettingsTab('ollama')">
+                        <i class="fa fa-server" style="color:#c084fc; width:16px;"></i> Local Ollama
+                    </button>
+                </div>
+
+                <!-- Right Content Panel -->
+                <div style="flex:1; padding:20px; overflow-y:auto; background:#18181b;" id="settings-panel-container">
+                    <!-- General Tab -->
+                    <div id="cfg-panel-general" style="display:flex; flex-direction:column; gap:14px;">
+                        <div style="font-weight:700; font-size:14px; color:#f4f4f5; margin-bottom:4px;">Universal Dispatcher Preferences</div>
+                        <div class="settings-group">
+                            <label class="settings-label">Primary Active LLM Provider</label>
+                            <select id="cfg-active-provider" class="settings-input" style="cursor:pointer;">
+                                <option value="ollama">Ollama (Local Self-Hosted)</option>
+                                <option value="anthropic">Anthropic (Claude 3.5 Sonnet / Haiku / Opus)</option>
+                                <option value="openai">OpenAI (GPT-4o / GPT-4o Mini / o1)</option>
+                                <option value="gemini">Google Gemini (Gemini 1.5 Pro / Flash)</option>
+                                <option value="deepseek">DeepSeek (DeepSeek-V3 / DeepSeek-R1)</option>
+                            </select>
+                            <span style="font-size:11px; color:#71717a;">The Visual IDE will route AI chat, inline edits (Ctrl+K), and composer calls to this provider.</span>
+                        </div>
+                        <div class="settings-group">
+                            <label class="settings-label">Default Model Identifier</label>
+                            <input type="text" id="cfg-active-model" class="settings-input" placeholder="e.g. claude-3-5-sonnet-20241022, gpt-4o, or dynabook-coder">
+                        </div>
+                        <div class="settings-group">
+                            <label class="settings-label">Sampling Temperature (<span id="cfg-temp-val">0.2</span>)</label>
+                            <input type="range" id="cfg-temperature" min="0.0" max="1.0" step="0.05" value="0.2" oninput="document.getElementById('cfg-temp-val').innerText = this.value" style="accent-color:#06b6d4; cursor:pointer;">
+                        </div>
+                    </div>
+
+                    <!-- Anthropic Tab -->
+                    <div id="cfg-panel-anthropic" style="display:none; flex-direction:column; gap:14px;">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <div style="font-weight:700; font-size:14px; color:#d97706;"><i class="fa fa-bolt"></i> Anthropic Claude</div>
+                            <span id="cfg-anthropic-status" class="badge" style="background:#27272a; color:#a1a1aa;">Not Configured</span>
+                        </div>
+                        <div class="settings-group">
+                            <label class="settings-label">Anthropic API Key</label>
+                            <div style="display:flex; gap:6px;">
+                                <input type="password" id="cfg-anthropic-key" class="settings-input" style="flex:1;" placeholder="sk-ant-api03-...">
+                                <button class="btn" type="button" onclick="togglePasswordVisibility('cfg-anthropic-key')"><i class="fa fa-eye"></i></button>
+                            </div>
+                            <span style="font-size:11px; color:#71717a;">Keys are stored encrypted on local disk in ~/.hgb/credentials.json.</span>
+                        </div>
+                        <div class="settings-group">
+                            <label class="settings-label">Base URL (API Endpoint)</label>
+                            <input type="text" id="cfg-anthropic-url" class="settings-input" value="https://api.anthropic.com">
+                        </div>
+                        <div style="display:flex; align-items:center; gap:10px; margin-top:8px;">
+                            <button class="btn btn-indigo" onclick="testCloudProvider('anthropic')"><i class="fa fa-plug"></i> Test Connection Ping</button>
+                            <span id="cfg-anthropic-ping-result" style="font-size:12px;"></span>
+                        </div>
+                    </div>
+
+                    <!-- OpenAI Tab -->
+                    <div id="cfg-panel-openai" style="display:none; flex-direction:column; gap:14px;">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <div style="font-weight:700; font-size:14px; color:#10b981;"><i class="fa fa-brain"></i> OpenAI</div>
+                            <span id="cfg-openai-status" class="badge" style="background:#27272a; color:#a1a1aa;">Not Configured</span>
+                        </div>
+                        <div class="settings-group">
+                            <label class="settings-label">OpenAI API Key</label>
+                            <div style="display:flex; gap:6px;">
+                                <input type="password" id="cfg-openai-key" class="settings-input" style="flex:1;" placeholder="sk-proj-...">
+                                <button class="btn" type="button" onclick="togglePasswordVisibility('cfg-openai-key')"><i class="fa fa-eye"></i></button>
+                            </div>
+                        </div>
+                        <div class="settings-group">
+                            <label class="settings-label">Base URL (API Endpoint)</label>
+                            <input type="text" id="cfg-openai-url" class="settings-input" value="https://api.openai.com/v1">
+                        </div>
+                        <div style="display:flex; align-items:center; gap:10px; margin-top:8px;">
+                            <button class="btn btn-indigo" onclick="testCloudProvider('openai')"><i class="fa fa-plug"></i> Test Connection Ping</button>
+                            <span id="cfg-openai-ping-result" style="font-size:12px;"></span>
+                        </div>
+                    </div>
+
+                    <!-- Gemini Tab -->
+                    <div id="cfg-panel-gemini" style="display:none; flex-direction:column; gap:14px;">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <div style="font-weight:700; font-size:14px; color:#38bdf8;"><i class="fa fa-gem"></i> Google Gemini</div>
+                            <span id="cfg-gemini-status" class="badge" style="background:#27272a; color:#a1a1aa;">Not Configured</span>
+                        </div>
+                        <div class="settings-group">
+                            <label class="settings-label">Gemini API Key</label>
+                            <div style="display:flex; gap:6px;">
+                                <input type="password" id="cfg-gemini-key" class="settings-input" style="flex:1;" placeholder="AIzaSy...">
+                                <button class="btn" type="button" onclick="togglePasswordVisibility('cfg-gemini-key')"><i class="fa fa-eye"></i></button>
+                            </div>
+                        </div>
+                        <div class="settings-group">
+                            <label class="settings-label">Base URL (API Endpoint)</label>
+                            <input type="text" id="cfg-gemini-url" class="settings-input" value="https://generativelanguage.googleapis.com/v1beta">
+                        </div>
+                        <div style="display:flex; align-items:center; gap:10px; margin-top:8px;">
+                            <button class="btn btn-indigo" onclick="testCloudProvider('gemini')"><i class="fa fa-plug"></i> Test Connection Ping</button>
+                            <span id="cfg-gemini-ping-result" style="font-size:12px;"></span>
+                        </div>
+                    </div>
+
+                    <!-- DeepSeek Tab -->
+                    <div id="cfg-panel-deepseek" style="display:none; flex-direction:column; gap:14px;">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <div style="font-weight:700; font-size:14px; color:#818cf8;"><i class="fa fa-rocket"></i> DeepSeek AI</div>
+                            <span id="cfg-deepseek-status" class="badge" style="background:#27272a; color:#a1a1aa;">Not Configured</span>
+                        </div>
+                        <div class="settings-group">
+                            <label class="settings-label">DeepSeek API Key</label>
+                            <div style="display:flex; gap:6px;">
+                                <input type="password" id="cfg-deepseek-key" class="settings-input" style="flex:1;" placeholder="sk-...">
+                                <button class="btn" type="button" onclick="togglePasswordVisibility('cfg-deepseek-key')"><i class="fa fa-eye"></i></button>
+                            </div>
+                        </div>
+                        <div class="settings-group">
+                            <label class="settings-label">Base URL (API Endpoint)</label>
+                            <input type="text" id="cfg-deepseek-url" class="settings-input" value="https://api.deepseek.com">
+                        </div>
+                        <div style="display:flex; align-items:center; gap:10px; margin-top:8px;">
+                            <button class="btn btn-indigo" onclick="testCloudProvider('deepseek')"><i class="fa fa-plug"></i> Test Connection Ping</button>
+                            <span id="cfg-deepseek-ping-result" style="font-size:12px;"></span>
+                        </div>
+                    </div>
+
+                    <!-- Ollama Tab -->
+                    <div id="cfg-panel-ollama" style="display:none; flex-direction:column; gap:14px;">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <div style="font-weight:700; font-size:14px; color:#c084fc;"><i class="fa fa-server"></i> Local Ollama</div>
+                            <span id="cfg-ollama-status" class="badge" style="background:#064e3b; color:#6ee7b7;">Local Engine</span>
+                        </div>
+                        <div class="settings-group">
+                            <label class="settings-label">Ollama Host URL</label>
+                            <input type="text" id="cfg-ollama-url" class="settings-input" value="http://127.0.0.1:11434">
+                            <span style="font-size:11px; color:#71717a;">Native sovereign Ollama daemon running on local workstation.</span>
+                        </div>
+                        <div style="display:flex; align-items:center; gap:10px; margin-top:8px;">
+                            <button class="btn btn-indigo" onclick="testCloudProvider('ollama')"><i class="fa fa-plug"></i> Test Connection Ping</button>
+                            <span id="cfg-ollama-ping-result" style="font-size:12px;"></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <!-- Footer -->
+            <div style="padding:12px 18px; background:#141416; border-top:1px solid #27272a; display:flex; justify-content:space-between; align-items:center;">
+                <span id="settings-save-status" style="font-size:11px; color:#a1a1aa;"><i class="fa fa-shield-halved" style="color:#10b981;"></i> Stored securely in ~/.hgb/credentials.json</span>
+                <div style="display:flex; gap:8px;">
+                    <button class="btn" onclick="closeSettingsModal()">Cancel</button>
+                    <button class="btn btn-primary" onclick="saveCloudSettings()"><i class="fa fa-floppy-disk"></i> Save Settings</button>
                 </div>
             </div>
         </div>
@@ -1449,6 +1648,9 @@
                 'swarm_spawn': ['/api/swarm/spawn', 'POST', args],
                 'swarm_tasks': ['/api/swarm/tasks', 'GET'],
                 'swarm_merge': ['/api/swarm/merge', 'POST', args],
+                'get_cloud_settings': ['/api/settings/models', 'GET'],
+                'update_cloud_settings': ['/api/settings/models', 'POST', args],
+                'test_cloud_settings': ['/api/settings/test_model', 'POST', args],
             };
             const config = routeMap[cmd];
             if (!config) throw new Error('Unknown command: ' + cmd);
@@ -2080,6 +2282,155 @@
             }
         }
 
+        // Phase 6A: Interactive Sovereign Terminal (PTY + xterm.js)
+        let ptyTerm = null;
+        let ptyFitAddon = null;
+        let ptyWs = null;
+        let ptyResizeObserver = null;
+
+        function initPtyTerminal(forceRestart = false) {
+            const container = document.getElementById('xterm-container');
+            const badge = document.getElementById('pty-status-badge');
+            if (!container) return;
+
+            if (forceRestart && ptyWs) {
+                try { ptyWs.close(); } catch (_) {}
+                ptyWs = null;
+            }
+
+            if (!ptyTerm && typeof window.Terminal !== 'undefined') {
+                ptyTerm = new window.Terminal({
+                    fontFamily: '"JetBrains Mono", Menlo, Monaco, Consolas, monospace',
+                    fontSize: 13,
+                    cursorBlink: true,
+                    convertEol: true,
+                    theme: {
+                        background: '#09090b',
+                        foreground: '#f4f4f5',
+                        cursor: '#38bdf8',
+                        selectionBackground: 'rgba(56, 189, 248, 0.3)',
+                        black: '#18181b',
+                        red: '#ef4444',
+                        green: '#10b981',
+                        yellow: '#f59e0b',
+                        blue: '#3b82f6',
+                        magenta: '#a855f7',
+                        cyan: '#06b6d4',
+                        white: '#f4f4f5',
+                        brightBlack: '#71717a',
+                        brightRed: '#f87171',
+                        brightGreen: '#34d399',
+                        brightYellow: '#fbbf24',
+                        brightBlue: '#60a5fa',
+                        brightMagenta: '#c084fc',
+                        brightCyan: '#22d3ee',
+                        brightWhite: '#ffffff'
+                    }
+                });
+
+                if (typeof window.FitAddon !== 'undefined' && window.FitAddon.FitAddon) {
+                    ptyFitAddon = new window.FitAddon.FitAddon();
+                    ptyTerm.loadAddon(ptyFitAddon);
+                }
+
+                container.innerHTML = '';
+                ptyTerm.open(container);
+
+                if (ptyFitAddon) {
+                    setTimeout(() => { try { ptyFitAddon.fit(); } catch (_) {} }, 50);
+                }
+
+                // Send keystrokes directly to PTY WebSocket
+                ptyTerm.onData(data => {
+                    if (ptyWs && ptyWs.readyState === WebSocket.OPEN) {
+                        ptyWs.send(JSON.stringify({ type: 'input', data }));
+                    }
+                });
+
+                // Auto-fit on drawer resize
+                if (window.ResizeObserver && !ptyResizeObserver) {
+                    ptyResizeObserver = new ResizeObserver(() => {
+                        if (ptyFitAddon && ptyTerm) {
+                            try {
+                                ptyFitAddon.fit();
+                                if (ptyWs && ptyWs.readyState === WebSocket.OPEN) {
+                                    ptyWs.send(JSON.stringify({ type: 'resize', cols: ptyTerm.cols, rows: ptyTerm.rows }));
+                                }
+                            } catch (_) {}
+                        }
+                    });
+                    ptyResizeObserver.observe(container);
+                }
+            }
+
+            if (!ptyWs || ptyWs.readyState === WebSocket.CLOSED || ptyWs.readyState === WebSocket.CLOSING) {
+                if (badge) {
+                    badge.innerText = 'Connecting...';
+                    badge.style.background = '#854d0e';
+                    badge.style.color = '#fef08a';
+                }
+
+                const wsProto = (window.location.protocol === 'https:') ? 'wss:' : 'ws:';
+                const host = window.location.host || '127.0.0.1:4173';
+                const wsUrl = `${wsProto}//${host}/api/terminal/pty/ws`;
+
+                try {
+                    ptyWs = new WebSocket(wsUrl);
+
+                    ptyWs.onopen = () => {
+                        if (badge) {
+                            badge.innerText = 'PTY Online';
+                            badge.style.background = '#064e3b';
+                            badge.style.color = '#6ee7b7';
+                        }
+                        if (ptyFitAddon && ptyTerm) {
+                            try { ptyFitAddon.fit(); } catch (_) {}
+                            ptyWs.send(JSON.stringify({ type: 'resize', cols: ptyTerm.cols, rows: ptyTerm.rows }));
+                        }
+                    };
+
+                    ptyWs.onmessage = (event) => {
+                        if (ptyTerm) {
+                            ptyTerm.write(event.data);
+                        } else {
+                            const outputBox = document.getElementById('terminal-output');
+                            if (outputBox) outputBox.innerText += event.data;
+                        }
+                    };
+
+                    ptyWs.onclose = () => {
+                        if (badge) {
+                            badge.innerText = 'Disconnected';
+                            badge.style.background = '#450a0a';
+                            badge.style.color = '#fca5a5';
+                        }
+                    };
+
+                    ptyWs.onerror = () => {
+                        if (badge) {
+                            badge.innerText = 'PTY Error';
+                            badge.style.background = '#450a0a';
+                            badge.style.color = '#fca5a5';
+                        }
+                    };
+                } catch (err) {
+                    console.warn('PTY WebSocket initialization warning:', err);
+                }
+            }
+        }
+
+        function restartPtyTerminal() {
+            if (ptyTerm) ptyTerm.clear();
+            initPtyTerminal(true);
+            toast.info('PTY Shell process restarted.');
+        }
+
+        function clearPtyTerminal() {
+            if (ptyTerm) ptyTerm.clear();
+            const outputBox = document.getElementById('terminal-output');
+            if (outputBox) outputBox.innerText = '';
+        }
+
         // Bottom Terminal Execution
         function toggleTerminal() {
             const drawer = document.getElementById('terminal-drawer');
@@ -2094,8 +2445,16 @@
                 drawer.style.display = 'flex';
                 if (resizer) resizer.style.display = 'block';
                 switchDrawerTab('term');
-                const termInput = document.getElementById('term-input');
-                if (termInput) termInput.focus();
+                initPtyTerminal();
+                setTimeout(() => {
+                    if (ptyFitAddon) {
+                        try { ptyFitAddon.fit(); } catch (_) {}
+                        if (ptyWs && ptyWs.readyState === WebSocket.OPEN && ptyTerm) {
+                            ptyWs.send(JSON.stringify({ type: 'resize', cols: ptyTerm.cols, rows: ptyTerm.rows }));
+                        }
+                    }
+                    if (ptyTerm) ptyTerm.focus();
+                }, 50);
             }
             if (editorInstance) editorInstance.layout();
             if (editorInstanceSplit) editorInstanceSplit.layout();
@@ -2106,33 +2465,339 @@
         }
 
         function runTermQuick(cmd) {
-            document.getElementById('term-input').value = cmd;
-            execTermCommand();
+            if (ptyWs && ptyWs.readyState === WebSocket.OPEN) {
+                ptyWs.send(JSON.stringify({ type: 'input', data: cmd + '\n' }));
+            } else {
+                document.getElementById('term-input').value = cmd;
+                execTermCommand();
+            }
         }
 
         async function execTermCommand() {
             const input = document.getElementById('term-input');
             const cmd = input.value.trim();
             if (!cmd) return;
-            const outputBox = document.getElementById('terminal-output');
-            outputBox.innerText += `\n$ ${cmd}\nRunning...`;
-            outputBox.scrollTop = outputBox.scrollHeight;
             input.value = '';
+
+            if (ptyWs && ptyWs.readyState === WebSocket.OPEN) {
+                ptyWs.send(JSON.stringify({ type: 'input', data: cmd + '\n' }));
+                if (ptyTerm) ptyTerm.focus();
+                return;
+            }
+
+            const outputBox = document.getElementById('terminal-output');
+            if (outputBox) {
+                outputBox.style.display = 'block';
+                outputBox.innerText += `\n$ ${cmd}\nRunning...`;
+                outputBox.scrollTop = outputBox.scrollHeight;
+            }
 
             try {
                 const res = await apiInvoke('execute_terminal_command', { command: cmd });
                 const statusStr = res.exit_code === 0 ? '✔ Success (0)' : `✘ Exit Code ${res.exit_code}`;
-                outputBox.innerText += `\n${res.stdout}${res.stderr}\n[${statusStr} in ${res.duration_ms}ms]\n`;
-                outputBox.scrollTop = outputBox.scrollHeight;
+                if (outputBox) {
+                    outputBox.innerText += `\n${res.stdout}${res.stderr}\n[${statusStr} in ${res.duration_ms}ms]\n`;
+                    outputBox.scrollTop = outputBox.scrollHeight;
+                }
 
                 if (res.exit_code !== 0 && res.stderr) {
                     lastTermStderr = res.stderr;
-                    document.getElementById('autofix-btn').style.display = 'inline-flex';
+                    const afBtn = document.getElementById('autofix-btn');
+                    if (afBtn) afBtn.style.display = 'inline-flex';
                 } else {
-                    document.getElementById('autofix-btn').style.display = 'none';
+                    const afBtn = document.getElementById('autofix-btn');
+                    if (afBtn) afBtn.style.display = 'none';
                 }
             } catch (err) {
-                outputBox.innerText += `\nExecution Error: ${err}\n`;
+                if (outputBox) outputBox.innerText += `\nExecution Error: ${err}\n`;
+            }
+        }
+
+        // Phase 6B: Live Workspace Filesystem Watcher WebSocket
+        let fsEventsWs = null;
+        let fsTreeDebounceTimer = null;
+
+        function initFsWatcher() {
+            if (fsEventsWs && (fsEventsWs.readyState === WebSocket.OPEN || fsEventsWs.readyState === WebSocket.CONNECTING)) {
+                return;
+            }
+
+            const wsProto = (window.location.protocol === 'https:') ? 'wss:' : 'ws:';
+            const host = window.location.host || '127.0.0.1:4173';
+            const wsUrl = `${wsProto}//${host}/api/fs/events/ws`;
+
+            try {
+                fsEventsWs = new WebSocket(wsUrl);
+
+                fsEventsWs.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        const kind = data.kind;
+                        const paths = data.paths || [];
+
+                        // 1. If file created, deleted, or renamed -> debounce refresh explorer tree and git status
+                        if (kind === 'create' || kind === 'remove' || kind === 'rename') {
+                            clearTimeout(fsTreeDebounceTimer);
+                            fsTreeDebounceTimer = setTimeout(() => {
+                                loadWorkspace();
+                                if (typeof refreshGitStatus === 'function') refreshGitStatus();
+                            }, 300);
+                        }
+
+                        // 2. If file modified -> check if matching open editor tabs
+                        if (kind === 'modify' && activeTabIdx >= 0 && openTabs[activeTabIdx]) {
+                            const curTab = openTabs[activeTabIdx];
+                            const isMatch = paths.some(p => p === curTab.path || p.endsWith(curTab.path) || curTab.path.endsWith(p));
+                            if (isMatch) {
+                                if (!curTab.isDirty) {
+                                    apiInvoke('read_file', { path: curTab.path }).then(res => {
+                                        const newContent = (res && typeof res.content === 'string') ? res.content : res;
+                                        if (typeof newContent === 'string' && editorInstance && !curTab.isDirty) {
+                                            const curPos = editorInstance.getPosition();
+                                            editorInstance.setValue(newContent);
+                                            if (curPos) editorInstance.setPosition(curPos);
+                                            curTab.content = newContent;
+                                        }
+                                    }).catch(_ => {});
+                                } else {
+                                    toast.info(`External file modification detected on ${curTab.name}.`);
+                                }
+                            }
+                        }
+                    } catch (_) {}
+                };
+
+                fsEventsWs.onclose = () => {
+                    setTimeout(initFsWatcher, 4000);
+                };
+
+                fsEventsWs.onerror = () => {
+                    try { fsEventsWs.close(); } catch (_) {}
+                };
+            } catch (err) {
+                console.warn('FS Watcher WebSocket warning:', err);
+            }
+        }
+
+        // Phase 6C: Visual Cloud LLM & API Key Settings Manager
+        let currentCloudSettings = null;
+
+        function openSettingsModal() {
+            const modal = document.getElementById('settings-modal');
+            if (modal) {
+                modal.style.display = 'flex';
+                loadCloudSettingsIntoUi();
+            }
+        }
+
+        function closeSettingsModal(e) {
+            if (e && e.target && e.target.closest && e.target.closest('.modal-content') && e.target.id !== 'settings-modal') {
+                return;
+            }
+            const modal = document.getElementById('settings-modal');
+            if (modal) modal.style.display = 'none';
+        }
+
+        function switchSettingsTab(tab) {
+            const tabs = ['general', 'anthropic', 'openai', 'gemini', 'deepseek', 'ollama'];
+            tabs.forEach(t => {
+                const btn = document.getElementById(`cfg-nav-${t}`);
+                const panel = document.getElementById(`cfg-panel-${t}`);
+                if (btn) {
+                    if (t === tab) btn.classList.add('active');
+                    else btn.classList.remove('active');
+                }
+                if (panel) {
+                    panel.style.display = (t === tab) ? 'flex' : 'none';
+                }
+            });
+        }
+
+        function togglePasswordVisibility(inputId) {
+            const el = document.getElementById(inputId);
+            if (!el) return;
+            el.type = (el.type === 'password') ? 'text' : 'password';
+        }
+
+        async function loadCloudSettingsIntoUi() {
+            try {
+                const res = await apiInvoke('get_cloud_settings');
+                currentCloudSettings = res;
+
+                // Populate General Tab
+                const provSel = document.getElementById('cfg-active-provider');
+                if (provSel && res.active_provider) provSel.value = res.active_provider;
+
+                const modelInput = document.getElementById('cfg-active-model');
+                if (modelInput && res.active_model) modelInput.value = res.active_model;
+
+                const tempSlider = document.getElementById('cfg-temperature');
+                const tempVal = document.getElementById('cfg-temp-val');
+                if (tempSlider && res.temperature !== undefined) {
+                    tempSlider.value = res.temperature;
+                    if (tempVal) tempVal.innerText = res.temperature;
+                }
+
+                // Populate Anthropic
+                const antStatus = document.getElementById('cfg-anthropic-status');
+                if (antStatus) {
+                    antStatus.innerText = res.anthropic_configured ? 'Configured' : 'Not Configured';
+                    antStatus.style.background = res.anthropic_configured ? '#064e3b' : '#27272a';
+                    antStatus.style.color = res.anthropic_configured ? '#6ee7b7' : '#a1a1aa';
+                }
+                if (res.anthropic_api_key) {
+                    const antKey = document.getElementById('cfg-anthropic-key');
+                    if (antKey) antKey.value = res.anthropic_api_key;
+                }
+                if (res.anthropic_base_url) {
+                    const antUrl = document.getElementById('cfg-anthropic-url');
+                    if (antUrl) antUrl.value = res.anthropic_base_url;
+                }
+
+                // Populate OpenAI
+                const oaiStatus = document.getElementById('cfg-openai-status');
+                if (oaiStatus) {
+                    oaiStatus.innerText = res.openai_configured ? 'Configured' : 'Not Configured';
+                    oaiStatus.style.background = res.openai_configured ? '#064e3b' : '#27272a';
+                    oaiStatus.style.color = res.openai_configured ? '#6ee7b7' : '#a1a1aa';
+                }
+                if (res.openai_api_key) {
+                    const oaiKey = document.getElementById('cfg-openai-key');
+                    if (oaiKey) oaiKey.value = res.openai_api_key;
+                }
+                if (res.openai_base_url) {
+                    const oaiUrl = document.getElementById('cfg-openai-url');
+                    if (oaiUrl) oaiUrl.value = res.openai_base_url;
+                }
+
+                // Populate Gemini
+                const gemStatus = document.getElementById('cfg-gemini-status');
+                if (gemStatus) {
+                    gemStatus.innerText = res.gemini_configured ? 'Configured' : 'Not Configured';
+                    gemStatus.style.background = res.gemini_configured ? '#064e3b' : '#27272a';
+                    gemStatus.style.color = res.gemini_configured ? '#6ee7b7' : '#a1a1aa';
+                }
+                if (res.gemini_api_key) {
+                    const gemKey = document.getElementById('cfg-gemini-key');
+                    if (gemKey) gemKey.value = res.gemini_api_key;
+                }
+                if (res.gemini_base_url) {
+                    const gemUrl = document.getElementById('cfg-gemini-url');
+                    if (gemUrl) gemUrl.value = res.gemini_base_url;
+                }
+
+                // Populate DeepSeek
+                const dsStatus = document.getElementById('cfg-deepseek-status');
+                if (dsStatus) {
+                    dsStatus.innerText = res.deepseek_configured ? 'Configured' : 'Not Configured';
+                    dsStatus.style.background = res.deepseek_configured ? '#064e3b' : '#27272a';
+                    dsStatus.style.color = res.deepseek_configured ? '#6ee7b7' : '#a1a1aa';
+                }
+                if (res.deepseek_api_key) {
+                    const dsKey = document.getElementById('cfg-deepseek-key');
+                    if (dsKey) dsKey.value = res.deepseek_api_key;
+                }
+                if (res.deepseek_base_url) {
+                    const dsUrl = document.getElementById('cfg-deepseek-url');
+                    if (dsUrl) dsUrl.value = res.deepseek_base_url;
+                }
+
+                // Populate Ollama
+                if (res.ollama_base_url) {
+                    const olUrl = document.getElementById('cfg-ollama-url');
+                    if (olUrl) olUrl.value = res.ollama_base_url;
+                }
+            } catch (err) {
+                console.warn('Failed to load cloud settings:', err);
+            }
+        }
+
+        async function testCloudProvider(provider) {
+            const statusEl = document.getElementById(`cfg-${provider}-ping-result`);
+            if (statusEl) {
+                statusEl.innerHTML = '<span style="color:#38bdf8;"><i class="fa fa-spinner fa-spin"></i> Testing ping...</span>';
+            }
+
+            let apiKey = null;
+            let baseUrl = null;
+            let model = null;
+
+            if (provider === 'anthropic') {
+                apiKey = document.getElementById('cfg-anthropic-key').value.trim();
+                baseUrl = document.getElementById('cfg-anthropic-url').value.trim();
+            } else if (provider === 'openai') {
+                apiKey = document.getElementById('cfg-openai-key').value.trim();
+                baseUrl = document.getElementById('cfg-openai-url').value.trim();
+            } else if (provider === 'gemini') {
+                apiKey = document.getElementById('cfg-gemini-key').value.trim();
+                baseUrl = document.getElementById('cfg-gemini-url').value.trim();
+            } else if (provider === 'deepseek') {
+                apiKey = document.getElementById('cfg-deepseek-key').value.trim();
+                baseUrl = document.getElementById('cfg-deepseek-url').value.trim();
+            } else if (provider === 'ollama') {
+                baseUrl = document.getElementById('cfg-ollama-url').value.trim();
+            }
+
+            try {
+                const res = await apiInvoke('test_cloud_settings', {
+                    provider,
+                    api_key: apiKey || undefined,
+                    base_url: baseUrl || undefined,
+                    model: model || undefined
+                });
+
+                if (statusEl) {
+                    if (res.success) {
+                        statusEl.innerHTML = `<span style="color:#10b981; font-weight:600;"><i class="fa fa-circle-check"></i> ${res.message} (${res.latency_ms}ms)</span>`;
+                    } else {
+                        statusEl.innerHTML = `<span style="color:#ef4444; font-weight:500;"><i class="fa fa-circle-xmark"></i> ${res.message}</span>`;
+                    }
+                }
+            } catch (err) {
+                if (statusEl) {
+                    statusEl.innerHTML = `<span style="color:#ef4444;"><i class="fa fa-circle-xmark"></i> Ping error: ${err}</span>`;
+                }
+            }
+        }
+
+        async function saveCloudSettings() {
+            const provSel = document.getElementById('cfg-active-provider');
+            const modelInput = document.getElementById('cfg-active-model');
+            const tempSlider = document.getElementById('cfg-temperature');
+
+            const payload = {
+                active_provider: provSel ? provSel.value : 'ollama',
+                active_model: (modelInput && modelInput.value.trim()) ? modelInput.value.trim() : 'qwen2.5-coder:1.5b',
+                temperature: tempSlider ? parseFloat(tempSlider.value) : 0.2,
+                anthropic_api_key: document.getElementById('cfg-anthropic-key')?.value.trim() || null,
+                anthropic_base_url: document.getElementById('cfg-anthropic-url')?.value.trim() || null,
+                openai_api_key: document.getElementById('cfg-openai-key')?.value.trim() || null,
+                openai_base_url: document.getElementById('cfg-openai-url')?.value.trim() || null,
+                gemini_api_key: document.getElementById('cfg-gemini-key')?.value.trim() || null,
+                gemini_base_url: document.getElementById('cfg-gemini-url')?.value.trim() || null,
+                deepseek_api_key: document.getElementById('cfg-deepseek-key')?.value.trim() || null,
+                deepseek_base_url: document.getElementById('cfg-deepseek-url')?.value.trim() || null,
+                ollama_base_url: document.getElementById('cfg-ollama-url')?.value.trim() || null
+            };
+
+            const statusLabel = document.getElementById('settings-save-status');
+            if (statusLabel) statusLabel.innerHTML = '<span style="color:#38bdf8;"><i class="fa fa-spinner fa-spin"></i> Saving...</span>';
+
+            try {
+                await apiInvoke('update_cloud_settings', payload);
+                if (statusLabel) {
+                    statusLabel.innerHTML = '<span style="color:#10b981;"><i class="fa fa-check"></i> Saved successfully to ~/.hgb/credentials.json</span>';
+                }
+                toast.success('Cloud model credentials and dispatcher settings saved!');
+                await loadAvailableModels();
+                setTimeout(() => {
+                    closeSettingsModal();
+                }, 600);
+            } catch (err) {
+                if (statusLabel) {
+                    statusLabel.innerHTML = `<span style="color:#ef4444;"><i class="fa fa-circle-xmark"></i> Save failed: ${err}</span>`;
+                }
+                toast.error('Failed to save settings: ' + err);
             }
         }
 
@@ -4206,6 +4871,9 @@
         refreshGitStatus();
         refreshZigTelemetry();
         updateBreadcrumbs(null);
+        initPtyTerminal();
+        initFsWatcher();
+        loadCloudSettingsIntoUi();
     </script>
 </body>
 </html>

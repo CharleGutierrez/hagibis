@@ -60,6 +60,9 @@ pub mod lsp_engine;
 pub mod semantic_index;
 pub mod dap_engine;
 pub mod worktree_swarm;
+pub mod pty_engine;
+pub mod fs_watcher;
+pub mod cloud_settings;
 
 pub use visual_ide::VisualIdeServer;
 pub use inline_diff_engine::{
