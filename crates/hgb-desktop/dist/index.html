@@ -35,10 +35,19 @@
         .btn-indigo { background: #4f46e5; border-color: #6366f1; color: #fff; }
         .btn-indigo:hover { background: #6366f1; }
         
-        .workspace-grid { display: flex; flex: 1; height: calc(100vh - 42px); overflow: hidden; position: relative; }
+        .workspace-grid { display: flex; flex: 1; height: calc(100vh - 42px - 24px); overflow: hidden; position: relative; }
         
+        /* Modern 48px Activity Bar */
+        .activity-bar { width: 48px; background: #0c0c0e; border-right: 1px solid var(--border-color); display: flex; flex-direction: column; justify-content: space-between; align-items: center; padding: 6px 0; user-select: none; z-index: 20; flex-shrink: 0; }
+        .activity-bar-group { display: flex; flex-direction: column; gap: 6px; align-items: center; width: 100%; }
+        .activity-btn { width: 38px; height: 38px; display: flex; align-items: center; justify-content: center; color: var(--text-muted); font-size: 15px; cursor: pointer; border-radius: 6px; position: relative; transition: all 0.15s ease; background: transparent; border: none; }
+        .activity-btn:hover { color: var(--text-main); background: rgba(255, 255, 255, 0.06); }
+        .activity-btn.active { color: var(--accent-cyan); background: rgba(6, 182, 212, 0.12); }
+        .activity-btn.active::before { content: ""; position: absolute; left: 0; top: 8px; bottom: 8px; width: 3px; background: var(--accent-cyan); border-radius: 0 2px 2px 0; }
+        .activity-badge { position: absolute; top: 4px; right: 4px; background: #0891b2; color: #fff; font-size: 9px; font-weight: 700; padding: 1px 4px; border-radius: 9999px; line-height: 1; }
+
         /* Left Sidebar */
-        .sidebar { width: 280px; background: var(--bg-sidebar); border-right: 1px solid var(--border-color); display: flex; flex-direction: column; }
+        .sidebar { width: 280px; background: var(--bg-sidebar); border-right: 1px solid var(--border-color); display: flex; flex-direction: column; flex-shrink: 0; }
         .sidebar-nav-bar { display: flex; height: 35px; background: #141416; border-bottom: 1px solid var(--border-color); padding: 0 4px; gap: 4px; align-items: center; }
         .sidebar-nav-btn { background: transparent; border: none; color: var(--text-muted); font-size: 11px; padding: 4px 8px; border-radius: 4px; cursor: pointer; display: flex; align-items: center; gap: 5px; font-weight: 500; transition: 0.15s; }
         .sidebar-nav-btn.active { background: #27272a; color: #fff; font-weight: 600; border-bottom: 2px solid var(--accent-cyan); }
@@ -259,6 +268,64 @@
             overflow-y: auto;
             white-space: pre-wrap;
         }
+
+        /* Draggable Layout Resizers (Splitters) */
+        .resizer-v { width: 4px; background: transparent; cursor: col-resize; position: relative; z-index: 15; transition: background 0.15s ease; flex-shrink: 0; }
+        .resizer-v:hover, .resizer-v.dragging { background: var(--accent-cyan); }
+        .resizer-h { height: 4px; background: transparent; cursor: row-resize; position: relative; z-index: 15; transition: background 0.15s ease; flex-shrink: 0; }
+        .resizer-h:hover, .resizer-h.dragging { background: var(--accent-cyan); }
+
+        /* Editor Breadcrumbs Bar */
+        .breadcrumbs-bar { height: 26px; background: #141416; border-bottom: 1px solid var(--border-color); display: flex; align-items: center; padding: 0 12px; font-size: 11px; color: var(--text-muted); gap: 6px; overflow-x: auto; white-space: nowrap; user-select: none; }
+        .crumb-item { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; transition: color 0.1s; }
+        .crumb-item:hover { color: var(--text-main); }
+        .crumb-sep { font-size: 9px; color: #52525b; }
+        .crumb-file { color: #38bdf8; font-weight: 600; }
+        .breadcrumbs-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+        .crumb-action-btn { cursor: pointer; color: #71717a; font-size: 11px; padding: 2px 4px; border-radius: 3px; }
+        .crumb-action-btn:hover { color: #fff; background: #27272a; }
+
+        /* Modern 24px Status Bar */
+        .status-bar { height: 24px; background: #09090b; border-top: 1px solid var(--border-color); display: flex; align-items: center; justify-content: space-between; padding: 0 10px; font-size: 11px; user-select: none; z-index: 30; color: #a1a1aa; flex-shrink: 0; }
+        .status-bar-left, .status-bar-right { display: flex; align-items: center; gap: 12px; }
+        .status-bar-item { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; padding: 2px 6px; border-radius: 3px; transition: all 0.1s; }
+        .status-bar-item:hover { background: #1f1f23; color: #fff; }
+        .status-pill-zig { background: #2e1065; color: #d8b4fe; border: 1px solid #581c87; font-weight: 600; }
+        .status-pill-zig:hover { background: #3b0764; color: #f3e8ff; }
+
+        /* Toast Notification Stack */
+        #toast-container { position: fixed; bottom: 32px; right: 16px; z-index: 9999; display: flex; flex-direction: column; gap: 8px; pointer-events: none; max-width: 380px; }
+        .toast-msg { pointer-events: auto; padding: 10px 14px; border-radius: 8px; background: #18181b; border: 1px solid #3f3f46; box-shadow: 0 10px 25px rgba(0,0,0,0.6); color: #f4f4f5; font-size: 12px; display: flex; align-items: center; gap: 10px; animation: toast-slide-in 0.2s cubic-bezier(0.16, 1, 0.3, 1); transition: opacity 0.2s, transform 0.2s; }
+        @keyframes toast-slide-in { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+        .toast-success { border-color: #059669; }
+        .toast-success i { color: #10b981; }
+        .toast-error { border-color: #dc2626; }
+        .toast-error i { color: #ef4444; }
+        .toast-info { border-color: #0284c7; }
+        .toast-info i { color: #06b6d4; }
+        .toast-warn { border-color: #d97706; }
+        .toast-warn i { color: #f59e0b; }
+        .toast-close { margin-left: auto; cursor: pointer; color: #71717a; font-size: 12px; }
+        .toast-close:hover { color: #fff; }
+
+        /* Command Palette (Ctrl+Shift+P / F1) */
+        .cmd-palette-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.65); backdrop-filter: blur(4px); z-index: 1000; display: none; justify-content: center; align-items: flex-start; padding-top: 60px; }
+        .cmd-palette-box { width: 620px; max-height: 480px; background: #18181b; border: 1px solid #3f3f46; border-radius: 8px; box-shadow: 0 20px 50px rgba(0,0,0,0.85); display: flex; flex-direction: column; overflow: hidden; }
+        .cmd-palette-input-wrap { display: flex; align-items: center; padding: 10px 14px; border-bottom: 1px solid #27272a; background: #141416; gap: 10px; }
+        .cmd-palette-input { flex: 1; background: transparent; border: none; outline: none; color: #fff; font-size: 14px; font-family: inherit; }
+        .cmd-palette-list { flex: 1; overflow-y: auto; padding: 6px 0; max-height: 380px; }
+        .cmd-palette-item { padding: 8px 14px; cursor: pointer; font-size: 13px; display: flex; align-items: center; justify-content: space-between; color: #e4e4e7; transition: background 0.1s; }
+        .cmd-palette-item.active, .cmd-palette-item:hover { background: #27272a; color: #38bdf8; }
+        .cmd-palette-shortcut { font-size: 11px; color: #71717a; background: #09090b; border: 1px solid #27272a; padding: 2px 6px; border-radius: 4px; font-family: monospace; }
+
+        /* Shortcuts Cheatsheet Grid */
+        .shortcuts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 14px; max-height: 480px; overflow-y: auto; }
+        .shortcut-card { background: #141416; border: 1px solid #27272a; border-radius: 6px; padding: 10px 12px; }
+
+        /* Zig Native Metric Cards */
+        .zig-metric-card { background: #141416; border: 1px solid #27272a; border-radius: 6px; padding: 10px 12px; margin-bottom: 8px; }
+        .zig-metric-header { font-size: 11px; color: #a1a1aa; text-transform: uppercase; font-weight: 700; display: flex; justify-content: space-between; margin-bottom: 4px; }
+        .zig-metric-val { font-size: 14px; font-weight: 700; color: #22d3ee; font-family: "JetBrains Mono", monospace; }
     </style>
 </head>
 <body>
@@ -275,6 +342,7 @@
                 <option value="qwen2.5-coder:1.5b">qwen2.5-coder:1.5b (Local)</option>
             </select>
             <button class="btn" style="background:#450a0a; border-color:#991b1b; color:#fca5a5;" onclick="triggerRollback()" title="1-Click Atomic Rollback to previous checkpoint"><i class="fa fa-rotate-left"></i> Rollback</button>
+            <button class="btn btn-indigo" onclick="openCommandPalette()"><i class="fa fa-terminal"></i> Commands (F1)</button>
             <button class="btn btn-indigo" onclick="openSearchModal()"><i class="fa fa-magnifying-glass"></i> Search (Ctrl+P)</button>
             <button class="btn btn-indigo" onclick="openSymbolsModal()"><i class="fa fa-code-branch"></i> Symbols (@)</button>
             <button class="btn btn-primary" onclick="triggerInlineCtrlK()"><i class="fa fa-wand-magic-sparkles"></i> Edit (Ctrl+K)</button>
@@ -283,16 +351,57 @@
             <button class="btn btn-green" onclick="toggleTerminal()"><i class="fa fa-terminal"></i> Terminal (Ctrl+`)</button>
             <button class="btn btn-primary" onclick="saveActiveFile()"><i class="fa fa-save"></i> Save (Ctrl+S)</button>
             <button class="btn btn-green" onclick="triggerDiff()"><i class="fa fa-code-compare"></i> Diff</button>
+            <button class="btn" onclick="openShortcutsModal()" title="Keyboard Shortcuts (?)"><i class="fa fa-circle-question"></i></button>
         </div>
     </header>
 
     <div class="workspace-grid">
+        <!-- Modern 48px Activity Bar -->
+        <div class="activity-bar" id="activity-bar">
+            <div class="activity-bar-group">
+                <button class="activity-btn active" id="act-btn-files" onclick="handleActivityClick('files')" title="Explorer (Ctrl+Shift+E)">
+                    <i class="fa fa-folder-tree"></i>
+                </button>
+                <button class="activity-btn" id="act-btn-search" onclick="handleActivityClick('search')" title="Search & Replace (Ctrl+Shift+F)">
+                    <i class="fa fa-magnifying-glass"></i>
+                </button>
+                <button class="activity-btn" id="act-btn-git" onclick="handleActivityClick('git')" title="Source Control (Ctrl+Shift+G)">
+                    <i class="fa fa-code-branch"></i>
+                    <span id="act-git-badge" class="activity-badge" style="display:none;">0</span>
+                </button>
+                <button class="activity-btn" id="act-btn-zig" onclick="handleActivityClick('zig')" title="Zig & Rust Native Telemetry" style="color:#c084fc;">
+                    <i class="fa fa-bolt"></i>
+                </button>
+                <button class="activity-btn" id="act-btn-composer" onclick="handleActivityClick('composer')" title="Composer Multi-File Agent (Ctrl+I)">
+                    <i class="fa fa-layer-group"></i>
+                </button>
+                <button class="activity-btn" id="act-btn-mcp" onclick="openMcpModal()" title="MCP Tools Runner">
+                    <i class="fa fa-plug"></i>
+                </button>
+            </div>
+            <div class="activity-bar-group">
+                <button class="activity-btn" onclick="openCommandPalette()" title="Command Palette (Ctrl+Shift+P / F1)">
+                    <i class="fa fa-terminal"></i>
+                </button>
+                <button class="activity-btn" onclick="toggleProblemsPanel()" title="Diagnostics & Problems">
+                    <i class="fa fa-triangle-exclamation"></i>
+                </button>
+                <button class="activity-btn" onclick="openShortcutsModal()" title="Keyboard Shortcuts (?)">
+                    <i class="fa fa-circle-question"></i>
+                </button>
+                <button class="activity-btn" onclick="toggleChatPanel()" title="Toggle AI Copilot" id="act-btn-chat">
+                    <i class="fa fa-wand-magic-sparkles"></i>
+                </button>
+            </div>
+        </div>
+
         <!-- Sidebar -->
-        <div class="sidebar">
+        <div class="sidebar" id="sidebar">
             <div class="sidebar-nav-bar">
                 <button class="sidebar-nav-btn active" id="tab-nav-files" onclick="switchSidebarTab('files')" title="Explorer (Files)"><i class="fa fa-folder-tree"></i> Files</button>
                 <button class="sidebar-nav-btn" id="tab-nav-search" onclick="switchSidebarTab('search')" title="Codebase Search (Ctrl+Shift+F)"><i class="fa fa-magnifying-glass"></i> Search</button>
                 <button class="sidebar-nav-btn" id="tab-nav-git" onclick="switchSidebarTab('git')" title="Source Control (Ctrl+Shift+G)"><i class="fa fa-code-branch"></i> Git <span id="git-badge-count" class="badge" style="display:none; font-size:9px; padding:1px 5px; background:#083344; color:#22d3ee; margin-left:2px;">0</span></button>
+                <button class="sidebar-nav-btn" id="tab-nav-zig" onclick="switchSidebarTab('zig')" title="Zig & Rust Native Telemetry"><i class="fa fa-bolt" style="color:#c084fc;"></i> Zig</button>
             </div>
 
             <!-- View 1: Files Explorer -->
@@ -401,10 +510,87 @@
                     </div>
                 </div>
             </div>
+
+            <!-- View 4: Zig & Rust Native Accelerators & Telemetry View -->
+            <div class="sidebar-view" id="sidebar-view-zig" style="display:none;">
+                <div class="sidebar-header">
+                    <div style="display:flex; align-items:center; gap:6px;">
+                        <span>Zig Telemetry</span>
+                        <span class="badge" style="background:#2e1065; color:#c084fc; font-size:10px;"><i class="fa fa-bolt"></i> ZIG SIMD</span>
+                    </div>
+                    <div class="sidebar-actions">
+                        <i class="fa fa-rotate-right" onclick="refreshZigTelemetry()" title="Refresh Zig Telemetry"></i>
+                    </div>
+                </div>
+                <div style="padding: 12px; overflow-y:auto; flex:1; display:flex; flex-direction:column; gap:10px;">
+                    <div class="zig-metric-card">
+                        <div class="zig-metric-header">
+                            <span>Myers Diff SES Latency</span>
+                            <i class="fa fa-gauge-high" style="color:#06b6d4;"></i>
+                        </div>
+                        <div class="zig-metric-val" id="zig-myers-val">Calculating...</div>
+                        <div style="font-size:11px; color:#a1a1aa; margin-top:2px;">Sub-microsecond line-level LCS diff kernel</div>
+                    </div>
+
+                    <div class="zig-metric-card">
+                        <div class="zig-metric-header">
+                            <span>Levenshtein Distance</span>
+                            <i class="fa fa-bolt" style="color:#a855f7;"></i>
+                        </div>
+                        <div class="zig-metric-val" id="zig-lev-val">Calculating...</div>
+                        <div style="font-size:11px; color:#a1a1aa; margin-top:2px;">SIMD fuzzy symbol distance</div>
+                    </div>
+
+                    <div class="zig-metric-card">
+                        <div class="zig-metric-header">
+                            <span>Vector Acceleration Lane</span>
+                            <i class="fa fa-microchip" style="color:#10b981;"></i>
+                        </div>
+                        <div class="zig-metric-val" id="zig-simd-val" style="color:#34d399; font-size:13px;">Probing...</div>
+                        <div style="font-size:11px; color:#a1a1aa; margin-top:2px;">AVX2 / SSE4.1 / NEON Vector dot products</div>
+                    </div>
+
+                    <div class="zig-metric-card">
+                        <div class="zig-metric-header">
+                            <span>Kernel Sandboxing</span>
+                            <i class="fa fa-shield-halved" style="color:#f59e0b;"></i>
+                        </div>
+                        <div class="zig-metric-val" id="zig-sandbox-val" style="color:#fbbf24; font-size:13px;">Checking...</div>
+                        <div style="font-size:11px; color:#a1a1aa; margin-top:2px;">Linux Landlock LSM unprivileged confinement</div>
+                    </div>
+
+                    <div class="zig-metric-card">
+                        <div class="zig-metric-header">
+                            <span>Memory Engine</span>
+                            <i class="fa fa-memory" style="color:#38bdf8;"></i>
+                        </div>
+                        <div class="zig-metric-val" id="zig-shm-val" style="color:#38bdf8; font-size:12px;">POSIX Shared Memory</div>
+                        <div style="font-size:11px; color:#a1a1aa; margin-top:2px;">Zero-copy /dev/shm IPC & Zig Arena Allocator</div>
+                    </div>
+
+                    <button class="btn btn-primary" onclick="benchmarkZigEngine()" style="margin-top:6px; justify-content:center; padding:7px;">
+                        <i class="fa fa-stopwatch"></i> Run Zig Benchmark
+                    </button>
+
+                    <div style="margin-top:8px;">
+                        <div style="font-size:11px; font-weight:700; color:#a1a1aa; text-transform:uppercase; margin-bottom:6px;">Active Combo Optimizations:</div>
+                        <ul id="zig-optimizations-list" style="list-style:none; display:flex; flex-direction:column; gap:4px; font-size:11px; color:#cbd5e1;">
+                            <li><i class="fa fa-check" style="color:#10b981; margin-right:4px;"></i> Zig Myers SES Diff Kernel</li>
+                            <li><i class="fa fa-check" style="color:#10b981; margin-right:4px;"></i> Zig AVX2 SIMD Cosine Distance</li>
+                            <li><i class="fa fa-check" style="color:#10b981; margin-right:4px;"></i> Sub-Microsecond Levenshtein</li>
+                            <li><i class="fa fa-check" style="color:#10b981; margin-right:4px;"></i> DualBuffer Speculative Overlay</li>
+                            <li><i class="fa fa-check" style="color:#10b981; margin-right:4px;"></i> Blake3 Time-Travel Snapshots</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
         </div>
 
+        <!-- Draggable Resizer between Sidebar and Editor -->
+        <div class="resizer-v" id="resizer-sidebar" title="Drag to resize sidebar"></div>
+
         <!-- Central Editor Area -->
-        <div class="editor-container">
+        <div class="editor-container" id="editor-container">
             <!-- Multi-Tab Bar -->
             <div class="editor-tabs-bar" id="editor-tabs-bar"></div>
             
@@ -415,6 +601,17 @@
                 <button class="mode-btn" id="mode-side" onclick="switchView('side')"><i class="fa fa-columns"></i> Side-by-Side</button>
                 <button class="mode-btn" id="mode-composer" onclick="switchView('composer')"><i class="fa fa-layer-group"></i> Composer Agent</button>
                 <button class="mode-btn" id="mode-problems" onclick="toggleProblemsPanel()"><i class="fa fa-triangle-exclamation"></i> Problems <span id="diag-count-badge" class="badge" style="background:#dc2626; color:#fff; display:none; padding:1px 5px; font-size:10px;">0</span></button>
+            </div>
+
+            <!-- Editor Breadcrumbs Bar -->
+            <div class="breadcrumbs-bar" id="breadcrumbs-bar">
+                <span class="crumb-item" onclick="loadWorkspace()"><i class="fa-solid fa-cube"></i> hagibis</span>
+                <i class="fa-solid fa-chevron-right crumb-sep"></i>
+                <span class="crumb-item crumb-file" id="breadcrumb-file"><i class="fa-brands fa-rust"></i> Select a file...</span>
+                <div class="breadcrumbs-actions">
+                    <span class="crumb-action-btn" onclick="copyCurrentPath()" title="Copy Relative Path"><i class="fa-regular fa-copy"></i></span>
+                    <span class="crumb-action-btn" onclick="openSymbolsModal()" title="Jump to Symbol (@)"><i class="fa-solid fa-code-branch"></i></span>
+                </div>
             </div>
 
             <div class="editor-canvas-box">
@@ -484,6 +681,9 @@
                 </div>
             </div>
 
+            <!-- Draggable Resizer for Bottom Drawer -->
+            <div class="resizer-h" id="resizer-drawer" title="Drag to resize bottom drawer"></div>
+
             <!-- Bottom Multi-Tab Drawer (Terminal & Diagnostics) -->
             <div class="terminal-panel" id="terminal-drawer">
                 <div class="drawer-tabs">
@@ -513,8 +713,11 @@
             </div>
         </div>
 
+        <!-- Draggable Resizer between Editor and AI Chat -->
+        <div class="resizer-v" id="resizer-chat" title="Drag to resize AI chat panel"></div>
+
         <!-- Right Side AI Copilot -->
-        <div class="chat-panel">
+        <div class="chat-panel" id="chat-panel">
             <div class="chat-header">
                 <div style="display:flex; align-items:center; gap:6px;">
                     <i class="fa fa-wand-magic-sparkles"></i>
@@ -542,6 +745,40 @@
             </div>
         </div>
     </div>
+
+    <!-- 24px Modern Status Bar -->
+    <footer class="status-bar" id="status-bar">
+        <div class="status-bar-left">
+            <span class="status-bar-item" onclick="handleActivityClick('git')" title="Git Branch">
+                <i class="fa fa-code-branch" style="color:#38bdf8;"></i>
+                <span id="sb-branch-name">main</span>
+            </span>
+            <span class="status-bar-item" onclick="toggleProblemsPanel()" title="Workspace Problems">
+                <i class="fa fa-circle-xmark" style="color:#ef4444;"></i>
+                <span id="sb-error-count">0</span>
+                <i class="fa fa-triangle-exclamation" style="color:#f59e0b; margin-left:4px;"></i>
+                <span id="sb-warn-count">0</span>
+            </span>
+            <span class="status-bar-item status-pill-zig" onclick="handleActivityClick('zig')" title="Native Zig Myers Diff & SIMD Engine">
+                <i class="fa fa-bolt"></i>
+                <span id="sb-zig-status">Zig Myers SES: 2µs | SIMD</span>
+            </span>
+        </div>
+        <div class="status-bar-right">
+            <span class="status-bar-item" id="sb-cursor-pos" title="Cursor Position">Ln 1, Col 1</span>
+            <span class="status-bar-item" title="Indentation">Spaces: 4</span>
+            <span class="status-bar-item" title="Encoding">UTF-8</span>
+            <span class="status-bar-item" title="Line Sequence">LF</span>
+            <span class="status-bar-item" id="sb-file-lang" title="Current Language">Rust</span>
+            <span class="status-bar-item" onclick="handleModelChangeClick()" title="Active LLM Model" style="color:#38bdf8;">
+                <i class="fa fa-robot"></i>
+                <span id="sb-model-badge">dynabook-coder</span>
+            </span>
+            <span class="status-bar-item" onclick="openShortcutsModal()" title="Keyboard Shortcuts (?)">
+                <i class="fa fa-keyboard"></i>
+            </span>
+        </div>
+    </footer>
 
     <!-- Codebase Search Modal -->
     <div class="modal-overlay" id="search-modal" onclick="closeSearchModal(event)">
@@ -598,6 +835,61 @@
         </div>
     </div>
 
+    <!-- Command Palette Spotlight Modal (Ctrl+Shift+P / F1) -->
+    <div class="cmd-palette-overlay" id="cmd-palette-modal" onclick="closeCommandPalette(event)">
+        <div class="cmd-palette-box" onclick="event.stopPropagation()">
+            <div class="cmd-palette-input-wrap">
+                <i class="fa fa-greater-than" style="color:#06b6d4; font-size:12px; font-weight:700;"></i>
+                <input type="text" class="cmd-palette-input" id="cmd-palette-input" placeholder="Type a command or search action (e.g. 'diff', 'format', 'git')..." oninput="filterCommandPalette()" onkeydown="handleCommandPaletteKeyDown(event)">
+                <span class="cmd-palette-shortcut">Esc to close</span>
+            </div>
+            <div class="cmd-palette-list" id="cmd-palette-list"></div>
+        </div>
+    </div>
+
+    <!-- Keyboard Shortcuts Cheatsheet Modal (?) -->
+    <div class="modal-overlay" id="shortcuts-modal" onclick="closeShortcutsModal(event)">
+        <div class="modal-content" style="width: 680px;" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <span><i class="fa fa-keyboard"></i> Hagibis Keyboard Shortcuts Cheatsheet</span>
+                <i class="fa fa-xmark" style="cursor:pointer;" onclick="closeShortcutsModal()"></i>
+            </div>
+            <div class="shortcuts-grid">
+                <div class="shortcut-card">
+                    <div style="font-weight:700; color:#38bdf8; margin-bottom:8px; font-size:12px;"><i class="fa fa-code"></i> Editing & Navigation</div>
+                    <div style="display:flex; flex-direction:column; gap:6px; font-size:11px;">
+                        <div style="display:flex; justify-content:space-between; align-items:center;"><span>Command Palette</span><span class="cmd-palette-shortcut">Ctrl+Shift+P / F1</span></div>
+                        <div style="display:flex; justify-content:space-between; align-items:center;"><span>Save Active File</span><span class="cmd-palette-shortcut">Ctrl+S</span></div>
+                        <div style="display:flex; justify-content:space-between; align-items:center;"><span>Quick Open File</span><span class="cmd-palette-shortcut">Ctrl+P</span></div>
+                        <div style="display:flex; justify-content:space-between; align-items:center;"><span>AST Symbols Outline</span><span class="cmd-palette-shortcut">@ / Symbols</span></div>
+                        <div style="display:flex; justify-content:space-between; align-items:center;"><span>Find in Files</span><span class="cmd-palette-shortcut">Ctrl+Shift+F</span></div>
+                        <div style="display:flex; justify-content:space-between; align-items:center;"><span>Source Control</span><span class="cmd-palette-shortcut">Ctrl+Shift+G</span></div>
+                        <div style="display:flex; justify-content:space-between; align-items:center;"><span>Toggle Split Editor</span><span class="cmd-palette-shortcut">Split Button</span></div>
+                    </div>
+                </div>
+                <div class="shortcut-card">
+                    <div style="font-weight:700; color:#a855f7; margin-bottom:8px; font-size:12px;"><i class="fa fa-bolt"></i> AI & Zig Accelerators</div>
+                    <div style="display:flex; flex-direction:column; gap:6px; font-size:11px;">
+                        <div style="display:flex; justify-content:space-between; align-items:center;"><span>Surgical Inline Edit</span><span class="cmd-palette-shortcut">Ctrl+K</span></div>
+                        <div style="display:flex; justify-content:space-between; align-items:center;"><span>Multi-File Composer</span><span class="cmd-palette-shortcut">Ctrl+I</span></div>
+                        <div style="display:flex; justify-content:space-between; align-items:center;"><span>Accept Speculative Edit</span><span class="cmd-palette-shortcut">Tab</span></div>
+                        <div style="display:flex; justify-content:space-between; align-items:center;"><span>Reject Speculative Edit</span><span class="cmd-palette-shortcut">Esc</span></div>
+                        <div style="display:flex; justify-content:space-between; align-items:center;"><span>Zig Myers SES Diff</span><span class="cmd-palette-shortcut">Ctrl+D</span></div>
+                        <div style="display:flex; justify-content:space-between; align-items:center;"><span>Toggle Terminal</span><span class="cmd-palette-shortcut">Ctrl+`</span></div>
+                        <div style="display:flex; justify-content:space-between; align-items:center;"><span>Zig SIMD Telemetry</span><span class="cmd-palette-shortcut">Ctrl+Shift+Z</span></div>
+                    </div>
+                </div>
+            </div>
+            <div style="padding:10px 14px; background:#141416; border-top:1px solid #27272a; display:flex; justify-content:space-between; align-items:center; font-size:11px; color:#71717a;">
+                <span>Press <strong style="color:#fff;">?</strong> anywhere outside text editors to open this cheatsheet</span>
+                <button class="btn btn-primary" onclick="closeShortcutsModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notification Container -->
+    <div id="toast-container"></div>
+
     <!-- Monaco AMD Loader -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs/loader.min.js"></script>
     <script>
@@ -618,6 +910,375 @@
         if (!isTauri) {
             document.getElementById('tauri-badge').innerText = 'HYBRID HTTP';
             document.getElementById('tauri-badge').style.background = '#3730a3';
+        }
+
+        function escapeHtml(str) {
+            return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
+
+        // Modern Non-Blocking Toast Notification System
+        const toast = {
+            show(msg, type = 'info', duration = 3500) {
+                const container = document.getElementById('toast-container');
+                if (!container) return;
+                const t = document.createElement('div');
+                t.className = `toast-msg toast-${type}`;
+                let icon = 'fa-circle-info';
+                if (type === 'success') icon = 'fa-circle-check';
+                else if (type === 'error') icon = 'fa-circle-xmark';
+                else if (type === 'warn') icon = 'fa-triangle-exclamation';
+
+                t.innerHTML = `
+                    <i class="fa-solid ${icon}"></i>
+                    <span style="flex:1;">${escapeHtml(String(msg))}</span>
+                    <i class="fa-solid fa-xmark toast-close" onclick="this.parentElement.remove()"></i>
+                `;
+                container.appendChild(t);
+                setTimeout(() => {
+                    t.style.opacity = '0';
+                    t.style.transform = 'translateX(100%)';
+                    setTimeout(() => t.remove(), 250);
+                }, duration);
+            },
+            success(msg, duration) { this.show(msg, 'success', duration); },
+            error(msg, duration) { this.show(msg, 'error', duration || 4500); },
+            info(msg, duration) { this.show(msg, 'info', duration); },
+            warn(msg, duration) { this.show(msg, 'warn', duration); },
+        };
+
+        // Global Command Palette Definition
+        const COMMANDS = [
+            { id: 'save', label: 'File: Save Active File', shortcut: 'Ctrl+S', icon: 'fa-floppy-disk', action: () => saveActiveFile() },
+            { id: 'quick_open', label: 'File: Quick Open / Search Codebase', shortcut: 'Ctrl+P', icon: 'fa-magnifying-glass', action: () => openSearchModal() },
+            { id: 'new_file', label: 'File: New File in Workspace', shortcut: '', icon: 'fa-file-circle-plus', action: () => promptCreateFile() },
+            { id: 'new_folder', label: 'File: New Folder in Workspace', shortcut: '', icon: 'fa-folder-plus', action: () => promptCreateFolder() },
+            { id: 'refresh_ws', label: 'File: Refresh Workspace Explorer', shortcut: '', icon: 'fa-rotate-right', action: () => loadWorkspace() },
+            { id: 'symbols', label: 'Code: Workspace AST Symbols Outline', shortcut: '@', icon: 'fa-code-branch', action: () => openSymbolsModal() },
+            { id: 'inline_edit', label: 'AI: Surgical Inline Edit (Ctrl+K)', shortcut: 'Ctrl+K', icon: 'fa-wand-magic-sparkles', action: () => triggerInlineCtrlK() },
+            { id: 'composer', label: 'AI: Open Multi-File Composer Orchestrator', shortcut: 'Ctrl+I', icon: 'fa-layer-group', action: () => switchView('composer') },
+            { id: 'diff_myers', label: 'Diff: Compute Zig Myers SES Inline Diff', shortcut: 'Ctrl+D', icon: 'fa-code-compare', action: () => triggerDiff() },
+            { id: 'split_editor', label: 'View: Toggle Split Editor Pane', shortcut: '', icon: 'fa-table-columns', action: () => toggleSplitEditor() },
+            { id: 'terminal', label: 'Terminal: Toggle Sovereign Terminal', shortcut: 'Ctrl+`', icon: 'fa-terminal', action: () => toggleTerminal() },
+            { id: 'problems', label: 'View: Toggle Diagnostics & Problems Drawer', shortcut: '', icon: 'fa-triangle-exclamation', action: () => toggleProblemsPanel() },
+            { id: 'cargo_check', label: 'Cargo: Check Compiler Problems', shortcut: '', icon: 'fa-wrench', action: () => refreshDiagnostics() },
+            { id: 'cargo_test', label: 'Terminal: Run cargo test', shortcut: '', icon: 'fa-flask', action: () => runTermQuick('cargo test') },
+            { id: 'git_status', label: 'Git: View Source Control Status', shortcut: 'Ctrl+Shift+G', icon: 'fa-code-branch', action: () => handleActivityClick('git') },
+            { id: 'git_stage_all', label: 'Git: Stage All Modified Changes', shortcut: '', icon: 'fa-plus', action: () => stageAllGit() },
+            { id: 'git_unstage_all', label: 'Git: Unstage All Changes', shortcut: '', icon: 'fa-minus', action: () => unstageAllGit() },
+            { id: 'zig_telemetry', label: 'Zig: Benchmark Zig Myers SES & SIMD Hardware', shortcut: 'Ctrl+Shift+Z', icon: 'fa-bolt', action: () => { handleActivityClick('zig'); benchmarkZigEngine(); } },
+            { id: 'checkpoint_create', label: 'Time-Travel: Create Blake3 Checkpoint Snapshot', shortcut: '', icon: 'fa-clock-rotate-left', action: () => triggerManualCheckpoint() },
+            { id: 'checkpoint_rollback', label: 'Time-Travel: 1-Click Atomic Rollback to Checkpoint', shortcut: '', icon: 'fa-rotate-left', action: () => triggerRollback() },
+            { id: 'mcp_tools', label: 'Tools: Open MCP Subprocess Runner', shortcut: '', icon: 'fa-plug', action: () => openMcpModal() },
+            { id: 'rules', label: 'Workspace: View Project Rules (.hgb/rules.md)', shortcut: '', icon: 'fa-scroll', action: () => showRules() },
+            { id: 'shortcuts', label: 'Help: Keyboard Shortcuts Cheatsheet', shortcut: '?', icon: 'fa-circle-question', action: () => openShortcutsModal() },
+        ];
+
+        let selectedCmdIdx = 0;
+        let filteredCommands = [];
+
+        function openCommandPalette() {
+            const modal = document.getElementById('cmd-palette-modal');
+            if (!modal) return;
+            modal.style.display = 'flex';
+            const input = document.getElementById('cmd-palette-input');
+            input.value = '';
+            selectedCmdIdx = 0;
+            filterCommandPalette();
+            setTimeout(() => input.focus(), 50);
+        }
+
+        function closeCommandPalette(e) {
+            if (e && e.target !== e.currentTarget) return;
+            const modal = document.getElementById('cmd-palette-modal');
+            if (modal) modal.style.display = 'none';
+        }
+
+        function filterCommandPalette() {
+            const query = (document.getElementById('cmd-palette-input')?.value || '').toLowerCase().trim();
+            filteredCommands = COMMANDS.filter(c => c.label.toLowerCase().includes(query) || (c.shortcut && c.shortcut.toLowerCase().includes(query)));
+            selectedCmdIdx = 0;
+            renderCommandPalette();
+        }
+
+        function renderCommandPalette() {
+            const list = document.getElementById('cmd-palette-list');
+            if (!list) return;
+            if (filteredCommands.length === 0) {
+                list.innerHTML = '<div style="padding:14px; color:#71717a; text-align:center;">No matching commands found.</div>';
+                return;
+            }
+            let html = '';
+            filteredCommands.forEach((cmd, idx) => {
+                const active = idx === selectedCmdIdx ? ' active' : '';
+                html += `
+                    <div class="cmd-palette-item${active}" onclick="executeCommand(${idx})">
+                        <div style="display:flex; align-items:center; gap:10px;">
+                            <i class="fa ${cmd.icon}" style="color:#06b6d4; width:16px; text-align:center;"></i>
+                            <span>${escapeHtml(cmd.label)}</span>
+                        </div>
+                        ${cmd.shortcut ? `<span class="cmd-palette-shortcut">${escapeHtml(cmd.shortcut)}</span>` : ''}
+                    </div>
+                `;
+            });
+            list.innerHTML = html;
+            const activeEl = list.children[selectedCmdIdx];
+            if (activeEl) activeEl.scrollIntoView({ block: 'nearest' });
+        }
+
+        function handleCommandPaletteKeyDown(e) {
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                if (filteredCommands.length > 0) {
+                    selectedCmdIdx = (selectedCmdIdx + 1) % filteredCommands.length;
+                    renderCommandPalette();
+                }
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                if (filteredCommands.length > 0) {
+                    selectedCmdIdx = (selectedCmdIdx - 1 + filteredCommands.length) % filteredCommands.length;
+                    renderCommandPalette();
+                }
+            } else if (e.key === 'Enter') {
+                e.preventDefault();
+                if (filteredCommands.length > 0) {
+                    executeCommand(selectedCmdIdx);
+                }
+            } else if (e.key === 'Escape') {
+                e.preventDefault();
+                closeCommandPalette();
+            }
+        }
+
+        function executeCommand(idx) {
+            const cmd = filteredCommands[idx];
+            closeCommandPalette();
+            if (cmd && cmd.action) {
+                cmd.action();
+            }
+        }
+
+        function openShortcutsModal() {
+            const modal = document.getElementById('shortcuts-modal');
+            if (modal) modal.style.display = 'flex';
+        }
+
+        function closeShortcutsModal(e) {
+            if (e && e.target !== e.currentTarget && e.target.tagName !== 'I' && !e.target.classList.contains('btn')) return;
+            const modal = document.getElementById('shortcuts-modal');
+            if (modal) modal.style.display = 'none';
+        }
+
+        function handleModelChangeClick() {
+            const select = document.getElementById('model-select');
+            if (select) {
+                select.focus();
+                if (typeof select.showPicker === 'function') {
+                    select.showPicker();
+                }
+            }
+        }
+
+        function initResizers() {
+            const resizerSidebar = document.getElementById('resizer-sidebar');
+            const sidebar = document.getElementById('sidebar');
+            if (resizerSidebar && sidebar) {
+                let isDragging = false;
+                resizerSidebar.addEventListener('mousedown', (e) => {
+                    isDragging = true;
+                    document.body.style.cursor = 'col-resize';
+                    resizerSidebar.classList.add('dragging');
+                    e.preventDefault();
+                });
+                window.addEventListener('mousemove', (e) => {
+                    if (!isDragging) return;
+                    const newWidth = Math.max(180, Math.min(600, e.clientX - 48));
+                    sidebar.style.width = newWidth + 'px';
+                    if (editorInstance) editorInstance.layout();
+                    if (editorInstanceSplit) editorInstanceSplit.layout();
+                });
+                window.addEventListener('mouseup', () => {
+                    if (isDragging) {
+                        isDragging = false;
+                        document.body.style.cursor = 'default';
+                        resizerSidebar.classList.remove('dragging');
+                        if (editorInstance) editorInstance.layout();
+                    }
+                });
+            }
+
+            const resizerChat = document.getElementById('resizer-chat');
+            const chatPanel = document.getElementById('chat-panel') || document.querySelector('.chat-panel');
+            if (resizerChat && chatPanel) {
+                let isDragging = false;
+                resizerChat.addEventListener('mousedown', (e) => {
+                    isDragging = true;
+                    document.body.style.cursor = 'col-resize';
+                    resizerChat.classList.add('dragging');
+                    e.preventDefault();
+                });
+                window.addEventListener('mousemove', (e) => {
+                    if (!isDragging) return;
+                    const newWidth = Math.max(260, Math.min(750, window.innerWidth - e.clientX));
+                    chatPanel.style.width = newWidth + 'px';
+                    if (editorInstance) editorInstance.layout();
+                    if (editorInstanceSplit) editorInstanceSplit.layout();
+                });
+                window.addEventListener('mouseup', () => {
+                    if (isDragging) {
+                        isDragging = false;
+                        document.body.style.cursor = 'default';
+                        resizerChat.classList.remove('dragging');
+                        if (editorInstance) editorInstance.layout();
+                    }
+                });
+            }
+
+            const resizerDrawer = document.getElementById('resizer-drawer');
+            const drawer = document.getElementById('terminal-drawer');
+            if (resizerDrawer && drawer) {
+                let isDragging = false;
+                resizerDrawer.addEventListener('mousedown', (e) => {
+                    isDragging = true;
+                    document.body.style.cursor = 'row-resize';
+                    resizerDrawer.classList.add('dragging');
+                    e.preventDefault();
+                });
+                window.addEventListener('mousemove', (e) => {
+                    if (!isDragging) return;
+                    const newHeight = Math.max(100, Math.min(500, window.innerHeight - e.clientY - 24));
+                    drawer.style.height = newHeight + 'px';
+                    if (editorInstance) editorInstance.layout();
+                });
+                window.addEventListener('mouseup', () => {
+                    if (isDragging) {
+                        isDragging = false;
+                        document.body.style.cursor = 'default';
+                        resizerDrawer.classList.remove('dragging');
+                        if (editorInstance) editorInstance.layout();
+                    }
+                });
+            }
+        }
+
+        function updateBreadcrumbs(filePath) {
+            const bar = document.getElementById('breadcrumbs-bar');
+            if (!bar) return;
+            if (!filePath) {
+                bar.innerHTML = `
+                    <span class="crumb-item" onclick="loadWorkspace()"><i class="fa-solid fa-cube"></i> hagibis</span>
+                    <i class="fa-solid fa-chevron-right crumb-sep"></i>
+                    <span class="crumb-item crumb-file" id="breadcrumb-file"><i class="fa-brands fa-rust"></i> Select a file...</span>
+                `;
+                return;
+            }
+            const parts = filePath.split('/');
+            const fname = parts.pop();
+            const ext = fname.split('.').pop();
+            let icon = 'fa-file-code';
+            if (ext === 'rs') icon = 'fa-rust fa-brands';
+            else if (ext === 'zig') icon = 'fa-bolt';
+            else if (ext === 'js' || ext === 'ts') icon = 'fa-js fa-brands';
+            else if (ext === 'json') icon = 'fa-file-lines';
+            else if (ext === 'md') icon = 'fa-markdown fa-brands';
+            else if (ext === 'toml') icon = 'fa-gear';
+
+            let crumbsHtml = `<span class="crumb-item" onclick="loadWorkspace()"><i class="fa-solid fa-cube"></i> hagibis</span>`;
+            parts.forEach(p => {
+                if (!p || p === '.') return;
+                crumbsHtml += ` <i class="fa-solid fa-chevron-right crumb-sep"></i> <span class="crumb-item">${escapeHtml(p)}</span>`;
+            });
+            crumbsHtml += ` <i class="fa-solid fa-chevron-right crumb-sep"></i> <span class="crumb-item crumb-file"><i class="${icon}"></i> ${escapeHtml(fname)}</span>`;
+            crumbsHtml += `
+                <div class="breadcrumbs-actions">
+                    <span class="crumb-action-btn" onclick="copyCurrentPath()" title="Copy Relative Path"><i class="fa-regular fa-copy"></i></span>
+                    <span class="crumb-action-btn" onclick="openSymbolsModal()" title="Jump to Symbol (@)"><i class="fa-solid fa-code-branch"></i></span>
+                </div>
+            `;
+            bar.innerHTML = crumbsHtml;
+
+            const langNameMap = { rs: 'Rust', zig: 'Zig', js: 'JavaScript', ts: 'TypeScript', json: 'JSON', md: 'Markdown', toml: 'TOML', py: 'Python', c: 'C', cpp: 'C++' };
+            const langEl = document.getElementById('sb-file-lang');
+            if (langEl) langEl.innerText = langNameMap[ext] || 'Plain Text';
+        }
+
+        function copyCurrentPath() {
+            if (activeTabIdx >= 0 && openTabs[activeTabIdx]) {
+                navigator.clipboard.writeText(openTabs[activeTabIdx].path);
+                toast.success(`Copied path: ${openTabs[activeTabIdx].path}`);
+            }
+        }
+
+        async function refreshZigTelemetry() {
+            try {
+                const t = await apiInvoke('get_zig_engine_telemetry');
+                const myersEl = document.getElementById('zig-myers-val');
+                const levEl = document.getElementById('zig-lev-val');
+                const simdEl = document.getElementById('zig-simd-val');
+                const sandEl = document.getElementById('zig-sandbox-val');
+                const shmEl = document.getElementById('zig-shm-val');
+                const sbZig = document.getElementById('sb-zig-status');
+
+                if (myersEl) myersEl.innerText = `${t.myers_ses_latency_us} µs (Similarity: ${(t.myers_lcs_similarity * 100).toFixed(1)}%)`;
+                if (levEl) levEl.innerText = `${t.levenshtein_benchmark_us} µs`;
+                if (simdEl) simdEl.innerText = `${t.simd_feature} (${t.simd_active ? 'Active' : 'Disabled'})`;
+                if (sandEl) sandEl.innerText = t.landlock_lsm_supported ? 'Enforced (Active)' : 'Available';
+                if (shmEl) shmEl.innerText = t.memory_arena_status;
+
+                if (sbZig) {
+                    sbZig.innerText = `Zig Myers SES: ${t.myers_ses_latency_us}µs | ${t.simd_active ? 'SIMD' : 'Scalar'}`;
+                }
+            } catch (e) {
+                console.warn('Zig telemetry notice:', e);
+            }
+        }
+
+        async function benchmarkZigEngine() {
+            toast.info('Running Zig Myers SES and SIMD microkernel benchmark...');
+            const t0 = performance.now();
+            await refreshZigTelemetry();
+            const elapsed = (performance.now() - t0).toFixed(2);
+            toast.success(`Zig microkernel benchmark completed in ${elapsed} ms!`);
+        }
+
+        async function triggerManualCheckpoint() {
+            try {
+                const id = await apiInvoke('create_checkpoint', {
+                    label: 'Manual Checkpoint from Command Palette',
+                    files: openTabs.map(t => t.path),
+                });
+                toast.success(`Created Blake3 checkpoint: ${id}`);
+            } catch (e) {
+                toast.error('Checkpoint creation failed: ' + e);
+            }
+        }
+
+        function toggleChatPanel() {
+            const chat = document.getElementById('chat-panel') || document.querySelector('.chat-panel');
+            const btn = document.getElementById('act-btn-chat');
+            if (!chat) return;
+            if (chat.style.display === 'none') {
+                chat.style.display = 'flex';
+                if (btn) btn.classList.add('active');
+            } else {
+                chat.style.display = 'none';
+                if (btn) btn.classList.remove('active');
+            }
+            if (editorInstance) editorInstance.layout();
+            if (editorInstanceSplit) editorInstanceSplit.layout();
+        }
+
+        function handleActivityClick(tab) {
+            const sidebar = document.getElementById('sidebar');
+            if (tab === 'composer') {
+                switchView('composer');
+                return;
+            }
+            if (sidebar) {
+                if (sidebar.style.display === 'none') {
+                    sidebar.style.display = 'flex';
+                }
+            }
+            switchSidebarTab(tab);
         }
 
         async function apiInvoke(cmd, args = {}) {
@@ -668,6 +1329,7 @@
                 'git_stage_all': ['/api/git_stage_all', 'POST', args],
                 'git_unstage_all': ['/api/git_unstage_all', 'POST', args],
                 'git_commit_changes': ['/api/git_commit', 'POST', args],
+                'get_zig_engine_telemetry': ['/api/zig_telemetry', 'GET'],
             };
             const config = routeMap[cmd];
             if (!config) throw new Error('Unknown command: ' + cmd);
@@ -735,6 +1397,9 @@
 
                         // Register direct Monaco editor commands for Cursor shortcuts
                         editorInstance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyK, triggerInlineCtrlK);
+                        editorInstance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyP, openCommandPalette);
+                        editorInstance.addCommand(monaco.KeyCode.F1, openCommandPalette);
+                        editorInstance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyZ, () => { handleActivityClick('zig'); benchmarkZigEngine(); });
                         editorInstance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyP, openSearchModal);
                         editorInstance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyO, openSymbolsModal);
                         editorInstance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyF, () => switchSidebarTab('search'));
@@ -742,6 +1407,11 @@
                         editorInstance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, saveActiveFile);
                         editorInstance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyI, () => switchView('composer'));
                         editorInstance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Backquote, toggleTerminal);
+
+                        editorInstance.onDidChangeCursorPosition((e) => {
+                            const posEl = document.getElementById('sb-cursor-pos');
+                            if (posEl) posEl.innerText = `Ln ${e.position.lineNumber}, Col ${e.position.column}`;
+                        });
 
                         editorInstance.onDidChangeModelContent(() => {
                             if (activeTabIdx >= 0) {
@@ -895,6 +1565,8 @@
                 if (prev && Array.from(sel.options).some(o => o.value === prev)) {
                     sel.value = prev;
                 }
+                const badge = document.getElementById('sb-model-badge');
+                if (badge && sel.value) badge.innerText = sel.value.split(':')[0];
             } catch (e) {
                 console.warn('Failed to probe models:', e);
             }
@@ -906,6 +1578,9 @@
         }
 
         function handleModelChange() {
+            const sel = document.getElementById('model-select');
+            const badge = document.getElementById('sb-model-badge');
+            if (badge && sel && sel.value) badge.innerText = sel.value.split(':')[0];
             debounceSaveSession();
         }
 
@@ -913,7 +1588,7 @@
             try {
                 const ckpts = await apiInvoke('get_checkpoints');
                 if (!ckpts || ckpts.length === 0) {
-                    alert('No checkpoints recorded yet. Automatic checkpoints are created before Composer and Agent code mutations.');
+                    toast.info('No checkpoints recorded yet. Automatic checkpoints are created before mutations.');
                     return;
                 }
                 const latest = ckpts[ckpts.length - 1];
@@ -921,14 +1596,11 @@
                     return;
                 }
                 const report = await apiInvoke('rollback_checkpoint', { checkpoint_id: latest.id });
-                let msg = `✔ Time-Travel Rollback complete in ${report.duration_ms}ms!\n`;
+                let msg = `✔ Time-Travel Rollback complete in ${report.duration_ms}ms! `;
                 if (report.files_restored && report.files_restored.length > 0) {
-                    msg += `Restored: ${report.files_restored.join(', ')}\n`;
+                    msg += `Restored: ${report.files_restored.join(', ')}`;
                 }
-                if (report.files_deleted && report.files_deleted.length > 0) {
-                    msg += `Deleted: ${report.files_deleted.join(', ')}\n`;
-                }
-                alert(msg);
+                toast.success(msg);
 
                 // Reload active tab
                 if (activeTabIdx >= 0) {
@@ -944,7 +1616,7 @@
                 }
                 await loadWorkspace();
             } catch (e) {
-                alert('Rollback failed: ' + e);
+                toast.error('Rollback failed: ' + e);
             }
         }
 
@@ -974,7 +1646,7 @@
                 switchTab(openTabs.length - 1);
                 debounceSaveSession();
             } catch (err) {
-                alert('Failed to read file: ' + err);
+                toast.error('Failed to read file: ' + err);
             }
         }
 
@@ -998,6 +1670,7 @@
             setEditorContent(tab.content, tab.lang);
             renderTabs();
             switchView('editor');
+            updateBreadcrumbs(tab.path);
             updateGitGutter(tab.path);
             refreshDiagnosticsForFile(tab.path);
             if (isSplitOpen) loadActiveIntoSplit();
@@ -1015,6 +1688,7 @@
             } else {
                 setEditorContent('// No file open.');
                 renderTabs();
+                updateBreadcrumbs(null);
             }
             debounceSaveSession();
         }
@@ -1031,8 +1705,9 @@
                 renderTabs();
                 updateGitGutter(tab.path);
                 refreshDiagnosticsForFile(tab.path);
+                toast.success(`Saved: ${tab.name}`);
             } catch (err) {
-                alert('Save failed: ' + err);
+                toast.error('Save failed: ' + err);
             }
         }
 
@@ -1074,7 +1749,7 @@
                     document.getElementById('side-view-container').innerText = diffData.side_by_side;
                     switchView('diff');
                 } catch (err) {
-                    alert('Inline Edit Error: ' + err);
+                    toast.error('Inline Edit Error: ' + err);
                 }
             }
         }
@@ -1082,7 +1757,24 @@
         // Global Keybindings
         function bindGlobalShortcuts() {
             window.addEventListener('keydown', (e) => {
-                if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+                const isInputActive = ['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName);
+
+                if (((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'p' || e.key === 'P')) || e.key === 'F1') {
+                    e.preventDefault();
+                    openCommandPalette();
+                } else if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'e' || e.key === 'E')) {
+                    e.preventDefault();
+                    handleActivityClick('files');
+                } else if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'f' || e.key === 'F')) {
+                    e.preventDefault();
+                    handleActivityClick('search');
+                } else if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'g' || e.key === 'G')) {
+                    e.preventDefault();
+                    handleActivityClick('git');
+                } else if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'z' || e.key === 'Z')) {
+                    e.preventDefault();
+                    handleActivityClick('zig');
+                } else if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
                     e.preventDefault();
                     saveActiveFile();
                 } else if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
@@ -1091,12 +1783,9 @@
                 } else if ((e.ctrlKey || e.metaKey) && (e.key === 'i' || e.key === 'I')) {
                     e.preventDefault();
                     switchView('composer');
-                } else if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'f' || e.key === 'F')) {
+                } else if ((e.ctrlKey || e.metaKey) && (e.key === 'd' || e.key === 'D')) {
                     e.preventDefault();
-                    switchSidebarTab('search');
-                } else if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'g' || e.key === 'G')) {
-                    e.preventDefault();
-                    switchSidebarTab('git');
+                    triggerDiff();
                 } else if ((e.ctrlKey || e.metaKey) && (e.key === 'p' || e.key === 'P')) {
                     e.preventDefault();
                     openSearchModal();
@@ -1108,6 +1797,9 @@
                     commitTabOverlay();
                 } else if (e.key === 'Escape' && speculativeContent) {
                     discardOverlay();
+                } else if (e.key === '?' && !isInputActive) {
+                    e.preventDefault();
+                    openShortcutsModal();
                 }
             });
         }
@@ -1352,7 +2044,7 @@
                 document.getElementById('side-view-container').innerText = diffData.side_by_side;
                 switchView('diff');
             } catch (err) {
-                alert('Diff error: ' + err);
+                toast.error('Diff error: ' + err);
             }
         }
 
@@ -1366,21 +2058,21 @@
             if (!window.currentComposerPlans) return;
             try {
                 await apiInvoke('commit_composer_plan', { plans: window.currentComposerPlans });
-                alert('All files successfully committed to disk!');
+                toast.success('All files successfully committed to disk!');
                 switchView('editor');
                 loadWorkspace();
             } catch (err) {
-                alert('Commit failed: ' + err);
+                toast.error('Commit failed: ' + err);
             }
         }
 
         async function commitSingleFile(path, orig, modif) {
             try {
                 await apiInvoke('commit_tab_overlay', { path, original: orig, speculative: modif });
-                alert('Committed: ' + path.split('/').pop());
+                toast.success('Committed: ' + path.split('/').pop());
                 loadWorkspace();
             } catch (err) {
-                alert('Commit failed: ' + err);
+                toast.error('Commit failed: ' + err);
             }
         }
 
@@ -1388,9 +2080,17 @@
         async function showRules() {
             try {
                 const res = await apiInvoke('load_project_rules');
-                alert(`[${res.source}]\n\n${res.rules}`);
+                toast.info(`Project rules loaded from ${res.source}`);
+                const stream = document.getElementById('chat-stream');
+                if (stream) {
+                    const bubble = document.createElement('div');
+                    bubble.className = 'chat-bubble chat-ai';
+                    bubble.innerHTML = `<strong>📜 Project Rules (${escapeHtml(res.source)}):</strong><div class="chat-snippet-box">${escapeHtml(res.rules)}</div>`;
+                    stream.appendChild(bubble);
+                    stream.scrollTop = stream.scrollHeight;
+                }
             } catch (err) {
-                alert('Error loading rules: ' + err);
+                toast.error('Error loading rules: ' + err);
             }
         }
 
@@ -1437,7 +2137,7 @@
                 document.getElementById('side-view-container').innerText = diffData.side_by_side;
                 switchView('diff');
             } catch (err) {
-                alert('Diff calculation failed: ' + err);
+                toast.error('Diff calculation failed: ' + err);
             }
         }
 
@@ -1575,7 +2275,7 @@
                 activeChatSession = await apiInvoke('load_chat_session', { session_id: sessionId, root_path: null });
                 renderActiveChatMessages();
             } catch (e) {
-                alert('Failed to load session: ' + e);
+                toast.error('Failed to load session: ' + e);
             }
         }
 
@@ -1597,8 +2297,9 @@
                 });
                 renderChatSessionsDropdown();
                 renderActiveChatMessages();
+                toast.success('Started new chat thread');
             } catch (e) {
-                alert('Failed to create session: ' + e);
+                toast.error('Failed to create session: ' + e);
             }
         }
 
@@ -1616,8 +2317,9 @@
                 }
                 renderChatSessionsDropdown();
                 renderActiveChatMessages();
+                toast.info('Chat thread deleted');
             } catch (e) {
-                alert('Failed to delete session: ' + e);
+                toast.error('Failed to delete session: ' + e);
             }
         }
 
@@ -1840,7 +2542,7 @@
                 document.getElementById('side-view-container').innerText = diffData.side_by_side;
                 switchView('diff');
             } catch (err) {
-                alert('Diff error: ' + err);
+                toast.error('Diff error: ' + err);
             }
         }
 
@@ -1861,8 +2563,9 @@
                 document.getElementById('speculative-pill').style.display = 'none';
                 renderTabs();
                 switchView('editor');
+                toast.success(`Overlay applied to ${tab.path} via native Zig SES engine`);
             } catch (err) {
-                alert('Commit failed: ' + err);
+                toast.error('Commit failed: ' + err);
             }
         }
 
@@ -1885,30 +2588,42 @@
             const filesView = document.getElementById('sidebar-view-files');
             const searchView = document.getElementById('sidebar-view-search');
             const gitView = document.getElementById('sidebar-view-git');
+            const zigView = document.getElementById('sidebar-view-zig');
             const btnFiles = document.getElementById('tab-nav-files');
             const btnSearch = document.getElementById('tab-nav-search');
             const btnGit = document.getElementById('tab-nav-git');
+            const btnZig = document.getElementById('tab-nav-zig');
 
             if (!filesView || !searchView || !gitView) return;
-            [btnFiles, btnSearch, btnGit].forEach(b => b.classList.remove('active'));
+            [btnFiles, btnSearch, btnGit, btnZig].filter(Boolean).forEach(b => b.classList.remove('active'));
             filesView.style.display = 'none';
             searchView.style.display = 'none';
             gitView.style.display = 'none';
+            if (zigView) zigView.style.display = 'none';
+
+            // Synchronize Activity Bar
+            document.querySelectorAll('.activity-btn').forEach(b => b.classList.remove('active'));
+            const actBtn = document.getElementById(`act-btn-${tab}`);
+            if (actBtn) actBtn.classList.add('active');
 
             if (tab === 'files') {
                 filesView.style.display = 'flex';
-                btnFiles.classList.add('active');
+                if (btnFiles) btnFiles.classList.add('active');
             } else if (tab === 'search') {
                 searchView.style.display = 'flex';
-                btnSearch.classList.add('active');
+                if (btnSearch) btnSearch.classList.add('active');
                 setTimeout(() => {
                     const inp = document.getElementById('global-search-input');
                     if (inp) inp.focus();
                 }, 50);
             } else if (tab === 'git') {
                 gitView.style.display = 'flex';
-                btnGit.classList.add('active');
+                if (btnGit) btnGit.classList.add('active');
                 refreshGitStatus();
+            } else if (tab === 'zig') {
+                if (zigView) zigView.style.display = 'flex';
+                if (btnZig) btnZig.classList.add('active');
+                refreshZigTelemetry();
             }
         }
 
@@ -2023,7 +2738,7 @@
             const query = searchInput.value.trim();
             const replacement = replaceInput.value;
             if (!query) {
-                alert('Please enter a search query to replace.');
+                toast.warn('Please enter a search query to replace.');
                 return;
             }
             if (!confirm(`Are you sure you want to replace all occurrences of "${query}" with "${replacement}" across the workspace?\n\n(A Blake3 atomic checkpoint will be created automatically for 1-click rollback)`)) {
@@ -2040,7 +2755,7 @@
                     root_path: null
                 });
 
-                alert(`✔ Batch Replace Complete!\nReplaced ${res.total_replacements} occurrences across ${res.files_modified.length} files.\nAtomic Checkpoint ID: ${res.checkpoint_id}`);
+                toast.success(`Batch Replace: ${res.total_replacements} occurrences in ${res.files_modified.length} files (Checkpoint: ${res.checkpoint_id.slice(0, 8)})`);
 
                 if (activeTabIdx >= 0 && res.files_modified.includes(openTabs[activeTabIdx].path)) {
                     const updated = await apiInvoke('read_file', { path: openTabs[activeTabIdx].path });
@@ -2054,7 +2769,7 @@
                 await triggerGlobalSearch();
                 await refreshGitStatus();
             } catch (e) {
-                alert('Global replace failed: ' + e);
+                toast.error('Global replace failed: ' + e);
             }
         }
 
@@ -2082,12 +2797,24 @@
                 if (elUntracked) elUntracked.innerText = untrackedCount;
 
                 const navBadge = document.getElementById('git-badge-count');
+                const actBadge = document.getElementById('act-git-badge');
+                const sbBranch = document.getElementById('sb-branch-name');
+                if (sbBranch) sbBranch.innerText = status.branch;
+
                 if (navBadge) {
                     if (totalChanges > 0) {
                         navBadge.innerText = totalChanges;
                         navBadge.style.display = 'inline-block';
                     } else {
                         navBadge.style.display = 'none';
+                    }
+                }
+                if (actBadge) {
+                    if (totalChanges > 0) {
+                        actBadge.innerText = totalChanges;
+                        actBadge.style.display = 'block';
+                    } else {
+                        actBadge.style.display = 'none';
                     }
                 }
 
@@ -2146,8 +2873,9 @@
             try {
                 await apiInvoke('git_stage_path', { path, root_path: null });
                 await refreshGitStatus();
+                toast.success('Staged: ' + path.split('/').pop());
             } catch (e) {
-                alert('Stage failed: ' + e);
+                toast.error('Stage failed: ' + e);
             }
         }
 
@@ -2155,8 +2883,9 @@
             try {
                 await apiInvoke('git_unstage_path', { path, root_path: null });
                 await refreshGitStatus();
+                toast.info('Unstaged: ' + path.split('/').pop());
             } catch (e) {
-                alert('Unstage failed: ' + e);
+                toast.error('Unstage failed: ' + e);
             }
         }
 
@@ -2164,8 +2893,9 @@
             try {
                 await apiInvoke('git_stage_all', { root_path: null });
                 await refreshGitStatus();
+                toast.success('Staged all changes');
             } catch (e) {
-                alert('Stage all failed: ' + e);
+                toast.error('Stage all failed: ' + e);
             }
         }
 
@@ -2173,8 +2903,9 @@
             try {
                 await apiInvoke('git_unstage_all', { root_path: null });
                 await refreshGitStatus();
+                toast.info('Unstaged all changes');
             } catch (e) {
-                alert('Unstage all failed: ' + e);
+                toast.error('Unstage all failed: ' + e);
             }
         }
 
@@ -2189,16 +2920,16 @@
             const msgInput = document.getElementById('git-commit-msg');
             const msg = msgInput.value.trim();
             if (!msg) {
-                alert('Please enter a commit message.');
+                toast.warn('Please enter a commit message.');
                 return;
             }
             try {
                 const res = await apiInvoke('git_commit_changes', { message: msg, root_path: null });
-                alert(`✔ Committed successfully!\nCommit: [${res.commit_hash}] ${res.summary}`);
+                toast.success(`Committed [${res.commit_hash}] ${res.summary}`);
                 msgInput.value = '';
                 await refreshGitStatus();
             } catch (e) {
-                alert('Commit failed: ' + e);
+                toast.error('Commit failed: ' + e);
             }
         }
 
@@ -2258,8 +2989,9 @@
                 await apiInvoke('create_file', { path: name });
                 await loadWorkspace();
                 openFile(name);
+                toast.success(`Created file ${name}`);
             } catch (err) {
-                alert('Create file failed: ' + err);
+                toast.error('Create file failed: ' + err);
             }
         }
 
@@ -2269,8 +3001,9 @@
             try {
                 await apiInvoke('create_folder', { path: name });
                 await loadWorkspace();
+                toast.success(`Created folder ${name}`);
             } catch (err) {
-                alert('Create folder failed: ' + err);
+                toast.error('Create folder failed: ' + err);
             }
         }
 
@@ -2288,8 +3021,9 @@
                     else setEditorContent('// No file open.');
                 }
                 await loadWorkspace();
+                toast.success(`Deleted ${path}`);
             } catch (err) {
-                alert('Delete failed: ' + err);
+                toast.error('Delete failed: ' + err);
             }
         }
 
@@ -2433,6 +3167,13 @@
                 } else {
                     countBadge.style.display = 'none';
                 }
+
+                const errCount = activeDiagnostics.filter(d => d.level === 'error').length;
+                const warnCount = activeDiagnostics.filter(d => d.level !== 'error').length;
+                const sbErr = document.getElementById('sb-error-count');
+                const sbWarn = document.getElementById('sb-warn-count');
+                if (sbErr) sbErr.innerText = errCount;
+                if (sbWarn) sbWarn.innerText = warnCount;
 
                 if (editorInstance && !isUsingFallback && typeof monaco !== 'undefined') {
                     const model = editorInstance.getModel();
@@ -2793,12 +3534,15 @@
 
         // Initialize Everything
         initEditor();
+        initResizers();
         loadWorkspace();
         loadDiagnostics();
         loadAvailableModels().then(restoreWorkspaceSession);
         initMentionSystem();
         initChatSessions();
         refreshGitStatus();
+        refreshZigTelemetry();
+        updateBreadcrumbs(null);
     </script>
 </body>
 </html>

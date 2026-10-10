@@ -82,6 +82,7 @@ fn main() {
             git_stage_all,
             git_unstage_all,
             git_commit_changes,
+            get_zig_engine_telemetry,
         ])
         .run(generate_context!())
         .expect("error while running Hagibis Tauri Visual IDE application");
