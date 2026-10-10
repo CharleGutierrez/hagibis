@@ -38,7 +38,12 @@
         .workspace-grid { display: flex; flex: 1; height: calc(100vh - 42px); overflow: hidden; position: relative; }
         
         /* Left Sidebar */
-        .sidebar { width: 260px; background: var(--bg-sidebar); border-right: 1px solid var(--border-color); display: flex; flex-direction: column; }
+        .sidebar { width: 280px; background: var(--bg-sidebar); border-right: 1px solid var(--border-color); display: flex; flex-direction: column; }
+        .sidebar-nav-bar { display: flex; height: 35px; background: #141416; border-bottom: 1px solid var(--border-color); padding: 0 4px; gap: 4px; align-items: center; }
+        .sidebar-nav-btn { background: transparent; border: none; color: var(--text-muted); font-size: 11px; padding: 4px 8px; border-radius: 4px; cursor: pointer; display: flex; align-items: center; gap: 5px; font-weight: 500; transition: 0.15s; }
+        .sidebar-nav-btn.active { background: #27272a; color: #fff; font-weight: 600; border-bottom: 2px solid var(--accent-cyan); }
+        .sidebar-nav-btn:hover { color: #fff; background: #1e1e24; }
+        .sidebar-view { display: flex; flex-direction: column; flex: 1; height: calc(100% - 35px); overflow: hidden; }
         .sidebar-header { padding: 9px 12px; font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; }
         .file-tree { flex: 1; overflow-y: auto; padding: 6px 0; font-size: 13px; }
         .tree-item { padding: 4px 12px; cursor: pointer; display: flex; align-items: center; gap: 7px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; user-select: none; border-left: 2px solid transparent; }
@@ -46,6 +51,38 @@
         .tree-item.active { background: #164e63; color: #67e8f9; font-weight: 600; border-left-color: var(--accent-cyan); }
         .tree-folder { color: #facc15; }
         .tree-file { color: #93c5fd; }
+
+        /* Search & Replace Sidebar UI */
+        .search-input-box { display: flex; align-items: center; background: #18181b; border: 1px solid #3f3f46; border-radius: 4px; padding: 3px 6px; gap: 4px; }
+        .search-input-box:focus-within { border-color: var(--accent-cyan); }
+        .search-text-input { background: transparent; border: none; outline: none; color: #fff; font-size: 12px; font-family: inherit; flex: 1; }
+        .btn-search-toggle { background: transparent; border: 1px solid transparent; color: #71717a; border-radius: 3px; font-size: 11px; padding: 1px 5px; cursor: pointer; font-family: monospace; font-weight: 700; }
+        .btn-search-toggle.active { background: #083344; color: #22d3ee; border-color: #0e7490; }
+        .search-match-file { padding: 6px 10px; background: #141416; border-bottom: 1px solid #1f1f23; font-size: 11px; font-weight: 600; color: #38bdf8; display: flex; justify-content: space-between; align-items: center; cursor: pointer; }
+        .search-match-file:hover { background: #1c1c20; }
+        .search-match-line { padding: 3px 10px 3px 20px; font-size: 11px; font-family: "JetBrains Mono", monospace; color: #a1a1aa; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-bottom: 1px solid #18181b; }
+        .search-match-line:hover { background: #1e1e24; color: #fff; }
+        .search-highlight { background: #854d0e; color: #fef08a; padding: 0 2px; border-radius: 2px; font-weight: bold; }
+
+        /* Git Source Control Sidebar UI */
+        .git-section-hdr { padding: 6px 10px; font-size: 10px; font-weight: 700; color: #a1a1aa; text-transform: uppercase; display: flex; justify-content: space-between; align-items: center; background: #141416; border-top: 1px solid #1f1f23; border-bottom: 1px solid #1f1f23; cursor: pointer; user-select: none; }
+        .git-section-hdr:hover { background: #1a1a1e; }
+        .git-item-row { padding: 4px 10px; font-size: 12px; display: flex; align-items: center; gap: 6px; cursor: pointer; border-bottom: 1px solid #18181b; }
+        .git-item-row:hover { background: #1e1e24; }
+        .git-status-badge { font-size: 10px; font-weight: 700; width: 18px; text-align: center; border-radius: 2px; padding: 1px 0; }
+        .git-badge-m { color: #38bdf8; background: rgba(56, 189, 248, 0.15); }
+        .git-badge-a { color: #34d399; background: rgba(52, 211, 153, 0.15); }
+        .git-badge-d { color: #f87171; background: rgba(248, 113, 113, 0.15); }
+        .git-badge-u { color: #cbd5e1; background: rgba(203, 213, 225, 0.15); }
+        .git-item-path { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+        .git-item-actions { display: none; align-items: center; gap: 6px; }
+        .git-item-row:hover .git-item-actions { display: flex; }
+        .git-action-btn { color: #a1a1aa; font-size: 11px; padding: 1px 4px; border-radius: 3px; cursor: pointer; }
+        .git-action-btn:hover { color: #fff; background: #27272a; }
+
+        /* Streaming AI Output Indicator */
+        .typing-cursor::after { content: "▋"; color: var(--accent-cyan); animation: blink 1s step-end infinite; }
+        @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
         
         /* Central Editor Area */
         .editor-container { flex: 1; display: flex; flex-direction: column; background: var(--bg-editor); position: relative; overflow: hidden; }
@@ -252,20 +289,117 @@
     <div class="workspace-grid">
         <!-- Sidebar -->
         <div class="sidebar">
-            <div class="sidebar-header">
-                <span>Workspace Explorer</span>
-                <div class="sidebar-actions">
-                    <i class="fa fa-file-circle-plus" title="New File" onclick="promptCreateFile()"></i>
-                    <i class="fa fa-folder-plus" title="New Folder" onclick="promptCreateFolder()"></i>
-                    <i class="fa fa-code-branch" title="AST Symbols" onclick="openSymbolsModal()"></i>
-                    <i class="fa fa-rotate-right" onclick="loadWorkspace()" title="Refresh Explorer"></i>
+            <div class="sidebar-nav-bar">
+                <button class="sidebar-nav-btn active" id="tab-nav-files" onclick="switchSidebarTab('files')" title="Explorer (Files)"><i class="fa fa-folder-tree"></i> Files</button>
+                <button class="sidebar-nav-btn" id="tab-nav-search" onclick="switchSidebarTab('search')" title="Codebase Search (Ctrl+Shift+F)"><i class="fa fa-magnifying-glass"></i> Search</button>
+                <button class="sidebar-nav-btn" id="tab-nav-git" onclick="switchSidebarTab('git')" title="Source Control (Ctrl+Shift+G)"><i class="fa fa-code-branch"></i> Git <span id="git-badge-count" class="badge" style="display:none; font-size:9px; padding:1px 5px; background:#083344; color:#22d3ee; margin-left:2px;">0</span></button>
+            </div>
+
+            <!-- View 1: Files Explorer -->
+            <div class="sidebar-view" id="sidebar-view-files">
+                <div class="sidebar-header">
+                    <span>Workspace Explorer</span>
+                    <div class="sidebar-actions">
+                        <i class="fa fa-file-circle-plus" title="New File" onclick="promptCreateFile()"></i>
+                        <i class="fa fa-folder-plus" title="New Folder" onclick="promptCreateFolder()"></i>
+                        <i class="fa fa-code-branch" title="AST Symbols" onclick="openSymbolsModal()"></i>
+                        <i class="fa fa-rotate-right" onclick="loadWorkspace()" title="Refresh Explorer"></i>
+                    </div>
+                </div>
+                <div class="file-tree" id="tree-root">
+                    <div style="padding: 14px; color: #71717a;">Loading workspace...</div>
+                </div>
+                <div style="padding: 10px 12px; border-top: 1px solid #27272a; font-size: 11px; color: #71717a;" id="diag-footer">
+                    <div><i class="fa fa-microchip"></i> Loading telemetry...</div>
                 </div>
             </div>
-            <div class="file-tree" id="tree-root">
-                <div style="padding: 14px; color: #71717a;">Loading workspace...</div>
+
+            <!-- View 2: Global Regex Search & Replace Engine (Ctrl+Shift+F) -->
+            <div class="sidebar-view" id="sidebar-view-search" style="display:none;">
+                <div class="sidebar-header">
+                    <span>Search & Replace</span>
+                    <div class="sidebar-actions">
+                        <i class="fa fa-rotate-right" onclick="triggerGlobalSearch()" title="Refresh Search"></i>
+                    </div>
+                </div>
+                <div style="padding: 8px 10px; display:flex; flex-direction:column; gap:6px; border-bottom: 1px solid var(--border-color);">
+                    <div class="search-input-box">
+                        <input type="text" id="global-search-input" class="search-text-input" placeholder="Search (Regex or Text)..." onkeydown="if(event.key==='Enter') triggerGlobalSearch()">
+                        <button id="search-toggle-case" class="btn-search-toggle" onclick="toggleSearchCase()" title="Match Case (Aa)">Aa</button>
+                        <button id="search-toggle-regex" class="btn-search-toggle" onclick="toggleSearchRegex()" title="Use Regular Expression (.*)">.*</button>
+                    </div>
+                    <div class="search-input-box">
+                        <input type="text" id="global-replace-input" class="search-text-input" placeholder="Replace with...">
+                        <button class="btn btn-primary" style="padding:2px 7px; font-size:10px;" onclick="triggerGlobalReplace()" title="Batch Replace with Blake3 Checkpoint Protection"><i class="fa fa-arrow-right-arrow-left"></i> Replace</button>
+                    </div>
+                    <div style="display:flex; gap:6px;">
+                        <button class="btn btn-primary" style="flex:1; justify-content:center; padding:4px;" onclick="triggerGlobalSearch()"><i class="fa fa-magnifying-glass"></i> Find in Codebase</button>
+                        <button class="btn" style="padding:4px 8px;" onclick="clearGlobalSearch()" title="Clear"><i class="fa fa-xmark"></i></button>
+                    </div>
+                </div>
+                <div id="global-search-summary" style="font-size:11px; color:#a1a1aa; padding:6px 10px; border-bottom: 1px solid #1f1f23; display:none;"></div>
+                <div id="global-search-results" style="flex:1; overflow-y:auto; padding:4px 0;">
+                    <div style="padding:14px; color:#71717a; text-align:center; font-size:12px;">Press Enter to search across workspace files</div>
+                </div>
             </div>
-            <div style="padding: 10px 12px; border-top: 1px solid #27272a; font-size: 11px; color: #71717a;" id="diag-footer">
-                <div><i class="fa fa-microchip"></i> Loading telemetry...</div>
+
+            <!-- View 3: Visual Git Source Control Panel -->
+            <div class="sidebar-view" id="sidebar-view-git" style="display:none;">
+                <div class="sidebar-header">
+                    <div style="display:flex; align-items:center; gap:6px;">
+                        <span>Source Control</span>
+                        <span id="git-branch-badge" class="badge" style="background:#083344; color:#22d3ee; font-size:10px;"><i class="fa fa-code-branch"></i> main</span>
+                    </div>
+                    <div class="sidebar-actions">
+                        <i class="fa fa-rotate-right" onclick="refreshGitStatus()" title="Refresh Git Status"></i>
+                    </div>
+                </div>
+                <div style="padding: 8px 10px; border-bottom: 1px solid var(--border-color); display:flex; flex-direction:column; gap:6px;">
+                    <textarea id="git-commit-msg" class="search-text-input" placeholder="Commit message (Ctrl+Enter to commit)" style="background:#18181b; border:1px solid #3f3f46; border-radius:4px; padding:6px 8px; font-size:12px; height:50px; resize:none; color:#fff;" onkeydown="handleGitCommitKeyDown(event)"></textarea>
+                    <button class="btn btn-primary" style="justify-content:center;" onclick="commitGitChanges()"><i class="fa fa-check"></i> Commit Changes</button>
+                </div>
+                <div style="flex:1; overflow-y:auto;" id="git-content-scroll">
+                    <!-- Staged section -->
+                    <div class="git-section-hdr" onclick="toggleGitCollapse('git-staged-box')">
+                        <div style="display:flex; align-items:center; gap:5px;">
+                            <i class="fa fa-chevron-down" id="git-staged-box-icon" style="font-size:9px;"></i>
+                            <span>Staged Changes (<span id="git-staged-count">0</span>)</span>
+                        </div>
+                        <i class="fa fa-minus" title="Unstage All" onclick="event.stopPropagation(); unstageAllGit();" style="cursor:pointer; color:#a1a1aa; font-size:11px;"></i>
+                    </div>
+                    <div id="git-staged-box">
+                        <div id="git-staged-list"></div>
+                    </div>
+
+                    <!-- Unstaged changes section -->
+                    <div class="git-section-hdr" onclick="toggleGitCollapse('git-unstaged-box')">
+                        <div style="display:flex; align-items:center; gap:5px;">
+                            <i class="fa fa-chevron-down" id="git-unstaged-box-icon" style="font-size:9px;"></i>
+                            <span>Changes (<span id="git-unstaged-count">0</span>)</span>
+                        </div>
+                        <i class="fa fa-plus" title="Stage All" onclick="event.stopPropagation(); stageAllGit();" style="cursor:pointer; color:#a1a1aa; font-size:11px;"></i>
+                    </div>
+                    <div id="git-unstaged-box">
+                        <div id="git-unstaged-list"></div>
+                    </div>
+
+                    <!-- Untracked section -->
+                    <div class="git-section-hdr" onclick="toggleGitCollapse('git-untracked-box')">
+                        <div style="display:flex; align-items:center; gap:5px;">
+                            <i class="fa fa-chevron-down" id="git-untracked-box-icon" style="font-size:9px;"></i>
+                            <span>Untracked Files (<span id="git-untracked-count">0</span>)</span>
+                        </div>
+                        <i class="fa fa-plus" title="Stage All Untracked" onclick="event.stopPropagation(); stageAllGit();" style="cursor:pointer; color:#a1a1aa; font-size:11px;"></i>
+                    </div>
+                    <div id="git-untracked-box">
+                        <div id="git-untracked-list"></div>
+                    </div>
+
+                    <div id="git-clean-msg" style="padding:16px; text-align:center; color:#10b981; font-size:12px; display:none;">
+                        <i class="fa fa-check-circle" style="font-size:18px; margin-bottom:6px; display:block;"></i>
+                        Working tree clean, no uncommitted changes.
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -384,9 +518,15 @@
             <div class="chat-header">
                 <div style="display:flex; align-items:center; gap:6px;">
                     <i class="fa fa-wand-magic-sparkles"></i>
-                    <span>Swarm Copilot</span>
+                    <select id="chat-session-select" onchange="handleSelectChatSession(this.value)" style="background:#18181b; border:1px solid #3f3f46; color:#38bdf8; font-size:11px; padding:2px 6px; border-radius:4px; max-width:130px; text-overflow:ellipsis;" title="Select Conversation Thread">
+                        <option value="">(Loading...)</option>
+                    </select>
                 </div>
-                <span style="font-size:10px; color:#10b981;" id="model-badge">dynabook-coder</span>
+                <div style="display:flex; align-items:center; gap:4px;">
+                    <button class="btn" style="padding:2px 6px; font-size:10px;" onclick="createNewChatSession()" title="New Thread"><i class="fa fa-plus"></i></button>
+                    <button class="btn" style="padding:2px 6px; font-size:10px; color:#ef4444;" onclick="deleteCurrentChatSession()" title="Delete Thread"><i class="fa fa-trash"></i></button>
+                    <span style="font-size:10px; color:#10b981;" id="model-badge">dynabook-coder</span>
+                </div>
             </div>
             <div class="chat-messages" id="chat-stream">
                 <div class="chat-bubble chat-ai">
@@ -515,6 +655,19 @@
                 'get_available_models': ['/api/models', 'GET'],
                 'load_workspace_session': ['/api/session/load', 'GET'],
                 'save_workspace_session': ['/api/session/save', 'POST', args],
+                'get_chat_sessions': ['/api/chat_sessions', 'GET'],
+                'load_chat_session': [`/api/chat_session?id=${encodeURIComponent(args.session_id || args.id || '')}`, 'GET'],
+                'save_chat_session': ['/api/chat_session/save', 'POST', args.session || args],
+                'delete_chat_session': ['/api/chat_session/delete', 'POST', { id: args.session_id || args.id }],
+                'create_chat_session': ['/api/chat_session/create', 'POST', args],
+                'global_search': ['/api/global_search', 'POST', args],
+                'global_replace': ['/api/global_replace', 'POST', args],
+                'get_git_status': ['/api/git_status', 'GET'],
+                'git_stage_path': ['/api/git_stage', 'POST', args],
+                'git_unstage_path': ['/api/git_unstage', 'POST', args],
+                'git_stage_all': ['/api/git_stage_all', 'POST', args],
+                'git_unstage_all': ['/api/git_unstage_all', 'POST', args],
+                'git_commit_changes': ['/api/git_commit', 'POST', args],
             };
             const config = routeMap[cmd];
             if (!config) throw new Error('Unknown command: ' + cmd);
@@ -584,6 +737,8 @@
                         editorInstance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyK, triggerInlineCtrlK);
                         editorInstance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyP, openSearchModal);
                         editorInstance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyO, openSymbolsModal);
+                        editorInstance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyF, () => switchSidebarTab('search'));
+                        editorInstance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyG, () => switchSidebarTab('git'));
                         editorInstance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, saveActiveFile);
                         editorInstance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyI, () => switchView('composer'));
                         editorInstance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Backquote, toggleTerminal);
@@ -936,6 +1091,12 @@
                 } else if ((e.ctrlKey || e.metaKey) && (e.key === 'i' || e.key === 'I')) {
                     e.preventDefault();
                     switchView('composer');
+                } else if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'f' || e.key === 'F')) {
+                    e.preventDefault();
+                    switchSidebarTab('search');
+                } else if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'g' || e.key === 'G')) {
+                    e.preventDefault();
+                    switchSidebarTab('git');
                 } else if ((e.ctrlKey || e.metaKey) && (e.key === 'p' || e.key === 'P')) {
                     e.preventDefault();
                     openSearchModal();
@@ -1351,16 +1512,190 @@
             switchView('editor');
         }
 
-        // Copilot Chat
+        // Persistent Multi-Turn Conversation Threads & Token Streaming
+        let chatSessions = [];
+        let activeChatSession = null;
+        let isCopilotStreaming = false;
+        let activeStreamElement = null;
+        let activeStreamAccumulator = "";
+
+        if (isTauri && window.__TAURI__ && window.__TAURI__.event) {
+            window.__TAURI__.event.listen('copilot-chunk', (event) => {
+                handleCopilotChunkEvent(event.payload);
+            });
+        }
+
+        async function initChatSessions() {
+            try {
+                chatSessions = await apiInvoke('get_chat_sessions', { root_path: null });
+                const sel = document.getElementById('chat-session-select');
+                if (sel) sel.innerHTML = '';
+                if (!chatSessions || chatSessions.length === 0) {
+                    activeChatSession = await apiInvoke('create_chat_session', {
+                        title: 'New Conversation',
+                        model: getSelectedModel(),
+                        root_path: null
+                    });
+                    chatSessions = [{
+                        id: activeChatSession.id,
+                        title: activeChatSession.title,
+                        created_at_utc: activeChatSession.created_at_utc,
+                        updated_at_utc: activeChatSession.updated_at_utc,
+                        model: activeChatSession.model,
+                        message_count: 0
+                    }];
+                } else {
+                    activeChatSession = await apiInvoke('load_chat_session', { session_id: chatSessions[0].id, root_path: null });
+                }
+                renderChatSessionsDropdown();
+                renderActiveChatMessages();
+            } catch (e) {
+                console.warn('Chat sessions init notice:', e);
+            }
+        }
+
+        function renderChatSessionsDropdown() {
+            const sel = document.getElementById('chat-session-select');
+            if (!sel) return;
+            sel.innerHTML = '';
+            chatSessions.forEach(s => {
+                const opt = document.createElement('option');
+                opt.value = s.id;
+                opt.text = s.title.length > 20 ? s.title.slice(0, 18) + '...' : s.title;
+                if (activeChatSession && activeChatSession.id === s.id) {
+                    opt.selected = true;
+                }
+                sel.appendChild(opt);
+            });
+        }
+
+        async function handleSelectChatSession(sessionId) {
+            if (!sessionId) return;
+            try {
+                activeChatSession = await apiInvoke('load_chat_session', { session_id: sessionId, root_path: null });
+                renderActiveChatMessages();
+            } catch (e) {
+                alert('Failed to load session: ' + e);
+            }
+        }
+
+        async function createNewChatSession() {
+            try {
+                const newSess = await apiInvoke('create_chat_session', {
+                    title: 'New Conversation',
+                    model: getSelectedModel(),
+                    root_path: null
+                });
+                activeChatSession = newSess;
+                chatSessions.unshift({
+                    id: newSess.id,
+                    title: newSess.title,
+                    created_at_utc: newSess.created_at_utc,
+                    updated_at_utc: newSess.updated_at_utc,
+                    model: newSess.model,
+                    message_count: 0
+                });
+                renderChatSessionsDropdown();
+                renderActiveChatMessages();
+            } catch (e) {
+                alert('Failed to create session: ' + e);
+            }
+        }
+
+        async function deleteCurrentChatSession() {
+            if (!activeChatSession) return;
+            if (!confirm(`Delete chat thread "${activeChatSession.title}"?`)) return;
+            try {
+                await apiInvoke('delete_chat_session', { session_id: activeChatSession.id, root_path: null });
+                chatSessions = chatSessions.filter(s => s.id !== activeChatSession.id);
+                if (chatSessions.length > 0) {
+                    activeChatSession = await apiInvoke('load_chat_session', { session_id: chatSessions[0].id, root_path: null });
+                } else {
+                    await createNewChatSession();
+                    return;
+                }
+                renderChatSessionsDropdown();
+                renderActiveChatMessages();
+            } catch (e) {
+                alert('Failed to delete session: ' + e);
+            }
+        }
+
+        function renderActiveChatMessages() {
+            const stream = document.getElementById('chat-stream');
+            stream.innerHTML = '';
+            if (!activeChatSession || !activeChatSession.messages || activeChatSession.messages.length === 0) {
+                stream.innerHTML = `<div class="chat-bubble chat-ai">
+                    👋 Welcome to Hagibis Visual IDE! Open any workspace file on the left, press <strong>Ctrl+K</strong> for in-place surgical editing, or use <strong>@Codebase</strong> for project-wide semantic context.
+                </div>`;
+                return;
+            }
+            activeChatSession.messages.forEach(m => {
+                if (m.role === 'user') {
+                    stream.innerHTML += `<div class="chat-bubble chat-user">${escapeHtml(m.content)}</div>`;
+                } else {
+                    let bubbleHtml = `<div class="chat-bubble chat-ai"><div>${escapeHtml(m.content)}</div>`;
+                    const code = extractCodeBlock(m.content);
+                    if (code) {
+                        bubbleHtml += `
+                            <div class="chat-snippet-box">${escapeHtml(code)}</div>
+                            <div class="chat-actions-row">
+                                <button class="btn btn-green" onclick="setSpeculativeAndDiff('${escapeJsString(code)}')"><i class="fa fa-code-compare"></i> Preview Diff</button>
+                                <button class="btn btn-primary" onclick="setSpeculativeAndCommit('${escapeJsString(code)}')"><i class="fa fa-check"></i> Accept Edit [Tab]</button>
+                            </div>
+                        `;
+                    }
+                    bubbleHtml += `</div>`;
+                    stream.innerHTML += bubbleHtml;
+                }
+            });
+            stream.scrollTop = stream.scrollHeight;
+        }
+
+        function handleCopilotChunkEvent(payload) {
+            if (!activeStreamElement) return;
+            if (payload.chunk) {
+                activeStreamAccumulator += payload.chunk;
+                const bodyEl = activeStreamElement.querySelector('.stream-body');
+                if (bodyEl) bodyEl.innerText = activeStreamAccumulator;
+                const stream = document.getElementById('chat-stream');
+                stream.scrollTop = stream.scrollHeight;
+            }
+            if (payload.done) {
+                finalizeStreamResponse(payload.full_response || activeStreamAccumulator, payload.model);
+            }
+        }
+
+        // Copilot Chat with Streaming & Multi-Turn History
         async function sendPrompt() {
             const input = document.getElementById('chat-input');
             const text = input.value.trim();
-            if (!text) return;
+            if (!text || isCopilotStreaming) return;
             input.value = '';
 
             const chatStream = document.getElementById('chat-stream');
             chatStream.innerHTML += `<div class="chat-bubble chat-user">${escapeHtml(text)}</div>`;
             chatStream.scrollTop = chatStream.scrollHeight;
+
+            if (activeChatSession) {
+                activeChatSession.messages.push({
+                    role: 'user',
+                    content: text,
+                    timestamp_utc: new Date().toISOString()
+                });
+                if (activeChatSession.title === 'New Conversation' || activeChatSession.title === 'New Chat') {
+                    activeChatSession.title = text.length > 22 ? text.slice(0, 20) + '...' : text;
+                    renderChatSessionsDropdown();
+                }
+            }
+
+            const bubbleId = 'bubble_' + Date.now();
+            const bubbleHtml = `<div class="chat-bubble chat-ai" id="${bubbleId}"><div class="stream-body typing-cursor"></div></div>`;
+            chatStream.innerHTML += bubbleHtml;
+            chatStream.scrollTop = chatStream.scrollHeight;
+            activeStreamElement = document.getElementById(bubbleId);
+            activeStreamAccumulator = "";
+            isCopilotStreaming = true;
 
             try {
                 let resolvedPrompt = text;
@@ -1370,36 +1705,127 @@
                         if (ctxRes && ctxRes.expanded_prompt) resolvedPrompt = ctxRes.expanded_prompt;
                     } catch (e) { console.warn('Context resolution notice:', e); }
                 }
-                const data = await apiInvoke('ask_copilot', {
-                    prompt: resolvedPrompt,
-                    context: getEditorContent(),
-                    model: getSelectedModel(),
-                });
 
-                let bubbleHtml = `<div class="chat-bubble chat-ai"><div>${escapeHtml(data.response)}</div>`;
-                const code = extractCodeBlock(data.response);
-                if (code) {
-                    speculativeContent = code;
-                    bubbleHtml += `
-                        <div class="chat-snippet-box">${escapeHtml(code)}</div>
-                        <div class="chat-actions-row">
-                            <button class="btn btn-green" onclick="previewSpeculativeDiff()"><i class="fa fa-code-compare"></i> Preview Diff</button>
-                            <button class="btn btn-primary" onclick="commitTabOverlay()"><i class="fa fa-check"></i> Accept Edit [Tab]</button>
-                        </div>
-                    `;
-                    document.getElementById('speculative-pill').style.display = 'flex';
-                }
-                bubbleHtml += `</div>`;
+                const historyForBackend = (activeChatSession && activeChatSession.messages.length > 1)
+                    ? activeChatSession.messages.slice(0, -1)
+                    : null;
 
-                chatStream.innerHTML += bubbleHtml;
-                chatStream.scrollTop = chatStream.scrollHeight;
+                if (isTauri) {
+                    await window.__TAURI__.core.invoke('ask_copilot_stream', {
+                        prompt: resolvedPrompt,
+                        context: getEditorContent(),
+                        model: getSelectedModel(),
+                        history: historyForBackend
+                    });
+                } else {
+                    try {
+                        const res = await fetch('/api/chat_stream', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                prompt: resolvedPrompt,
+                                context: getEditorContent(),
+                                model: getSelectedModel(),
+                                history: historyForBackend
+                            })
+                        });
 
-                if (data.model) {
-                    document.getElementById('model-badge').innerText = data.model;
+                        if (res.ok && res.body) {
+                            const reader = res.body.getReader();
+                            const decoder = new TextDecoder();
+                            while (true) {
+                                const { value, done } = await reader.read();
+                                if (done) break;
+                                const chunk = decoder.decode(value, { stream: true });
+                                activeStreamAccumulator += chunk;
+                                if (activeStreamElement) {
+                                    const bodyEl = activeStreamElement.querySelector('.stream-body');
+                                    if (bodyEl) bodyEl.innerText = activeStreamAccumulator;
+                                    chatStream.scrollTop = chatStream.scrollHeight;
+                                }
+                            }
+                            finalizeStreamResponse(activeStreamAccumulator, getSelectedModel());
+                        } else {
+                            const data = await apiInvoke('ask_copilot', {
+                                prompt: resolvedPrompt,
+                                context: getEditorContent(),
+                                model: getSelectedModel(),
+                                history: historyForBackend
+                            });
+                            finalizeStreamResponse(data.response, data.model);
+                        }
+                    } catch (fetchErr) {
+                        const data = await apiInvoke('ask_copilot', {
+                            prompt: resolvedPrompt,
+                            context: getEditorContent(),
+                            model: getSelectedModel(),
+                            history: historyForBackend
+                        });
+                        finalizeStreamResponse(data.response, data.model);
+                    }
                 }
             } catch (err) {
-                chatStream.innerHTML += `<div class="chat-bubble chat-ai" style="color:#ef4444;">Error: ${err}</div>`;
+                if (activeStreamElement) {
+                    activeStreamElement.innerHTML = `<div style="color:#ef4444;">Error: ${err}</div>`;
+                }
+                isCopilotStreaming = false;
             }
+        }
+
+        function finalizeStreamResponse(fullText, modelName) {
+            if (!activeStreamElement) return;
+            isCopilotStreaming = false;
+            const bodyEl = activeStreamElement.querySelector('.stream-body');
+            if (bodyEl) {
+                bodyEl.classList.remove('typing-cursor');
+                bodyEl.innerText = fullText;
+            }
+
+            if (modelName) {
+                document.getElementById('model-badge').innerText = modelName;
+            }
+
+            if (activeChatSession) {
+                activeChatSession.messages.push({
+                    role: 'assistant',
+                    content: fullText,
+                    timestamp_utc: new Date().toISOString()
+                });
+                activeChatSession.updated_at_utc = new Date().toISOString();
+                apiInvoke('save_chat_session', { session: activeChatSession, root_path: null }).catch(e => console.warn('Save chat turn notice:', e));
+            }
+
+            const code = extractCodeBlock(fullText);
+            if (code) {
+                speculativeContent = code;
+                activeStreamElement.innerHTML += `
+                    <div class="chat-snippet-box">${escapeHtml(code)}</div>
+                    <div class="chat-actions-row">
+                        <button class="btn btn-green" onclick="previewSpeculativeDiff()"><i class="fa fa-code-compare"></i> Preview Diff</button>
+                        <button class="btn btn-primary" onclick="commitTabOverlay()"><i class="fa fa-check"></i> Accept Edit [Tab]</button>
+                    </div>
+                `;
+                document.getElementById('speculative-pill').style.display = 'flex';
+            }
+
+            const stream = document.getElementById('chat-stream');
+            stream.scrollTop = stream.scrollHeight;
+            activeStreamElement = null;
+            activeStreamAccumulator = "";
+        }
+
+        function setSpeculativeAndDiff(code) {
+            speculativeContent = code;
+            previewSpeculativeDiff();
+        }
+
+        function setSpeculativeAndCommit(code) {
+            speculativeContent = code;
+            commitTabOverlay();
+        }
+
+        function escapeJsString(str) {
+            return str.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
         }
 
         async function previewSpeculativeDiff() {
@@ -1452,6 +1878,333 @@
 
         function escapeHtml(str) {
             return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
+
+        // Sidebar View Tab Switcher
+        function switchSidebarTab(tab) {
+            const filesView = document.getElementById('sidebar-view-files');
+            const searchView = document.getElementById('sidebar-view-search');
+            const gitView = document.getElementById('sidebar-view-git');
+            const btnFiles = document.getElementById('tab-nav-files');
+            const btnSearch = document.getElementById('tab-nav-search');
+            const btnGit = document.getElementById('tab-nav-git');
+
+            if (!filesView || !searchView || !gitView) return;
+            [btnFiles, btnSearch, btnGit].forEach(b => b.classList.remove('active'));
+            filesView.style.display = 'none';
+            searchView.style.display = 'none';
+            gitView.style.display = 'none';
+
+            if (tab === 'files') {
+                filesView.style.display = 'flex';
+                btnFiles.classList.add('active');
+            } else if (tab === 'search') {
+                searchView.style.display = 'flex';
+                btnSearch.classList.add('active');
+                setTimeout(() => {
+                    const inp = document.getElementById('global-search-input');
+                    if (inp) inp.focus();
+                }, 50);
+            } else if (tab === 'git') {
+                gitView.style.display = 'flex';
+                btnGit.classList.add('active');
+                refreshGitStatus();
+            }
+        }
+
+        // Global Regex Codebase Search & Replace Engine
+        let isSearchCase = false;
+        let isSearchRegex = false;
+
+        function toggleSearchCase() {
+            isSearchCase = !isSearchCase;
+            const btn = document.getElementById('search-toggle-case');
+            if (isSearchCase) btn.classList.add('active');
+            else btn.classList.remove('active');
+        }
+
+        function toggleSearchRegex() {
+            isSearchRegex = !isSearchRegex;
+            const btn = document.getElementById('search-toggle-regex');
+            if (isSearchRegex) btn.classList.add('active');
+            else btn.classList.remove('active');
+        }
+
+        async function triggerGlobalSearch() {
+            const input = document.getElementById('global-search-input');
+            const query = input.value.trim();
+            const container = document.getElementById('global-search-results');
+            const summary = document.getElementById('global-search-summary');
+            if (!query) {
+                container.innerHTML = '<div style="padding:14px; color:#71717a; text-align:center; font-size:12px;">Type query to scan workspace</div>';
+                summary.style.display = 'none';
+                return;
+            }
+            container.innerHTML = '<div style="padding:14px; color:#38bdf8; text-align:center; font-size:12px;"><i class="fa fa-spinner fa-spin"></i> Searching codebase...</div>';
+            summary.style.display = 'none';
+
+            try {
+                const res = await apiInvoke('global_search', {
+                    query,
+                    is_regex: isSearchRegex,
+                    case_sensitive: isSearchCase,
+                    root_path: null
+                });
+                summary.style.display = 'block';
+                summary.innerHTML = `<span><strong>${res.total_matches}</strong> matches across <strong>${res.files_count}</strong> files</span>`;
+
+                if (res.matches.length === 0) {
+                    container.innerHTML = '<div style="padding:14px; color:#71717a; text-align:center; font-size:12px;">No matches found</div>';
+                    return;
+                }
+
+                const byFile = {};
+                res.matches.forEach(m => {
+                    if (!byFile[m.file_path]) byFile[m.file_path] = [];
+                    byFile[m.file_path].push(m);
+                });
+
+                let html = '';
+                for (const [filePath, fileMatches] of Object.entries(byFile)) {
+                    const fname = filePath.split('/').pop();
+                    const relPath = filePath.includes('/') ? filePath.slice(filePath.indexOf('/') + 1) : filePath;
+                    html += `<div class="search-match-file" onclick="openFile('${filePath}')">
+                        <span title="${filePath}"><i class="fa fa-file-code"></i> ${fname} <span style="font-size:10px; color:#a1a1aa;">(${fileMatches.length})</span></span>
+                        <span style="font-size:10px; color:#71717a;">${escapeHtml(relPath)}</span>
+                    </div>`;
+                    fileMatches.forEach(m => {
+                        const highlighted = highlightMatchSnippet(m.line_content, m.matched_text);
+                        html += `<div class="search-match-line" onclick="jumpToSearchMatch('${m.file_path}', ${m.line_number}, ${m.start_col})">
+                            <span style="color:#71717a; margin-right:6px;">${m.line_number}:</span>
+                            <span>${highlighted}</span>
+                        </div>`;
+                    });
+                }
+                container.innerHTML = html;
+            } catch (e) {
+                container.innerHTML = `<div style="padding:14px; color:#ef4444; text-align:center; font-size:12px;">Search error: ${e}</div>`;
+            }
+        }
+
+        function highlightMatchSnippet(lineContent, matchedText) {
+            if (!matchedText) return escapeHtml(lineContent);
+            const escapedLine = escapeHtml(lineContent);
+            const escapedMatch = escapeHtml(matchedText);
+            const idx = escapedLine.toLowerCase().indexOf(escapedMatch.toLowerCase());
+            if (idx >= 0) {
+                return escapedLine.substring(0, idx) +
+                    '<span class="search-highlight">' + escapedLine.substring(idx, idx + escapedMatch.length) + '</span>' +
+                    escapedLine.substring(idx + escapedMatch.length);
+            }
+            return escapedLine;
+        }
+
+        async function jumpToSearchMatch(filePath, lineNumber, col) {
+            await openFile(filePath);
+            if (editorInstance && !isUsingFallback) {
+                setTimeout(() => {
+                    editorInstance.revealLineInCenter(lineNumber);
+                    editorInstance.setPosition({ lineNumber, column: col + 1 });
+                    editorInstance.focus();
+                }, 100);
+            }
+        }
+
+        function clearGlobalSearch() {
+            document.getElementById('global-search-input').value = '';
+            document.getElementById('global-replace-input').value = '';
+            document.getElementById('global-search-summary').style.display = 'none';
+            document.getElementById('global-search-results').innerHTML = '<div style="padding:14px; color:#71717a; text-align:center; font-size:12px;">Press Enter to search across workspace files</div>';
+        }
+
+        async function triggerGlobalReplace() {
+            const searchInput = document.getElementById('global-search-input');
+            const replaceInput = document.getElementById('global-replace-input');
+            const query = searchInput.value.trim();
+            const replacement = replaceInput.value;
+            if (!query) {
+                alert('Please enter a search query to replace.');
+                return;
+            }
+            if (!confirm(`Are you sure you want to replace all occurrences of "${query}" with "${replacement}" across the workspace?\n\n(A Blake3 atomic checkpoint will be created automatically for 1-click rollback)`)) {
+                return;
+            }
+
+            try {
+                const res = await apiInvoke('global_replace', {
+                    query,
+                    replacement,
+                    is_regex: isSearchRegex,
+                    case_sensitive: isSearchCase,
+                    file_filter: null,
+                    root_path: null
+                });
+
+                alert(`✔ Batch Replace Complete!\nReplaced ${res.total_replacements} occurrences across ${res.files_modified.length} files.\nAtomic Checkpoint ID: ${res.checkpoint_id}`);
+
+                if (activeTabIdx >= 0 && res.files_modified.includes(openTabs[activeTabIdx].path)) {
+                    const updated = await apiInvoke('read_file', { path: openTabs[activeTabIdx].path });
+                    openTabs[activeTabIdx].content = updated;
+                    openTabs[activeTabIdx].originalContent = updated;
+                    openTabs[activeTabIdx].isDirty = false;
+                    setEditorContent(updated, openTabs[activeTabIdx].lang);
+                    renderTabs();
+                }
+
+                await triggerGlobalSearch();
+                await refreshGitStatus();
+            } catch (e) {
+                alert('Global replace failed: ' + e);
+            }
+        }
+
+        // Visual Git Source Control Panel
+        let currentGitStatus = null;
+
+        async function refreshGitStatus() {
+            try {
+                const status = await apiInvoke('get_git_status', { root_path: null });
+                currentGitStatus = status;
+
+                const badge = document.getElementById('git-branch-badge');
+                if (badge) badge.innerHTML = `<i class="fa fa-code-branch"></i> ${escapeHtml(status.branch)}`;
+
+                const stagedCount = status.staged.length;
+                const unstagedCount = status.unstaged.length;
+                const untrackedCount = status.untracked.length;
+                const totalChanges = stagedCount + unstagedCount + untrackedCount;
+
+                const elStaged = document.getElementById('git-staged-count');
+                const elUnstaged = document.getElementById('git-unstaged-count');
+                const elUntracked = document.getElementById('git-untracked-count');
+                if (elStaged) elStaged.innerText = stagedCount;
+                if (elUnstaged) elUnstaged.innerText = unstagedCount;
+                if (elUntracked) elUntracked.innerText = untrackedCount;
+
+                const navBadge = document.getElementById('git-badge-count');
+                if (navBadge) {
+                    if (totalChanges > 0) {
+                        navBadge.innerText = totalChanges;
+                        navBadge.style.display = 'inline-block';
+                    } else {
+                        navBadge.style.display = 'none';
+                    }
+                }
+
+                const cleanMsg = document.getElementById('git-clean-msg');
+                if (cleanMsg) {
+                    cleanMsg.style.display = status.is_clean ? 'block' : 'none';
+                }
+
+                renderGitFileList('git-staged-list', status.staged, true);
+                renderGitFileList('git-unstaged-list', status.unstaged, false);
+                renderGitFileList('git-untracked-list', status.untracked, false, true);
+            } catch (e) {
+                console.warn('Git status query notice:', e);
+            }
+        }
+
+        function renderGitFileList(containerId, list, isStaged, isUntracked = false) {
+            const container = document.getElementById(containerId);
+            if (!container) return;
+            container.innerHTML = '';
+            list.forEach(item => {
+                const row = document.createElement('div');
+                row.className = 'git-item-row';
+                const badgeCls = item.status_code === 'M' ? 'git-badge-m' : (item.status_code === 'A' ? 'git-badge-a' : (item.status_code === 'D' ? 'git-badge-d' : 'git-badge-u'));
+                const actionIcon = isStaged ? 'fa-minus' : 'fa-plus';
+                const actionTitle = isStaged ? 'Unstage' : 'Stage';
+                const actionFn = isStaged ? `unstageGitPath('${item.path}')` : `stageGitPath('${item.path}')`;
+
+                row.innerHTML = `
+                    <span class="git-status-badge ${badgeCls}">${item.status_code}</span>
+                    <span class="git-item-path" title="${item.path}">${item.path}</span>
+                    <div class="git-item-actions">
+                        <i class="fa fa-code-compare git-action-btn" title="Preview Diff" onclick="event.stopPropagation(); previewGitFileDiff('${item.path}')"></i>
+                        <i class="fa ${actionIcon} git-action-btn" title="${actionTitle}" onclick="event.stopPropagation(); ${actionFn}"></i>
+                    </div>
+                `;
+                row.onclick = () => previewGitFileDiff(item.path);
+                container.appendChild(row);
+            });
+        }
+
+        function toggleGitCollapse(id) {
+            const el = document.getElementById(id);
+            const icon = document.getElementById(id + '-icon');
+            if (!el) return;
+            if (el.style.display === 'none') {
+                el.style.display = 'block';
+                if (icon) icon.className = 'fa fa-chevron-down';
+            } else {
+                el.style.display = 'none';
+                if (icon) icon.className = 'fa fa-chevron-right';
+            }
+        }
+
+        async function stageGitPath(path) {
+            try {
+                await apiInvoke('git_stage_path', { path, root_path: null });
+                await refreshGitStatus();
+            } catch (e) {
+                alert('Stage failed: ' + e);
+            }
+        }
+
+        async function unstageGitPath(path) {
+            try {
+                await apiInvoke('git_unstage_path', { path, root_path: null });
+                await refreshGitStatus();
+            } catch (e) {
+                alert('Unstage failed: ' + e);
+            }
+        }
+
+        async function stageAllGit() {
+            try {
+                await apiInvoke('git_stage_all', { root_path: null });
+                await refreshGitStatus();
+            } catch (e) {
+                alert('Stage all failed: ' + e);
+            }
+        }
+
+        async function unstageAllGit() {
+            try {
+                await apiInvoke('git_unstage_all', { root_path: null });
+                await refreshGitStatus();
+            } catch (e) {
+                alert('Unstage all failed: ' + e);
+            }
+        }
+
+        function handleGitCommitKeyDown(e) {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                e.preventDefault();
+                commitGitChanges();
+            }
+        }
+
+        async function commitGitChanges() {
+            const msgInput = document.getElementById('git-commit-msg');
+            const msg = msgInput.value.trim();
+            if (!msg) {
+                alert('Please enter a commit message.');
+                return;
+            }
+            try {
+                const res = await apiInvoke('git_commit_changes', { message: msg, root_path: null });
+                alert(`✔ Committed successfully!\nCommit: [${res.commit_hash}] ${res.summary}`);
+                msgInput.value = '';
+                await refreshGitStatus();
+            } catch (e) {
+                alert('Commit failed: ' + e);
+            }
+        }
+
+        async function previewGitFileDiff(filePath) {
+            await openFile(filePath);
+            await triggerDiff();
         }
 
         // Workspace Tree Explorer
@@ -2044,6 +2797,8 @@
         loadDiagnostics();
         loadAvailableModels().then(restoreWorkspaceSession);
         initMentionSystem();
+        initChatSessions();
+        refreshGitStatus();
     </script>
 </body>
 </html>

@@ -68,6 +68,20 @@ fn main() {
             get_available_models,
             load_workspace_session,
             save_workspace_session,
+            ask_copilot_stream,
+            get_chat_sessions,
+            load_chat_session,
+            save_chat_session,
+            delete_chat_session,
+            create_chat_session,
+            global_search,
+            global_replace,
+            get_git_status,
+            git_stage_path,
+            git_unstage_path,
+            git_stage_all,
+            git_unstage_all,
+            git_commit_changes,
         ])
         .run(generate_context!())
         .expect("error while running Hagibis Tauri Visual IDE application");

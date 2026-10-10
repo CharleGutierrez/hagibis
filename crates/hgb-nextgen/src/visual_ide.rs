@@ -63,6 +63,126 @@ pub struct TabCommitPayload {
 pub struct ChatPayload {
     pub prompt: String,
     pub context: Option<String>,
+    pub model: Option<String>,
+    pub history: Option<Vec<ChatMessage>>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct ChatMessage {
+    pub id: String,
+    pub role: String,
+    pub content: String,
+    pub timestamp_utc: String,
+    pub model: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct ChatSession {
+    pub id: String,
+    pub title: String,
+    pub created_at_utc: String,
+    pub updated_at_utc: String,
+    pub model: String,
+    pub messages: Vec<ChatMessage>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct ChatSessionSummary {
+    pub id: String,
+    pub title: String,
+    pub created_at_utc: String,
+    pub updated_at_utc: String,
+    pub model: String,
+    pub message_count: usize,
+}
+
+#[derive(Deserialize)]
+pub struct SessionQuery {
+    pub id: String,
+}
+
+#[derive(Deserialize)]
+pub struct CreateSessionPayload {
+    pub title: String,
+    pub model: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct GlobalSearchMatch {
+    pub file_path: String,
+    pub line_number: usize,
+    pub start_col: usize,
+    pub end_col: usize,
+    pub line_content: String,
+    pub matched_text: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct GlobalSearchResult {
+    pub query: String,
+    pub is_regex: bool,
+    pub case_sensitive: bool,
+    pub total_matches: usize,
+    pub files_count: usize,
+    pub matches: Vec<GlobalSearchMatch>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct GlobalReplaceResult {
+    pub checkpoint_id: String,
+    pub files_modified: Vec<String>,
+    pub total_replacements: usize,
+}
+
+#[derive(Deserialize)]
+pub struct GlobalSearchPayload {
+    pub query: String,
+    pub is_regex: Option<bool>,
+    pub case_sensitive: Option<bool>,
+}
+
+#[derive(Deserialize)]
+pub struct GlobalReplacePayload {
+    pub query: String,
+    pub replacement: String,
+    pub is_regex: Option<bool>,
+    pub case_sensitive: Option<bool>,
+    pub file_filter: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct GitFileChange {
+    pub path: String,
+    pub status_code: String,
+    pub status_label: String,
+    pub is_staged: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct GitStatusSummary {
+    pub branch: String,
+    pub is_clean: bool,
+    pub staged: Vec<GitFileChange>,
+    pub unstaged: Vec<GitFileChange>,
+    pub untracked: Vec<GitFileChange>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct GitCommitResult {
+    pub success: bool,
+    pub commit_hash: String,
+    pub summary: String,
+    pub files_changed: usize,
+}
+
+#[derive(Deserialize)]
+pub struct GitStagePayload {
+    pub path: String,
+}
+
+#[derive(Deserialize)]
+pub struct GitCommitPayload {
+    pub message: String,
 }
 
 #[derive(Deserialize)]
@@ -272,6 +392,20 @@ impl VisualIdeServer {
             .route("/api/models", get(Self::handle_get_models))
             .route("/api/session/load", get(Self::handle_load_session))
             .route("/api/session/save", post(Self::handle_save_session))
+            .route("/api/chat_sessions", get(Self::handle_get_chat_sessions))
+            .route("/api/chat_session", get(Self::handle_load_chat_session))
+            .route("/api/chat_session/save", post(Self::handle_save_chat_session))
+            .route("/api/chat_session/delete", post(Self::handle_delete_chat_session))
+            .route("/api/chat_session/create", post(Self::handle_create_chat_session))
+            .route("/api/global_search", post(Self::handle_global_search))
+            .route("/api/global_replace", post(Self::handle_global_replace))
+            .route("/api/git_status", get(Self::handle_git_status))
+            .route("/api/git_stage", post(Self::handle_git_stage))
+            .route("/api/git_unstage", post(Self::handle_git_unstage))
+            .route("/api/git_stage_all", post(Self::handle_git_stage_all))
+            .route("/api/git_unstage_all", post(Self::handle_git_unstage_all))
+            .route("/api/git_commit", post(Self::handle_git_commit))
+            .route("/api/chat_stream", post(Self::handle_chat_stream))
             .with_state(Arc::new(self.clone()));
 
         let addr = SocketAddr::from(([127, 0, 0, 1], self.port));
@@ -1175,6 +1309,573 @@ impl VisualIdeServer {
             Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
         }
     }
+
+    // --- Persistent Multi-Turn Conversation Threads ---
+
+    async fn handle_get_chat_sessions(State(state): State<Arc<Self>>) -> impl IntoResponse {
+        let dir = state.workspace_root.join(".hgb").join("chat_sessions");
+        if !dir.exists() {
+            return (StatusCode::OK, Json(Vec::<ChatSessionSummary>::new())).into_response();
+        }
+        let mut summaries = Vec::new();
+        if let Ok(mut entries) = fs::read_dir(&dir).await {
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let path = entry.path();
+                if path.extension().and_then(|s| s.to_str()) == Some("json") {
+                    if let Ok(content) = fs::read_to_string(&path).await {
+                        if let Ok(sess) = serde_json::from_str::<ChatSession>(&content) {
+                            summaries.push(ChatSessionSummary {
+                                id: sess.id,
+                                title: sess.title,
+                                created_at_utc: sess.created_at_utc,
+                                updated_at_utc: sess.updated_at_utc,
+                                model: sess.model,
+                                message_count: sess.messages.len(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        summaries.sort_by(|a, b| b.updated_at_utc.cmp(&a.updated_at_utc));
+        (StatusCode::OK, Json(summaries)).into_response()
+    }
+
+    async fn handle_load_chat_session(State(state): State<Arc<Self>>, Query(query): Query<SessionQuery>) -> impl IntoResponse {
+        let file = state.workspace_root.join(".hgb").join("chat_sessions").join(format!("{}.json", query.id));
+        if !file.exists() {
+            return (StatusCode::NOT_FOUND, "Chat session not found").into_response();
+        }
+        match fs::read_to_string(&file).await {
+            Ok(content) => match serde_json::from_str::<ChatSession>(&content) {
+                Ok(sess) => (StatusCode::OK, Json(sess)).into_response(),
+                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Parse error: {}", e)).into_response(),
+            },
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Read error: {}", e)).into_response(),
+        }
+    }
+
+    async fn handle_save_chat_session(State(state): State<Arc<Self>>, Json(session): Json<ChatSession>) -> impl IntoResponse {
+        let dir = state.workspace_root.join(".hgb").join("chat_sessions");
+        let _ = fs::create_dir_all(&dir).await;
+        let file = dir.join(format!("{}.json", session.id));
+        match serde_json::to_string_pretty(&session) {
+            Ok(json) => match fs::write(&file, json).await {
+                Ok(_) => (StatusCode::OK, Json(serde_json::json!({ "status": "saved", "id": session.id }))).into_response(),
+                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Write error: {}", e)).into_response(),
+            },
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Serialize error: {}", e)).into_response(),
+        }
+    }
+
+    async fn handle_delete_chat_session(State(state): State<Arc<Self>>, Json(payload): Json<SessionQuery>) -> impl IntoResponse {
+        let file = state.workspace_root.join(".hgb").join("chat_sessions").join(format!("{}.json", payload.id));
+        if file.exists() {
+            let _ = fs::remove_file(&file).await;
+        }
+        (StatusCode::OK, Json(serde_json::json!({ "status": "deleted" }))).into_response()
+    }
+
+    async fn handle_create_chat_session(State(state): State<Arc<Self>>, Json(payload): Json<CreateSessionPayload>) -> impl IntoResponse {
+        let dir = state.workspace_root.join(".hgb").join("chat_sessions");
+        let _ = fs::create_dir_all(&dir).await;
+        let now = chrono::Utc::now().to_rfc3339();
+        let id = format!("chat_{}_{:x}", chrono::Utc::now().timestamp_millis(), std::process::id());
+        let title_clean = if payload.title.trim().is_empty() { "New Chat".to_string() } else { payload.title };
+        let sess = ChatSession {
+            id: id.clone(),
+            title: title_clean,
+            created_at_utc: now.clone(),
+            updated_at_utc: now,
+            model: payload.model,
+            messages: Vec::new(),
+        };
+        let file = dir.join(format!("{}.json", id));
+        if let Ok(json) = serde_json::to_string_pretty(&sess) {
+            let _ = fs::write(&file, json).await;
+        }
+        (StatusCode::OK, Json(sess)).into_response()
+    }
+
+    // --- Global Regex Codebase Search & Replace Engine (Ctrl+Shift+F) ---
+
+    async fn handle_global_search(State(state): State<Arc<Self>>, Json(payload): Json<GlobalSearchPayload>) -> impl IntoResponse {
+        let query = payload.query;
+        let is_regex = payload.is_regex.unwrap_or(false);
+        let case_sensitive = payload.case_sensitive.unwrap_or(false);
+
+        if query.is_empty() {
+            return (StatusCode::OK, Json(GlobalSearchResult {
+                query,
+                is_regex,
+                case_sensitive,
+                total_matches: 0,
+                files_count: 0,
+                matches: Vec::new(),
+            })).into_response();
+        }
+
+        let compiled_re = if is_regex {
+            match regex::RegexBuilder::new(&query).case_insensitive(!case_sensitive).build() {
+                Ok(r) => r,
+                Err(e) => return (StatusCode::BAD_REQUEST, format!("Invalid regex: {}", e)).into_response(),
+            }
+        } else {
+            let escaped = regex::escape(&query);
+            match regex::RegexBuilder::new(&escaped).case_insensitive(!case_sensitive).build() {
+                Ok(r) => r,
+                Err(e) => return (StatusCode::BAD_REQUEST, format!("Regex build error: {}", e)).into_response(),
+            }
+        };
+
+        let mut matches = Vec::new();
+        let mut files_matched = std::collections::HashSet::new();
+
+        async fn search_files(
+            dir: &Path,
+            re: &regex::Regex,
+            matches: &mut Vec<GlobalSearchMatch>,
+            files_matched: &mut std::collections::HashSet<String>,
+        ) -> Result<(), std::io::Error> {
+            let mut entries = fs::read_dir(dir).await?;
+            while let Some(entry) = entries.next_entry().await? {
+                let path = entry.path();
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name == "target" || name == ".git" || name == ".hgb" || name == "node_modules" {
+                    continue;
+                }
+                let is_dir = entry.file_type().await?.is_dir();
+                if is_dir {
+                    Box::pin(search_files(&path, re, matches, files_matched)).await?;
+                } else {
+                    let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+                    if ["png", "jpg", "jpeg", "ico", "bin", "so", "o", "lock", "tar", "gz", "wasm"].contains(&ext) {
+                        continue;
+                    }
+                    if let Ok(content) = fs::read_to_string(&path).await {
+                        let path_str = path.to_string_lossy().to_string();
+                        for (line_idx, line) in content.lines().enumerate() {
+                            for mat in re.find_iter(line) {
+                                matches.push(GlobalSearchMatch {
+                                    file_path: path_str.clone(),
+                                    line_number: line_idx + 1,
+                                    start_col: mat.start(),
+                                    end_col: mat.end(),
+                                    line_content: line.to_string(),
+                                    matched_text: mat.as_str().to_string(),
+                                });
+                                files_matched.insert(path_str.clone());
+                                if matches.len() >= 1000 {
+                                    return Ok(());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(())
+        }
+
+        let _ = search_files(&state.workspace_root, &compiled_re, &mut matches, &mut files_matched).await;
+        let total = matches.len();
+        let files_count = files_matched.len();
+
+        (StatusCode::OK, Json(GlobalSearchResult {
+            query,
+            is_regex,
+            case_sensitive,
+            total_matches: total,
+            files_count,
+            matches,
+        })).into_response()
+    }
+
+    async fn handle_global_replace(State(state): State<Arc<Self>>, Json(payload): Json<GlobalReplacePayload>) -> impl IntoResponse {
+        let query = payload.query;
+        let replacement = payload.replacement;
+        let is_regex = payload.is_regex.unwrap_or(false);
+        let case_sensitive = payload.case_sensitive.unwrap_or(false);
+
+        if query.is_empty() {
+            return (StatusCode::BAD_REQUEST, "Search query cannot be empty").into_response();
+        }
+
+        let compiled_re = if is_regex {
+            match regex::RegexBuilder::new(&query).case_insensitive(!case_sensitive).build() {
+                Ok(r) => r,
+                Err(e) => return (StatusCode::BAD_REQUEST, format!("Invalid regex: {}", e)).into_response(),
+            }
+        } else {
+            let escaped = regex::escape(&query);
+            match regex::RegexBuilder::new(&escaped).case_insensitive(!case_sensitive).build() {
+                Ok(r) => r,
+                Err(e) => return (StatusCode::BAD_REQUEST, format!("Regex build error: {}", e)).into_response(),
+            }
+        };
+
+        let mut files_to_modify: Vec<(PathBuf, String, usize)> = Vec::new();
+
+        async fn collect_candidates(
+            dir: &Path,
+            re: &regex::Regex,
+            repl: &str,
+            filter: Option<&str>,
+            out: &mut Vec<(PathBuf, String, usize)>,
+        ) -> Result<(), std::io::Error> {
+            let mut entries = fs::read_dir(dir).await?;
+            while let Some(entry) = entries.next_entry().await? {
+                let path = entry.path();
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name == "target" || name == ".git" || name == ".hgb" || name == "node_modules" {
+                    continue;
+                }
+                let is_dir = entry.file_type().await?.is_dir();
+                if is_dir {
+                    Box::pin(collect_candidates(&path, re, repl, filter, out)).await?;
+                } else {
+                    let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+                    if ["png", "jpg", "jpeg", "ico", "bin", "so", "o", "lock", "tar", "gz", "wasm"].contains(&ext) {
+                        continue;
+                    }
+                    if let Some(f) = filter {
+                        if !name.contains(f) && !path.to_string_lossy().contains(f) {
+                            continue;
+                        }
+                    }
+                    if let Ok(content) = fs::read_to_string(&path).await {
+                        let count = re.find_iter(&content).count();
+                        if count > 0 {
+                            let new_content = re.replace_all(&content, repl).to_string();
+                            out.push((path, new_content, count));
+                        }
+                    }
+                }
+            }
+            Ok(())
+        }
+
+        let _ = collect_candidates(&state.workspace_root, &compiled_re, &replacement, payload.file_filter.as_deref(), &mut files_to_modify).await;
+
+        if files_to_modify.is_empty() {
+            return (StatusCode::OK, Json(GlobalReplaceResult {
+                checkpoint_id: String::new(),
+                files_modified: Vec::new(),
+                total_replacements: 0,
+            })).into_response();
+        }
+
+        // Automatic Time-Travel Checkpoint snapshot
+        let target_paths_str: Vec<String> = files_to_modify.iter().map(|(p, _, _)| p.to_string_lossy().to_string()).collect();
+        let checkpoint_label = format!("Pre-global replace: '{}' -> '{}'", query, replacement);
+        let ckpt_id = {
+            let mut mgr = get_checkpoint_mgr().lock().unwrap();
+            for f in &target_paths_str {
+                let _ = mgr.snapshot_file(&PathBuf::from(f));
+            }
+            let ckpt = mgr.create_checkpoint(&checkpoint_label, HashMap::new(), HashMap::new());
+            ckpt.checkpoint_id
+        };
+
+        let mut modified_list = Vec::new();
+        let mut total_replacements = 0;
+        for (path, new_content, count) in files_to_modify {
+            let _ = fs::write(&path, &new_content).await;
+            modified_list.push(path.to_string_lossy().to_string());
+            total_replacements += count;
+        }
+
+        (StatusCode::OK, Json(GlobalReplaceResult {
+            checkpoint_id: ckpt_id,
+            files_modified: modified_list,
+            total_replacements,
+        })).into_response()
+    }
+
+    // --- Visual Git Source Control Panel ---
+
+    async fn handle_git_status(State(state): State<Arc<Self>>) -> impl IntoResponse {
+        let base = &state.workspace_root;
+
+        let status_out = tokio::process::Command::new("git")
+            .args(["status", "--porcelain=v1"])
+            .current_dir(base)
+            .output()
+            .await;
+
+        let (status_success, stdout) = match status_out {
+            Ok(out) if out.status.success() => (true, String::from_utf8_lossy(&out.stdout).to_string()),
+            _ => (false, String::new()),
+        };
+
+        if !status_success {
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Not a git repository or git command failed").into_response();
+        }
+
+        let branch_out = tokio::process::Command::new("git")
+            .args(["branch", "--show-current"])
+            .current_dir(base)
+            .output()
+            .await;
+
+        let branch = match branch_out {
+            Ok(ref out) if out.status.success() => {
+                let b = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if b.is_empty() { "main".into() } else { b }
+            }
+            _ => "main".into(),
+        };
+
+        let mut staged = Vec::new();
+        let mut unstaged = Vec::new();
+        let mut untracked = Vec::new();
+
+        for line in stdout.lines() {
+            if line.len() < 3 {
+                continue;
+            }
+            let bytes = line.as_bytes();
+            let index_code = bytes[0] as char;
+            let worktree_code = bytes[1] as char;
+            let raw_path = &line[3..];
+            let path = if let Some((_, new_p)) = raw_path.split_once(" -> ") {
+                new_p.trim().to_string()
+            } else {
+                raw_path.trim().to_string()
+            };
+
+            if index_code == '?' && worktree_code == '?' {
+                untracked.push(GitFileChange {
+                    path: path.clone(),
+                    status_code: "??".into(),
+                    status_label: "Untracked".into(),
+                    is_staged: false,
+                });
+                continue;
+            }
+
+            if index_code != ' ' && index_code != '?' {
+                let label = match index_code {
+                    'M' => "Modified",
+                    'A' => "Added",
+                    'D' => "Deleted",
+                    'R' => "Renamed",
+                    'C' => "Copied",
+                    _ => "Staged",
+                };
+                staged.push(GitFileChange {
+                    path: path.clone(),
+                    status_code: index_code.to_string(),
+                    status_label: label.to_string(),
+                    is_staged: true,
+                });
+            }
+
+            if worktree_code != ' ' && worktree_code != '?' {
+                let label = match worktree_code {
+                    'M' => "Modified",
+                    'D' => "Deleted",
+                    _ => "Unstaged",
+                };
+                unstaged.push(GitFileChange {
+                    path: path.clone(),
+                    status_code: worktree_code.to_string(),
+                    status_label: label.to_string(),
+                    is_staged: false,
+                });
+            }
+        }
+
+        let is_clean = staged.is_empty() && unstaged.is_empty() && untracked.is_empty();
+
+        (StatusCode::OK, Json(GitStatusSummary {
+            branch,
+            is_clean,
+            staged,
+            unstaged,
+            untracked,
+        })).into_response()
+    }
+
+    async fn handle_git_stage(State(state): State<Arc<Self>>, Json(payload): Json<GitStagePayload>) -> impl IntoResponse {
+        let output = tokio::process::Command::new("git")
+            .args(["add", "-A", "--", &payload.path])
+            .current_dir(&state.workspace_root)
+            .output()
+            .await;
+
+        match output {
+            Ok(out) if out.status.success() => (StatusCode::OK, Json(serde_json::json!({ "status": "staged", "path": payload.path }))).into_response(),
+            Ok(out) => (StatusCode::INTERNAL_SERVER_ERROR, String::from_utf8_lossy(&out.stderr).to_string()).into_response(),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        }
+    }
+
+    async fn handle_git_unstage(State(state): State<Arc<Self>>, Json(payload): Json<GitStagePayload>) -> impl IntoResponse {
+        let output = tokio::process::Command::new("git")
+            .args(["restore", "--staged", "--", &payload.path])
+            .current_dir(&state.workspace_root)
+            .output()
+            .await;
+
+        match output {
+            Ok(out) if out.status.success() => (StatusCode::OK, Json(serde_json::json!({ "status": "unstaged", "path": payload.path }))).into_response(),
+            _ => {
+                let fallback = tokio::process::Command::new("git")
+                    .args(["reset", "HEAD", "--", &payload.path])
+                    .current_dir(&state.workspace_root)
+                    .output()
+                    .await;
+                match fallback {
+                    Ok(out) if out.status.success() => (StatusCode::OK, Json(serde_json::json!({ "status": "unstaged", "path": payload.path }))).into_response(),
+                    _ => {
+                        let rm_cached = tokio::process::Command::new("git")
+                            .args(["rm", "--cached", "--", &payload.path])
+                            .current_dir(&state.workspace_root)
+                            .output()
+                            .await;
+                        match rm_cached {
+                            Ok(out) if out.status.success() => (StatusCode::OK, Json(serde_json::json!({ "status": "unstaged", "path": payload.path }))).into_response(),
+                            Ok(out) => (StatusCode::INTERNAL_SERVER_ERROR, String::from_utf8_lossy(&out.stderr).to_string()).into_response(),
+                            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    async fn handle_git_stage_all(State(state): State<Arc<Self>>) -> impl IntoResponse {
+        let output = tokio::process::Command::new("git")
+            .args(["add", "-A"])
+            .current_dir(&state.workspace_root)
+            .output()
+            .await;
+
+        match output {
+            Ok(out) if out.status.success() => (StatusCode::OK, Json(serde_json::json!({ "status": "all_staged" }))).into_response(),
+            Ok(out) => (StatusCode::INTERNAL_SERVER_ERROR, String::from_utf8_lossy(&out.stderr).to_string()).into_response(),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        }
+    }
+
+    async fn handle_git_unstage_all(State(state): State<Arc<Self>>) -> impl IntoResponse {
+        let output = tokio::process::Command::new("git")
+            .args(["restore", "--staged", "."])
+            .current_dir(&state.workspace_root)
+            .output()
+            .await;
+
+        match output {
+            Ok(out) if out.status.success() => (StatusCode::OK, Json(serde_json::json!({ "status": "all_unstaged" }))).into_response(),
+            _ => {
+                let fallback = tokio::process::Command::new("git")
+                    .args(["reset", "HEAD", "."])
+                    .current_dir(&state.workspace_root)
+                    .output()
+                    .await;
+                match fallback {
+                    Ok(out) if out.status.success() => (StatusCode::OK, Json(serde_json::json!({ "status": "all_unstaged" }))).into_response(),
+                    _ => {
+                        let rm_cached = tokio::process::Command::new("git")
+                            .args(["rm", "--cached", "-r", "."])
+                            .current_dir(&state.workspace_root)
+                            .output()
+                            .await;
+                        match rm_cached {
+                            Ok(out) if out.status.success() => (StatusCode::OK, Json(serde_json::json!({ "status": "all_unstaged" }))).into_response(),
+                            Ok(out) => (StatusCode::INTERNAL_SERVER_ERROR, String::from_utf8_lossy(&out.stderr).to_string()).into_response(),
+                            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    async fn handle_git_commit(State(state): State<Arc<Self>>, Json(payload): Json<GitCommitPayload>) -> impl IntoResponse {
+        let clean_msg = payload.message.trim();
+        if clean_msg.is_empty() {
+            return (StatusCode::BAD_REQUEST, "Commit message cannot be empty").into_response();
+        }
+
+        let output = tokio::process::Command::new("git")
+            .args(["commit", "-m", clean_msg])
+            .current_dir(&state.workspace_root)
+            .output()
+            .await;
+
+        match output {
+            Ok(out) if out.status.success() => {
+                let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+                let hash_out = tokio::process::Command::new("git")
+                    .args(["rev-parse", "--short", "HEAD"])
+                    .current_dir(&state.workspace_root)
+                    .output()
+                    .await;
+                let commit_hash = hash_out.ok().map(|h| String::from_utf8_lossy(&h.stdout).trim().to_string()).unwrap_or_default();
+                (StatusCode::OK, Json(GitCommitResult {
+                    success: true,
+                    commit_hash,
+                    summary: stdout.lines().next().unwrap_or(clean_msg).to_string(),
+                    files_changed: 1,
+                })).into_response()
+            }
+            Ok(out) => (StatusCode::BAD_REQUEST, format!("Commit failed: {}", String::from_utf8_lossy(&out.stderr))).into_response(),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        }
+    }
+
+    async fn handle_chat_stream(Json(payload): Json<ChatPayload>) -> impl IntoResponse {
+        let client = reqwest::Client::new();
+        let prompt_clone = payload.prompt.clone();
+        let prompt_full = if let Some(ctx) = payload.context {
+            format!("Code Context:\n```\n{}\n```\n\nTask: {}\nProvide direct, surgical code corrections.", ctx, prompt_clone)
+        } else {
+            prompt_clone
+        };
+
+        let requested = payload.model.unwrap_or_else(|| "dynabook-coder:latest".to_string());
+
+        let mut messages = Vec::new();
+        if let Some(hist) = payload.history {
+            for m in hist {
+                messages.push(serde_json::json!({ "role": m.role, "content": m.content }));
+            }
+        }
+        messages.push(serde_json::json!({ "role": "user", "content": prompt_full }));
+
+        let ollama_req = serde_json::json!({
+            "model": requested,
+            "messages": messages,
+            "stream": false
+        });
+
+        match client.post("http://127.0.0.1:11434/api/chat")
+            .json(&ollama_req)
+            .timeout(std::time::Duration::from_secs(30))
+            .send()
+            .await
+        {
+            Ok(resp) => {
+                if let Ok(json) = resp.json::<serde_json::Value>().await {
+                    let text = json.get("message").and_then(|m| m.get("content")).and_then(|v| v.as_str()).unwrap_or("No content");
+                    (StatusCode::OK, Json(serde_json::json!({
+                        "response": text,
+                        "model": requested,
+                        "status": "success"
+                    }))).into_response()
+                } else {
+                    (StatusCode::OK, Json(serde_json::json!({ "response": "Error parsing output", "status": "error" }))).into_response()
+                }
+            }
+            Err(_) => {
+                (StatusCode::OK, Json(serde_json::json!({
+                    "response": "Inference service offline",
+                    "status": "offline"
+                }))).into_response()
+            }
+        }
+    }
 }
 
 const INDEX_HTML: &str = include_str!("../../hgb-desktop/dist/index.html");
@@ -1241,5 +1942,65 @@ mod tests {
 
         let (parts, _body) = resp.into_response().into_parts();
         assert_eq!(parts.status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_visual_ide_chat_sessions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let server = Arc::new(VisualIdeServer::new(4174, tmp.path().to_path_buf()));
+
+        // Create
+        let created_resp = VisualIdeServer::handle_create_chat_session(
+            State(server.clone()),
+            Json(CreateSessionPayload {
+                title: "Web Thread".to_string(),
+                model: "qwen2.5-coder:1.5b".to_string(),
+            }),
+        ).await;
+        let (parts, body) = created_resp.into_response().into_parts();
+        assert_eq!(parts.status, StatusCode::OK);
+
+        // List
+        let list_resp = VisualIdeServer::handle_get_chat_sessions(State(server.clone())).await;
+        let (lparts, _) = list_resp.into_response().into_parts();
+        assert_eq!(lparts.status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_visual_ide_global_search_and_replace() {
+        let tmp = tempfile::tempdir().unwrap();
+        let server = Arc::new(VisualIdeServer::new(4175, tmp.path().to_path_buf()));
+
+        let file1 = tmp.path().join("code.rs");
+        tokio::fs::write(&file1, "const MAGIC_VAL_99: u32 = 99;").await.unwrap();
+
+        // Search
+        let search_resp = VisualIdeServer::handle_global_search(
+            State(server.clone()),
+            Json(GlobalSearchPayload {
+                query: r"MAGIC_VAL_\d+".to_string(),
+                is_regex: Some(true),
+                case_sensitive: Some(true),
+            }),
+        ).await;
+        let (sparts, _) = search_resp.into_response().into_parts();
+        assert_eq!(sparts.status, StatusCode::OK);
+
+        // Replace
+        let replace_resp = VisualIdeServer::handle_global_replace(
+            State(server.clone()),
+            Json(GlobalReplacePayload {
+                query: r"MAGIC_VAL_(\d+)".to_string(),
+                replacement: "SOVEREIGN_VAL_$1".to_string(),
+                is_regex: Some(true),
+                case_sensitive: Some(true),
+                file_filter: None,
+            }),
+        ).await;
+        let (rparts, _) = replace_resp.into_response().into_parts();
+        assert_eq!(rparts.status, StatusCode::OK);
+
+        let content = tokio::fs::read_to_string(&file1).await.unwrap();
+        assert!(content.contains("SOVEREIGN_VAL_99"));
     }
 }

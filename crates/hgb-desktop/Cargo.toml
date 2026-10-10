@@ -17,6 +17,8 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 reqwest = { workspace = true }
+regex = { workspace = true }
+chrono = { workspace = true }
 hgb-core = { path = "../hgb-core" }
 hgb-nextgen = { path = "../hgb-nextgen" }
 
