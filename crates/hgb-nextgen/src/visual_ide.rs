@@ -1,3 +1,4 @@
+use crate::checkpoint::{RollbackReport, SwarmCheckpoint, SwarmCheckpointManager};
 use crate::inline_diff_engine::{DualBufferOverlay, InlineDiffEngine};
 use axum::{
     extract::{Query, State},
@@ -7,11 +8,18 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 use tokio::fs;
+
+static CHECKPOINT_MGR: OnceLock<Mutex<SwarmCheckpointManager>> = OnceLock::new();
+
+fn get_checkpoint_mgr() -> &'static Mutex<SwarmCheckpointManager> {
+    CHECKPOINT_MGR.get_or_init(|| Mutex::new(SwarmCheckpointManager::new()))
+}
 
 #[derive(Clone)]
 pub struct VisualIdeServer {
@@ -138,6 +146,25 @@ pub struct McpToolPayload {
     pub arguments: serde_json::Value,
 }
 
+#[derive(Deserialize)]
+pub struct CreateCheckpointPayload {
+    pub label: String,
+    pub files: Vec<String>,
+}
+
+#[derive(Deserialize)]
+pub struct RollbackPayload {
+    pub checkpoint_id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct WorkspaceSession {
+    pub open_tabs: Vec<String>,
+    pub active_tab_idx: usize,
+    pub selected_model: String,
+    pub last_active_view: String,
+}
+
 fn get_real_memory_metrics() -> String {
     let page_size = 4096u64;
     let self_rss_pages = std::fs::read_to_string("/proc/self/statm")
@@ -239,6 +266,12 @@ impl VisualIdeServer {
             .route("/api/diagnostics", post(Self::handle_diagnostics))
             .route("/api/autonomous_agent", post(Self::handle_autonomous_agent))
             .route("/api/mcp_tool", post(Self::handle_mcp_tool))
+            .route("/api/checkpoints", get(Self::handle_get_checkpoints))
+            .route("/api/checkpoints/create", post(Self::handle_create_checkpoint))
+            .route("/api/rollback", post(Self::handle_rollback))
+            .route("/api/models", get(Self::handle_get_models))
+            .route("/api/session/load", get(Self::handle_load_session))
+            .route("/api/session/save", post(Self::handle_save_session))
             .with_state(Arc::new(self.clone()));
 
         let addr = SocketAddr::from(([127, 0, 0, 1], self.port));
@@ -791,6 +824,40 @@ impl VisualIdeServer {
             }
         }
 
+        if payload.prompt.contains("@problems") || payload.prompt.contains("@Problems") {
+            let output = tokio::process::Command::new("cargo")
+                .args(["check", "--message-format=json", "--quiet"])
+                .current_dir(&state.workspace_root)
+                .output()
+                .await;
+
+            let mut diags_text = String::new();
+            let mut problem_count = 0;
+            if let Ok(out) = output {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                for line in stdout.lines() {
+                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
+                        if json.get("reason").and_then(|r| r.as_str()) == Some("compiler-message") {
+                            if let Some(msg) = json.get("message") {
+                                let rendered = msg.get("rendered").and_then(|r| r.as_str()).unwrap_or("");
+                                if !rendered.is_empty() && problem_count < 10 {
+                                    diags_text.push_str(rendered);
+                                    problem_count += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            let problem_ctx = if problem_count > 0 {
+                format!("\n[Live Compiler Problems ({} issues)]:\n{}\n", problem_count, diags_text)
+            } else {
+                "\n[Live Compiler Problems]: 0 errors or warnings detected in workspace.\n".to_string()
+            };
+            expanded = expanded.replace("@problems", &problem_ctx).replace("@Problems", &problem_ctx);
+            sources.push(format!("Compiler Diagnostics ({} problems)", problem_count));
+        }
+
         if payload.prompt.contains("@Codebase") || payload.prompt.contains("@codebase") {
             let symbols = crate::ide_agent_engine::IdeAgentEngine::extract_workspace_symbols(&state.workspace_root).await.unwrap_or_default();
             let mut symbol_summary = String::new();
@@ -837,6 +904,58 @@ impl VisualIdeServer {
             sources.push(format!("Project Codebase Index ({} symbols extracted)", symbols.len()));
         }
 
+        // Match @file:, @folder:, and @web:
+        for word in payload.prompt.split_whitespace() {
+            if let Some(rest) = word.strip_prefix("@file:").or_else(|| word.strip_prefix("@File:")) {
+                let target = rest.trim_matches(|c| c == ',' || c == '.' || c == ';' || c == ')' || c == ']' || c == '"' || c == '\'');
+                let p = if Path::new(target).is_absolute() {
+                    PathBuf::from(target)
+                } else {
+                    state.workspace_root.join(target)
+                };
+                if let Ok(content) = fs::read_to_string(&p).await {
+                    let file_ctx = format!("\n[File Context: {}]:\n```\n{}\n```\n", target, content);
+                    expanded = expanded.replace(word, &file_ctx);
+                    sources.push(format!("File Context ({})", target));
+                }
+            } else if let Some(rest) = word.strip_prefix("@folder:").or_else(|| word.strip_prefix("@Folder:")) {
+                let target = rest.trim_matches(|c| c == ',' || c == '.' || c == ';' || c == ')' || c == ']' || c == '"' || c == '\'');
+                let p = if Path::new(target).is_absolute() {
+                    PathBuf::from(target)
+                } else {
+                    state.workspace_root.join(target)
+                };
+                if let Ok(mut entries) = fs::read_dir(&p).await {
+                    let mut listing = Vec::new();
+                    while let Ok(Some(entry)) = entries.next_entry().await {
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        let is_dir = entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false);
+                        if is_dir { listing.push(format!("{}/", name)); } else { listing.push(name); }
+                        if listing.len() >= 30 { break; }
+                    }
+                    let folder_ctx = format!("\n[Folder Listing: {} ({} items)]:\n{}\n", target, listing.len(), listing.join("\n"));
+                    expanded = expanded.replace(word, &folder_ctx);
+                    sources.push(format!("Folder Listing ({})", target));
+                }
+            } else if let Some(rest) = word.strip_prefix("@web:").or_else(|| word.strip_prefix("@Web:")) {
+                let url = rest.trim_matches(|c| c == ',' || c == ';' || c == ')' || c == ']' || c == '"' || c == '\'');
+                let client = reqwest::Client::new();
+                if let Ok(resp) = client.get(url).timeout(std::time::Duration::from_secs(6)).send().await {
+                    if let Ok(body) = resp.text().await {
+                        let clean_text = if body.contains("<body") {
+                            body.split("<body").nth(1).unwrap_or(&body)
+                                .chars().filter(|&c| c != '<' && c != '>').take(2500).collect::<String>()
+                        } else {
+                            body.chars().take(2500).collect::<String>()
+                        };
+                        let web_ctx = format!("\n[Web Resource: {}]:\n```\n{}\n```\n", url, clean_text);
+                        expanded = expanded.replace(word, &web_ctx);
+                        sources.push(format!("Web Resource ({})", url));
+                    }
+                }
+            }
+        }
+
         (StatusCode::OK, Json(serde_json::json!({
             "expanded_prompt": expanded,
             "sources": sources
@@ -844,6 +963,15 @@ impl VisualIdeServer {
     }
 
     async fn handle_composer_commit(Json(plans): Json<Vec<ComposerFilePlan>>) -> impl IntoResponse {
+        // Automatic Time-Travel Checkpoint snapshot before mutation
+        if let Ok(mut mgr) = get_checkpoint_mgr().lock() {
+            for plan in &plans {
+                let p = PathBuf::from(&plan.path);
+                let _ = mgr.snapshot_file(&p);
+            }
+            let _ = mgr.create_checkpoint("Auto-checkpoint before Composer commit", HashMap::new(), HashMap::new());
+        }
+
         let mut results = Vec::new();
         for plan in plans {
             let mut overlay = DualBufferOverlay::new(&plan.path, &plan.original_content);
@@ -860,6 +988,147 @@ impl VisualIdeServer {
             }
         }
         (StatusCode::OK, Json(results)).into_response()
+    }
+
+    async fn handle_get_checkpoints() -> impl IntoResponse {
+        let mgr = match get_checkpoint_mgr().lock() {
+            Ok(m) => m,
+            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        };
+        let list: Vec<serde_json::Value> = mgr.get_checkpoints().iter().map(|c| {
+            serde_json::json!({
+                "id": c.checkpoint_id,
+                "label": c.label,
+                "timestamp_utc": c.timestamp_utc,
+                "files_count": c.file_snapshots.len()
+            })
+        }).collect();
+        (StatusCode::OK, Json(list)).into_response()
+    }
+
+    async fn handle_create_checkpoint(Json(payload): Json<CreateCheckpointPayload>) -> impl IntoResponse {
+        let mut mgr = match get_checkpoint_mgr().lock() {
+            Ok(m) => m,
+            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        };
+        for f in &payload.files {
+            let p = PathBuf::from(f);
+            let _ = mgr.snapshot_file(&p);
+        }
+        let ckpt = mgr.create_checkpoint(&payload.label, HashMap::new(), HashMap::new());
+        (StatusCode::OK, Json(serde_json::json!({ "checkpoint_id": ckpt.checkpoint_id }))).into_response()
+    }
+
+    async fn handle_rollback(Json(payload): Json<RollbackPayload>) -> impl IntoResponse {
+        let mgr = match get_checkpoint_mgr().lock() {
+            Ok(m) => m,
+            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        };
+        let res = match payload.checkpoint_id {
+            Some(id) if !id.trim().is_empty() => mgr.restore_files_from_checkpoint(&id),
+            _ => mgr.rollback_latest_files(),
+        };
+        match res {
+            Ok(report) => (StatusCode::OK, Json(report)).into_response(),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        }
+    }
+
+    async fn handle_get_models() -> impl IntoResponse {
+        let mut list = Vec::new();
+        // Ollama
+        let client = reqwest::Client::new();
+        if let Ok(resp) = client.get("http://127.0.0.1:11434/api/tags").timeout(std::time::Duration::from_millis(600)).send().await {
+            if let Ok(json) = resp.json::<serde_json::Value>().await {
+                if let Some(models) = json.get("models").and_then(|m| m.as_array()) {
+                    for m in models {
+                        if let Some(name) = m.get("name").and_then(|n| n.as_str()) {
+                            list.push(serde_json::json!({
+                                "id": name,
+                                "name": format!("{} (Local)", name),
+                                "provider": "Ollama (Local)",
+                                "is_local": true,
+                                "context_window": 32768
+                            }));
+                        }
+                    }
+                }
+            }
+        }
+        // Cloud keys
+        if std::env::var("ANTHROPIC_API_KEY").is_ok() {
+            list.push(serde_json::json!({
+                "id": "claude-3-7-sonnet-20250219",
+                "name": "Claude 3.7 Sonnet (Anthropic)",
+                "provider": "Anthropic",
+                "is_local": false,
+                "context_window": 200000
+            }));
+            list.push(serde_json::json!({
+                "id": "claude-3-5-sonnet-20241022",
+                "name": "Claude 3.5 Sonnet (Anthropic)",
+                "provider": "Anthropic",
+                "is_local": false,
+                "context_window": 200000
+            }));
+        }
+        if std::env::var("OPENAI_API_KEY").is_ok() {
+            list.push(serde_json::json!({
+                "id": "gpt-4o",
+                "name": "GPT-4o (OpenAI)",
+                "provider": "OpenAI",
+                "is_local": false,
+                "context_window": 128000
+            }));
+            list.push(serde_json::json!({
+                "id": "o3-mini",
+                "name": "o3-mini Reasoning (OpenAI)",
+                "provider": "OpenAI",
+                "is_local": false,
+                "context_window": 200000
+            }));
+        }
+        if std::env::var("DEEPSEEK_API_KEY").is_ok() {
+            list.push(serde_json::json!({
+                "id": "deepseek-chat",
+                "name": "DeepSeek-V3",
+                "provider": "DeepSeek",
+                "is_local": false,
+                "context_window": 64000
+            }));
+            list.push(serde_json::json!({
+                "id": "deepseek-reasoner",
+                "name": "DeepSeek-R1 (Reasoning)",
+                "provider": "DeepSeek",
+                "is_local": false,
+                "context_window": 64000
+            }));
+        }
+        (StatusCode::OK, Json(list)).into_response()
+    }
+
+    async fn handle_load_session(State(state): State<Arc<Self>>) -> impl IntoResponse {
+        let session_file = state.workspace_root.join(".hgb").join("session.json");
+        if session_file.exists() {
+            if let Ok(content) = fs::read_to_string(&session_file).await {
+                if let Ok(session) = serde_json::from_str::<WorkspaceSession>(&content) {
+                    return (StatusCode::OK, Json(session)).into_response();
+                }
+            }
+        }
+        (StatusCode::OK, Json(WorkspaceSession::default())).into_response()
+    }
+
+    async fn handle_save_session(State(state): State<Arc<Self>>, Json(session): Json<WorkspaceSession>) -> impl IntoResponse {
+        let dir = state.workspace_root.join(".hgb");
+        let _ = fs::create_dir_all(&dir).await;
+        let session_file = dir.join("session.json");
+        if let Ok(json) = serde_json::to_string_pretty(&session) {
+            if fs::write(&session_file, json).await.is_ok() {
+                return (StatusCode::OK, Json(serde_json::json!({ "status": "saved" }))).into_response();
+            }
+        }
+        (StatusCode::INTERNAL_SERVER_ERROR, "Failed to save session").into_response()
     }
 
     async fn handle_git_diff(State(state): State<Arc<Self>>, Json(payload): Json<GitDiffPayload>) -> impl IntoResponse {

@@ -62,6 +62,12 @@ fn main() {
             get_file_diagnostics,
             run_autonomous_agent,
             call_mcp_tool,
+            create_checkpoint,
+            rollback_checkpoint,
+            get_checkpoints,
+            get_available_models,
+            load_workspace_session,
+            save_workspace_session,
         ])
         .run(generate_context!())
         .expect("error while running Hagibis Tauri Visual IDE application");

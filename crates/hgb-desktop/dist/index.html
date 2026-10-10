@@ -233,6 +233,11 @@
             <span class="badge badge-rules" id="rules-badge" onclick="showRules()"><i class="fa fa-scroll"></i> Rules</span>
         </div>
         <div class="header-actions">
+            <select id="model-select" class="btn" style="background:#18181b; color:#38bdf8; border-color:#0284c7; padding: 4px 8px; font-weight:600;" onchange="handleModelChange()" title="Select Active LLM Provider & Model">
+                <option value="dynabook-coder:latest">dynabook-coder (Local)</option>
+                <option value="qwen2.5-coder:1.5b">qwen2.5-coder:1.5b (Local)</option>
+            </select>
+            <button class="btn" style="background:#450a0a; border-color:#991b1b; color:#fca5a5;" onclick="triggerRollback()" title="1-Click Atomic Rollback to previous checkpoint"><i class="fa fa-rotate-left"></i> Rollback</button>
             <button class="btn btn-indigo" onclick="openSearchModal()"><i class="fa fa-magnifying-glass"></i> Search (Ctrl+P)</button>
             <button class="btn btn-indigo" onclick="openSymbolsModal()"><i class="fa fa-code-branch"></i> Symbols (@)</button>
             <button class="btn btn-primary" onclick="triggerInlineCtrlK()"><i class="fa fa-wand-magic-sparkles"></i> Edit (Ctrl+K)</button>
@@ -504,6 +509,12 @@
                 'get_file_diagnostics': ['/api/diagnostics', 'POST', args],
                 'run_autonomous_agent': ['/api/autonomous_agent', 'POST', args],
                 'call_mcp_tool': ['/api/mcp_tool', 'POST', args],
+                'create_checkpoint': ['/api/checkpoints/create', 'POST', args],
+                'rollback_checkpoint': ['/api/rollback', 'POST', args],
+                'get_checkpoints': ['/api/checkpoints', 'GET'],
+                'get_available_models': ['/api/models', 'GET'],
+                'load_workspace_session': ['/api/session/load', 'GET'],
+                'save_workspace_session': ['/api/session/save', 'POST', args],
             };
             const config = routeMap[cmd];
             if (!config) throw new Error('Unknown command: ' + cmd);
@@ -637,6 +648,151 @@
             return "";
         }
 
+        // Multi-Provider Model Selection & Session State
+        let sessionSaveTimer = null;
+        function debounceSaveSession() {
+            clearTimeout(sessionSaveTimer);
+            sessionSaveTimer = setTimeout(async () => {
+                try {
+                    const session = {
+                        open_tabs: openTabs.map(t => t.path),
+                        active_tab_idx: activeTabIdx >= 0 ? activeTabIdx : 0,
+                        selected_model: getSelectedModel(),
+                        last_active_view: 'editor'
+                    };
+                    await apiInvoke('save_workspace_session', { session });
+                } catch (e) {
+                    console.warn('Session auto-save notice:', e);
+                }
+            }, 800);
+        }
+
+        async function restoreWorkspaceSession() {
+            try {
+                const session = await apiInvoke('load_workspace_session');
+                if (session && session.selected_model) {
+                    const sel = document.getElementById('model-select');
+                    if (sel) {
+                        let exists = false;
+                        for (let i = 0; i < sel.options.length; i++) {
+                            if (sel.options[i].value === session.selected_model) {
+                                sel.selectedIndex = i;
+                                exists = true;
+                                break;
+                            }
+                        }
+                        if (!exists) {
+                            const opt = document.createElement('option');
+                            opt.value = session.selected_model;
+                            opt.text = session.selected_model;
+                            sel.appendChild(opt);
+                            sel.value = session.selected_model;
+                        }
+                    }
+                }
+                if (session && session.open_tabs && session.open_tabs.length > 0) {
+                    for (const p of session.open_tabs) {
+                        await openFileSilently(p);
+                    }
+                    if (openTabs.length > 0) {
+                        renderTabs();
+                        const idx = (session.active_tab_idx >= 0 && session.active_tab_idx < openTabs.length) ? session.active_tab_idx : 0;
+                        switchTab(idx);
+                    }
+                }
+            } catch (e) {
+                console.warn('Restore session notice:', e);
+            }
+        }
+
+        async function openFileSilently(path) {
+            if (openTabs.some(t => t.path === path)) return;
+            try {
+                const content = await apiInvoke('read_file', { path });
+                const name = path.split('/').pop();
+                const ext = name.split('.').pop();
+                const langMap = { rs: 'rust', zig: 'zig', js: 'javascript', ts: 'typescript', json: 'json', md: 'markdown', toml: 'ini', py: 'python', c: 'c', cpp: 'cpp' };
+                const lang = langMap[ext] || 'plaintext';
+                openTabs.push({
+                    path,
+                    name,
+                    content,
+                    originalContent: content,
+                    lang,
+                    isDirty: false
+                });
+            } catch (e) {}
+        }
+
+        async function loadAvailableModels() {
+            try {
+                const models = await apiInvoke('get_available_models');
+                const sel = document.getElementById('model-select');
+                if (!sel || !models || models.length === 0) return;
+                const prev = sel.value;
+                sel.innerHTML = '';
+                models.forEach(m => {
+                    const opt = document.createElement('option');
+                    opt.value = m.id;
+                    opt.text = m.name;
+                    sel.appendChild(opt);
+                });
+                if (prev && Array.from(sel.options).some(o => o.value === prev)) {
+                    sel.value = prev;
+                }
+            } catch (e) {
+                console.warn('Failed to probe models:', e);
+            }
+        }
+
+        function getSelectedModel() {
+            const sel = document.getElementById('model-select');
+            return (sel && sel.value) ? sel.value : 'dynabook-coder:latest';
+        }
+
+        function handleModelChange() {
+            debounceSaveSession();
+        }
+
+        async function triggerRollback() {
+            try {
+                const ckpts = await apiInvoke('get_checkpoints');
+                if (!ckpts || ckpts.length === 0) {
+                    alert('No checkpoints recorded yet. Automatic checkpoints are created before Composer and Agent code mutations.');
+                    return;
+                }
+                const latest = ckpts[ckpts.length - 1];
+                if (!confirm(`Revert workspace files to checkpoint "${latest.label}" (ID: ${latest.id})?`)) {
+                    return;
+                }
+                const report = await apiInvoke('rollback_checkpoint', { checkpoint_id: latest.id });
+                let msg = `✔ Time-Travel Rollback complete in ${report.duration_ms}ms!\n`;
+                if (report.files_restored && report.files_restored.length > 0) {
+                    msg += `Restored: ${report.files_restored.join(', ')}\n`;
+                }
+                if (report.files_deleted && report.files_deleted.length > 0) {
+                    msg += `Deleted: ${report.files_deleted.join(', ')}\n`;
+                }
+                alert(msg);
+
+                // Reload active tab
+                if (activeTabIdx >= 0) {
+                    const path = openTabs[activeTabIdx].path;
+                    try {
+                        const updated = await apiInvoke('read_file', { path });
+                        openTabs[activeTabIdx].content = updated;
+                        openTabs[activeTabIdx].originalContent = updated;
+                        openTabs[activeTabIdx].isDirty = false;
+                        setEditorContent(updated, openTabs[activeTabIdx].lang);
+                        renderTabs();
+                    } catch (e) {}
+                }
+                await loadWorkspace();
+            } catch (e) {
+                alert('Rollback failed: ' + e);
+            }
+        }
+
         // Multi-Tab Management
         async function openFile(path) {
             const existingIdx = openTabs.findIndex(t => t.path === path);
@@ -661,6 +817,7 @@
                 });
                 renderTabs();
                 switchTab(openTabs.length - 1);
+                debounceSaveSession();
             } catch (err) {
                 alert('Failed to read file: ' + err);
             }
@@ -689,6 +846,7 @@
             updateGitGutter(tab.path);
             refreshDiagnosticsForFile(tab.path);
             if (isSplitOpen) loadActiveIntoSplit();
+            debounceSaveSession();
         }
 
         function closeTab(idx, e) {
@@ -703,6 +861,7 @@
                 setEditorContent('// No file open.');
                 renderTabs();
             }
+            debounceSaveSession();
         }
 
         async function saveActiveFile() {
@@ -752,6 +911,7 @@
                         selected_text: selected,
                         file_context: getEditorContent(),
                         instruction: prompt,
+                        model: getSelectedModel(),
                     });
                     window.currentInlineEditReplacement = diffData.replacement;
                     window.currentInlineEditSelected = selected;
@@ -983,11 +1143,16 @@
                         if (ctxRes && ctxRes.expanded_prompt) resolvedPrompt = ctxRes.expanded_prompt;
                     } catch (e) { console.warn('Context resolution notice:', e); }
                 }
-                const res = await apiInvoke('ask_composer', { prompt: resolvedPrompt, files: activeFiles });
+                const res = await apiInvoke('ask_composer', {
+                    prompt: resolvedPrompt,
+                    files: activeFiles,
+                    model: getSelectedModel(),
+                });
                 let html = `<div style="background:#18181b; padding:12px; border-radius:6px; border:1px solid #27272a; margin-bottom:12px;">
                     <strong>Plan Summary:</strong> ${escapeHtml(res.summary)}
-                    <div style="margin-top:8px;">
+                    <div style="margin-top:8px; display:flex; gap:8px;">
                         <button class="btn btn-green" onclick="acceptAllComposer()"><i class="fa fa-check-double"></i> Commit All Files to Disk</button>
+                        <button class="btn" style="background:#450a0a; border-color:#991b1b; color:#fca5a5;" onclick="triggerRollback()"><i class="fa fa-rotate-left"></i> Rollback</button>
                     </div>
                 </div>`;
 
@@ -1208,6 +1373,7 @@
                 const data = await apiInvoke('ask_copilot', {
                     prompt: resolvedPrompt,
                     context: getEditorContent(),
+                    model: getSelectedModel(),
                 });
 
                 let bubbleHtml = `<div class="chat-bubble chat-ai"><div>${escapeHtml(data.response)}</div>`;
@@ -1645,10 +1811,13 @@
             dropdown.style.display = 'flex';
 
             const baseOptions = [
-                { type: 'Context', label: '@Codebase', desc: 'Project-wide semantic index', insert: '@Codebase ' },
+                { type: 'Context', label: '@Codebase', desc: 'Project-wide semantic AST index', insert: '@Codebase ' },
                 { type: 'Context', label: '@Git', desc: 'Active git status & diff changes', insert: '@Git ' },
+                { type: 'Context', label: '@Problems', desc: 'Live compiler diagnostics & error logs', insert: '@Problems ' },
                 { type: 'Context', label: '@Terminal', desc: 'Last terminal logs & stderr', insert: '@Terminal ' },
                 { type: 'Context', label: '@Rules', desc: 'Active project rules (.cursorrules)', insert: '@Rules ' },
+                { type: 'Context', label: '@Folder:crates', desc: 'Folder directory structure outline', insert: '@Folder:crates ' },
+                { type: 'Context', label: '@Web:https://', desc: 'Fetch external webpage or documentation', insert: '@Web:https://' },
             ];
 
             openTabs.forEach(t => {
@@ -1698,6 +1867,9 @@
                 if (item.type === 'File') icon = 'fa-file-lines';
                 else if (item.type === 'Symbol') icon = 'fa-code';
                 else if (item.label.includes('@Git')) icon = 'fa-code-branch';
+                else if (item.label.includes('@Problems')) icon = 'fa-triangle-exclamation';
+                else if (item.label.includes('@Folder')) icon = 'fa-folder';
+                else if (item.label.includes('@Web')) icon = 'fa-globe';
                 else if (item.label.includes('@Terminal')) icon = 'fa-terminal';
 
                 html += `
@@ -1870,6 +2042,7 @@
         initEditor();
         loadWorkspace();
         loadDiagnostics();
+        loadAvailableModels().then(restoreWorkspaceSession);
         initMentionSystem();
     </script>
 </body>

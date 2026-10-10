@@ -1,10 +1,13 @@
+use hgb_nextgen::checkpoint::{RollbackReport, SwarmCheckpoint, SwarmCheckpointManager};
 use hgb_nextgen::ide_agent_engine::{
     AgentExecutionReport, GitFileDiff, IdeAgentEngine, LspDiagnostic, McpToolCallResponse,
     WorkspaceSymbol,
 };
 use hgb_nextgen::inline_diff_engine::{DualBufferOverlay, InlineDiffEngine, InlineDiffLine, InlineDiffMetrics};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 use tauri::command;
 use tokio::fs;
@@ -172,6 +175,272 @@ pub async fn query_local_llm_status() -> String {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct CheckpointInfo {
+    pub id: String,
+    pub label: String,
+    pub timestamp_utc: String,
+    pub files_count: usize,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct AvailableModel {
+    pub id: String,
+    pub name: String,
+    pub provider: String,
+    pub is_local: bool,
+    pub context_window: usize,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct WorkspaceSession {
+    pub open_tabs: Vec<String>,
+    pub active_tab_idx: usize,
+    pub selected_model: String,
+    pub last_active_view: String,
+}
+
+static CHECKPOINT_MGR: OnceLock<Mutex<SwarmCheckpointManager>> = OnceLock::new();
+
+fn get_checkpoint_mgr() -> &'static Mutex<SwarmCheckpointManager> {
+    CHECKPOINT_MGR.get_or_init(|| Mutex::new(SwarmCheckpointManager::new()))
+}
+
+pub async fn fetch_available_models() -> Vec<AvailableModel> {
+    let mut list = Vec::new();
+
+    // 1. Check local Ollama models
+    let client = reqwest::Client::new();
+    if let Ok(resp) = client.get("http://127.0.0.1:11434/api/tags")
+        .timeout(std::time::Duration::from_millis(600))
+        .send()
+        .await
+    {
+        if let Ok(json) = resp.json::<serde_json::Value>().await {
+            if let Some(models) = json.get("models").and_then(|m| m.as_array()) {
+                for m in models {
+                    if let Some(name) = m.get("name").and_then(|n| n.as_str()) {
+                        list.push(AvailableModel {
+                            id: name.to_string(),
+                            name: format!("{} (Local)", name),
+                            provider: "Ollama (Local)".to_string(),
+                            is_local: true,
+                            context_window: 32768,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Check Anthropic
+    if std::env::var("ANTHROPIC_API_KEY").is_ok() {
+        list.push(AvailableModel {
+            id: "claude-3-7-sonnet-20250219".to_string(),
+            name: "Claude 3.7 Sonnet (Anthropic)".to_string(),
+            provider: "Anthropic".to_string(),
+            is_local: false,
+            context_window: 200000,
+        });
+        list.push(AvailableModel {
+            id: "claude-3-5-sonnet-20241022".to_string(),
+            name: "Claude 3.5 Sonnet (Anthropic)".to_string(),
+            provider: "Anthropic".to_string(),
+            is_local: false,
+            context_window: 200000,
+        });
+    }
+
+    // 3. Check OpenAI
+    if std::env::var("OPENAI_API_KEY").is_ok() {
+        list.push(AvailableModel {
+            id: "gpt-4o".to_string(),
+            name: "GPT-4o (OpenAI)".to_string(),
+            provider: "OpenAI".to_string(),
+            is_local: false,
+            context_window: 128000,
+        });
+        list.push(AvailableModel {
+            id: "o3-mini".to_string(),
+            name: "o3-mini Reasoning (OpenAI)".to_string(),
+            provider: "OpenAI".to_string(),
+            is_local: false,
+            context_window: 200000,
+        });
+    }
+
+    // 4. Check DeepSeek
+    if std::env::var("DEEPSEEK_API_KEY").is_ok() {
+        list.push(AvailableModel {
+            id: "deepseek-chat".to_string(),
+            name: "DeepSeek-V3".to_string(),
+            provider: "DeepSeek".to_string(),
+            is_local: false,
+            context_window: 64000,
+        });
+        list.push(AvailableModel {
+            id: "deepseek-reasoner".to_string(),
+            name: "DeepSeek-R1 (Reasoning)".to_string(),
+            provider: "DeepSeek".to_string(),
+            is_local: false,
+            context_window: 64000,
+        });
+    }
+
+    list
+}
+
+pub async fn dispatch_llm_completion(
+    prompt: &str,
+    system_prompt: Option<&str>,
+    model_id: Option<&str>,
+) -> Result<(String, String), String> {
+    let client = reqwest::Client::new();
+    let requested = model_id.unwrap_or("dynabook-coder:latest");
+
+    // 1. Anthropic Claude Provider
+    if requested.starts_with("claude") {
+        if let Ok(api_key) = std::env::var("ANTHROPIC_API_KEY") {
+            let mut body = serde_json::json!({
+                "model": requested,
+                "max_tokens": 4096,
+                "messages": [
+                    { "role": "user", "content": prompt }
+                ]
+            });
+            if let Some(sys) = system_prompt {
+                body["system"] = serde_json::Value::String(sys.to_string());
+            }
+
+            let resp = client.post("https://api.anthropic.com/v1/messages")
+                .header("x-api-key", api_key)
+                .header("anthropic-version", "2023-06-01")
+                .header("content-type", "application/json")
+                .json(&body)
+                .timeout(std::time::Duration::from_secs(60))
+                .send()
+                .await
+                .map_err(|e| format!("Anthropic request failed: {}", e))?;
+
+            if resp.status().is_success() {
+                if let Ok(json) = resp.json::<serde_json::Value>().await {
+                    if let Some(content) = json.get("content").and_then(|c| c.as_array()) {
+                        let text = content.iter()
+                            .filter_map(|b| b.get("text").and_then(|t| t.as_str()))
+                            .collect::<Vec<_>>()
+                            .join("");
+                        return Ok((text, requested.to_string()));
+                    }
+                }
+            } else {
+                let err_text = resp.text().await.unwrap_or_default();
+                return Err(format!("Anthropic API error: {}", err_text));
+            }
+        } else {
+            return Err("ANTHROPIC_API_KEY environment variable is not set.".into());
+        }
+    }
+
+    // 2. OpenAI & DeepSeek Compatible Provider
+    if requested.starts_with("gpt") || requested.starts_with("o3") || requested.starts_with("deepseek") {
+        let (api_key_var, endpoint) = if requested.starts_with("deepseek") {
+            ("DEEPSEEK_API_KEY", "https://api.deepseek.com/v1/chat/completions")
+        } else {
+            ("OPENAI_API_KEY", "https://api.openai.com/v1/chat/completions")
+        };
+
+        if let Ok(api_key) = std::env::var(api_key_var) {
+            let mut messages = Vec::new();
+            if let Some(sys) = system_prompt {
+                messages.push(serde_json::json!({ "role": "system", "content": sys }));
+            }
+            messages.push(serde_json::json!({ "role": "user", "content": prompt }));
+
+            let body = serde_json::json!({
+                "model": requested,
+                "messages": messages,
+            });
+
+            let resp = client.post(endpoint)
+                .header("authorization", format!("Bearer {}", api_key))
+                .header("content-type", "application/json")
+                .json(&body)
+                .timeout(std::time::Duration::from_secs(60))
+                .send()
+                .await
+                .map_err(|e| format!("API request failed: {}", e))?;
+
+            if resp.status().is_success() {
+                if let Ok(json) = resp.json::<serde_json::Value>().await {
+                    if let Some(choices) = json.get("choices").and_then(|c| c.as_array()) {
+                        if let Some(content) = choices.get(0).and_then(|ch| ch.get("message")).and_then(|m| m.get("content")).and_then(|c| c.as_str()) {
+                            return Ok((content.to_string(), requested.to_string()));
+                        }
+                    }
+                }
+            } else {
+                let err_text = resp.text().await.unwrap_or_default();
+                return Err(format!("Cloud API error: {}", err_text));
+            }
+        } else {
+            return Err(format!("{} environment variable is not set.", api_key_var));
+        }
+    }
+
+    // 3. Local Ollama Provider (Default fallback)
+    let prompt_full = if let Some(sys) = system_prompt {
+        format!("System: {}\n\nUser Task: {}", sys, prompt)
+    } else {
+        prompt.to_string()
+    };
+
+    let ollama_req = serde_json::json!({
+        "model": requested,
+        "prompt": prompt_full,
+        "stream": false
+    });
+
+    if let Ok(resp) = client.post("http://127.0.0.1:11434/api/generate")
+        .json(&ollama_req)
+        .timeout(std::time::Duration::from_secs(45))
+        .send()
+        .await
+    {
+        if let Ok(json) = resp.json::<serde_json::Value>().await {
+            if let Some(text) = json.get("response").and_then(|v| v.as_str()) {
+                return Ok((text.to_string(), requested.to_string()));
+            }
+        }
+    }
+
+    // Secondary local fallback if requested was dynabook-coder
+    if requested != "qwen2.5-coder:1.5b" {
+        let fallback_req = serde_json::json!({
+            "model": "qwen2.5-coder:1.5b",
+            "prompt": prompt_full,
+            "stream": false
+        });
+
+        if let Ok(resp) = client.post("http://127.0.0.1:11434/api/generate")
+            .json(&fallback_req)
+            .timeout(std::time::Duration::from_secs(30))
+            .send()
+            .await
+        {
+            if let Ok(json) = resp.json::<serde_json::Value>().await {
+                if let Some(text) = json.get("response").and_then(|v| v.as_str()) {
+                    return Ok((text.to_string(), "qwen2.5-coder:1.5b".to_string()));
+                }
+            }
+        }
+    }
+
+    Err(format!(
+        "Inference service failed for model '{}'. If using local models, ensure Ollama is running ('ollama serve'). If using cloud models, verify API keys (ANTHROPIC_API_KEY, OPENAI_API_KEY, DEEPSEEK_API_KEY).",
+        requested
+    ))
+}
+
 pub mod commands {
     use super::*;
 
@@ -309,63 +578,24 @@ pub mod commands {
     }
 
     #[command]
-    pub async fn ask_copilot(prompt: String, context: Option<String>) -> Result<CopilotResponse, String> {
-        let client = reqwest::Client::new();
-        let prompt_full = if let Some(ctx) = context {
+    pub async fn ask_copilot(
+        prompt: String,
+        context: Option<String>,
+        model: Option<String>,
+    ) -> Result<CopilotResponse, String> {
+        let system_prompt = "You are Hagibis Copilot, an expert AI programming assistant specializing in Rust, Zig, SIMD optimization, and systems development. Provide direct, surgical, accurate code and explanations.";
+        let user_prompt = if let Some(ctx) = context {
             format!("Code Context:\n```\n{}\n```\n\nTask: {}\nProvide direct, surgical code corrections.", ctx, prompt)
         } else {
-            prompt.clone()
+            prompt
         };
 
-        let ollama_req = serde_json::json!({
-            "model": "dynabook-coder:latest",
-            "prompt": prompt_full,
-            "stream": false
-        });
-
-        // Primary attempt: dynabook-coder:latest
-        if let Ok(resp) = client.post("http://127.0.0.1:11434/api/generate")
-            .json(&ollama_req)
-            .timeout(std::time::Duration::from_secs(30))
-            .send()
-            .await
-        {
-            if let Ok(json) = resp.json::<serde_json::Value>().await {
-                if let Some(text) = json.get("response").and_then(|v| v.as_str()) {
-                    return Ok(CopilotResponse {
-                        response: text.to_string(),
-                        model: "dynabook-coder:latest".into(),
-                        status: "success".into(),
-                    });
-                }
-            }
-        }
-
-        // Secondary attempt: qwen2.5-coder:1.5b
-        let fallback_req = serde_json::json!({
-            "model": "qwen2.5-coder:1.5b",
-            "prompt": format!("Task: {}\nProvide direct, surgical code corrections.", prompt),
-            "stream": false
-        });
-
-        if let Ok(resp) = client.post("http://127.0.0.1:11434/api/generate")
-            .json(&fallback_req)
-            .timeout(std::time::Duration::from_secs(20))
-            .send()
-            .await
-        {
-            if let Ok(json) = resp.json::<serde_json::Value>().await {
-                if let Some(text) = json.get("response").and_then(|v| v.as_str()) {
-                    return Ok(CopilotResponse {
-                        response: text.to_string(),
-                        model: "qwen2.5-coder:1.5b".into(),
-                        status: "success".into(),
-                    });
-                }
-            }
-        }
-
-        Err("Local LLM service is offline or unreachable at http://127.0.0.1:11434. Please start Ollama ('ollama serve') and ensure 'dynabook-coder:latest' or 'qwen2.5-coder:1.5b' is available.".into())
+        let (response, model_used) = dispatch_llm_completion(&user_prompt, Some(system_prompt), model.as_deref()).await?;
+        Ok(CopilotResponse {
+            response,
+            model: model_used,
+            status: "success".into(),
+        })
     }
 
     #[command]
@@ -518,59 +748,20 @@ pub mod commands {
     }
 
     #[command]
-    pub async fn ask_inline_edit(path: String, selected_text: String, file_context: String, instruction: String) -> Result<DiffResponse, String> {
-        let client = reqwest::Client::new();
+    pub async fn ask_inline_edit(
+        path: String,
+        selected_text: String,
+        file_context: String,
+        instruction: String,
+        model: Option<String>,
+    ) -> Result<DiffResponse, String> {
+        let system_prompt = "You are Hagibis Inline Editor. Output ONLY the replacement code snippet directly, without any explanations, markdown greetings, or conversational filler.";
         let prompt = format!(
-            "File: {}\nContext:\n```\n{}\n```\nSelected Code to modify:\n```\n{}\n```\nInstruction: {}\nProvide ONLY the replacement code snippet directly, without any explanations or conversational text.",
+            "File: {}\nContext:\n```\n{}\n```\nSelected Code to modify:\n```\n{}\n```\nInstruction: {}\nProvide ONLY the replacement code snippet directly.",
             path, file_context, selected_text, instruction
         );
 
-        let ollama_req = serde_json::json!({
-            "model": "dynabook-coder:latest",
-            "prompt": prompt,
-            "stream": false
-        });
-
-        let mut replacement = String::new();
-
-        if let Ok(resp) = client.post("http://127.0.0.1:11434/api/generate")
-            .json(&ollama_req)
-            .timeout(std::time::Duration::from_secs(30))
-            .send()
-            .await
-        {
-            if let Ok(json) = resp.json::<serde_json::Value>().await {
-                if let Some(text) = json.get("response").and_then(|v| v.as_str()) {
-                    replacement = text.to_string();
-                }
-            }
-        }
-
-        if replacement.is_empty() {
-            // Secondary attempt: qwen2.5-coder:1.5b
-            let fallback_req = serde_json::json!({
-                "model": "qwen2.5-coder:1.5b",
-                "prompt": format!("Modify this snippet:\n{}\nInstruction: {}\nOutput ONLY modified snippet.", selected_text, instruction),
-                "stream": false
-            });
-
-            if let Ok(resp) = client.post("http://127.0.0.1:11434/api/generate")
-                .json(&fallback_req)
-                .timeout(std::time::Duration::from_secs(20))
-                .send()
-                .await
-            {
-                if let Ok(json) = resp.json::<serde_json::Value>().await {
-                    if let Some(text) = json.get("response").and_then(|v| v.as_str()) {
-                        replacement = text.to_string();
-                    }
-                }
-            }
-        }
-
-        if replacement.is_empty() {
-            return Err("Local LLM failed to generate inline edit. Ensure Ollama is running ('ollama serve') and model is available.".into());
-        }
+        let (replacement, _) = dispatch_llm_completion(&prompt, Some(system_prompt), model.as_deref()).await?;
 
         // Strip backticks if returned
         let clean_replacement = if replacement.contains("```") {
@@ -578,7 +769,7 @@ pub mod commands {
             if parts.len() >= 2 {
                 let code_part = parts[1];
                 let lines: Vec<&str> = code_part.lines().collect();
-                if !lines.is_empty() && (lines[0].starts_with("rust") || lines[0].starts_with("zig") || lines[0].starts_with("js")) {
+                if !lines.is_empty() && (lines[0].starts_with("rust") || lines[0].starts_with("zig") || lines[0].starts_with("js") || lines[0].starts_with("ts") || lines[0].starts_with("python")) {
                     lines[1..].join("\n")
                 } else {
                     code_part.to_string()
@@ -724,6 +915,43 @@ pub mod commands {
             sources.push(rules_res.source);
         }
 
+        // Check @problems or @Problems
+        if prompt.contains("@problems") || prompt.contains("@Problems") {
+            let output = tokio::process::Command::new("cargo")
+                .args(["check", "--message-format=json", "--quiet"])
+                .current_dir(&base)
+                .output()
+                .await;
+
+            let mut diags_text = String::new();
+            let mut problem_count = 0;
+            if let Ok(out) = output {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                for line in stdout.lines() {
+                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
+                        if json.get("reason").and_then(|r| r.as_str()) == Some("compiler-message") {
+                            if let Some(msg) = json.get("message") {
+                                let rendered = msg.get("rendered").and_then(|r| r.as_str()).unwrap_or("");
+                                if !rendered.is_empty() && problem_count < 10 {
+                                    diags_text.push_str(rendered);
+                                    problem_count += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            let problem_ctx = if problem_count > 0 {
+                format!("\n[Live Compiler Problems ({} issues)]:\n{}\n", problem_count, diags_text)
+            } else {
+                "\n[Live Compiler Problems]: 0 errors or warnings detected in workspace.\n".to_string()
+            };
+
+            expanded = expanded.replace("@problems", &problem_ctx).replace("@Problems", &problem_ctx);
+            sources.push(format!("Compiler Diagnostics ({} problems)", problem_count));
+        }
+
         if prompt.contains("@Codebase") || prompt.contains("@codebase") {
             // 1. Extract genuine syn AST symbols from workspace
             let symbols = IdeAgentEngine::extract_workspace_symbols(&base).await.unwrap_or_default();
@@ -763,6 +991,62 @@ pub mod commands {
             sources.push(format!("Project Codebase Index ({} symbols extracted)", symbols.len()));
         }
 
+        // Check @file:<path>, @folder:<path>, and @web:<url>
+        for word in prompt.split_whitespace() {
+            if let Some(rest) = word.strip_prefix("@file:").or_else(|| word.strip_prefix("@File:")) {
+                let target = rest.trim_matches(|c| c == ',' || c == '.' || c == ';' || c == ')' || c == ']' || c == '"' || c == '\'');
+                let p = if Path::new(target).is_absolute() {
+                    PathBuf::from(target)
+                } else {
+                    base.join(target)
+                };
+                if let Ok(content) = fs::read_to_string(&p).await {
+                    let file_ctx = format!("\n[File Context: {}]:\n```\n{}\n```\n", target, content);
+                    expanded = expanded.replace(word, &file_ctx);
+                    sources.push(format!("File Context ({})", target));
+                }
+            } else if let Some(rest) = word.strip_prefix("@folder:").or_else(|| word.strip_prefix("@Folder:")) {
+                let target = rest.trim_matches(|c| c == ',' || c == '.' || c == ';' || c == ')' || c == ']' || c == '"' || c == '\'');
+                let p = if Path::new(target).is_absolute() {
+                    PathBuf::from(target)
+                } else {
+                    base.join(target)
+                };
+                if let Ok(mut entries) = fs::read_dir(&p).await {
+                    let mut listing = Vec::new();
+                    while let Ok(Some(entry)) = entries.next_entry().await {
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        let is_dir = entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false);
+                        if is_dir {
+                            listing.push(format!("{}/", name));
+                        } else {
+                            listing.push(name);
+                        }
+                        if listing.len() >= 30 { break; }
+                    }
+                    let folder_ctx = format!("\n[Folder Listing: {} ({} items)]:\n{}\n", target, listing.len(), listing.join("\n"));
+                    expanded = expanded.replace(word, &folder_ctx);
+                    sources.push(format!("Folder Listing ({})", target));
+                }
+            } else if let Some(rest) = word.strip_prefix("@web:").or_else(|| word.strip_prefix("@Web:")) {
+                let url = rest.trim_matches(|c| c == ',' || c == ';' || c == ')' || c == ']' || c == '"' || c == '\'');
+                let client = reqwest::Client::new();
+                if let Ok(resp) = client.get(url).timeout(std::time::Duration::from_secs(6)).send().await {
+                    if let Ok(body) = resp.text().await {
+                        let clean_text = if body.contains("<body") {
+                            body.split("<body").nth(1).unwrap_or(&body)
+                                .chars().filter(|&c| c != '<' && c != '>').take(2500).collect::<String>()
+                        } else {
+                            body.chars().take(2500).collect::<String>()
+                        };
+                        let web_ctx = format!("\n[Web Resource: {}]:\n```\n{}\n```\n", url, clean_text);
+                        expanded = expanded.replace(word, &web_ctx);
+                        sources.push(format!("Web Resource ({})", url));
+                    }
+                }
+            }
+        }
+
         Ok(ContextResolution {
             expanded_prompt: expanded,
             sources,
@@ -770,10 +1054,13 @@ pub mod commands {
     }
 
     #[command]
-    pub async fn ask_composer(prompt: String, files: Vec<String>) -> Result<ComposerResponse, String> {
+    pub async fn ask_composer(
+        prompt: String,
+        files: Vec<String>,
+        model: Option<String>,
+    ) -> Result<ComposerResponse, String> {
         let mut context_summary = String::new();
         let mut file_plans = Vec::new();
-        let client = reqwest::Client::new();
 
         for file_path in &files {
             if let Ok(content) = fs::read_to_string(file_path).await {
@@ -787,27 +1074,13 @@ pub mod commands {
             prompt, context_summary
         );
 
-        let ollama_req = serde_json::json!({
-            "model": "dynabook-coder:latest",
-            "prompt": full_prompt,
-            "stream": false
-        });
-
-        let mut summary = "Composer Multi-File Orchestration Plan ready.".to_string();
-        let model = "dynabook-coder:latest".to_string();
-
-        if let Ok(resp) = client.post("http://127.0.0.1:11434/api/generate")
-            .json(&ollama_req)
-            .timeout(std::time::Duration::from_secs(30))
-            .send()
-            .await
-        {
-            if let Ok(json) = resp.json::<serde_json::Value>().await {
-                if let Some(text) = json.get("response").and_then(|v| v.as_str()) {
-                    summary = text.to_string();
-                }
-            }
-        }
+        let (summary, model_used) = dispatch_llm_completion(
+            &full_prompt,
+            Some("You are Hagibis Composer, an autonomous multi-file refactoring architect."),
+            model.as_deref(),
+        )
+        .await
+        .unwrap_or_else(|_| ("Composer Multi-File Orchestration Plan ready.".into(), "dynabook-coder:latest".into()));
 
         // For each target file, synthesize genuine code modifications
         for file_path in files {
@@ -817,45 +1090,12 @@ pub mod commands {
                 file_path, orig, prompt
             );
 
-            let file_req = serde_json::json!({
-                "model": "dynabook-coder:latest",
-                "prompt": file_prompt,
-                "stream": false
-            });
-
-            let mut modif = String::new();
-            if let Ok(resp) = client.post("http://127.0.0.1:11434/api/generate")
-                .json(&file_req)
-                .timeout(std::time::Duration::from_secs(30))
-                .send()
-                .await
-            {
-                if let Ok(json) = resp.json::<serde_json::Value>().await {
-                    if let Some(text) = json.get("response").and_then(|v| v.as_str()) {
-                        modif = text.to_string();
-                    }
-                }
-            }
-
-            if modif.is_empty() {
-                let fb_req = serde_json::json!({
-                    "model": "qwen2.5-coder:1.5b",
-                    "prompt": file_prompt,
-                    "stream": false
-                });
-                if let Ok(resp) = client.post("http://127.0.0.1:11434/api/generate")
-                    .json(&fb_req)
-                    .timeout(std::time::Duration::from_secs(20))
-                    .send()
-                    .await
-                {
-                    if let Ok(json) = resp.json::<serde_json::Value>().await {
-                        if let Some(text) = json.get("response").and_then(|v| v.as_str()) {
-                            modif = text.to_string();
-                        }
-                    }
-                }
-            }
+            let (modif, _) = dispatch_llm_completion(
+                &file_prompt,
+                Some("Output ONLY the updated code inside a ``` fenced block."),
+                model.as_deref(),
+            )
+            .await?;
 
             let clean_modif = if modif.contains("```") {
                 let parts: Vec<&str> = modif.split("```").collect();
@@ -870,10 +1110,8 @@ pub mod commands {
                 } else {
                     modif
                 }
-            } else if !modif.is_empty() {
-                modif
             } else {
-                return Err(format!("Local LLM failed to generate updates for '{}'. Ensure Ollama is running ('ollama serve').", file_path));
+                modif
             };
 
             file_plans.push(ComposerFilePlan {
@@ -887,12 +1125,85 @@ pub mod commands {
         Ok(ComposerResponse {
             summary,
             files: file_plans,
-            model,
+            model: model_used,
         })
     }
 
     #[command]
+    pub async fn create_checkpoint(label: String, files: Vec<String>) -> Result<String, String> {
+        let mut mgr = get_checkpoint_mgr().lock().map_err(|e| e.to_string())?;
+        for f in &files {
+            let p = PathBuf::from(f);
+            let _ = mgr.snapshot_file(&p);
+        }
+        let ckpt = mgr.create_checkpoint(&label, HashMap::new(), HashMap::new());
+        Ok(ckpt.checkpoint_id)
+    }
+
+    #[command]
+    pub async fn rollback_checkpoint(checkpoint_id: Option<String>) -> Result<RollbackReport, String> {
+        let mgr = get_checkpoint_mgr().lock().map_err(|e| e.to_string())?;
+        let report = match checkpoint_id {
+            Some(id) if !id.trim().is_empty() => mgr.restore_files_from_checkpoint(&id).map_err(|e| e.to_string())?,
+            _ => mgr.rollback_latest_files().map_err(|e| e.to_string())?,
+        };
+        Ok(report)
+    }
+
+    #[command]
+    pub async fn get_checkpoints() -> Result<Vec<CheckpointInfo>, String> {
+        let mgr = get_checkpoint_mgr().lock().map_err(|e| e.to_string())?;
+        let list = mgr.get_checkpoints().iter().map(|c| CheckpointInfo {
+            id: c.checkpoint_id.clone(),
+            label: c.label.clone(),
+            timestamp_utc: c.timestamp_utc.clone(),
+            files_count: c.file_snapshots.len(),
+        }).collect();
+        Ok(list)
+    }
+
+    #[command]
+    pub async fn get_available_models() -> Result<Vec<AvailableModel>, String> {
+        Ok(fetch_available_models().await)
+    }
+
+    #[command]
+    pub async fn load_workspace_session(root_path: Option<String>) -> Result<WorkspaceSession, String> {
+        let base = match root_path {
+            Some(p) => PathBuf::from(p),
+            None => std::env::current_dir().map_err(|e| e.to_string())?,
+        };
+        let session_file = base.join(".hgb").join("session.json");
+        if session_file.exists() {
+            if let Ok(content) = fs::read_to_string(&session_file).await {
+                if let Ok(session) = serde_json::from_str::<WorkspaceSession>(&content) {
+                    return Ok(session);
+                }
+            }
+        }
+        Ok(WorkspaceSession::default())
+    }
+
+    #[command]
+    pub async fn save_workspace_session(session: WorkspaceSession, root_path: Option<String>) -> Result<bool, String> {
+        let base = match root_path {
+            Some(p) => PathBuf::from(p),
+            None => std::env::current_dir().map_err(|e| e.to_string())?,
+        };
+        let dir = base.join(".hgb");
+        let _ = fs::create_dir_all(&dir).await;
+        let session_file = dir.join("session.json");
+        let json = serde_json::to_string_pretty(&session).map_err(|e| e.to_string())?;
+        fs::write(&session_file, json).await.map_err(|e| e.to_string())?;
+        Ok(true)
+    }
+
+    #[command]
     pub async fn commit_composer_plan(plans: Vec<ComposerFilePlan>) -> Result<Vec<SaveResult>, String> {
+        // Automatic Time-Travel Checkpoint snapshot before applying multi-file mutations!
+        let target_paths: Vec<String> = plans.iter().map(|p| p.path.clone()).collect();
+        let _ = create_checkpoint("Auto-checkpoint before Composer commit".into(), target_paths).await;
+
         let mut results = Vec::new();
         for plan in plans {
             let mut overlay = DualBufferOverlay::new(&plan.path, &plan.original_content);
@@ -956,10 +1267,11 @@ pub mod commands {
 mod tests {
     use super::commands::{
         ask_copilot, ask_tab_completion, call_mcp_tool, commit_composer_plan, commit_tab_overlay,
-        compute_diff, create_file, delete_entry, execute_terminal_command, get_diagnostics,
-        get_file_diagnostics, get_file_git_diff, get_workspace_symbols, get_workspace_tree,
-        load_project_rules, read_file, resolve_context_mentions, run_autonomous_agent, save_file,
-        search_codebase,
+        compute_diff, create_checkpoint, create_file, delete_entry, execute_terminal_command,
+        get_available_models, get_checkpoints, get_diagnostics, get_file_diagnostics,
+        get_file_git_diff, get_workspace_symbols, get_workspace_tree, load_project_rules,
+        load_workspace_session, read_file, resolve_context_mentions, rollback_checkpoint,
+        run_autonomous_agent, save_file, save_workspace_session, search_codebase,
     };
     use super::*;
 
@@ -1036,13 +1348,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_ask_copilot_fallback_or_ollama() {
-        match ask_copilot("Explain Hagibis microkernel".into(), None).await {
+        match ask_copilot("Explain Hagibis microkernel".into(), None, None).await {
             Ok(resp) => {
                 assert!(!resp.response.is_empty());
                 assert!(!resp.model.is_empty());
             }
             Err(e) => {
-                assert!(e.contains("Ollama") || e.contains("offline"));
+                assert!(e.contains("Ollama") || e.contains("offline") || e.contains("Inference"));
             }
         }
     }
@@ -1185,5 +1497,101 @@ mod tests {
         .await
         .expect("mcp call should succeed");
         assert!(!resp.is_error || resp.is_error);
+    }
+
+    #[tokio::test]
+    async fn test_create_checkpoint_and_rollback() {
+        let tmp = std::env::temp_dir().join(format!("hgb_ckpt_test_{}", std::process::id()));
+        let _ = tokio::fs::create_dir_all(&tmp).await;
+        let file_path = tmp.join("test_rollback_target.rs").to_string_lossy().to_string();
+
+        let initial_content = "pub fn initial_state() -> i32 { 100 }";
+        tokio::fs::write(&file_path, initial_content).await.unwrap();
+
+        // 1. Create Checkpoint
+        let ckpt_id = create_checkpoint("Test Checkpoint".into(), vec![file_path.clone()])
+            .await
+            .expect("create_checkpoint should succeed");
+        assert!(!ckpt_id.is_empty());
+
+        // 2. Query Checkpoints
+        let ckpts = get_checkpoints().await.expect("get_checkpoints should succeed");
+        assert!(ckpts.iter().any(|c| c.id == ckpt_id));
+
+        // 3. Mutate file
+        let mutated_content = "pub fn mutated_state() -> i32 { 999 }";
+        tokio::fs::write(&file_path, mutated_content).await.unwrap();
+        assert_eq!(tokio::fs::read_to_string(&file_path).await.unwrap(), mutated_content);
+
+        // 4. One-Click Rollback
+        let report = rollback_checkpoint(Some(ckpt_id.clone()))
+            .await
+            .expect("rollback_checkpoint should succeed");
+        assert_eq!(report.checkpoint_id, ckpt_id);
+        assert!(!report.files_restored.is_empty());
+
+        // 5. Verify 100% real byte restoration
+        let restored = tokio::fs::read_to_string(&file_path).await.unwrap();
+        assert_eq!(restored, initial_content);
+
+        let _ = tokio::fs::remove_dir_all(&tmp).await;
+    }
+
+    #[tokio::test]
+    async fn test_workspace_session_save_and_load() {
+        let tmp = std::env::temp_dir().join(format!("hgb_sess_test_{}", std::process::id()));
+        let _ = tokio::fs::create_dir_all(&tmp).await;
+        let root = tmp.to_string_lossy().to_string();
+
+        let session = WorkspaceSession {
+            open_tabs: vec!["src/main.rs".into(), "Cargo.toml".into()],
+            active_tab_idx: 1,
+            selected_model: "claude-3-7-sonnet-20250219".into(),
+            last_active_view: "editor".into(),
+        };
+
+        let saved = save_workspace_session(session.clone(), Some(root.clone()))
+            .await
+            .expect("save session should succeed");
+        assert!(saved);
+
+        let loaded = load_workspace_session(Some(root.clone()))
+            .await
+            .expect("load session should succeed");
+        assert_eq!(loaded.open_tabs, session.open_tabs);
+        assert_eq!(loaded.active_tab_idx, 1);
+        assert_eq!(loaded.selected_model, "claude-3-7-sonnet-20250219");
+
+        let _ = tokio::fs::remove_dir_all(&tmp).await;
+    }
+
+    #[tokio::test]
+    async fn test_get_available_models_real_probing() {
+        let models = get_available_models().await.expect("models probing should succeed");
+        // Vector is returned successfully with either local Ollama or cloud models if keys set
+        for m in &models {
+            assert!(!m.id.is_empty());
+            assert!(!m.provider.is_empty());
+            assert!(m.context_window > 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_extended_context_mentions_parsing() {
+        let tmp = std::env::temp_dir().join(format!("hgb_mention_test_{}", std::process::id()));
+        let _ = tokio::fs::create_dir_all(&tmp).await;
+        let dummy_file = tmp.join("hello.txt");
+        tokio::fs::write(&dummy_file, "Hagibis sovereign context engine").await.unwrap();
+
+        let prompt = format!("Explain @file:{} and verify @problems", dummy_file.to_string_lossy());
+        let res = resolve_context_mentions(prompt, Some(tmp.to_string_lossy().to_string()))
+            .await
+            .expect("mentions resolution should succeed");
+
+        assert!(res.expanded_prompt.contains("[File Context:"));
+        assert!(res.expanded_prompt.contains("Hagibis sovereign context engine"));
+        assert!(res.sources.iter().any(|s| s.contains("File Context")));
+
+        let _ = tokio::fs::remove_dir_all(&tmp).await;
     }
 }
