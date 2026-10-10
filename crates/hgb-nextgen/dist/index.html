@@ -332,7 +332,7 @@
     <header>
         <div class="logo-box">
             <span>🪽 HAGIBIS VISUAL IDE</span>
-            <span class="badge" id="tauri-badge">NATIVE TAURI</span>
+            <span class="badge" id="tauri-badge" style="background:#065f46; color:#a7f3d0; border-color:#059669;">AXUM + WEBSOCKET</span>
             <span class="badge" style="background:#1e1b4b; color:#818cf8; border-color:#4338ca;">ZIG MYERS SES</span>
             <span class="badge badge-rules" id="rules-badge" onclick="showRules()"><i class="fa fa-scroll"></i> Rules</span>
         </div>
@@ -908,10 +908,11 @@
         let lastTermStderr = "";
         let currentRules = "";
 
-        const isTauri = window.__TAURI__ && window.__TAURI__.core;
-        if (!isTauri) {
-            document.getElementById('tauri-badge').innerText = 'HYBRID HTTP';
-            document.getElementById('tauri-badge').style.background = '#3730a3';
+        const isTauri = typeof window !== 'undefined' && window.__TAURI__ && window.__TAURI__.core;
+        const tauriBadgeEl = document.getElementById('tauri-badge');
+        if (tauriBadgeEl) {
+            tauriBadgeEl.innerText = 'AXUM + WEBSOCKET';
+            tauriBadgeEl.style.background = '#065f46';
         }
 
         function escapeHtml(str) {
@@ -1375,7 +1376,7 @@
             } catch (err) {
                 if (window.location.protocol === 'file:' && !window.__backendWarned) {
                     window.__backendWarned = true;
-                    toast.error('Cannot connect to Visual IDE backend at http://127.0.0.1:5173. Start with "hgb ide" or "hgb-desktop" to activate all controls.');
+                    toast.error('Cannot connect to Visual IDE backend. Launch with "hgb visual ide" or "hgb ide" to activate all controls.');
                 }
                 throw err;
             }

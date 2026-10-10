@@ -1983,7 +1983,7 @@ impl VisualIdeServer {
     }
 }
 
-const INDEX_HTML: &str = include_str!("../../hgb-desktop/dist/index.html");
+const INDEX_HTML: &str = include_str!("../dist/index.html");
 
 #[cfg(test)]
 mod tests {
