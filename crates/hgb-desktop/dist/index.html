@@ -1361,14 +1361,24 @@
             };
             const config = routeMap[cmd];
             if (!config) throw new Error('Unknown command: ' + cmd);
-            const [url, method, body] = config;
-            const res = await fetch(url, {
-                method,
-                headers: body ? { 'Content-Type': 'application/json' } : undefined,
-                body: body ? JSON.stringify(body) : undefined,
-            });
-            if (cmd === 'read_file') return await res.text();
-            return await res.json();
+            const [urlPath, method, body] = config;
+            const apiBase = (window.location.protocol === 'file:' || !window.location.host) ? 'http://127.0.0.1:5173' : '';
+            const url = apiBase + urlPath;
+            try {
+                const res = await fetch(url, {
+                    method,
+                    headers: body ? { 'Content-Type': 'application/json' } : undefined,
+                    body: body ? JSON.stringify(body) : undefined,
+                });
+                if (cmd === 'read_file') return await res.text();
+                return await res.json();
+            } catch (err) {
+                if (window.location.protocol === 'file:' && !window.__backendWarned) {
+                    window.__backendWarned = true;
+                    toast.error('Cannot connect to Visual IDE backend at http://127.0.0.1:5173. Start with "hgb ide" or "hgb-desktop" to activate all controls.');
+                }
+                throw err;
+            }
         }
 
         function initEditor() {
@@ -2471,8 +2481,9 @@
                         history: historyForBackend
                     });
                 } else {
+                    const apiBase = (window.location.protocol === 'file:' || !window.location.host) ? 'http://127.0.0.1:5173' : '';
                     try {
-                        const res = await fetch('/api/chat_stream', {
+                        const res = await fetch(apiBase + '/api/chat_stream', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({

@@ -421,6 +421,7 @@ impl VisualIdeServer {
             .route("/api/git_commit", post(Self::handle_git_commit))
             .route("/api/chat_stream", post(Self::handle_chat_stream))
             .route("/api/zig_telemetry", get(Self::handle_zig_telemetry))
+            .layer(axum::middleware::from_fn(Self::cors_middleware))
             .with_state(Arc::new(self.clone()));
 
         let addr = SocketAddr::from(([127, 0, 0, 1], self.port));
@@ -429,6 +430,27 @@ impl VisualIdeServer {
         axum::serve(listener, app).await?;
 
         Ok(())
+    }
+
+    async fn cors_middleware(
+        req: axum::extract::Request,
+        next: axum::middleware::Next,
+    ) -> axum::response::Response {
+        use axum::http::Method;
+        if req.method() == Method::OPTIONS {
+            let mut resp = axum::response::Response::new(axum::body::Body::empty());
+            let headers = resp.headers_mut();
+            headers.insert("Access-Control-Allow-Origin", "*".parse().unwrap());
+            headers.insert("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE".parse().unwrap());
+            headers.insert("Access-Control-Allow-Headers", "*".parse().unwrap());
+            return resp;
+        }
+        let mut response = next.run(req).await;
+        let headers = response.headers_mut();
+        headers.insert("Access-Control-Allow-Origin", "*".parse().unwrap());
+        headers.insert("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE".parse().unwrap());
+        headers.insert("Access-Control-Allow-Headers", "*".parse().unwrap());
+        response
     }
 
     async fn serve_index() -> Html<&'static str> {

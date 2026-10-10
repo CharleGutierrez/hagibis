@@ -2211,7 +2211,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
-    let cli = Cli::parse();
+    let mut raw_args: Vec<String> = std::env::args().collect();
+    if raw_args.len() >= 3 && raw_args[1] == "visual" && raw_args[2] == "ide" {
+        raw_args.remove(1); // removes "visual", leaving ["hgb", "ide", ...]
+    } else if raw_args.len() >= 2 && raw_args[1] == "visual" {
+        raw_args[1] = "ide".to_string();
+    }
+    let cli = Cli::parse_from(&raw_args);
     let client = HgbClient::new();
 
     // Default to AGY Chat Canvas & Cockpit if no subcommand provided, or classic REPL if --classic is specified
