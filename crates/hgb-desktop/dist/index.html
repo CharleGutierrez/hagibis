@@ -792,6 +792,8 @@
                 <div style="padding:14px; color:#71717a; text-align:center;">Type query to scan workspace...</div>
             </div>
         </div>
+    </div>
+
     <!-- Mention Floating Dropdown Menu -->
     <div id="mention-dropdown" class="mention-dropdown"></div>
 
@@ -1106,6 +1108,7 @@
                         document.body.style.cursor = 'default';
                         resizerSidebar.classList.remove('dragging');
                         if (editorInstance) editorInstance.layout();
+                        if (editorInstanceSplit) editorInstanceSplit.layout();
                     }
                 });
             }
@@ -1133,6 +1136,7 @@
                         document.body.style.cursor = 'default';
                         resizerChat.classList.remove('dragging');
                         if (editorInstance) editorInstance.layout();
+                        if (editorInstanceSplit) editorInstanceSplit.layout();
                     }
                 });
             }
@@ -1152,6 +1156,7 @@
                     const newHeight = Math.max(100, Math.min(500, window.innerHeight - e.clientY - 24));
                     drawer.style.height = newHeight + 'px';
                     if (editorInstance) editorInstance.layout();
+                    if (editorInstanceSplit) editorInstanceSplit.layout();
                 });
                 window.addEventListener('mouseup', () => {
                     if (isDragging) {
@@ -1159,6 +1164,7 @@
                         document.body.style.cursor = 'default';
                         resizerDrawer.classList.remove('dragging');
                         if (editorInstance) editorInstance.layout();
+                        if (editorInstanceSplit) editorInstanceSplit.layout();
                     }
                 });
             }
@@ -1209,6 +1215,8 @@
             if (activeTabIdx >= 0 && openTabs[activeTabIdx]) {
                 navigator.clipboard.writeText(openTabs[activeTabIdx].path);
                 toast.success(`Copied path: ${openTabs[activeTabIdx].path}`);
+            } else {
+                toast.info('No active file open to copy path.');
             }
         }
 
