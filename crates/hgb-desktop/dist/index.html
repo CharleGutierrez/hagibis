@@ -931,13 +931,16 @@
                 t.innerHTML = `
                     <i class="fa-solid ${icon}"></i>
                     <span style="flex:1;">${escapeHtml(String(msg))}</span>
-                    <i class="fa-solid fa-xmark toast-close" onclick="this.parentElement.remove()"></i>
+                    <i class="fa-solid fa-xmark toast-close" onclick="if (this.parentElement.remove) this.parentElement.remove(); else if (this.parentElement.parentElement) this.parentElement.parentElement.removeChild(this.parentElement);"></i>
                 `;
                 container.appendChild(t);
                 setTimeout(() => {
                     t.style.opacity = '0';
                     t.style.transform = 'translateX(100%)';
-                    setTimeout(() => t.remove(), 250);
+                    setTimeout(() => {
+                        if (typeof t.remove === 'function') t.remove();
+                        else if (t.parentElement) t.parentElement.removeChild(t);
+                    }, 250);
                 }, duration);
             },
             success(msg, duration) { this.show(msg, 'success', duration); },
@@ -945,6 +948,7 @@
             info(msg, duration) { this.show(msg, 'info', duration); },
             warn(msg, duration) { this.show(msg, 'warn', duration); },
         };
+        window.toast = toast;
 
         // Global Command Palette Definition
         const COMMANDS = [
@@ -1252,15 +1256,20 @@
             }
         }
 
+        let activeSidebarTab = 'files';
+
         function toggleChatPanel() {
             const chat = document.getElementById('chat-panel') || document.querySelector('.chat-panel');
+            const resizer = document.getElementById('resizer-chat');
             const btn = document.getElementById('act-btn-chat');
             if (!chat) return;
             if (chat.style.display === 'none') {
                 chat.style.display = 'flex';
+                if (resizer) resizer.style.display = 'block';
                 if (btn) btn.classList.add('active');
             } else {
                 chat.style.display = 'none';
+                if (resizer) resizer.style.display = 'none';
                 if (btn) btn.classList.remove('active');
             }
             if (editorInstance) editorInstance.layout();
@@ -1269,16 +1278,27 @@
 
         function handleActivityClick(tab) {
             const sidebar = document.getElementById('sidebar');
+            const resizer = document.getElementById('resizer-sidebar');
             if (tab === 'composer') {
                 switchView('composer');
                 return;
             }
             if (sidebar) {
-                if (sidebar.style.display === 'none') {
-                    sidebar.style.display = 'flex';
+                if (activeSidebarTab === tab && sidebar.style.display !== 'none') {
+                    sidebar.style.display = 'none';
+                    if (resizer) resizer.style.display = 'none';
+                    document.querySelectorAll('.activity-btn').forEach(b => b.classList.remove('active'));
+                    if (editorInstance) editorInstance.layout();
+                    if (editorInstanceSplit) editorInstanceSplit.layout();
+                    return;
                 }
+                sidebar.style.display = 'flex';
+                if (resizer) resizer.style.display = 'block';
             }
+            activeSidebarTab = tab;
             switchSidebarTab(tab);
+            if (editorInstance) editorInstance.layout();
+            if (editorInstanceSplit) editorInstanceSplit.layout();
         }
 
         async function apiInvoke(cmd, args = {}) {
@@ -1553,7 +1573,7 @@
             try {
                 const models = await apiInvoke('get_available_models');
                 const sel = document.getElementById('model-select');
-                if (!sel || !models || models.length === 0) return;
+                if (!sel || !Array.isArray(models) || models.length === 0) return;
                 const prev = sel.value;
                 sel.innerHTML = '';
                 models.forEach(m => {
@@ -1853,10 +1873,22 @@
         // Bottom Terminal Execution
         function toggleTerminal() {
             const drawer = document.getElementById('terminal-drawer');
-            drawer.style.display = (drawer.style.display === 'flex' ? 'none' : 'flex');
-            if (drawer.style.display === 'flex') {
-                document.getElementById('term-input').focus();
+            const resizer = document.getElementById('resizer-drawer');
+            if (!drawer) return;
+            const isOpen = (drawer.style.display === 'flex');
+            const termBtn = document.getElementById('tab-term-btn');
+            if (isOpen && termBtn && termBtn.classList.contains('active')) {
+                drawer.style.display = 'none';
+                if (resizer) resizer.style.display = 'none';
+            } else {
+                drawer.style.display = 'flex';
+                if (resizer) resizer.style.display = 'block';
+                switchDrawerTab('term');
+                const termInput = document.getElementById('term-input');
+                if (termInput) termInput.focus();
             }
+            if (editorInstance) editorInstance.layout();
+            if (editorInstanceSplit) editorInstanceSplit.layout();
         }
 
         function handleTermInput(e) {
@@ -1896,6 +1928,16 @@
 
         function autoFixTerminalError() {
             if (!lastTermStderr) return;
+            const chat = document.getElementById('chat-panel') || document.querySelector('.chat-panel');
+            const resizer = document.getElementById('resizer-chat');
+            const btn = document.getElementById('act-btn-chat');
+            if (chat && chat.style.display === 'none') {
+                chat.style.display = 'flex';
+                if (resizer) resizer.style.display = 'block';
+                if (btn) btn.classList.add('active');
+                if (editorInstance) editorInstance.layout();
+                if (editorInstanceSplit) editorInstanceSplit.layout();
+            }
             const chatInput = document.getElementById('chat-input');
             chatInput.value = `Fix terminal compiler/runtime error:\n\`\`\`\n${lastTermStderr}\n\`\`\``;
             sendPrompt();
@@ -2230,7 +2272,7 @@
                 chatSessions = await apiInvoke('get_chat_sessions', { root_path: null });
                 const sel = document.getElementById('chat-session-select');
                 if (sel) sel.innerHTML = '';
-                if (!chatSessions || chatSessions.length === 0) {
+                if (!Array.isArray(chatSessions) || chatSessions.length === 0) {
                     activeChatSession = await apiInvoke('create_chat_session', {
                         title: 'New Conversation',
                         model: getSelectedModel(),
@@ -2261,7 +2303,8 @@
             chatSessions.forEach(s => {
                 const opt = document.createElement('option');
                 opt.value = s.id;
-                opt.text = s.title.length > 20 ? s.title.slice(0, 18) + '...' : s.title;
+                const titleStr = s.title || 'Untitled';
+                opt.text = titleStr.length > 20 ? titleStr.slice(0, 18) + '...' : titleStr;
                 if (activeChatSession && activeChatSession.id === s.id) {
                     opt.selected = true;
                 }
@@ -2572,6 +2615,8 @@
         function discardOverlay() {
             speculativeContent = "";
             document.getElementById('speculative-pill').style.display = 'none';
+            switchView('editor');
+            toast.info('Speculative edit discarded');
         }
 
         function extractCodeBlock(text) {
@@ -2632,6 +2677,8 @@
             const btn = document.getElementById('search-toggle-case');
             if (isSearchCase) btn.classList.add('active');
             else btn.classList.remove('active');
+            const input = document.getElementById('global-search-input');
+            if (input && input.value.trim()) triggerGlobalSearch();
         }
 
         function toggleSearchRegex() {
@@ -2639,6 +2686,8 @@
             const btn = document.getElementById('search-toggle-regex');
             if (isSearchRegex) btn.classList.add('active');
             else btn.classList.remove('active');
+            const input = document.getElementById('global-search-input');
+            if (input && input.value.trim()) triggerGlobalSearch();
         }
 
         async function triggerGlobalSearch() {
@@ -2775,14 +2824,15 @@
         async function refreshGitStatus() {
             try {
                 const status = await apiInvoke('get_git_status', { root_path: null });
+                if (!status || !status.branch) return;
                 currentGitStatus = status;
 
                 const badge = document.getElementById('git-branch-badge');
                 if (badge) badge.innerHTML = `<i class="fa fa-code-branch"></i> ${escapeHtml(status.branch)}`;
 
-                const stagedCount = status.staged.length;
-                const unstagedCount = status.unstaged.length;
-                const untrackedCount = status.untracked.length;
+                const stagedCount = (status.staged && status.staged.length) || 0;
+                const unstagedCount = (status.unstaged && status.unstaged.length) || 0;
+                const untrackedCount = (status.untracked && status.untracked.length) || 0;
                 const totalChanges = stagedCount + unstagedCount + untrackedCount;
 
                 const elStaged = document.getElementById('git-staged-count');
@@ -2947,6 +2997,7 @@
         }
 
         function renderTree(nodes, parentEl) {
+            if (!Array.isArray(nodes) || !parentEl) return;
             nodes.forEach(node => {
                 const item = document.createElement('div');
                 item.className = 'tree-item';
@@ -3224,6 +3275,16 @@
         function autoFixDiagnostic(idx) {
             if (!activeDiagnostics[idx]) return;
             const d = activeDiagnostics[idx];
+            const chat = document.getElementById('chat-panel') || document.querySelector('.chat-panel');
+            const resizer = document.getElementById('resizer-chat');
+            const btn = document.getElementById('act-btn-chat');
+            if (chat && chat.style.display === 'none') {
+                chat.style.display = 'flex';
+                if (resizer) resizer.style.display = 'block';
+                if (btn) btn.classList.add('active');
+                if (editorInstance) editorInstance.layout();
+                if (editorInstanceSplit) editorInstanceSplit.layout();
+            }
             const chatInput = document.getElementById('chat-input');
             chatInput.value = `Fix rustc compiler diagnostic on line ${d.primary_line_start}:\n[${d.level}] ${d.message}\n${d.rendered || ''}`;
             sendPrompt();
@@ -3251,8 +3312,20 @@
 
         function toggleProblemsPanel() {
             const drawer = document.getElementById('terminal-drawer');
-            drawer.style.display = 'flex';
-            switchDrawerTab('problems');
+            const resizer = document.getElementById('resizer-drawer');
+            if (!drawer) return;
+            const isOpen = (drawer.style.display === 'flex');
+            const probBtn = document.getElementById('tab-problems-btn');
+            if (isOpen && probBtn && probBtn.classList.contains('active')) {
+                drawer.style.display = 'none';
+                if (resizer) resizer.style.display = 'none';
+            } else {
+                drawer.style.display = 'flex';
+                if (resizer) resizer.style.display = 'block';
+                switchDrawerTab('problems');
+            }
+            if (editorInstance) editorInstance.layout();
+            if (editorInstanceSplit) editorInstanceSplit.layout();
         }
 
         // Phase 1: Interactive @ Mention System
