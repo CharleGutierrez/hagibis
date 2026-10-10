@@ -2189,6 +2189,14 @@ enum Commands {
         /// Do not automatically launch browser
         #[arg(long)]
         no_open: bool,
+
+        /// Require secure auth token for remote hosting
+        #[arg(long)]
+        token: Option<String>,
+
+        /// Auto-generate a high-entropy security token on launch
+        #[arg(long)]
+        generate_token: bool,
     },
 }
 
@@ -2246,7 +2254,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
         return state.run_interactive().await.map_err(|e| Box::new(e) as Box<dyn std::error::Error>);
     }
 
-    if let Commands::Ide { path, web: _, port, no_open } = command {
+    if let Commands::Ide { path, web: _, port, no_open, token, generate_token } = command {
         let target_dir = path
             .as_ref()
             .map(|p| {
@@ -2264,15 +2272,34 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             })
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")));
 
-        let server = hgb_nextgen::VisualIdeServer::new(port, target_dir.clone());
+        let active_token = if let Some(t) = token {
+            Some(t)
+        } else if generate_token {
+            let gen = format!("hgb-{}", &uuid::Uuid::new_v4().to_string().replace("-", "")[..24]);
+            Some(gen)
+        } else {
+            None
+        };
+
+        let server = hgb_nextgen::VisualIdeServer::new(port, target_dir.clone())
+            .with_auth_token(active_token.clone());
+
         tokio::spawn(async move {
             if let Err(e) = server.run().await {
                 eprintln!("Visual IDE Server error: {}", e);
             }
         });
 
-        let url = format!("http://127.0.0.1:{}", port);
+        let url = if let Some(ref t) = active_token {
+            format!("http://127.0.0.1:{}?token={}", port, t)
+        } else {
+            format!("http://127.0.0.1:{}", port)
+        };
+
         println!("🚀 Hagibis Web Visual IDE active at {}", url);
+        if let Some(ref t) = active_token {
+            println!("🔒 Remote Auth Token Gatekeeper: ACTIVE (Token: {})", t);
+        }
         println!("📂 Workspace directory: {}", target_dir.display());
         println!("Press Ctrl+C to terminate the Visual IDE server.");
 
@@ -3115,7 +3142,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             } else if target.is_file() {
                 match auditor.audit_file(&target).await { Ok(x) => x, Err(_) => auditor.audit_code("", None).await }
             } else {
-                auditor.audit_workspace(&target).await.unwrap_or_else(|_| { let engine = tokio::runtime::Handle::current(); tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(auditor.audit_code("", None))) })
+                auditor.audit_workspace(&target).await.unwrap_or_else(|_| { let _engine = tokio::runtime::Handle::current(); tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(auditor.audit_code("", None))) })
             };
 
             println!("\n{}", report.render_terminal_card());

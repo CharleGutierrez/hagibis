@@ -56,6 +56,10 @@ pub mod voice_stream;
 pub mod inline_diff_engine;
 pub mod ide_agent_engine;
 pub mod visual_ide;
+pub mod lsp_engine;
+pub mod semantic_index;
+pub mod dap_engine;
+pub mod worktree_swarm;
 
 pub use visual_ide::VisualIdeServer;
 pub use inline_diff_engine::{

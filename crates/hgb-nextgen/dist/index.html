@@ -34,6 +34,7 @@
         .btn-green:hover { background: #10b981; }
         .btn-indigo { background: #4f46e5; border-color: #6366f1; color: #fff; }
         .btn-indigo:hover { background: #6366f1; }
+        .dap-breakpoint-glyph { background: #ef4444; border-radius: 50%; margin-left: 3px; width: 10px !important; height: 10px !important; box-shadow: 0 0 6px rgba(239, 68, 68, 0.8); cursor: pointer; }
         
         .workspace-grid { display: flex; flex: 1; height: calc(100vh - 42px - 24px); overflow: hidden; position: relative; }
         
@@ -375,6 +376,12 @@
                 <button class="activity-btn" id="act-btn-composer" onclick="handleActivityClick('composer')" title="Composer Multi-File Agent (Ctrl+I)">
                     <i class="fa fa-layer-group"></i>
                 </button>
+                <button class="activity-btn" id="act-btn-debug" onclick="handleActivityClick('debug')" title="Visual Debugger (DAP)">
+                    <i class="fa fa-bug"></i>
+                </button>
+                <button class="activity-btn" id="act-btn-swarm" onclick="handleActivityClick('swarm')" title="Multi-Agent Worktree Swarm">
+                    <i class="fa fa-network-wired"></i>
+                </button>
                 <button class="activity-btn" id="act-btn-mcp" onclick="openMcpModal()" title="MCP Tools Runner">
                     <i class="fa fa-plug"></i>
                 </button>
@@ -402,6 +409,8 @@
                 <button class="sidebar-nav-btn" id="tab-nav-search" onclick="switchSidebarTab('search')" title="Codebase Search (Ctrl+Shift+F)"><i class="fa fa-magnifying-glass"></i> Search</button>
                 <button class="sidebar-nav-btn" id="tab-nav-git" onclick="switchSidebarTab('git')" title="Source Control (Ctrl+Shift+G)"><i class="fa fa-code-branch"></i> Git <span id="git-badge-count" class="badge" style="display:none; font-size:9px; padding:1px 5px; background:#083344; color:#22d3ee; margin-left:2px;">0</span></button>
                 <button class="sidebar-nav-btn" id="tab-nav-zig" onclick="switchSidebarTab('zig')" title="Zig & Rust Native Telemetry"><i class="fa fa-bolt" style="color:#c084fc;"></i> Zig</button>
+                <button class="sidebar-nav-btn" id="tab-nav-debug" onclick="switchSidebarTab('debug')" title="Visual Debugger (DAP)"><i class="fa fa-bug"></i> Debug</button>
+                <button class="sidebar-nav-btn" id="tab-nav-swarm" onclick="switchSidebarTab('swarm')" title="Multi-Agent Swarm"><i class="fa fa-network-wired"></i> Swarm</button>
             </div>
 
             <!-- View 1: Files Explorer -->
@@ -436,6 +445,10 @@
                         <input type="text" id="global-search-input" class="search-text-input" placeholder="Search (Regex or Text)..." onkeydown="if(event.key==='Enter') triggerGlobalSearch()">
                         <button id="search-toggle-case" class="btn-search-toggle" onclick="toggleSearchCase()" title="Match Case (Aa)">Aa</button>
                         <button id="search-toggle-regex" class="btn-search-toggle" onclick="toggleSearchRegex()" title="Use Regular Expression (.*)">.*</button>
+                    </div>
+                    <div style="display:flex; gap:6px; margin:2px 0;">
+                        <button id="search-mode-regex" class="btn btn-primary" style="flex:1; padding:2px 6px; font-size:10px; justify-content:center;" onclick="setSearchMode('regex')">Regex / Text</button>
+                        <button id="search-mode-semantic" class="btn btn-secondary" style="flex:1; padding:2px 6px; font-size:10px; justify-content:center; color:#38bdf8;" onclick="setSearchMode('semantic')"><i class="fa fa-bolt"></i> Semantic Vector</button>
                     </div>
                     <div class="search-input-box">
                         <input type="text" id="global-replace-input" class="search-text-input" placeholder="Replace with...">
@@ -582,6 +595,49 @@
                             <li><i class="fa fa-check" style="color:#10b981; margin-right:4px;"></i> Blake3 Time-Travel Snapshots</li>
                         </ul>
                     </div>
+                </div>
+            </div>
+
+            <!-- View 5: Interactive Visual Debugger (DAP) -->
+            <div class="sidebar-view" id="sidebar-view-debug" style="display:none;">
+                <div class="sidebar-header">
+                    <div style="display:flex; align-items:center; gap:6px;">
+                        <span>Visual Debugger</span>
+                        <span id="dap-state-badge" class="badge" style="background:#1e293b; color:#94a3b8; font-size:10px;">IDLE</span>
+                    </div>
+                </div>
+                <div style="padding:10px; border-bottom:1px solid var(--border-color); display:flex; gap:6px; flex-wrap:wrap;">
+                    <button class="btn btn-primary" onclick="runDapLaunch()" title="Start Debug Session (F5)" style="font-size:11px; padding:4px 8px;"><i class="fa fa-play"></i> Launch</button>
+                    <button class="btn btn-secondary" onclick="runDapContinue()" title="Continue (F5)" style="font-size:11px; padding:4px 8px;"><i class="fa fa-forward"></i> Continue</button>
+                    <button class="btn btn-secondary" onclick="runDapStepOver()" title="Step Over (F10)" style="font-size:11px; padding:4px 8px;"><i class="fa fa-arrow-right"></i> Next</button>
+                    <button class="btn btn-secondary" onclick="runDapStepInto()" title="Step In (F11)" style="font-size:11px; padding:4px 8px;"><i class="fa fa-arrow-down"></i> In</button>
+                    <button class="btn btn-secondary" style="background:#450a0a; color:#fca5a5; font-size:11px; padding:4px 8px;" onclick="runDapStop()" title="Stop Session (Shift+F5)"><i class="fa fa-stop"></i> Stop</button>
+                </div>
+                <div style="padding:10px 14px 4px; font-size:11px; font-weight:700; color:#94a3b8; text-transform:uppercase;">Call Stack</div>
+                <div id="dap-stack-list" style="padding:4px 10px 10px; font-size:12px; color:#cbd5e1; font-family:monospace; max-height:120px; overflow-y:auto;">
+                    <div style="color:#64748b; font-style:italic;">No active debug target</div>
+                </div>
+                <div style="padding:10px 14px 4px; font-size:11px; font-weight:700; color:#94a3b8; text-transform:uppercase; border-top:1px solid var(--border-color);">Scope Variables</div>
+                <div id="dap-vars-list" style="padding:4px 10px 10px; font-size:12px; color:#cbd5e1; font-family:monospace; max-height:140px; overflow-y:auto;">
+                    <div style="color:#64748b; font-style:italic;">Variables inspect on pause</div>
+                </div>
+                <div style="padding:10px 14px 4px; font-size:11px; font-weight:700; color:#94a3b8; text-transform:uppercase; border-top:1px solid var(--border-color);">Breakpoints (<span id="dap-bp-count">0</span>)</div>
+                <div id="dap-bp-list" style="padding:4px 10px 10px; font-size:12px; color:#cbd5e1; font-family:monospace; max-height:160px; overflow-y:auto;">
+                    <div style="color:#64748b; font-style:italic;">Click editor gutter to toggle breakpoints</div>
+                </div>
+            </div>
+
+            <!-- View 6: Multi-Agent Parallel Git Worktrees Swarm -->
+            <div class="sidebar-view" id="sidebar-view-swarm" style="display:none;">
+                <div class="sidebar-header">
+                    <div style="display:flex; align-items:center; gap:6px;">
+                        <span>Swarm Worktrees</span>
+                        <span class="badge" style="background:#064e3b; color:#6ee7b7; font-size:10px;">PARALLEL AGENTS</span>
+                    </div>
+                    <button class="btn btn-primary" onclick="promptSpawnSwarmWorker()" style="font-size:11px; padding:3px 8px;"><i class="fa fa-plus"></i> Spawn</button>
+                </div>
+                <div id="swarm-task-cards" style="padding:10px; display:flex; flex-direction:column; gap:10px; overflow-y:auto; flex:1;">
+                    <div style="color:#64748b; font-size:12px; text-align:center; padding:16px;">No active swarm worktrees. Click + Spawn to launch parallel branch workers.</div>
                 </div>
             </div>
         </div>
@@ -885,6 +941,24 @@
             <div style="padding:10px 14px; background:#141416; border-top:1px solid #27272a; display:flex; justify-content:space-between; align-items:center; font-size:11px; color:#71717a;">
                 <span>Press <strong style="color:#fff;">?</strong> anywhere outside text editors to open this cheatsheet</span>
                 <button class="btn btn-primary" onclick="closeShortcutsModal()">Close</button>
+        </div>
+    </div>
+
+    <!-- Remote Auth Security Gatekeeper Modal -->
+    <div class="modal-overlay" id="auth-modal" style="display:none; z-index:99999;">
+        <div class="modal-content" style="max-width:440px; border-color:#0284c7; background:#0f172a; box-shadow:0 0 40px rgba(2,132,199,0.3);" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <i class="fa fa-shield-halved" style="color:#38bdf8; font-size:18px;"></i>
+                    <span style="font-weight:700; color:#f8fafc;">Hagibis Security Gatekeeper</span>
+                </div>
+            </div>
+            <div style="padding:16px 20px;">
+                <p style="font-size:13px; color:#94a3b8; margin-bottom:14px;">This Hagibis Web Visual IDE instance is protected by a remote auth token. Enter your security token to continue.</p>
+                <input type="password" id="auth-token-input" placeholder="Enter security token (e.g. hgb-...)" style="width:100%; padding:10px 12px; background:#1e293b; border:1px solid #334155; border-radius:6px; color:#f8fafc; font-family:monospace; font-size:13px; outline:none;" onkeydown="if(event.key==='Enter') verifyAndSubmitAuthToken();">
+                <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:16px;">
+                    <button class="btn btn-primary" onclick="verifyAndSubmitAuthToken()" style="background:#0284c7; border-color:#0369a1; padding:8px 16px;"><i class="fa fa-unlock"></i> Unlock IDE</button>
+                </div>
             </div>
         </div>
     </div>
@@ -1359,18 +1433,51 @@
                 'git_unstage_all': ['/api/git_unstage_all', 'POST', args],
                 'git_commit_changes': ['/api/git_commit', 'POST', args],
                 'get_zig_engine_telemetry': ['/api/zig_telemetry', 'GET'],
+                'lsp_hover': ['/api/lsp/hover', 'POST', args],
+                'lsp_definition': ['/api/lsp/definition', 'POST', args],
+                'lsp_completion': ['/api/lsp/completion', 'POST', args],
+                'auth_verify': ['/api/auth/verify', 'POST', args],
+                'semantic_search': ['/api/semantic_search', 'POST', args],
+                'dap_toggle_breakpoint': ['/api/dap/toggle_breakpoint', 'POST', args],
+                'dap_get_breakpoints': ['/api/dap/breakpoints', 'GET'],
+                'dap_launch': ['/api/dap/launch', 'POST', args],
+                'dap_continue': ['/api/dap/continue', 'POST', args],
+                'dap_step_over': ['/api/dap/step_over', 'POST', args],
+                'dap_step_into': ['/api/dap/step_into', 'POST', args],
+                'dap_stop': ['/api/dap/stop', 'POST', args],
+                'dap_status': ['/api/dap/status', 'GET'],
+                'swarm_spawn': ['/api/swarm/spawn', 'POST', args],
+                'swarm_tasks': ['/api/swarm/tasks', 'GET'],
+                'swarm_merge': ['/api/swarm/merge', 'POST', args],
             };
             const config = routeMap[cmd];
             if (!config) throw new Error('Unknown command: ' + cmd);
             const [urlPath, method, body] = config;
             const apiBase = (window.location.protocol === 'file:' || !window.location.host) ? 'http://127.0.0.1:5173' : '';
             const url = apiBase + urlPath;
+
+            const token = new URLSearchParams(window.location.search).get('token') || sessionStorage.getItem('hgb_token') || '';
+            if (token && !sessionStorage.getItem('hgb_token')) {
+                sessionStorage.setItem('hgb_token', token);
+            }
+
+            const reqHeaders = {};
+            if (body) reqHeaders['Content-Type'] = 'application/json';
+            if (token) {
+                reqHeaders['Authorization'] = 'Bearer ' + token;
+                reqHeaders['x-hgb-token'] = token;
+            }
+
             try {
                 const res = await fetch(url, {
                     method,
-                    headers: body ? { 'Content-Type': 'application/json' } : undefined,
+                    headers: Object.keys(reqHeaders).length > 0 ? reqHeaders : undefined,
                     body: body ? JSON.stringify(body) : undefined,
                 });
+                if (res.status === 401) {
+                    openAuthModal();
+                    throw new Error('Authentication required');
+                }
                 if (cmd === 'read_file') return await res.text();
                 return await res.json();
             } catch (err) {
@@ -1397,6 +1504,89 @@
                             minimap: { enabled: true },
                             scrollBeyondLastLine: false,
                             inlineSuggest: { enabled: true },
+                            glyphMargin: true,
+                        });
+
+                        // Interactive Gutter Breakpoint Listener
+                        editorInstance.onMouseDown((e) => {
+                            if (e.target && e.target.type === monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN) {
+                                const line = e.target.position ? e.target.position.lineNumber : 0;
+                                if (line > 0) toggleGutterBreakpoint(line);
+                            }
+                        });
+
+                        // Register Real LSP Providers (Hover, Definition, Completion)
+                        const lspLangs = ['rust', 'zig', 'javascript', 'typescript', 'python'];
+                        lspLangs.forEach(lang => {
+                            monaco.languages.registerHoverProvider(lang, {
+                                provideHover: async (model, position) => {
+                                    if (activeTabIdx < 0) return null;
+                                    try {
+                                        const res = await apiInvoke('lsp_hover', {
+                                            path: openTabs[activeTabIdx].path,
+                                            line: position.lineNumber,
+                                            character: position.column,
+                                        });
+                                        if (res && res.contents) {
+                                            return { contents: [{ value: res.contents }] };
+                                        }
+                                    } catch (err) { /* silent */ }
+                                    return null;
+                                }
+                            });
+
+                            monaco.languages.registerDefinitionProvider(lang, {
+                                provideDefinition: async (model, position) => {
+                                    if (activeTabIdx < 0) return null;
+                                    try {
+                                        const res = await apiInvoke('lsp_definition', {
+                                            path: openTabs[activeTabIdx].path,
+                                            line: position.lineNumber,
+                                            character: position.column,
+                                        });
+                                        if (res && res.uri) {
+                                            await openFile(res.uri);
+                                            if (editorInstance) {
+                                                editorInstance.setPosition({ lineNumber: res.line, column: res.character });
+                                                editorInstance.revealLineInCenter(res.line);
+                                            }
+                                            return {
+                                                uri: monaco.Uri.parse(res.uri),
+                                                range: new monaco.Range(res.line, res.character, res.line, res.character),
+                                            };
+                                        }
+                                    } catch (err) { /* silent */ }
+                                    return null;
+                                }
+                            });
+
+                            monaco.languages.registerCompletionItemProvider(lang, {
+                                triggerCharacters: ['.', ':', '$'],
+                                provideCompletionItems: async (model, position) => {
+                                    if (activeTabIdx < 0) return { suggestions: [] };
+                                    const lineContent = model.getLineContent(position.lineNumber);
+                                    try {
+                                        const items = await apiInvoke('lsp_completion', {
+                                            path: openTabs[activeTabIdx].path,
+                                            line_content: lineContent,
+                                            character: position.column,
+                                        });
+                                        if (Array.isArray(items)) {
+                                            return {
+                                                suggestions: items.map(item => ({
+                                                    label: item.label,
+                                                    kind: monaco.languages.CompletionItemKind.Keyword,
+                                                    detail: item.detail,
+                                                    documentation: item.documentation,
+                                                    insertText: item.insert_text,
+                                                    insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+                                                }))
+                                            };
+                                        }
+                                    } catch (err) { /* silent */ }
+                                    return { suggestions: [] };
+                                }
+                            });
                         });
 
                         // Register Cursor Tab (Fill-In-The-Middle Predictive Ghost Text)
@@ -1712,6 +1902,7 @@
             updateBreadcrumbs(tab.path);
             updateGitGutter(tab.path);
             refreshDiagnosticsForFile(tab.path);
+            renderGutterBreakpoints();
             if (isSplitOpen) loadActiveIntoSplit();
             debounceSaveSession();
         }
@@ -2650,17 +2841,24 @@
             const searchView = document.getElementById('sidebar-view-search');
             const gitView = document.getElementById('sidebar-view-git');
             const zigView = document.getElementById('sidebar-view-zig');
+            const debugView = document.getElementById('sidebar-view-debug');
+            const swarmView = document.getElementById('sidebar-view-swarm');
+
             const btnFiles = document.getElementById('tab-nav-files');
             const btnSearch = document.getElementById('tab-nav-search');
             const btnGit = document.getElementById('tab-nav-git');
             const btnZig = document.getElementById('tab-nav-zig');
+            const btnDebug = document.getElementById('tab-nav-debug');
+            const btnSwarm = document.getElementById('tab-nav-swarm');
 
             if (!filesView || !searchView || !gitView) return;
-            [btnFiles, btnSearch, btnGit, btnZig].filter(Boolean).forEach(b => b.classList.remove('active'));
+            [btnFiles, btnSearch, btnGit, btnZig, btnDebug, btnSwarm].filter(Boolean).forEach(b => b.classList.remove('active'));
             filesView.style.display = 'none';
             searchView.style.display = 'none';
             gitView.style.display = 'none';
             if (zigView) zigView.style.display = 'none';
+            if (debugView) debugView.style.display = 'none';
+            if (swarmView) swarmView.style.display = 'none';
 
             // Synchronize Activity Bar
             document.querySelectorAll('.activity-btn').forEach(b => b.classList.remove('active'));
@@ -2685,12 +2883,48 @@
                 if (zigView) zigView.style.display = 'flex';
                 if (btnZig) btnZig.classList.add('active');
                 refreshZigTelemetry();
+            } else if (tab === 'debug') {
+                if (debugView) debugView.style.display = 'flex';
+                if (btnDebug) btnDebug.classList.add('active');
+                refreshDapStatus();
+            } else if (tab === 'swarm') {
+                if (swarmView) swarmView.style.display = 'flex';
+                if (btnSwarm) btnSwarm.classList.add('active');
+                refreshSwarmTasks();
             }
         }
 
         // Global Regex Codebase Search & Replace Engine
         let isSearchCase = false;
         let isSearchRegex = false;
+        let currentSearchMode = 'regex';
+
+        function setSearchMode(mode) {
+            currentSearchMode = mode;
+            const btnRegex = document.getElementById('search-mode-regex');
+            const btnSemantic = document.getElementById('search-mode-semantic');
+            if (mode === 'semantic') {
+                if (btnSemantic) {
+                    btnSemantic.className = 'btn btn-primary';
+                    btnSemantic.style.color = '#fff';
+                }
+                if (btnRegex) {
+                    btnRegex.className = 'btn btn-secondary';
+                    btnRegex.style.color = '#94a3b8';
+                }
+            } else {
+                if (btnRegex) {
+                    btnRegex.className = 'btn btn-primary';
+                    btnRegex.style.color = '#fff';
+                }
+                if (btnSemantic) {
+                    btnSemantic.className = 'btn btn-secondary';
+                    btnSemantic.style.color = '#38bdf8';
+                }
+            }
+            const input = document.getElementById('global-search-input');
+            if (input && input.value.trim()) triggerGlobalSearch();
+        }
 
         function toggleSearchCase() {
             isSearchCase = !isSearchCase;
@@ -2722,6 +2956,38 @@
             }
             container.innerHTML = '<div style="padding:14px; color:#38bdf8; text-align:center; font-size:12px;"><i class="fa fa-spinner fa-spin"></i> Searching codebase...</div>';
             summary.style.display = 'none';
+
+            if (currentSearchMode === 'semantic') {
+                try {
+                    const res = await apiInvoke('semantic_search', { query, limit: 20 });
+                    summary.style.display = 'block';
+                    const hits = res.results || [];
+                    summary.innerHTML = `<span><strong>${hits.length}</strong> semantic matches (Indexed: <strong>${res.indexed_files || 0}</strong> chunks)</span>`;
+                    if (hits.length === 0) {
+                        container.innerHTML = '<div style="padding:14px; color:#71717a; text-align:center; font-size:12px;">No semantic matches found</div>';
+                        return;
+                    }
+                    let html = '';
+                    hits.forEach(h => {
+                        const fname = h.file_path.split('/').pop();
+                        const relPath = h.file_path.includes('/') ? h.file_path.slice(h.file_path.indexOf('/') + 1) : h.file_path;
+                        const scorePct = (h.similarity_score * 100).toFixed(1);
+                        const snippet = escapeHtml(h.snippet.slice(0, 180));
+                        html += `
+                        <div class="search-match-file" onclick="jumpToSearchMatch('${h.file_path}', ${h.start_line}, 0)">
+                            <span title="${h.file_path}"><i class="fa fa-brain" style="color:#38bdf8; margin-right:4px;"></i> ${fname} <span class="badge" style="background:#083344; color:#38bdf8; font-size:10px;">${scorePct}%</span></span>
+                            <span style="font-size:10px; color:#71717a;">${escapeHtml(relPath)}:${h.start_line}</span>
+                        </div>
+                        <div class="search-match-line" onclick="jumpToSearchMatch('${h.file_path}', ${h.start_line}, 0)" style="font-family:monospace; font-size:11px; white-space:pre-wrap; color:#cbd5e1; padding:4px 8px;">
+                            ${snippet}
+                        </div>`;
+                    });
+                    container.innerHTML = html;
+                } catch (e) {
+                    container.innerHTML = `<div style="padding:14px; color:#ef4444; text-align:center; font-size:12px;">Semantic search error: ${e}</div>`;
+                }
+                return;
+            }
 
             try {
                 const res = await apiInvoke('global_search', {
@@ -3618,6 +3884,314 @@
                 resBox.innerText = JSON.stringify(resp, null, 2);
             } catch (err) {
                 resBox.innerText = 'MCP Execution Error: ' + err;
+            }
+        }
+
+        // Phase 2: Remote Auth Security Gatekeeper
+        function openAuthModal() {
+            const modal = document.getElementById('auth-modal');
+            if (modal) {
+                modal.style.display = 'flex';
+                const input = document.getElementById('auth-token-input');
+                if (input) setTimeout(() => input.focus(), 50);
+            }
+        }
+
+        function closeAuthModal(e) {
+            if (e && e.target !== e.currentTarget && e.target.tagName !== 'I') return;
+            const modal = document.getElementById('auth-modal');
+            if (modal) modal.style.display = 'none';
+        }
+
+        async function verifyAndSubmitAuthToken() {
+            const input = document.getElementById('auth-token-input');
+            if (!input) return;
+            const token = input.value.trim();
+            if (!token) {
+                toast.warn('Please enter a security token.');
+                return;
+            }
+            try {
+                const res = await fetch('/api/auth/verify', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer ' + token,
+                        'x-hgb-token': token,
+                    },
+                    body: JSON.stringify({ token })
+                });
+                const data = await res.json();
+                if (data.authenticated) {
+                    sessionStorage.setItem('hgb_token', token);
+                    toast.success('Authentication verified! Session authorized.');
+                    closeAuthModal();
+                    loadWorkspace();
+                } else {
+                    toast.error('Invalid security token: ' + (data.error || 'Access denied'));
+                }
+            } catch (e) {
+                toast.error('Verification error: ' + e);
+            }
+        }
+
+        // Phase 4: Interactive Visual Debugger (DAP) & Breakpoints
+        let breakpointDecorations = [];
+        let cachedBreakpoints = [];
+
+        async function toggleGutterBreakpoint(line) {
+            if (activeTabIdx < 0 || !openTabs[activeTabIdx]) {
+                toast.warn('Please open a file to set breakpoints.');
+                return;
+            }
+            const path = openTabs[activeTabIdx].path;
+            try {
+                const res = await apiInvoke('dap_toggle_breakpoint', { path, line });
+                cachedBreakpoints = res.breakpoints || [];
+                renderGutterBreakpoints();
+                toast.info((res.action === 'added' ? 'Added' : 'Removed') + ` breakpoint at line ${line}`);
+            } catch (err) {
+                toast.error('Failed to toggle breakpoint: ' + err);
+            }
+        }
+
+        async function renderGutterBreakpoints() {
+            if (!cachedBreakpoints || cachedBreakpoints.length === 0) {
+                try {
+                    const res = await apiInvoke('dap_get_breakpoints');
+                    cachedBreakpoints = res.breakpoints || [];
+                } catch (e) {
+                    cachedBreakpoints = [];
+                }
+            }
+
+            const bpCount = document.getElementById('dap-bp-count');
+            const bpList = document.getElementById('dap-bp-list');
+            if (bpCount) bpCount.innerText = cachedBreakpoints.length;
+
+            if (bpList) {
+                if (cachedBreakpoints.length === 0) {
+                    bpList.innerHTML = '<div style="color:#64748b; font-style:italic;">Click editor gutter to toggle breakpoints</div>';
+                } else {
+                    let html = '';
+                    cachedBreakpoints.forEach(bp => {
+                        const fname = bp.file_path.split('/').pop();
+                        html += `
+                        <div style="display:flex; justify-content:space-between; align-items:center; padding:3px 0; border-bottom:1px solid #1e293b; cursor:pointer;" onclick="openFile('${bp.file_path}').then(() => { if (editorInstance) { editorInstance.revealLineInCenter(${bp.line}); editorInstance.setPosition({ lineNumber:${bp.line}, column:1 }); } })">
+                            <div style="display:flex; align-items:center; gap:6px;">
+                                <span style="color:#ef4444; font-size:10px;">●</span>
+                                <span style="color:#e2e8f0; font-weight:600;">${fname}</span>
+                                <span style="color:#64748b; font-size:11px;">:${bp.line}</span>
+                            </div>
+                            <span style="font-size:10px; color:#38bdf8;">${bp.enabled ? 'Active' : 'Disabled'}</span>
+                        </div>`;
+                    });
+                    bpList.innerHTML = html;
+                }
+            }
+
+            // Monaco editor decorations
+            if (editorInstance && !isUsingFallback && activeTabIdx >= 0 && openTabs[activeTabIdx]) {
+                const curPath = openTabs[activeTabIdx].path;
+                const fileBps = cachedBreakpoints.filter(b => b.file_path === curPath && b.enabled);
+                const newDecorations = fileBps.map(b => ({
+                    range: new monaco.Range(b.line, 1, b.line, 1),
+                    options: {
+                        isWholeLine: false,
+                        glyphMarginClassName: 'dap-breakpoint-glyph',
+                        glyphMarginHoverMessage: { value: `Breakpoint at line ${b.line}` }
+                    }
+                }));
+                breakpointDecorations = editorInstance.deltaDecorations(breakpointDecorations, newDecorations);
+            }
+        }
+
+        async function runDapLaunch() {
+            try {
+                toast.info('Launching DAP debug session...');
+                await apiInvoke('dap_launch', { program: 'cargo run', args: [] });
+                await refreshDapStatus();
+            } catch (e) {
+                toast.error('DAP launch failed: ' + e);
+            }
+        }
+
+        async function runDapContinue() {
+            try {
+                await apiInvoke('dap_continue');
+                await refreshDapStatus();
+            } catch (e) {
+                toast.error('DAP continue error: ' + e);
+            }
+        }
+
+        async function runDapStepOver() {
+            try {
+                await apiInvoke('dap_step_over');
+                await refreshDapStatus();
+            } catch (e) {
+                toast.error('DAP step over error: ' + e);
+            }
+        }
+
+        async function runDapStepInto() {
+            try {
+                await apiInvoke('dap_step_into');
+                await refreshDapStatus();
+            } catch (e) {
+                toast.error('DAP step into error: ' + e);
+            }
+        }
+
+        async function runDapStop() {
+            try {
+                await apiInvoke('dap_stop');
+                await refreshDapStatus();
+                toast.info('Debug session terminated.');
+            } catch (e) {
+                toast.error('DAP stop error: ' + e);
+            }
+        }
+
+        async function refreshDapStatus() {
+            try {
+                const status = await apiInvoke('dap_status');
+                const badge = document.getElementById('dap-state-badge');
+                const stackList = document.getElementById('dap-stack-list');
+                const varsList = document.getElementById('dap-vars-list');
+
+                if (badge) {
+                    badge.innerText = status.state || 'IDLE';
+                    if (status.state === 'RUNNING') {
+                        badge.style.background = '#065f46';
+                        badge.style.color = '#34d399';
+                    } else if (status.state === 'STOPPED') {
+                        badge.style.background = '#78350f';
+                        badge.style.color = '#fbbf24';
+                    } else if (status.state === 'TERMINATED') {
+                        badge.style.background = '#450a0a';
+                        badge.style.color = '#f87171';
+                    } else {
+                        badge.style.background = '#1e293b';
+                        badge.style.color = '#94a3b8';
+                    }
+                }
+
+                if (stackList) {
+                    if (!status.frames || status.frames.length === 0) {
+                        stackList.innerHTML = '<div style="color:#64748b; font-style:italic;">No active frames</div>';
+                    } else {
+                        let html = '';
+                        status.frames.forEach((f, idx) => {
+                            const fname = f.file_path ? f.file_path.split('/').pop() : 'unknown';
+                            html += `
+                            <div style="padding:4px 0; border-bottom:1px solid #1e293b; cursor:pointer;" onclick="${f.file_path ? `openFile('${f.file_path}').then(() => { if (editorInstance) { editorInstance.revealLineInCenter(${f.line}); editorInstance.setPosition({ lineNumber:${f.line}, column:1 }); } })` : ''}">
+                                <div style="color:#38bdf8; font-weight:600;">#${idx} ${escapeHtml(f.function_name)}</div>
+                                <div style="font-size:10px; color:#94a3b8;">${fname}:${f.line}</div>
+                            </div>`;
+                        });
+                        stackList.innerHTML = html;
+                    }
+                }
+
+                if (varsList) {
+                    if (!status.scopes || status.scopes.length === 0) {
+                        varsList.innerHTML = '<div style="color:#64748b; font-style:italic;">Variables inspect on pause</div>';
+                    } else {
+                        let html = '';
+                        status.scopes.forEach(sc => {
+                            sc.variables.forEach(v => {
+                                html += `
+                                <div style="padding:3px 0; border-bottom:1px solid #1e293b; display:flex; justify-content:space-between; align-items:center;">
+                                    <span style="color:#a78bfa; font-weight:600;">${escapeHtml(v.name)}</span>
+                                    <span style="color:#34d399; font-size:11px;">${escapeHtml(v.value)} <span style="color:#64748b; font-size:9px;">(${escapeHtml(v.var_type)})</span></span>
+                                </div>`;
+                            });
+                        });
+                        varsList.innerHTML = html;
+                    }
+                }
+
+                renderGutterBreakpoints();
+            } catch (e) {
+                console.warn('Failed to refresh DAP status:', e);
+            }
+        }
+
+        // Phase 5: Multi-Agent Parallel Git Worktrees Swarm
+        async function promptSpawnSwarmWorker() {
+            const prompt = window.prompt("Enter autonomous Swarm Agent task / goal:\n(e.g., 'Refactor error handling in worktree_swarm.rs')", "");
+            if (!prompt || !prompt.trim()) return;
+            const branch_name = "worker-" + Math.floor(Math.random() * 10000);
+            try {
+                toast.info(`Spawning Swarm worker on isolated worktree branch ${branch_name}...`);
+                await apiInvoke('swarm_spawn', { branch_name, prompt });
+                toast.success(`Swarm worker spawned!`);
+                refreshSwarmTasks();
+            } catch (err) {
+                toast.error('Swarm spawn error: ' + err);
+            }
+        }
+
+        async function refreshSwarmTasks() {
+            const container = document.getElementById('swarm-task-cards');
+            if (!container) return;
+            try {
+                const res = await apiInvoke('swarm_tasks');
+                const tasks = res.tasks || [];
+                if (tasks.length === 0) {
+                    container.innerHTML = '<div style="color:#64748b; font-size:12px; text-align:center; padding:16px;">No active swarm worktrees. Click + Spawn to launch parallel branch workers.</div>';
+                    return;
+                }
+                let html = '';
+                tasks.forEach(t => {
+                    let statusColor = '#38bdf8';
+                    let statusBg = '#083344';
+                    if (t.status === 'ready_to_merge') {
+                        statusColor = '#4ade80';
+                        statusBg = '#064e3b';
+                    } else if (t.status === 'merged') {
+                        statusColor = '#a78bfa';
+                        statusBg = '#2e1065';
+                    } else if (t.status === 'error') {
+                        statusColor = '#f87171';
+                        statusBg = '#450a0a';
+                    }
+
+                    const canMerge = t.status === 'ready_to_merge';
+                    html += `
+                    <div style="background:#18181b; border:1px solid #27272a; border-radius:6px; padding:10px; display:flex; flex-direction:column; gap:6px;">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <span style="font-weight:700; color:#f4f4f5; font-size:12px; font-family:monospace;"><i class="fa fa-code-branch" style="color:#a855f7; margin-right:4px;"></i>${escapeHtml(t.branch_name)}</span>
+                            <span class="badge" style="background:${statusBg}; color:${statusColor}; font-size:10px; text-transform:uppercase;">${t.status}</span>
+                        </div>
+                        <div style="font-size:11px; color:#a1a1aa; line-height:1.4;">${escapeHtml(t.prompt)}</div>
+                        <div style="display:flex; justify-content:space-between; align-items:center; font-size:10px; color:#71717a; border-top:1px solid #27272a; padding-top:6px; margin-top:2px;">
+                            <span><i class="fa fa-shield-check" style="color:${t.verification_passed ? '#4ade80' : '#f87171'}; margin-right:3px;"></i>${t.verification_passed ? 'Checks Passed' : 'Pending Verification'}</span>
+                            <span style="font-family:monospace; color:#cbd5e1;">${escapeHtml(t.diff_stat || '0 files')}</span>
+                        </div>
+                        ${canMerge ? `
+                        <button class="btn btn-primary" style="margin-top:4px; justify-content:center; padding:4px 8px; font-size:11px; background:#059669; border-color:#047857;" onclick="mergeSwarmTask('${t.task_id}')">
+                            <i class="fa fa-code-merge"></i> Safe Merge & Clean Worktree
+                        </button>` : ''}
+                    </div>`;
+                });
+                container.innerHTML = html;
+            } catch (err) {
+                container.innerHTML = `<div style="color:#ef4444; font-size:12px; text-align:center; padding:16px;">Failed to load swarm tasks: ${err}</div>`;
+            }
+        }
+
+        async function mergeSwarmTask(taskId) {
+            try {
+                toast.info('Merging and cleaning worktree...');
+                const res = await apiInvoke('swarm_merge', { task_id: taskId });
+                toast.success(`Worktree branch merged cleanly! ${res.merged_commit || ''}`);
+                refreshSwarmTasks();
+                refreshGitStatus();
+                loadWorkspace();
+            } catch (err) {
+                toast.error('Swarm merge error: ' + err);
             }
         }
 

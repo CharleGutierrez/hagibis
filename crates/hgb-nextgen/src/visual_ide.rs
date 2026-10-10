@@ -1,7 +1,10 @@
-use crate::checkpoint::{RollbackReport, SwarmCheckpoint, SwarmCheckpointManager};
+use crate::checkpoint::SwarmCheckpointManager;
 use crate::inline_diff_engine::{DualBufferOverlay, InlineDiffEngine};
 use axum::{
-    extract::{Query, State},
+    extract::{
+        ws::{Message, WebSocket, WebSocketUpgrade},
+        Query, State,
+    },
     http::StatusCode,
     response::{Html, IntoResponse},
     routing::{get, post},
@@ -25,6 +28,11 @@ fn get_checkpoint_mgr() -> &'static Mutex<SwarmCheckpointManager> {
 pub struct VisualIdeServer {
     pub port: u16,
     pub workspace_root: PathBuf,
+    pub auth_token: Option<String>,
+    pub lsp: Arc<crate::lsp_engine::LspEngine>,
+    pub semantic_index: Arc<crate::semantic_index::SemanticCodebaseIndex>,
+    pub dap: Arc<crate::dap_engine::DapEngine>,
+    pub swarm: Arc<crate::worktree_swarm::WorktreeSwarmManager>,
 }
 
 #[derive(Serialize)]
@@ -367,13 +375,34 @@ async fn query_local_llm_status() -> String {
 
 impl VisualIdeServer {
     pub fn new(port: u16, workspace_root: PathBuf) -> Self {
+        let lsp = Arc::new(crate::lsp_engine::LspEngine::new(workspace_root.clone()));
+        let semantic_index = Arc::new(crate::semantic_index::SemanticCodebaseIndex::new(workspace_root.clone()));
+        let dap = Arc::new(crate::dap_engine::DapEngine::new(workspace_root.clone()));
+        let swarm = Arc::new(crate::worktree_swarm::WorktreeSwarmManager::new(workspace_root.clone()));
+
         Self {
             port,
             workspace_root,
+            auth_token: None,
+            lsp,
+            semantic_index,
+            dap,
+            swarm,
         }
     }
 
+    pub fn with_auth_token(mut self, token: Option<String>) -> Self {
+        self.auth_token = token;
+        self
+    }
+
     pub async fn run(&self) -> Result<(), Box<dyn std::error::Error>> {
+        // Kick off background semantic indexing
+        let sem_idx = self.semantic_index.clone();
+        tokio::spawn(async move {
+            let _ = sem_idx.index_workspace().await;
+        });
+
         let app = Router::new()
             .route("/", get(Self::serve_index))
             .route("/api/workspace", get(Self::handle_workspace))
@@ -421,6 +450,32 @@ impl VisualIdeServer {
             .route("/api/git_commit", post(Self::handle_git_commit))
             .route("/api/chat_stream", post(Self::handle_chat_stream))
             .route("/api/zig_telemetry", get(Self::handle_zig_telemetry))
+            // Phase 1: Real LSP Routes
+            .route("/api/lsp/hover", post(Self::handle_lsp_hover))
+            .route("/api/lsp/definition", post(Self::handle_lsp_definition))
+            .route("/api/lsp/completion", post(Self::handle_lsp_completion))
+            .route("/api/lsp/ws", get(Self::handle_lsp_ws))
+            // Phase 2: Remote Auth Token Verification
+            .route("/api/auth/verify", post(Self::handle_auth_verify))
+            // Phase 3: Semantic Vector Search
+            .route("/api/semantic_search", post(Self::handle_semantic_search))
+            // Phase 4: DAP Visual Debugger
+            .route("/api/dap/toggle_breakpoint", post(Self::handle_dap_toggle_breakpoint))
+            .route("/api/dap/breakpoints", get(Self::handle_dap_get_breakpoints))
+            .route("/api/dap/launch", post(Self::handle_dap_launch))
+            .route("/api/dap/continue", post(Self::handle_dap_continue))
+            .route("/api/dap/step_over", post(Self::handle_dap_step_over))
+            .route("/api/dap/step_into", post(Self::handle_dap_step_into))
+            .route("/api/dap/stop", post(Self::handle_dap_stop))
+            .route("/api/dap/status", get(Self::handle_dap_status))
+            // Phase 5: Multi-Agent Parallel Git Worktree Swarm
+            .route("/api/swarm/spawn", post(Self::handle_swarm_spawn))
+            .route("/api/swarm/tasks", get(Self::handle_swarm_tasks))
+            .route("/api/swarm/merge", post(Self::handle_swarm_merge))
+            .layer(axum::middleware::from_fn_with_state(
+                Arc::new(self.clone()),
+                Self::auth_middleware,
+            ))
             .layer(axum::middleware::from_fn(Self::cors_middleware))
             .with_state(Arc::new(self.clone()));
 
@@ -449,8 +504,57 @@ impl VisualIdeServer {
         let headers = response.headers_mut();
         headers.insert("Access-Control-Allow-Origin", "*".parse().unwrap());
         headers.insert("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE".parse().unwrap());
-        headers.insert("Access-Control-Allow-Headers", "*".parse().unwrap());
         response
+    }
+
+    async fn auth_middleware(
+        State(state): State<Arc<Self>>,
+        req: axum::extract::Request,
+        next: axum::middleware::Next,
+    ) -> axum::response::Response {
+        let path = req.uri().path();
+
+        // Landing page, auth verification, and OPTIONS preflight do not require authentication
+        if path == "/" || path == "/api/auth/verify" || req.method() == axum::http::Method::OPTIONS {
+            return next.run(req).await;
+        }
+
+        if let Some(ref token) = state.auth_token {
+            let auth_hdr = req.headers().get("authorization").and_then(|h| h.to_str().ok());
+            let custom_hdr = req.headers().get("x-hgb-token").and_then(|h| h.to_str().ok());
+            let query_token = req.uri().query().and_then(|q| {
+                q.split('&').find_map(|pair| {
+                    let mut parts = pair.split('=');
+                    if parts.next() == Some("token") {
+                        parts.next()
+                    } else {
+                        None
+                    }
+                })
+            });
+
+            let provided = auth_hdr
+                .and_then(|h| h.strip_prefix("Bearer ").or_else(|| h.strip_prefix("bearer ")))
+                .or(custom_hdr)
+                .or(query_token);
+
+            if provided != Some(token.as_str()) {
+                let mut resp = axum::response::Response::new(
+                    axum::body::Body::from(
+                        serde_json::to_string(&serde_json::json!({
+                            "error": "Authentication required. Provide valid Bearer token or ?token= parameter.",
+                            "auth_required": true
+                        })).unwrap()
+                    )
+                );
+                *resp.status_mut() = StatusCode::UNAUTHORIZED;
+                resp.headers_mut().insert(axum::http::header::CONTENT_TYPE, "application/json".parse().unwrap());
+                resp.headers_mut().insert(axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN, "*".parse().unwrap());
+                return resp;
+            }
+        }
+
+        next.run(req).await
     }
 
     async fn serve_index() -> Html<&'static str> {
@@ -1981,6 +2085,279 @@ impl VisualIdeServer {
 
         (StatusCode::OK, Json(telemetry))
     }
+
+    // --- Phase 1: Real LSP Handlers ---
+    async fn handle_lsp_hover(
+        State(state): State<Arc<Self>>,
+        Json(payload): Json<crate::lsp_engine::LspHoverRequest>,
+    ) -> impl IntoResponse {
+        let hover = state.lsp.analyze_hover(&payload);
+        (StatusCode::OK, Json(hover))
+    }
+
+    async fn handle_lsp_definition(
+        State(state): State<Arc<Self>>,
+        Json(payload): Json<crate::lsp_engine::LspDefinitionRequest>,
+    ) -> impl IntoResponse {
+        let def = state.lsp.find_definition(&payload);
+        (StatusCode::OK, Json(def))
+    }
+
+    async fn handle_lsp_completion(
+        State(state): State<Arc<Self>>,
+        Json(payload): Json<LspCompletionPayload>,
+    ) -> impl IntoResponse {
+        let completions = state.lsp.get_completions(&payload.path, &payload.line_content, payload.character);
+        (StatusCode::OK, Json(completions))
+    }
+
+    async fn handle_lsp_ws(
+        State(state): State<Arc<Self>>,
+        ws: WebSocketUpgrade,
+    ) -> impl IntoResponse {
+        ws.on_upgrade(move |socket| Self::handle_lsp_ws_stream(socket, state))
+    }
+
+    async fn handle_lsp_ws_stream(mut socket: WebSocket, state: Arc<Self>) {
+        while let Some(Ok(msg)) = socket.recv().await {
+            if let Message::Text(text) = msg {
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&text) {
+                    let id = val.get("id").cloned();
+                    let method = val.get("method").and_then(|m| m.as_str()).unwrap_or("");
+
+                    let response = match method {
+                        "initialize" => serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": {
+                                "capabilities": {
+                                    "hoverProvider": true,
+                                    "definitionProvider": true,
+                                    "completionProvider": { "triggerCharacters": [".", ":", "$"] },
+                                    "textDocumentSync": 1
+                                },
+                                "serverInfo": { "name": "Hagibis Native LSP Engine", "version": "1.0.0" }
+                            }
+                        }),
+                        "textDocument/hover" => {
+                            let path = val.get("params")
+                                .and_then(|p| p.get("textDocument"))
+                                .and_then(|t| t.get("uri"))
+                                .and_then(|u| u.as_str())
+                                .unwrap_or("");
+                            let line = val.get("params")
+                                .and_then(|p| p.get("position"))
+                                .and_then(|pos| pos.get("line"))
+                                .and_then(|l| l.as_u64())
+                                .unwrap_or(0) as usize + 1;
+                            let character = val.get("params")
+                                .and_then(|p| p.get("position"))
+                                .and_then(|pos| pos.get("character"))
+                                .and_then(|c| c.as_u64())
+                                .unwrap_or(0) as usize + 1;
+
+                            let hover = state.lsp.analyze_hover(&crate::lsp_engine::LspHoverRequest {
+                                path: path.replace("file://", ""),
+                                line,
+                                character,
+                            });
+
+                            serde_json::json!({
+                                "jsonrpc": "2.0",
+                                "id": id,
+                                "result": hover.map(|h| serde_json::json!({
+                                    "contents": { "kind": "markdown", "value": h.contents }
+                                }))
+                            })
+                        }
+                        "textDocument/definition" => {
+                            let path = val.get("params")
+                                .and_then(|p| p.get("textDocument"))
+                                .and_then(|t| t.get("uri"))
+                                .and_then(|u| u.as_str())
+                                .unwrap_or("");
+                            let line = val.get("params")
+                                .and_then(|p| p.get("position"))
+                                .and_then(|pos| pos.get("line"))
+                                .and_then(|l| l.as_u64())
+                                .unwrap_or(0) as usize + 1;
+                            let character = val.get("params")
+                                .and_then(|p| p.get("position"))
+                                .and_then(|pos| pos.get("character"))
+                                .and_then(|c| c.as_u64())
+                                .unwrap_or(0) as usize + 1;
+
+                            let def = state.lsp.find_definition(&crate::lsp_engine::LspDefinitionRequest {
+                                path: path.replace("file://", ""),
+                                line,
+                                character,
+                            });
+
+                            serde_json::json!({
+                                "jsonrpc": "2.0",
+                                "id": id,
+                                "result": def.map(|d| serde_json::json!({
+                                    "uri": format!("file://{}", d.uri),
+                                    "range": {
+                                        "start": { "line": d.line.saturating_sub(1), "character": d.character.saturating_sub(1) },
+                                        "end": { "line": d.line.saturating_sub(1), "character": d.character }
+                                    }
+                                }))
+                            })
+                        }
+                        _ => serde_json::json!({ "jsonrpc": "2.0", "id": id, "result": null }),
+                    };
+
+                    let _ = socket.send(Message::Text(response.to_string())).await;
+                }
+            }
+        }
+    }
+
+    // --- Phase 2: Remote Auth Token Verification ---
+    async fn handle_auth_verify(
+        State(state): State<Arc<Self>>,
+        Json(payload): Json<AuthVerifyPayload>,
+    ) -> impl IntoResponse {
+        let is_valid = match &state.auth_token {
+            Some(t) => t == &payload.token,
+            None => true,
+        };
+
+        if is_valid {
+            (StatusCode::OK, Json(serde_json::json!({ "valid": true, "message": "Authentication verified" }))).into_response()
+        } else {
+            (StatusCode::UNAUTHORIZED, Json(serde_json::json!({ "valid": false, "error": "Invalid auth token" }))).into_response()
+        }
+    }
+
+    // --- Phase 3: Semantic Vector Search ---
+    async fn handle_semantic_search(
+        State(state): State<Arc<Self>>,
+        Json(payload): Json<SemanticSearchPayload>,
+    ) -> impl IntoResponse {
+        let limit = payload.limit.unwrap_or(10);
+        let results = state.semantic_index.search(&payload.query, limit).await;
+        (StatusCode::OK, Json(results)).into_response()
+    }
+
+    // --- Phase 4: DAP Visual Debugger Handlers ---
+    async fn handle_dap_toggle_breakpoint(
+        State(state): State<Arc<Self>>,
+        Json(payload): Json<ToggleBreakpointPayload>,
+    ) -> impl IntoResponse {
+        let bp = state.dap.toggle_breakpoint(&payload.file, payload.line).await;
+        (StatusCode::OK, Json(bp)).into_response()
+    }
+
+    async fn handle_dap_get_breakpoints(State(state): State<Arc<Self>>) -> impl IntoResponse {
+        let bps = state.dap.get_all_breakpoints().await;
+        (StatusCode::OK, Json(bps)).into_response()
+    }
+
+    async fn handle_dap_launch(
+        State(state): State<Arc<Self>>,
+        Json(payload): Json<DapLaunchPayload>,
+    ) -> impl IntoResponse {
+        let prog = payload.program.unwrap_or_default();
+        let args = payload.args.unwrap_or_default();
+        match state.dap.launch_target(&prog, &args).await {
+            Ok(status) => (StatusCode::OK, Json(serde_json::to_value(status).unwrap())).into_response(),
+            Err(e) => (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": e }))).into_response(),
+        }
+    }
+
+    async fn handle_dap_continue(State(state): State<Arc<Self>>) -> impl IntoResponse {
+        let status = state.dap.continue_exec().await;
+        (StatusCode::OK, Json(status)).into_response()
+    }
+
+    async fn handle_dap_step_over(State(state): State<Arc<Self>>) -> impl IntoResponse {
+        let status = state.dap.step_over().await;
+        (StatusCode::OK, Json(status)).into_response()
+    }
+
+    async fn handle_dap_step_into(State(state): State<Arc<Self>>) -> impl IntoResponse {
+        let status = state.dap.step_into().await;
+        (StatusCode::OK, Json(status)).into_response()
+    }
+
+    async fn handle_dap_stop(State(state): State<Arc<Self>>) -> impl IntoResponse {
+        let status = state.dap.stop_session().await;
+        (StatusCode::OK, Json(status)).into_response()
+    }
+
+    async fn handle_dap_status(State(state): State<Arc<Self>>) -> impl IntoResponse {
+        let status = state.dap.get_status().await;
+        (StatusCode::OK, Json(status)).into_response()
+    }
+
+    // --- Phase 5: Multi-Agent Parallel Git Worktree Swarm Handlers ---
+    async fn handle_swarm_spawn(
+        State(state): State<Arc<Self>>,
+        Json(payload): Json<SwarmSpawnPayload>,
+    ) -> impl IntoResponse {
+        match state.swarm.spawn_worktree_task(&payload.title, &payload.prompt).await {
+            Ok(task) => (StatusCode::OK, Json(serde_json::to_value(task).unwrap())).into_response(),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e }))).into_response(),
+        }
+    }
+
+    async fn handle_swarm_tasks(State(state): State<Arc<Self>>) -> impl IntoResponse {
+        let tasks = state.swarm.list_tasks().await;
+        (StatusCode::OK, Json(tasks)).into_response()
+    }
+
+    async fn handle_swarm_merge(
+        State(state): State<Arc<Self>>,
+        Json(payload): Json<SwarmMergePayload>,
+    ) -> impl IntoResponse {
+        match state.swarm.merge_worktree_task(&payload.task_id).await {
+            Ok(msg) => (StatusCode::OK, Json(serde_json::json!({ "success": true, "message": msg }))).into_response(),
+            Err(e) => (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "success": false, "error": e }))).into_response(),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct LspCompletionPayload {
+    pub path: String,
+    pub line_content: String,
+    pub character: usize,
+}
+
+#[derive(Deserialize)]
+pub struct AuthVerifyPayload {
+    pub token: String,
+}
+
+#[derive(Deserialize)]
+pub struct SemanticSearchPayload {
+    pub query: String,
+    pub limit: Option<usize>,
+}
+
+#[derive(Deserialize)]
+pub struct ToggleBreakpointPayload {
+    pub file: String,
+    pub line: usize,
+}
+
+#[derive(Deserialize)]
+pub struct DapLaunchPayload {
+    pub program: Option<String>,
+    pub args: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+pub struct SwarmSpawnPayload {
+    pub title: String,
+    pub prompt: String,
+}
+
+#[derive(Deserialize)]
+pub struct SwarmMergePayload {
+    pub task_id: String,
 }
 
 const INDEX_HTML: &str = include_str!("../dist/index.html");
