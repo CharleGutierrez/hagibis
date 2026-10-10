@@ -2579,10 +2579,6 @@
             return match ? match[1] : null;
         }
 
-        function escapeHtml(str) {
-            return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        }
-
         // Sidebar View Tab Switcher
         function switchSidebarTab(tab) {
             const filesView = document.getElementById('sidebar-view-files');

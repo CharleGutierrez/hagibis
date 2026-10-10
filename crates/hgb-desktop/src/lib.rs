@@ -1337,7 +1337,7 @@ pub mod commands {
         // Check @rules or @Rules
         if prompt.contains("@rules") || prompt.contains("@Rules") {
             let rules_res = load_project_rules(Some(base.to_string_lossy().to_string())).await?;
-            let rules_ctx = format!("\n[Project Rules ({}]:\n{}\n", rules_res.source, rules_res.rules);
+            let rules_ctx = format!("\n[Project Rules ({})]:\n{}\n", rules_res.source, rules_res.rules);
             expanded = expanded.replace("@rules", &rules_ctx).replace("@Rules", &rules_ctx);
             sources.push(rules_res.source);
         }

@@ -726,6 +726,7 @@ impl VisualIdeServer {
         let candidates = [
             (".cursorrules", "Cursor Rules (.cursorrules)"),
             (".hgb/rules", "Hagibis Project Directives (.hgb/rules)"),
+            (".github/copilot-instructions.md", "Copilot Instructions (.github/copilot-instructions.md)"),
             ("AGENTS.md", "Agents Architecture (AGENTS.md)"),
         ];
 
@@ -959,17 +960,30 @@ impl VisualIdeServer {
         }
 
         if payload.prompt.contains("@rules") || payload.prompt.contains("@Rules") {
-            let candidates = [".cursorrules", ".hgb/rules", "AGENTS.md"];
-            for rel in candidates {
+            let candidates = [
+                (".cursorrules", "Cursor Rules (.cursorrules)"),
+                (".hgb/rules", "Hagibis Project Directives (.hgb/rules)"),
+                (".github/copilot-instructions.md", "Copilot Instructions"),
+                ("AGENTS.md", "Agents Architecture (AGENTS.md)"),
+            ];
+            let mut matched = false;
+            for (rel, src_name) in candidates {
                 let p = state.workspace_root.join(rel);
                 if p.is_file() {
                     if let Ok(c) = fs::read_to_string(&p).await {
-                        let rules_ctx = format!("\n[Project Rules ({}]:\n{}\n", rel, c);
+                        let rules_ctx = format!("\n[Project Rules ({})]:\n{}\n", src_name, c);
                         expanded = expanded.replace("@rules", &rules_ctx).replace("@Rules", &rules_ctx);
-                        sources.push(rel.to_string());
+                        sources.push(src_name.to_string());
+                        matched = true;
                         break;
                     }
                 }
+            }
+            if !matched {
+                let default_rules = "// Default Hagibis Microkernel Sovereign Directives\n// 1. Prioritize zero-copy memory and Zig AVX2/SSE4 SIMD acceleration.\n// 2. Enforce strict Landlock LSM confinement.\n// 3. Keep all completions localized without remote telemetry.";
+                let rules_ctx = format!("\n[Project Rules (Default System Rules)]:\n{}\n", default_rules);
+                expanded = expanded.replace("@rules", &rules_ctx).replace("@Rules", &rules_ctx);
+                sources.push("Default System Rules".to_string());
             }
         }
 
