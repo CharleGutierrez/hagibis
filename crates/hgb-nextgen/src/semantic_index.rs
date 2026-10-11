@@ -38,12 +38,16 @@ impl SemanticCodebaseIndex {
         }
     }
 
-    /// Recursively indexes source code files in the workspace
+    /// Recursively indexes source code files in the workspace (lean-tuned for 8GB RAM / dual-core i3)
     pub async fn index_workspace(&self) -> usize {
         let mut all_chunks = Vec::new();
         let mut dirs = vec![self.workspace_root.clone()];
+        let mut file_count = 0usize;
 
         while let Some(current_dir) = dirs.pop() {
+            if all_chunks.len() >= 4000 {
+                break;
+            }
             if let Ok(entries) = std::fs::read_dir(&current_dir) {
                 for entry in entries.flatten() {
                     let path = entry.path();
@@ -55,10 +59,23 @@ impl SemanticCodebaseIndex {
                     } else if path.is_file() {
                         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
                         if matches!(ext, "rs" | "zig" | "toml" | "json" | "js" | "ts" | "py" | "md" | "c" | "cpp" | "h") {
+                            // Skip files larger than 256KB to avoid massive RAM allocations on 8GB machines
+                            if let Ok(meta) = entry.metadata() {
+                                if meta.len() > 256 * 1024 {
+                                    continue;
+                                }
+                            }
                             if let Ok(content) = std::fs::read_to_string(&path) {
                                 let rel = path.strip_prefix(&self.workspace_root).unwrap_or(&path);
                                 let file_chunks = chunk_file_content(&rel.to_string_lossy(), &content);
                                 all_chunks.extend(file_chunks);
+                                file_count += 1;
+                                if file_count % 25 == 0 {
+                                    tokio::task::yield_now().await;
+                                }
+                                if all_chunks.len() >= 4000 {
+                                    break;
+                                }
                             }
                         }
                     }

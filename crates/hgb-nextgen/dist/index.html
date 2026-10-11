@@ -56,6 +56,37 @@
             --font-ui-size: 11px;
         }
 
+        /* Hardware Efficiency Profile (8GB RAM / i3 7th Gen Dual-Core / Intel HD 620 GPU Optimization) */
+        body.low-spec-mode {
+            --backdrop-filter: none !important;
+        }
+        body.low-spec-mode *,
+        body.low-spec-mode *::before,
+        body.low-spec-mode *::after {
+            backdrop-filter: none !important;
+            -webkit-backdrop-filter: none !important;
+        }
+        body.low-spec-mode .floating-pill,
+        body.low-spec-mode .modal-overlay,
+        body.low-spec-mode .cmd-palette-overlay,
+        body.low-spec-mode .mention-dropdown {
+            backdrop-filter: none !important;
+            -webkit-backdrop-filter: none !important;
+            box-shadow: 0 4px 14px rgba(0,0,0,0.65) !important;
+        }
+        body.low-spec-mode .file-tree,
+        body.low-spec-mode .chat-messages,
+        body.low-spec-mode .problems-list,
+        body.low-spec-mode .terminal-output {
+            content-visibility: auto;
+            contain-intrinsic-size: 0 350px;
+        }
+        body.low-spec-mode .chat-bubble,
+        body.low-spec-mode .toast-msg {
+            animation: none !important;
+            transition: none !important;
+        }
+
         * { box-sizing: border-box; margin: 0; padding: 0; }
         html, body {
             height: 100%;
@@ -372,12 +403,12 @@
         .diff-span-ins { background: rgba(16, 185, 129, 0.45); font-weight: 700; color: #fff; border-radius: 2px; padding: 0 3px; }
         
         /* Floating Tab Acceptance Notification */
-        .floating-pill { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); background: #18181b; border: 1px solid #06b6d4; padding: 6px 14px; border-radius: 9999px; box-shadow: 0 10px 30px rgba(0,0,0,0.6); display: none; align-items: center; gap: 10px; font-size: 11px; z-index: 100; backdrop-filter: blur(8px); max-width: 92%; flex-wrap: wrap; justify-content: center; }
+        .floating-pill { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); background: #18181b; border: 1px solid #06b6d4; padding: 6px 14px; border-radius: 9999px; box-shadow: 0 4px 16px rgba(0,0,0,0.6); display: none; align-items: center; gap: 10px; font-size: 11px; z-index: 100; max-width: 92%; flex-wrap: wrap; justify-content: center; }
         .pill-key { background: #0891b2; color: #fff; font-weight: 700; padding: 2px 7px; border-radius: 4px; font-size: 11px; cursor: pointer; white-space: nowrap; }
         .pill-key-danger { background: #dc2626; color: #fff; font-weight: 700; padding: 2px 7px; border-radius: 4px; font-size: 11px; cursor: pointer; white-space: nowrap; }
         
         /* Ctrl+K Inline Diff Floating Widget */
-        .inline-ctrl-k-box { position: absolute; top: 40px; left: 50%; transform: translateX(-50%); width: min(540px, 92%); background: #18181b; border: 1px solid #06b6d4; box-shadow: 0 20px 40px rgba(0,0,0,0.7); border-radius: 8px; z-index: 200; display: none; flex-direction: column; overflow: hidden; }
+        .inline-ctrl-k-box { position: absolute; top: 40px; left: 50%; transform: translateX(-50%); width: min(540px, 92%); background: #18181b; border: 1px solid #06b6d4; box-shadow: 0 10px 25px rgba(0,0,0,0.7); border-radius: 8px; z-index: 200; display: none; flex-direction: column; overflow: hidden; }
         .ctrl-k-header { background: #0f172a; border-bottom: 1px solid #334155; padding: 8px 12px; font-size: 12px; font-weight: 600; color: #38bdf8; display: flex; justify-content: space-between; align-items: center; }
         .ctrl-k-input { background: #1e293b; border: none; outline: none; padding: 10px 12px; color: #fff; font-size: 13px; font-family: inherit; width: 100%; }
         .ctrl-k-footer { padding: 6px 12px; background: #0f172a; border-top: 1px solid #334155; font-size: 11px; color: #94a3b8; display: flex; justify-content: space-between; align-items: center; }
@@ -431,8 +462,8 @@
         .chat-textarea:focus { border-color: var(--accent-cyan); }
         
         /* Codebase Search Modal */
-        .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.65); backdrop-filter: blur(4px); z-index: 300; display: none; align-items: flex-start; justify-content: center; padding-top: 60px; }
-        .modal-content { width: min(620px, 94vw); max-width: 95vw; max-height: 85vh; background: #18181b; border: 1px solid #3f3f46; border-radius: 8px; box-shadow: 0 20px 40px rgba(0,0,0,0.8); display: flex; flex-direction: column; overflow: hidden; }
+        .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.72); z-index: 300; display: none; align-items: flex-start; justify-content: center; padding-top: 60px; }
+        .modal-content { width: min(620px, 94vw); max-width: 95vw; max-height: 85vh; background: #18181b; border: 1px solid #3f3f46; border-radius: 8px; box-shadow: 0 10px 25px rgba(0,0,0,0.75); display: flex; flex-direction: column; overflow: hidden; }
         .modal-header { padding: 9px 12px; background: #141416; border-bottom: 1px solid #27272a; font-weight: 600; font-size: 13px; display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; }
         .modal-input { padding: 9px 12px; background: #1f1f23; border: none; border-bottom: 1px solid #27272a; color: #fff; font-size: 13px; outline: none; flex-shrink: 0; }
         .modal-list { flex: 1; overflow-y: auto; padding: 4px 0; }
@@ -498,13 +529,12 @@
             background: #18181b;
             border: 1px solid #3f3f46;
             border-radius: 8px;
-            box-shadow: 0 16px 36px rgba(0,0,0,0.85);
+            box-shadow: 0 8px 24px rgba(0,0,0,0.7);
             width: 320px;
             max-height: 280px;
             overflow-y: auto;
             display: none;
             flex-direction: column;
-            backdrop-filter: blur(10px);
         }
         .mention-item {
             padding: 8px 12px;
@@ -616,8 +646,8 @@
         .toast-close:hover { color: #fff; }
 
         /* Command Palette (Ctrl+Shift+P / F1) */
-        .cmd-palette-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.65); backdrop-filter: blur(4px); z-index: 1000; display: none; justify-content: center; align-items: flex-start; padding-top: 60px; }
-        .cmd-palette-box { width: 620px; max-height: 480px; background: #18181b; border: 1px solid #3f3f46; border-radius: 8px; box-shadow: 0 20px 50px rgba(0,0,0,0.85); display: flex; flex-direction: column; overflow: hidden; }
+        .cmd-palette-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.72); z-index: 1000; display: none; justify-content: center; align-items: flex-start; padding-top: 60px; }
+        .cmd-palette-box { width: 620px; max-height: 480px; background: #18181b; border: 1px solid #3f3f46; border-radius: 8px; box-shadow: 0 10px 30px rgba(0,0,0,0.75); display: flex; flex-direction: column; overflow: hidden; }
         .cmd-palette-input-wrap { display: flex; align-items: center; padding: 10px 14px; border-bottom: 1px solid #27272a; background: #141416; gap: 10px; }
         .cmd-palette-input { flex: 1; background: transparent; border: none; outline: none; color: #fff; font-size: 14px; font-family: inherit; }
         .cmd-palette-list { flex: 1; overflow-y: auto; padding: 6px 0; max-height: 380px; }
@@ -703,6 +733,7 @@
             <button class="btn" style="background:#450a0a; border-color:#991b1b; color:#fca5a5;" onclick="triggerRollback()" title="1-Click Atomic Rollback to previous checkpoint"><i class="fa fa-rotate-left"></i> <span class="btn-text-optional">Rollback</span></button>
             <button class="btn btn-indigo" id="pwa-install-btn" style="display:none; background:#4338ca; border-color:#6366f1;" onclick="installPwaApp()" title="Install Hagibis as Native Desktop PWA"><i class="fa fa-download"></i> <span class="btn-text">Install</span></button>
             <button class="btn" id="compact-mode-btn" onclick="toggleCompactDensity()" title="Toggle Laptop Compact Density (Maximize Screen Space)"><i class="fa fa-compress"></i></button>
+            <button class="btn" id="efficiency-mode-btn" onclick="toggleEfficiencyMode()" title="Hardware Efficiency Profile (8GB / i3-7th Gen / Low GPU Mode)" style="color:#10b981;"><i class="fa fa-bolt"></i></button>
             <button class="btn" id="toggle-sidebar-btn" onclick="toggleSidebar()" title="Toggle Left Sidebar (Ctrl+B)"><i class="fa fa-bars"></i></button>
             <button class="btn" id="toggle-chat-btn" onclick="toggleChatPanel()" title="Toggle AI Copilot (Ctrl+L)"><i class="fa fa-comments"></i></button>
             <button class="btn" onclick="openSettingsModal()" title="Cloud LLM Models & API Keys Settings"><i class="fa fa-gear"></i></button>
@@ -1223,6 +1254,7 @@
             </span>
         </div>
         <div class="status-bar-right">
+            <span class="status-bar-item" id="sb-hardware-efficiency" onclick="toggleEfficiencyMode()" title="Hardware Efficiency Profile (8GB RAM / i3 7th Gen Dual-Core / Lean SSD Mode)" style="color:#10b981; cursor:pointer;"><i class="fa fa-microchip"></i> <span id="sb-hardware-text">⚡ 8GB i3 Lean Profile</span></span>
             <span class="status-bar-item" id="sb-cursor-pos" title="Cursor Position">Ln 1, Col 1</span>
             <span class="status-bar-item" title="Indentation">Spaces: 4</span>
             <span class="status-bar-item" title="Encoding">UTF-8</span>
@@ -2034,6 +2066,27 @@
             handleAppResize();
         }
 
+        function toggleEfficiencyMode() {
+            const isEff = document.body.classList.toggle('low-spec-mode');
+            localStorage.setItem('hgb-efficiency-mode', isEff ? '1' : '0');
+            updateEfficiencyUi(isEff);
+            toast.info(isEff ? '⚡ Efficiency Profile Active (8GB RAM / i3 Dual-Core / GPU De-stressed)' : 'Standard Performance Profile Active');
+        }
+
+        function updateEfficiencyUi(isEff) {
+            const btn = document.getElementById('efficiency-mode-btn');
+            if (btn) {
+                btn.style.color = isEff ? '#10b981' : '#71717a';
+                btn.title = isEff ? 'Efficiency Mode Active (Optimized for 8GB / i3-7th Gen)' : 'Enable Efficiency Mode (8GB / i3)';
+            }
+            const badge = document.getElementById('sb-hardware-efficiency');
+            if (badge) {
+                badge.style.color = isEff ? '#10b981' : '#a1a1aa';
+                const text = document.getElementById('sb-hardware-text');
+                if (text) text.innerText = isEff ? '⚡ 8GB i3 Lean' : 'Standard Profile';
+            }
+        }
+
         function toggleMaximizeTerminal() {
             const drawer = document.getElementById('terminal-drawer');
             const maxBtn = document.getElementById('term-maximize-btn');
@@ -2206,16 +2259,26 @@
                             value: '// 🪽 Welcome to Hagibis Visual IDE & Cursor Studio\n// Select a file from the explorer or press Ctrl+P to search @Codebase.\n',
                             language: 'rust',
                             theme: 'vs-dark',
-                            automaticLayout: true,
+                            automaticLayout: false,
                             fontSize: 13,
                             fontFamily: 'JetBrains Mono, monospace',
-                            minimap: { enabled: window.innerWidth > 1250 },
+                            minimap: { enabled: false },
                             wordWrap: 'on',
-                            smoothScrolling: true,
-                            cursorBlinking: 'smooth',
+                            smoothScrolling: false,
+                            cursorBlinking: 'blink',
+                            cursorSmoothCaretAnimation: 'off',
                             scrollBeyondLastLine: false,
                             inlineSuggest: { enabled: true },
                             glyphMargin: true,
+                            renderLineHighlight: 'line',
+                            folding: true,
+                            foldingStrategy: 'indentation',
+                            renderWhitespace: 'none',
+                            occurrencesHighlight: false,
+                            selectionHighlight: false,
+                            stopRenderingLineAfter: 3000,
+                            maxTokenizationLineLength: 10000,
+                            quickSuggestionsDelay: 150,
                         });
 
                         // Interactive Gutter Breakpoint Listener
@@ -2962,8 +3025,10 @@
                 term = new window.Terminal({
                     fontFamily: '"JetBrains Mono", Menlo, Monaco, Consolas, monospace',
                     fontSize: 13,
-                    cursorBlink: true,
+                    cursorBlink: false,
                     convertEol: true,
+                    scrollback: 1000,
+                    fastScrollModifier: 'alt',
                     theme: {
                         background: '#09090b',
                         foreground: '#f4f4f5',
@@ -3938,6 +4003,7 @@
             }
         }
 
+        let showFullChatHistory = false;
         function renderActiveChatMessages() {
             const stream = document.getElementById('chat-stream');
             stream.innerHTML = '';
@@ -3947,7 +4013,23 @@
                 </div>`;
                 return;
             }
-            activeChatSession.messages.forEach(m => {
+
+            const totalMsgs = activeChatSession.messages.length;
+            const maxDomNodes = 25;
+            let displayList = activeChatSession.messages;
+
+            // DOM Pruning for 8GB RAM machines: limit active rendered bubbles to latest 25
+            if (!showFullChatHistory && totalMsgs > maxDomNodes) {
+                const hiddenCount = totalMsgs - maxDomNodes;
+                displayList = activeChatSession.messages.slice(hiddenCount);
+                const banner = document.createElement('div');
+                banner.style.textAlign = 'center';
+                banner.style.padding = '4px';
+                banner.innerHTML = `<button class="btn" style="padding:2px 8px; font-size:10px;" onclick="expandAllChatMessages()"><i class="fa fa-clock-rotate-left"></i> Show ${hiddenCount} older messages (preserved in memory)</button>`;
+                stream.appendChild(banner);
+            }
+
+            displayList.forEach(m => {
                 if (m.role === 'user') {
                     stream.innerHTML += `<div class="chat-bubble chat-user">${escapeHtml(m.content)}</div>`;
                 } else {
@@ -3969,16 +4051,31 @@
             stream.scrollTop = stream.scrollHeight;
         }
 
+        function expandAllChatMessages() {
+            showFullChatHistory = true;
+            renderActiveChatMessages();
+        }
+
+        // RAF-batched token streaming for dual-core i3 CPUs (prevents event loop choking)
+        let streamRafPending = false;
         function handleCopilotChunkEvent(payload) {
             if (!activeStreamElement) return;
             if (payload.chunk) {
                 activeStreamAccumulator += payload.chunk;
-                const bodyEl = activeStreamElement.querySelector('.stream-body');
-                if (bodyEl) bodyEl.innerText = activeStreamAccumulator;
-                const stream = document.getElementById('chat-stream');
-                stream.scrollTop = stream.scrollHeight;
+                if (!streamRafPending) {
+                    streamRafPending = true;
+                    requestAnimationFrame(() => {
+                        streamRafPending = false;
+                        if (!activeStreamElement) return;
+                        const bodyEl = activeStreamElement.querySelector('.stream-body');
+                        if (bodyEl) bodyEl.innerText = activeStreamAccumulator;
+                        const stream = document.getElementById('chat-stream');
+                        if (stream) stream.scrollTop = stream.scrollHeight;
+                    });
+                }
             }
             if (payload.done) {
+                streamRafPending = false;
                 finalizeStreamResponse(payload.full_response || activeStreamAccumulator, payload.model);
             }
         }
@@ -5137,11 +5234,19 @@
                         value: '// Split Pane (Secondary Monaco Editor)\n',
                         language: 'rust',
                         theme: 'vs-dark',
-                        automaticLayout: true,
+                        automaticLayout: false,
                         fontSize: 13,
                         fontFamily: 'JetBrains Mono, monospace',
                         minimap: { enabled: false },
                         scrollBeyondLastLine: false,
+                        smoothScrolling: false,
+                        cursorBlinking: 'blink',
+                        cursorSmoothCaretAnimation: 'off',
+                        renderLineHighlight: 'line',
+                        occurrencesHighlight: false,
+                        selectionHighlight: false,
+                        stopRenderingLineAfter: 3000,
+                        maxTokenizationLineLength: 10000,
                     });
                 }
                 loadActiveIntoSplit();
@@ -5947,6 +6052,19 @@
                     btn.innerHTML = '<i class="fa fa-expand"></i>';
                     btn.title = 'Restore Standard Density';
                 }
+            }
+
+            // Auto-detect or restore Hardware Efficiency Profile (8GB RAM / dual-core i3)
+            const cores = navigator.hardwareConcurrency || 4;
+            const memory = navigator.deviceMemory || 8;
+            const isLowSpecHardware = (cores <= 4 || memory <= 8);
+            const savedEff = localStorage.getItem('hgb-efficiency-mode');
+            const shouldEnableEff = (savedEff === '1' || (savedEff === null && isLowSpecHardware));
+            if (shouldEnableEff) {
+                document.body.classList.add('low-spec-mode');
+                updateEfficiencyUi(true);
+            } else {
+                updateEfficiencyUi(false);
             }
 
             // On laptop screens under 1150px width, auto-collapse chat panel to give editor full space

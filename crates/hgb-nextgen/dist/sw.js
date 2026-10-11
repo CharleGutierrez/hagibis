@@ -1,5 +1,6 @@
-// 🪽 Hagibis Sovereign PWA Studio Service Worker
-const CACHE_NAME = 'hgb-pwa-v1';
+// 🪽 Hagibis Sovereign PWA Studio Service Worker (Lean SSD Quota Tuned)
+const CACHE_NAME = 'hgb-pwa-v2';
+const MAX_CACHE_ENTRIES = 40;
 const STATIC_ASSETS = [
     '/',
     '/manifest.json',
@@ -12,11 +13,22 @@ const STATIC_ASSETS = [
     'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs/loader.min.js'
 ];
 
+async function trimCache(cacheName, maxEntries) {
+    try {
+        const cache = await caches.open(cacheName);
+        const keys = await cache.keys();
+        if (keys.length > maxEntries) {
+            await cache.delete(keys[0]);
+            await trimCache(cacheName, maxEntries);
+        }
+    } catch (_) {}
+}
+
 self.addEventListener('install', (event) => {
     event.waitUntil(
         caches.open(CACHE_NAME).then((cache) => {
             return cache.addAll(STATIC_ASSETS).catch((err) => {
-                console.warn('PWA precache partial notice (some external CDN assets might be dynamic):', err);
+                console.warn('PWA precache partial notice:', err);
             });
         }).then(() => self.skipWaiting())
     );
@@ -52,6 +64,7 @@ self.addEventListener('fetch', (event) => {
                     const responseClone = networkResponse.clone();
                     caches.open(CACHE_NAME).then((cache) => {
                         cache.put(event.request, responseClone);
+                        trimCache(CACHE_NAME, MAX_CACHE_ENTRIES);
                     });
                 }
                 return networkResponse;
