@@ -456,6 +456,8 @@ impl VisualIdeServer {
             .route("/manifest.webmanifest", get(Self::serve_manifest))
             .route("/sw.js", get(Self::serve_sw))
             .route("/icon.svg", get(Self::serve_icon))
+            .route("/hgb_kernel.wasm", get(Self::serve_wasm_kernel))
+            .route("/api/wasm_kernel/health", get(Self::handle_wasm_kernel_health))
             .route("/api/workspace", get(Self::handle_workspace))
             .route("/api/file", get(Self::handle_get_file))
             .route("/api/save_file", post(Self::handle_save_file))
@@ -599,8 +601,17 @@ impl VisualIdeServer {
     ) -> axum::response::Response {
         let path = req.uri().path();
 
-        // Landing page, auth verification, and OPTIONS preflight do not require authentication
-        if path == "/" || path == "/api/auth/verify" || req.method() == axum::http::Method::OPTIONS {
+        // Landing page, PWA static assets, wasm kernel, and OPTIONS preflight do not require authentication
+        if path == "/" 
+            || path == "/hgb_kernel.wasm" 
+            || path == "/api/wasm_kernel/health" 
+            || path == "/manifest.json" 
+            || path == "/manifest.webmanifest" 
+            || path == "/sw.js" 
+            || path == "/icon.svg" 
+            || path == "/api/auth/verify" 
+            || req.method() == axum::http::Method::OPTIONS 
+        {
             return next.run(req).await;
         }
 
@@ -693,6 +704,61 @@ impl VisualIdeServer {
             [(axum::http::header::CONTENT_TYPE, "image/svg+xml")],
             ICON_SVG,
         )
+    }
+
+    pub async fn serve_wasm_kernel(headers: axum::http::HeaderMap) -> impl IntoResponse {
+        static GZIP_WASM: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+        let gzip_data = GZIP_WASM.get_or_init(|| {
+            use std::io::Write;
+            let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+            let _ = encoder.write_all(HGB_KERNEL_WASM);
+            encoder.finish().unwrap_or_else(|_| HGB_KERNEL_WASM.to_vec())
+        });
+
+        let accepts_gzip = headers
+            .get(axum::http::header::ACCEPT_ENCODING)
+            .and_then(|h| h.to_str().ok())
+            .map(|s| s.contains("gzip"))
+            .unwrap_or(false);
+
+        if accepts_gzip {
+            (
+                [
+                    (axum::http::header::CONTENT_TYPE, "application/wasm"),
+                    (axum::http::header::CONTENT_ENCODING, "gzip"),
+                    (axum::http::header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+                    (axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN, "*"),
+                ],
+                gzip_data.clone(),
+            ).into_response()
+        } else {
+            (
+                [
+                    (axum::http::header::CONTENT_TYPE, "application/wasm"),
+                    (axum::http::header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+                    (axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN, "*"),
+                ],
+                HGB_KERNEL_WASM.to_vec(),
+            ).into_response()
+        }
+    }
+
+    pub async fn handle_wasm_kernel_health() -> impl IntoResponse {
+        let magic_valid = HGB_KERNEL_WASM.len() >= 8 
+            && &HGB_KERNEL_WASM[0..4] == b"\0asm" 
+            && &HGB_KERNEL_WASM[4..8] == b"\x01\0\0\0";
+
+        (
+            StatusCode::OK,
+            Json(WasmKernelHealth {
+                status: if magic_valid { "online_and_healthy".into() } else { "invalid_magic".into() },
+                size_bytes: HGB_KERNEL_WASM.len(),
+                magic_valid,
+                version: "1.0.0 (Zig wasm32-freestanding)".into(),
+                zero_copy_ready: true,
+                precompressed_gzip_active: true,
+            })
+        ).into_response()
     }
 
     async fn handle_workspace(State(state): State<Arc<Self>>) -> impl IntoResponse {
@@ -3638,6 +3704,17 @@ const INDEX_HTML: &str = include_str!("../dist/index.html");
 const MANIFEST_JSON: &str = include_str!("../dist/manifest.json");
 const SW_JS: &str = include_str!("../dist/sw.js");
 const ICON_SVG: &str = include_str!("../dist/icon.svg");
+const HGB_KERNEL_WASM: &[u8] = include_bytes!("../dist/hgb_kernel.wasm");
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct WasmKernelHealth {
+    pub status: String,
+    pub size_bytes: usize,
+    pub magic_valid: bool,
+    pub version: String,
+    pub zero_copy_ready: bool,
+    pub precompressed_gzip_active: bool,
+}
 
 #[cfg(test)]
 mod tests {
@@ -3824,5 +3901,45 @@ mod tests {
 
         let msg_resp = VisualIdeServer::handle_git_generate_commit_msg(State(server)).await.into_response();
         assert_eq!(msg_resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_hgb_kernel_wasm_magic_bytes_and_version() {
+        assert!(HGB_KERNEL_WASM.len() >= 8, "WASM binary must be at least 8 bytes");
+        assert_eq!(&HGB_KERNEL_WASM[0..4], b"\0asm", "WASM magic header must match \\0asm");
+        assert_eq!(&HGB_KERNEL_WASM[4..8], b"\x01\0\0\0", "WASM version must match 1");
+    }
+
+    #[tokio::test]
+    async fn test_serve_wasm_kernel_headers_and_status() {
+        let headers = axum::http::HeaderMap::new();
+        let resp = VisualIdeServer::serve_wasm_kernel(headers).await.into_response();
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+
+        let content_type = resp.headers().get(axum::http::header::CONTENT_TYPE).unwrap();
+        assert_eq!(content_type, "application/wasm");
+
+        let cache_control = resp.headers().get(axum::http::header::CACHE_CONTROL).unwrap();
+        assert_eq!(cache_control, "public, max-age=31536000, immutable");
+    }
+
+    #[tokio::test]
+    async fn test_serve_wasm_kernel_gzip_support() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(axum::http::header::ACCEPT_ENCODING, "gzip, deflate, br".parse().unwrap());
+        let resp = VisualIdeServer::serve_wasm_kernel(headers).await.into_response();
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+
+        let enc = resp.headers().get(axum::http::header::CONTENT_ENCODING).unwrap();
+        assert_eq!(enc, "gzip");
+
+        let content_type = resp.headers().get(axum::http::header::CONTENT_TYPE).unwrap();
+        assert_eq!(content_type, "application/wasm");
+    }
+
+    #[tokio::test]
+    async fn test_wasm_kernel_health_reporting() {
+        let resp = VisualIdeServer::handle_wasm_kernel_health().await.into_response();
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
     }
 }

@@ -1,11 +1,14 @@
-// 🪽 Hagibis Sovereign PWA Studio Service Worker (Optimized Cache-First & Offline Monaco)
-const CACHE_NAME = 'hgb-pwa-v3';
-const MAX_CACHE_ENTRIES = 120;
+// 🪽 Hagibis Sovereign PWA Studio Service Worker (Optimized Cache-First & Offline Monaco + Wasm Microkernel)
+const CACHE_NAME = 'hgb-pwa-v4';
+const MAX_CACHE_ENTRIES = 140;
+
 const STATIC_ASSETS = [
     '/',
     '/manifest.json',
     '/manifest.webmanifest',
     '/icon.svg',
+    // --- Hybrid WebAssembly Microkernel Asset ---
+    '/hgb_kernel.wasm',
     'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css',
     'https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css',
     'https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js',
@@ -60,9 +63,10 @@ self.addEventListener('fetch', (event) => {
     }
 
     const isCdnAsset = url.hostname.includes('cdnjs.cloudflare.com') || url.hostname.includes('cdn.jsdelivr.net');
+    const isWasmKernel = url.pathname === '/hgb_kernel.wasm';
 
-    // Strategy A: Cache-First for versioned static CDN assets (0ms local load)
-    if (isCdnAsset) {
+    // Strategy A: Cache-First for Wasm Kernel and CDN static assets (0ms local load & 100% offline)
+    if (isCdnAsset || isWasmKernel) {
         event.respondWith(
             caches.match(event.request).then((cachedResponse) => {
                 if (cachedResponse) {
@@ -100,7 +104,6 @@ self.addEventListener('fetch', (event) => {
                     const responseClone = networkResponse.clone();
                     caches.open(CACHE_NAME).then((cache) => {
                         cache.put(event.request, responseClone);
-                        trimCache(CACHE_NAME, MAX_CACHE_ENTRIES);
                     });
                 }
                 return networkResponse;
@@ -110,7 +113,7 @@ self.addEventListener('fetch', (event) => {
                     if (cachedResponse) {
                         return cachedResponse;
                     }
-                    if (event.request.mode === 'navigate') {
+                    if (event.request.headers.get('accept')?.includes('text/html')) {
                         return caches.match('/');
                     }
                 });
