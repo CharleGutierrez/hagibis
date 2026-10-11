@@ -401,6 +401,34 @@ async fn query_local_llm_status() -> String {
     status_str
 }
 
+pub(crate) fn is_ignored_workspace_dir(name: &str) -> bool {
+    matches!(
+        name,
+        "target"
+            | ".git"
+            | ".hgb"
+            | "node_modules"
+            | ".bun"
+            | ".cache"
+            | ".cargo"
+            | ".rustup"
+            | ".npm"
+            | ".gemini"
+            | ".local"
+            | ".config"
+            | ".vscode"
+            | ".idea"
+            | ".turbo"
+            | ".next"
+            | ".nuxt"
+            | "venv"
+            | ".venv"
+            | "__pycache__"
+            | ".DS_Store"
+            | ".antigravity"
+    )
+}
+
 impl VisualIdeServer {
     pub fn new(port: u16, workspace_root: PathBuf) -> Self {
         let lsp = Arc::new(crate::lsp_engine::LspEngine::new(workspace_root.clone()));
@@ -762,18 +790,21 @@ impl VisualIdeServer {
     }
 
     async fn handle_workspace(State(state): State<Arc<Self>>) -> impl IntoResponse {
-        async fn walk_dir(dir: &Path) -> Result<Vec<FileNode>, std::io::Error> {
+        async fn walk_dir(dir: &Path, depth: usize) -> Result<Vec<FileNode>, std::io::Error> {
+            if depth > 5 {
+                return Ok(Vec::new());
+            }
             let mut entries = fs::read_dir(dir).await?;
             let mut nodes = Vec::new();
             while let Some(entry) = entries.next_entry().await? {
                 let path = entry.path();
                 let name = entry.file_name().to_string_lossy().to_string();
-                if name == "target" || name == ".git" || name == ".hgb" || name == "node_modules" {
+                if is_ignored_workspace_dir(&name) {
                     continue;
                 }
                 let is_dir = entry.file_type().await?.is_dir();
                 let children = if is_dir {
-                    Some(Box::pin(walk_dir(&path)).await?)
+                    Some(Box::pin(walk_dir(&path, depth + 1)).await?)
                 } else {
                     None
                 };
@@ -783,11 +814,14 @@ impl VisualIdeServer {
                     is_dir,
                     children,
                 });
+                if nodes.len() >= 500 {
+                    break;
+                }
             }
             nodes.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then(a.name.cmp(&b.name)));
             Ok(nodes)
         }
-        match walk_dir(&state.workspace_root).await {
+        match walk_dir(&state.workspace_root, 0).await {
             Ok(nodes) => (StatusCode::OK, Json(nodes)).into_response(),
             Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
         }
@@ -971,7 +1005,7 @@ impl VisualIdeServer {
             while let Some(entry) = entries.next_entry().await? {
                 let path = entry.path();
                 let name = entry.file_name().to_string_lossy().to_string();
-                if name == "target" || name == ".git" || name == ".hgb" || name == "node_modules" {
+                if is_ignored_workspace_dir(&name) {
                     continue;
                 }
                 if entry.file_type().await?.is_dir() {
@@ -1826,7 +1860,7 @@ impl VisualIdeServer {
             while let Some(entry) = entries.next_entry().await? {
                 let path = entry.path();
                 let name = entry.file_name().to_string_lossy().to_string();
-                if name == "target" || name == ".git" || name == ".hgb" || name == "node_modules" {
+                if is_ignored_workspace_dir(&name) {
                     continue;
                 }
                 let is_dir = entry.file_type().await?.is_dir();
@@ -1911,7 +1945,7 @@ impl VisualIdeServer {
             while let Some(entry) = entries.next_entry().await? {
                 let path = entry.path();
                 let name = entry.file_name().to_string_lossy().to_string();
-                if name == "target" || name == ".git" || name == ".hgb" || name == "node_modules" {
+                if is_ignored_workspace_dir(&name) {
                     continue;
                 }
                 let is_dir = entry.file_type().await?.is_dir();

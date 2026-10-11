@@ -5295,37 +5295,58 @@
             }
         }
 
-        function renderTree(nodes, parentEl) {
+        function renderTree(nodes, parentEl, depth = 0) {
             if (!Array.isArray(nodes) || !parentEl) return;
+            const fragment = document.createDocumentFragment();
+
             nodes.forEach(node => {
                 const item = document.createElement('div');
                 item.className = 'tree-item';
                 if (node.is_dir) {
-                    item.innerHTML = `<i class="fa fa-folder tree-folder"></i> <span>${node.name}</span><i class="fa fa-trash tree-del-btn" title="Delete folder" onclick="promptDeleteEntry('${node.path}', event)"></i>`;
+                    const isExpanded = depth === 0 && (node.name === 'crates' || node.name === 'src');
+                    item.innerHTML = `<i class="fa ${isExpanded ? 'fa-folder-open' : 'fa-folder'} tree-folder"></i> <span>${escapeHtml(node.name)}</span><i class="fa fa-trash tree-del-btn" title="Delete folder" onclick="promptDeleteEntry('${escapeHtml(node.path)}', event)"></i>`;
                     const childBox = document.createElement('div');
                     childBox.style.paddingLeft = '14px';
-                    childBox.style.display = 'block';
+                    childBox.style.display = isExpanded ? 'block' : 'none';
+
+                    let hasRenderedChildren = false;
+                    const renderChildren = () => {
+                        if (!hasRenderedChildren && node.children && node.children.length > 0) {
+                            renderTree(node.children, childBox, depth + 1);
+                            hasRenderedChildren = true;
+                        }
+                    };
+
+                    if (isExpanded) {
+                        renderChildren();
+                    }
+
                     item.onclick = (e) => {
                         e.stopPropagation();
-                        childBox.style.display = childBox.style.display === 'none' ? 'block' : 'none';
+                        renderChildren();
+                        const isNowHidden = childBox.style.display === 'none';
+                        childBox.style.display = isNowHidden ? 'block' : 'none';
+                        const folderIcon = item.querySelector('.tree-folder');
+                        if (folderIcon) {
+                            folderIcon.className = `fa ${isNowHidden ? 'fa-folder-open' : 'fa-folder'} tree-folder`;
+                        }
                     };
-                    parentEl.appendChild(item);
-                    if (node.children) {
-                        renderTree(node.children, childBox);
-                        parentEl.appendChild(childBox);
-                    }
+                    fragment.appendChild(item);
+                    fragment.appendChild(childBox);
                 } else {
                     const icon = getFileIcon(node.name);
-                    item.innerHTML = `<i class="${icon} tree-file"></i> <span>${node.name}</span><i class="fa fa-trash tree-del-btn" title="Delete file" onclick="promptDeleteEntry('${node.path}', event)"></i>`;
+                    item.innerHTML = `<i class="${icon} tree-file"></i> <span>${escapeHtml(node.name)}</span><i class="fa fa-trash tree-del-btn" title="Delete file" onclick="promptDeleteEntry('${escapeHtml(node.path)}', event)"></i>`;
                     item.onclick = (e) => {
                         e.stopPropagation();
                         document.querySelectorAll('.tree-item').forEach(el => el.classList.remove('active'));
                         item.classList.add('active');
                         openFile(node.path);
                     };
-                    parentEl.appendChild(item);
+                    fragment.appendChild(item);
                 }
             });
+
+            parentEl.appendChild(fragment);
         }
 
         async function promptCreateFile() {
