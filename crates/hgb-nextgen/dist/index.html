@@ -4700,7 +4700,19 @@
                                 activeStreamAccumulator += chunk;
                                 if (activeStreamElement) {
                                     const bodyEl = activeStreamElement.querySelector('.stream-body');
-                                    if (bodyEl) bodyEl.innerText = activeStreamAccumulator;
+                                    if (bodyEl) {
+                                        const trimmed = activeStreamAccumulator.trim();
+                                        if (trimmed.startsWith('{')) {
+                                            try {
+                                                const p = JSON.parse(trimmed);
+                                                bodyEl.innerText = p.response || "Thinking...";
+                                            } catch (_) {
+                                                bodyEl.innerText = "Thinking...";
+                                            }
+                                        } else {
+                                            bodyEl.innerText = activeStreamAccumulator;
+                                        }
+                                    }
                                     chatStream.scrollTop = chatStream.scrollHeight;
                                 }
                             }
@@ -4735,10 +4747,32 @@
         function finalizeStreamResponse(fullText, modelName) {
             if (!activeStreamElement) return;
             isCopilotStreaming = false;
+
+            let displayText = fullText;
+            let finalModel = modelName;
+
+            // Check if fullText is a JSON envelope
+            try {
+                const trimmed = (fullText || '').trim();
+                if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+                    const parsed = JSON.parse(trimmed);
+                    if (parsed.status === 'offline') {
+                        displayText = `⚠️ Inference Service Offline: The local LLM engine (Ollama) is currently unreachable on 127.0.0.1:11434.\n\nMake sure Ollama is running ('ollama serve') and model '${modelName || 'selected'}' is loaded.`;
+                    } else if (parsed.response) {
+                        displayText = parsed.response;
+                    } else if (parsed.error) {
+                        displayText = `⚠️ Error: ${parsed.error}`;
+                    }
+                    if (parsed.model) {
+                        finalModel = parsed.model;
+                    }
+                }
+            } catch (_) {}
+
             const bodyEl = activeStreamElement.querySelector('.stream-body');
             if (bodyEl) {
                 bodyEl.classList.remove('typing-cursor');
-                bodyEl.innerText = fullText;
+                bodyEl.innerText = displayText;
             }
 
             if (modelName) {

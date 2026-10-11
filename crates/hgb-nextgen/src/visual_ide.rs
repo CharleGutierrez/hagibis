@@ -2271,7 +2271,7 @@ impl VisualIdeServer {
 
         match client.post("http://127.0.0.1:11434/api/chat")
             .json(&ollama_req)
-            .timeout(std::time::Duration::from_secs(30))
+            .timeout(std::time::Duration::from_secs(90))
             .send()
             .await
         {
@@ -2287,9 +2287,9 @@ impl VisualIdeServer {
                     (StatusCode::OK, Json(serde_json::json!({ "response": "Error parsing output", "status": "error" }))).into_response()
                 }
             }
-            Err(_) => {
+            Err(e) => {
                 (StatusCode::OK, Json(serde_json::json!({
-                    "response": "Inference service offline",
+                    "response": format!("Inference service unreachable: {}", e),
                     "status": "offline"
                 }))).into_response()
             }
