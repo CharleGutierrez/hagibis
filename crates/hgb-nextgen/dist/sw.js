@@ -1,6 +1,6 @@
-// 🪽 Hagibis Sovereign PWA Studio Service Worker (Lean SSD Quota Tuned)
-const CACHE_NAME = 'hgb-pwa-v2';
-const MAX_CACHE_ENTRIES = 40;
+// 🪽 Hagibis Sovereign PWA Studio Service Worker (Optimized Cache-First & Offline Monaco)
+const CACHE_NAME = 'hgb-pwa-v3';
+const MAX_CACHE_ENTRIES = 120;
 const STATIC_ASSETS = [
     '/',
     '/manifest.json',
@@ -10,7 +10,10 @@ const STATIC_ASSETS = [
     'https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css',
     'https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js',
     'https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js',
-    'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs/loader.min.js'
+    'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs/loader.min.js',
+    'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs/editor/editor.main.js',
+    'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs/editor/editor.main.css',
+    'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs/editor/editor.main.nls.js'
 ];
 
 async function trimCache(cacheName, maxEntries) {
@@ -51,12 +54,45 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
     const url = new URL(event.request.url);
 
-    // Bypass caching for dynamic Axum API routes, WebSockets, or POST/PUT mutations
+    // Bypass caching for dynamic Axum API routes, WebSockets, or mutations
     if (url.pathname.startsWith('/api/') || event.request.method !== 'GET') {
         return;
     }
 
-    // Network-first strategy with cache fallback for HTML and UI shell assets
+    const isCdnAsset = url.hostname.includes('cdnjs.cloudflare.com') || url.hostname.includes('cdn.jsdelivr.net');
+
+    // Strategy A: Cache-First for versioned static CDN assets (0ms local load)
+    if (isCdnAsset) {
+        event.respondWith(
+            caches.match(event.request).then((cachedResponse) => {
+                if (cachedResponse) {
+                    // Stale-while-revalidate in background
+                    fetch(event.request).then((networkResponse) => {
+                        if (networkResponse && networkResponse.status === 200) {
+                            caches.open(CACHE_NAME).then((cache) => {
+                                cache.put(event.request, networkResponse.clone());
+                            });
+                        }
+                    }).catch(() => {});
+                    return cachedResponse;
+                }
+                // Not in cache yet: fetch and cache
+                return fetch(event.request).then((networkResponse) => {
+                    if (networkResponse && networkResponse.status === 200) {
+                        const responseClone = networkResponse.clone();
+                        caches.open(CACHE_NAME).then((cache) => {
+                            cache.put(event.request, responseClone);
+                            trimCache(CACHE_NAME, MAX_CACHE_ENTRIES);
+                        });
+                    }
+                    return networkResponse;
+                });
+            })
+        );
+        return;
+    }
+
+    // Strategy B: Network-first with instant cache fallback for HTML shell and local routes
     event.respondWith(
         fetch(event.request)
             .then((networkResponse) => {

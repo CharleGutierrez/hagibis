@@ -37,6 +37,7 @@ pub struct VisualIdeServer {
     pub fs_watcher: Arc<tokio::sync::Mutex<crate::fs_watcher::WorkspaceFsWatcher>>,
     pub cloud_settings: Arc<tokio::sync::RwLock<crate::cloud_settings::CloudSettings>>,
     pub agent_loop: Arc<crate::agent_loop::AgentLoopEngine>,
+    pub test_cache: Arc<tokio::sync::RwLock<Option<(std::time::SystemTime, Vec<TestCaseItem>)>>>,
 }
 
 #[derive(Serialize)]
@@ -348,10 +349,29 @@ fn get_real_memory_metrics() -> String {
     }
 }
 
+static SHARED_HTTP_CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+static LLM_STATUS_CACHE: std::sync::OnceLock<tokio::sync::RwLock<(std::time::Instant, String)>> = std::sync::OnceLock::new();
+
 async fn query_local_llm_status() -> String {
-    let client = reqwest::Client::new();
-    match client.get("http://127.0.0.1:11434/api/tags")
-        .timeout(std::time::Duration::from_millis(600))
+    let cache = LLM_STATUS_CACHE.get_or_init(|| {
+        tokio::sync::RwLock::new((std::time::Instant::now() - std::time::Duration::from_secs(60), "Offline".to_string()))
+    });
+
+    {
+        let r = cache.read().await;
+        if r.0.elapsed() < std::time::Duration::from_secs(5) {
+            return r.1.clone();
+        }
+    }
+
+    let client = SHARED_HTTP_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_millis(350))
+            .build()
+            .unwrap_or_default()
+    });
+
+    let status_str = match client.get("http://127.0.0.1:11434/api/tags")
         .send()
         .await
     {
@@ -374,7 +394,11 @@ async fn query_local_llm_status() -> String {
             }
         }
         Err(_) => "Offline / Not Running (run 'ollama serve')".to_string(),
-    }
+    };
+
+    let mut w = cache.write().await;
+    *w = (std::time::Instant::now(), status_str.clone());
+    status_str
 }
 
 impl VisualIdeServer {
@@ -387,6 +411,7 @@ impl VisualIdeServer {
         let fs_watcher = Arc::new(tokio::sync::Mutex::new(crate::fs_watcher::WorkspaceFsWatcher::new(workspace_root.clone())));
         let cloud_settings = Arc::new(tokio::sync::RwLock::new(crate::cloud_settings::CloudSettings::load_from_disk(None)));
         let agent_loop = Arc::new(crate::agent_loop::AgentLoopEngine::new(workspace_root.clone()));
+        let test_cache = Arc::new(tokio::sync::RwLock::new(None));
 
         Self {
             port,
@@ -400,6 +425,7 @@ impl VisualIdeServer {
             fs_watcher,
             cloud_settings,
             agent_loop,
+            test_cache,
         }
     }
 
@@ -616,8 +642,33 @@ impl VisualIdeServer {
         next.run(req).await
     }
 
-    async fn serve_index() -> Html<&'static str> {
-        Html(INDEX_HTML)
+    async fn serve_index(headers: axum::http::HeaderMap) -> impl IntoResponse {
+        static GZIP_HTML: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+        let gzip_data = GZIP_HTML.get_or_init(|| {
+            use std::io::Write;
+            let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+            let _ = encoder.write_all(INDEX_HTML.as_bytes());
+            encoder.finish().unwrap_or_else(|_| INDEX_HTML.as_bytes().to_vec())
+        });
+
+        let accepts_gzip = headers
+            .get(axum::http::header::ACCEPT_ENCODING)
+            .and_then(|h| h.to_str().ok())
+            .map(|s| s.contains("gzip"))
+            .unwrap_or(false);
+
+        if accepts_gzip {
+            (
+                [
+                    (axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8"),
+                    (axum::http::header::CONTENT_ENCODING, "gzip"),
+                    (axum::http::header::CACHE_CONTROL, "no-cache"),
+                ],
+                gzip_data.clone(),
+            ).into_response()
+        } else {
+            Html(INDEX_HTML).into_response()
+        }
     }
 
     async fn serve_manifest() -> impl IntoResponse {
@@ -2927,44 +2978,40 @@ impl VisualIdeServer {
     // =========================================================================
 
     async fn handle_tests_discover(State(state): State<Arc<Self>>) -> impl IntoResponse {
-        let mut tests = Vec::new();
         let workspace_root = &state.workspace_root;
 
-        // 1. Run cargo test -- --list for accurate Rust unit/integration test names
-        if workspace_root.join("Cargo.toml").exists() {
-            let output = tokio::process::Command::new("cargo")
-                .args(["test", "--", "--list"])
-                .current_dir(workspace_root)
-                .output()
-                .await;
+        // Check Cargo manifest mtime for cache validation
+        let cargo_lock = workspace_root.join("Cargo.lock");
+        let cargo_toml = workspace_root.join("Cargo.toml");
+        let current_mtime = if cargo_lock.exists() {
+            fs::metadata(&cargo_lock).await.and_then(|m| m.modified()).unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+        } else if cargo_toml.exists() {
+            fs::metadata(&cargo_toml).await.and_then(|m| m.modified()).unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+        } else {
+            std::time::SystemTime::now()
+        };
 
-            if let Ok(out) = output {
-                let stdout = String::from_utf8_lossy(&out.stdout);
-                for line in stdout.lines() {
-                    let trimmed = line.trim();
-                    if trimmed.ends_with(": test") {
-                        if let Some(test_name) = trimmed.strip_suffix(": test") {
-                            let name = test_name.trim();
-                            let file_guess = if name.contains("::") {
-                                let parts: Vec<&str> = name.split("::").collect();
-                                format!("{}.rs", parts[0])
-                            } else {
-                                "tests".to_string()
-                            };
-                            tests.push(TestCaseItem {
-                                id: name.to_string(),
-                                name: name.to_string(),
-                                file: file_guess,
-                                line: 1,
-                                framework: "cargo".to_string(),
-                            });
-                        }
-                    }
+        // If cache valid and populated, return immediately (< 0.2ms)
+        {
+            let cache = state.test_cache.read().await;
+            if let Some((cached_mtime, ref cached_tests)) = *cache {
+                if current_mtime <= cached_mtime && !cached_tests.is_empty() {
+                    return (
+                        StatusCode::OK,
+                        Json(serde_json::json!({
+                            "framework": "cargo",
+                            "count": cached_tests.len(),
+                            "tests": cached_tests,
+                            "cached": true
+                        })),
+                    ).into_response();
                 }
             }
         }
 
-        // 2. Walk directory for source-level test discovery (matching #[test], #[tokio::test], test "...", def test_)
+        let mut tests = Vec::new();
+
+        // 1. Walk directory for source-level test discovery (matching #[test], #[tokio::test], test "...", def test_)
         async fn scan_dir_for_tests(dir: &Path, base: &Path, tests: &mut Vec<TestCaseItem>, depth: usize) {
             if depth > 4 { return; }
             if let Ok(mut entries) = fs::read_dir(dir).await {
@@ -3035,13 +3082,55 @@ impl VisualIdeServer {
                 }
             }
         }
-
         scan_dir_for_tests(workspace_root, workspace_root, &mut tests, 0).await;
+
+        // 2. Run cargo test -- --list for accurate Rust unit/integration test names
+        if workspace_root.join("Cargo.toml").exists() {
+            let output = tokio::process::Command::new("cargo")
+                .args(["test", "--", "--list"])
+                .current_dir(workspace_root)
+                .output()
+                .await;
+
+            if let Ok(out) = output {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                for line in stdout.lines() {
+                    let trimmed = line.trim();
+                    if trimmed.ends_with(": test") {
+                        if let Some(test_name) = trimmed.strip_suffix(": test") {
+                            let name = test_name.trim();
+                            let file_guess = if name.contains("::") {
+                                let parts: Vec<&str> = name.split("::").collect();
+                                format!("{}.rs", parts[0])
+                            } else {
+                                "tests".to_string()
+                            };
+                            if !tests.iter().any(|t| t.id == name || t.name == name) {
+                                tests.push(TestCaseItem {
+                                    id: name.to_string(),
+                                    name: name.to_string(),
+                                    file: file_guess,
+                                    line: 1,
+                                    framework: "cargo".to_string(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Store in cache
+        {
+            let mut cache = state.test_cache.write().await;
+            *cache = Some((current_mtime, tests.clone()));
+        }
 
         (StatusCode::OK, Json(serde_json::json!({
             "framework": "cargo",
             "count": tests.len(),
             "tests": tests,
+            "cached": false
         }))).into_response()
     }
 

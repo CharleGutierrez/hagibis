@@ -2014,6 +2014,7 @@ dependencies = [
  "colored",
  "cpal",
  "crossterm",
+ "flate2",
  "futures-util",
  "hgb-core",
  "hgb-daemon",
