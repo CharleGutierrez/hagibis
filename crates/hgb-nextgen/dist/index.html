@@ -701,6 +701,25 @@
         .branch-list-item { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-bottom: 1px solid #1f1f23; cursor: pointer; font-size: 12px; transition: background 0.1s ease; }
         .branch-list-item:hover { background: #1e1e24; color: #38bdf8; }
         .branch-list-item.current { background: #083344; color: #22d3ee; font-weight: 600; }
+
+        /* Phase 8A: Visual Test Explorer & TDD Green-Light Runner */
+        .test-tree-item { display: flex; align-items: center; justify-content: space-between; padding: 5px 8px; font-size: 11px; border-radius: 4px; cursor: pointer; border-left: 2px solid transparent; margin-bottom: 2px; }
+        .test-tree-item:hover { background: #1e1e24; }
+        .test-tree-item.passed { border-left-color: #10b981; }
+        .test-tree-item.failed { border-left-color: #ef4444; background: rgba(239, 68, 68, 0.08); }
+        .test-tree-item.running { border-left-color: #f59e0b; }
+        .test-tree-item.pending { border-left-color: #71717a; }
+        .test-gutter-glyph-passed { background: #10b981; border-radius: 50%; width: 8px !important; height: 8px !important; margin: 5px 0 0 5px; cursor: pointer; }
+        .test-gutter-glyph-failed { background: #ef4444; border-radius: 50%; width: 8px !important; height: 8px !important; margin: 5px 0 0 5px; cursor: pointer; }
+        .test-gutter-glyph-pending { background: #64748b; border-radius: 50%; width: 8px !important; height: 8px !important; margin: 5px 0 0 5px; cursor: pointer; }
+
+        /* Phase 8B: In-IDE Live Web Preview & Responsive Browser Canvas */
+        .preview-btn-active { background: #0284c7 !important; color: #fff !important; }
+
+        /* Phase 8C: Git History DAG Graph & Commit Topology */
+        .dag-node-card { display: flex; flex-direction: column; gap: 4px; padding: 8px 12px; background: #141416; border: 1px solid #27272a; border-radius: 6px; margin-bottom: 6px; font-size: 12px; }
+        .dag-node-card:hover { border-color: #0284c7; background: #18181b; }
+        .dag-graph-line { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 11px; color: #38bdf8; white-space: pre; }
     </style>
 </head>
 <body>
@@ -764,6 +783,10 @@
                 <button class="activity-btn" id="act-btn-debug" onclick="handleActivityClick('debug')" title="Visual Debugger (DAP)">
                     <i class="fa fa-bug"></i>
                 </button>
+                <button class="activity-btn" id="act-btn-tests" onclick="handleActivityClick('tests')" title="Visual Test Explorer (TDD Runner)" style="color:#10b981;">
+                    <i class="fa fa-vial"></i>
+                    <span id="act-tests-badge" class="activity-badge" style="display:none; background:#10b981;">0</span>
+                </button>
                 <button class="activity-btn" id="act-btn-swarm" onclick="handleActivityClick('swarm')" title="Multi-Agent Worktree Swarm">
                     <i class="fa fa-network-wired"></i>
                 </button>
@@ -798,6 +821,7 @@
                 <button class="sidebar-nav-btn" id="tab-nav-git" onclick="switchSidebarTab('git')" title="Source Control (Ctrl+Shift+G)"><i class="fa fa-code-branch"></i> Git <span id="git-badge-count" class="badge" style="display:none; font-size:9px; padding:1px 5px; background:#083344; color:#22d3ee; margin-left:2px;">0</span></button>
                 <button class="sidebar-nav-btn" id="tab-nav-zig" onclick="switchSidebarTab('zig')" title="Zig & Rust Native Telemetry"><i class="fa fa-bolt" style="color:#c084fc;"></i> Zig</button>
                 <button class="sidebar-nav-btn" id="tab-nav-debug" onclick="switchSidebarTab('debug')" title="Visual Debugger (DAP)"><i class="fa fa-bug"></i> Debug</button>
+                <button class="sidebar-nav-btn" id="tab-nav-tests" onclick="switchSidebarTab('tests')" title="Visual Test Explorer & TDD Runner"><i class="fa fa-vial" style="color:#10b981;"></i> Tests</button>
                 <button class="sidebar-nav-btn" id="tab-nav-swarm" onclick="switchSidebarTab('swarm')" title="Multi-Agent Swarm"><i class="fa fa-network-wired"></i> Swarm</button>
             </div>
 
@@ -866,7 +890,12 @@
                 </div>
                 <div style="padding: 8px 10px; border-bottom: 1px solid var(--border-color); display:flex; flex-direction:column; gap:6px;">
                     <textarea id="git-commit-msg" class="search-text-input" placeholder="Commit message (Ctrl+Enter to commit)" style="background:#18181b; border:1px solid #3f3f46; border-radius:4px; padding:6px 8px; font-size:12px; height:50px; resize:none; color:#fff;" onkeydown="handleGitCommitKeyDown(event)"></textarea>
-                    <button class="btn btn-primary" style="justify-content:center;" onclick="commitGitChanges()"><i class="fa fa-check"></i> Commit Changes</button>
+                    <div style="display:flex; gap:6px;">
+                        <button class="btn btn-primary" style="flex:1; justify-content:center;" onclick="commitGitChanges()"><i class="fa fa-check"></i> Commit</button>
+                        <button class="btn btn-indigo" id="git-ai-msg-btn" onclick="generateAiCommitMessage()" title="AI Synthesize Conventional Commit Message from Staged Diff" style="padding:4px 8px;"><i class="fa fa-wand-magic-sparkles"></i> AI Msg</button>
+                        <button class="btn" onclick="openGitHistoryModal()" title="View Visual Git History DAG Graph" style="padding:4px 8px;"><i class="fa fa-diagram-project"></i> DAG</button>
+                        <button class="btn" onclick="openGitStashModal()" title="Git Stash Manager" style="padding:4px 8px;"><i class="fa fa-box-archive"></i> Stash</button>
+                    </div>
                 </div>
                 <div style="flex:1; overflow-y:auto;" id="git-content-scroll">
                     <!-- Staged section -->
@@ -1028,6 +1057,56 @@
                     <div style="color:#64748b; font-size:12px; text-align:center; padding:16px;">No active swarm worktrees. Click + Spawn to launch parallel branch workers.</div>
                 </div>
             </div>
+
+            <!-- View 7: Visual Test Explorer & TDD Green-Light Runner -->
+            <div class="sidebar-view" id="sidebar-view-tests" style="display:none;">
+                <div class="sidebar-header">
+                    <div style="display:flex; align-items:center; gap:6px;">
+                        <span>Test Explorer</span>
+                        <span id="tests-summary-badge" class="badge" style="background:#064e3b; color:#6ee7b7; font-size:10px;">0 Tests</span>
+                    </div>
+                    <div class="sidebar-actions">
+                        <i class="fa fa-rotate-right" onclick="discoverTests()" title="Rescan / Discover Tests"></i>
+                        <i class="fa fa-play" onclick="runAllTests()" title="Run All Tests (Green Light)" style="color:#10b981;"></i>
+                    </div>
+                </div>
+                <!-- Test Toolbar -->
+                <div style="padding: 6px 10px; border-bottom: 1px solid var(--border-color); display:flex; flex-direction:column; gap:6px; background:#141416;">
+                    <div style="display:flex; gap:6px;">
+                        <input type="text" id="test-filter-input" class="search-text-input" placeholder="Filter tests..." style="flex:1; background:#18181b; border:1px solid #3f3f46; border-radius:4px; padding:4px 8px; font-size:11px; color:#fff;" oninput="filterTestsList(this.value)">
+                        <button class="btn btn-sm btn-primary" onclick="runAllTests()" title="Run All Tests"><i class="fa fa-play"></i> Run</button>
+                        <button class="btn btn-sm" id="btn-run-failed-tests" onclick="runFailedTests()" title="Re-run only failed tests" style="display:none; color:#ef4444;"><i class="fa fa-rotate-left"></i> Failed</button>
+                    </div>
+                    <div style="display:flex; justify-content:space-between; align-items:center; font-size:11px;">
+                        <label style="display:flex; align-items:center; gap:5px; color:#a1a1aa; cursor:pointer;" title="Auto-run tests when file is saved (Continuous TDD Loop)">
+                            <input type="checkbox" id="test-tdd-watch-toggle" onchange="toggleTddWatch(this.checked)">
+                            <span>TDD Watch Loop</span>
+                        </label>
+                        <div id="test-metrics-bar" style="color:#71717a; font-size:10px;">
+                            <span id="tests-passed-stat" style="color:#10b981; font-weight:600;">0 passed</span>,
+                            <span id="tests-failed-stat" style="color:#ef4444; font-weight:600;">0 failed</span>
+                        </div>
+                    </div>
+                </div>
+                <!-- Discovered Tests List -->
+                <div style="flex:1; overflow-y:auto; padding:4px 6px;" id="tests-tree-container">
+                    <div style="padding:14px; color:#71717a; text-align:center; font-size:12px;">
+                        Click <i class="fa fa-rotate-right"></i> to discover workspace tests
+                    </div>
+                </div>
+                <!-- Failure Inspector Drawer -->
+                <div id="test-failure-inspector" style="display:none; border-top:1px solid #3f3f46; background:#18181b; padding:8px 10px; max-height:220px; overflow-y:auto; font-size:11px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                        <span style="font-weight:700; color:#ef4444;"><i class="fa fa-triangle-exclamation"></i> Failure Inspector</span>
+                        <div style="display:flex; gap:6px;">
+                            <button class="btn btn-sm btn-indigo" id="test-ai-fix-btn" onclick="triggerAiTestFixActive()" style="padding:2px 6px; font-size:10px;"><i class="fa fa-wand-magic-sparkles"></i> 1-Click AI Fix</button>
+                            <i class="fa fa-xmark" style="cursor:pointer; color:#a1a1aa;" onclick="closeFailureInspector()"></i>
+                        </div>
+                    </div>
+                    <div id="test-failure-name" style="font-weight:600; color:#fca5a5; margin-bottom:4px; font-family:monospace;"></div>
+                    <div id="test-failure-message" style="color:#f87171; background:#09090b; padding:6px; border-radius:4px; font-family:monospace; white-space:pre-wrap; font-size:10px; border:1px solid #7f1d1d; max-height:140px; overflow-y:auto;"></div>
+                </div>
+            </div>
         </div>
 
         <!-- Draggable Resizer between Sidebar and Editor -->
@@ -1044,6 +1123,7 @@
                 <button class="mode-btn" id="mode-diff" onclick="switchView('diff')"><i class="fa fa-table-columns"></i> Myers SES Diff</button>
                 <button class="mode-btn" id="mode-side" onclick="switchView('side')"><i class="fa fa-columns"></i> Side-by-Side</button>
                 <button class="mode-btn" id="mode-composer" onclick="switchView('composer')"><i class="fa fa-layer-group"></i> Composer Agent</button>
+                <button class="mode-btn" id="mode-preview" onclick="switchView('preview')"><i class="fa fa-globe"></i> Live Preview</button>
                 <button class="mode-btn" id="mode-problems" onclick="toggleProblemsPanel()"><i class="fa fa-triangle-exclamation"></i> Problems <span id="diag-count-badge" class="badge" style="background:#dc2626; color:#fff; display:none; padding:1px 5px; font-size:10px;">0</span></button>
             </div>
 
@@ -1117,6 +1197,36 @@
                         <button class="btn btn-primary" onclick="runComposer()"><i class="fa fa-play"></i> Run Orchestrator</button>
                     </div>
                     <div id="composer-results"></div>
+                </div>
+
+                <!-- Phase 8B: In-IDE Live Web Preview & Responsive Browser Canvas -->
+                <div id="preview-container" style="display:none; flex-direction:column; width:100%; height:100%; background:#09090b; overflow:hidden;">
+                    <!-- Preview Nav Bar -->
+                    <div class="preview-navbar" style="height:34px; background:#18181b; border-bottom:1px solid #27272a; display:flex; align-items:center; padding:0 8px; gap:8px; flex-shrink:0;">
+                        <button class="btn btn-sm" onclick="reloadLivePreview()" title="Reload Preview (Ctrl+R)"><i class="fa fa-rotate-right"></i></button>
+                        <div style="display:flex; align-items:center; flex:1; background:#09090b; border:1px solid #27272a; border-radius:4px; padding:0 8px; height:24px;">
+                            <i class="fa fa-lock" style="font-size:10px; color:#10b981; margin-right:6px;"></i>
+                            <input type="text" id="preview-url-input" value="http://localhost:3000" style="background:transparent; border:none; color:#f4f4f5; font-size:11px; width:100%; outline:none;" onkeydown="if(event.key==='Enter') navigateLivePreview()">
+                        </div>
+                        <div class="preview-device-presets" style="display:flex; gap:2px; background:#09090b; border:1px solid #27272a; border-radius:4px; padding:2px;">
+                            <button class="btn btn-sm" id="preset-mobile" onclick="setPreviewViewport('375px')" title="Mobile Viewport (375px)"><i class="fa fa-mobile-screen"></i> 375</button>
+                            <button class="btn btn-sm" id="preset-tablet" onclick="setPreviewViewport('768px')" title="Tablet Viewport (768px)"><i class="fa fa-tablet-screen-button"></i> 768</button>
+                            <button class="btn btn-sm" id="preset-laptop" onclick="setPreviewViewport('1024px')" title="Laptop Viewport (1024px)"><i class="fa fa-laptop"></i> 1024</button>
+                            <button class="btn btn-sm preview-btn-active" id="preset-full" onclick="setPreviewViewport('100%')" title="Full Responsive (100%)"><i class="fa fa-expand"></i> 100%</button>
+                        </div>
+                        <label style="display:flex; align-items:center; gap:4px; font-size:10px; color:#a1a1aa; cursor:pointer;" title="Auto-reload preview whenever workspace files are saved">
+                            <input type="checkbox" id="preview-auto-reload-toggle" checked>
+                            <span>Live Reload</span>
+                        </label>
+                        <button class="btn btn-sm" onclick="openPreviewExternal()" title="Open URL in External Browser"><i class="fa fa-arrow-up-right-from-square"></i></button>
+                        <div id="preview-active-ports-badge" style="font-size:10px; color:#a1a1aa; display:flex; align-items:center; gap:4px;">
+                            <span class="badge" style="background:#064e3b; color:#6ee7b7; font-size:10px; cursor:pointer;" onclick="detectAndInitLivePreview()" title="Click to auto-detect active dev ports"><i class="fa fa-network-wired"></i> Auto-Detect</span>
+                        </div>
+                    </div>
+                    <!-- Preview Screen Wrapper -->
+                    <div id="preview-screen-wrapper" style="flex:1; display:flex; justify-content:center; align-items:stretch; background:#0e0e11; overflow:hidden; position:relative;">
+                        <iframe id="live-preview-iframe" src="about:blank" style="width:100%; height:100%; border:none; background:#ffffff; transition:width 0.2s ease;" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"></iframe>
+                    </div>
                 </div>
                 
                 <!-- Floating Speculative Tab Pill -->
@@ -1588,6 +1698,45 @@
             </div>
             <div class="modal-list" id="branch-list-container" style="max-height:300px;">
                 <div style="padding:14px; color:#71717a; text-align:center;">Loading branches...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Phase 8C: Git History DAG Graph Modal -->
+    <div class="modal-overlay" id="git-history-modal" onclick="closeGitHistoryModal(event)">
+        <div class="modal-content" onclick="event.stopPropagation()" style="width: min(850px, 95vw); max-height: 85vh;">
+            <div class="modal-header">
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <i class="fa fa-diagram-project" style="color:#06b6d4;"></i>
+                    <span>Git History DAG Graph & Commit Topology</span>
+                </div>
+                <div style="display:flex; gap:8px; align-items:center;">
+                    <button class="btn btn-sm" onclick="loadGitHistory()"><i class="fa fa-rotate-right"></i> Refresh</button>
+                    <i class="fa fa-xmark" style="cursor:pointer;" onclick="closeGitHistoryModal()"></i>
+                </div>
+            </div>
+            <div style="flex:1; overflow-y:auto; padding:12px;" id="git-history-container">
+                <div style="padding:16px; color:#71717a; text-align:center;">Loading commit DAG history...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Phase 8C: Git Stash Manager Modal -->
+    <div class="modal-overlay" id="git-stash-modal" onclick="closeGitStashModal(event)">
+        <div class="modal-content" onclick="event.stopPropagation()" style="width: min(560px, 94vw);">
+            <div class="modal-header">
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <i class="fa fa-box-archive" style="color:#f59e0b;"></i>
+                    <span>Git Stash Manager</span>
+                </div>
+                <i class="fa fa-xmark" style="cursor:pointer;" onclick="closeGitStashModal()"></i>
+            </div>
+            <div style="padding:10px 14px; border-bottom:1px solid #27272a; display:flex; gap:8px;">
+                <input type="text" class="search-text-input" id="git-stash-msg-input" placeholder="Optional stash message (e.g. 'WIP refactor')..." style="flex:1; background:#18181b; border:1px solid #3f3f46; border-radius:4px; padding:6px 10px; font-size:12px; color:#fff;" onkeydown="if(event.key==='Enter') pushGitStash()">
+                <button class="btn btn-primary" onclick="pushGitStash()"><i class="fa fa-plus"></i> Stash Changes</button>
+            </div>
+            <div class="modal-list" id="git-stash-list-container" style="max-height:300px; overflow-y:auto; padding:6px;">
+                <div style="padding:14px; color:#71717a; text-align:center;">Loading stashes...</div>
             </div>
         </div>
     </div>
@@ -2210,6 +2359,14 @@
                 'git_branch_checkout': ['/api/git/branch/checkout', 'POST', args],
                 'git_conflicts': ['/api/git/conflicts', 'GET'],
                 'git_conflicts_resolve': ['/api/git/conflicts/resolve', 'POST', args],
+                'tests_discover': ['/api/tests/discover', 'GET'],
+                'tests_run': ['/api/tests/run', 'POST', args],
+                'tests_ai_fix': ['/api/tests/ai_fix', 'POST', args],
+                'preview_ports': ['/api/preview/ports', 'GET'],
+                'git_history': ['/api/git/history', 'GET'],
+                'git_generate_commit_msg': ['/api/git/generate_commit_msg', 'POST', args],
+                'git_stashes': ['/api/git/stashes', 'GET'],
+                'git_stash_action': ['/api/git/stash_action', 'POST', args],
             };
             const config = routeMap[cmd];
             if (!config) throw new Error('Unknown command: ' + cmd);
@@ -2281,11 +2438,14 @@
                             quickSuggestionsDelay: 150,
                         });
 
-                        // Interactive Gutter Breakpoint Listener
+                        // Interactive Gutter Margin Listener (Tests & Breakpoints)
                         editorInstance.onMouseDown((e) => {
                             if (e.target && e.target.type === monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN) {
                                 const line = e.target.position ? e.target.position.lineNumber : 0;
-                                if (line > 0) toggleGutterBreakpoint(line);
+                                if (line > 0) {
+                                    if (typeof handleGutterClick === 'function') handleGutterClick(line);
+                                    else toggleGutterBreakpoint(line);
+                                }
                             }
                         });
 
@@ -2627,10 +2787,16 @@
         }
 
         // Multi-Tab Management
-        async function openFile(path) {
+        async function openFile(path, line = null) {
             const existingIdx = openTabs.findIndex(t => t.path === path);
             if (existingIdx >= 0) {
                 switchTab(existingIdx);
+                if (line && editorInstance) {
+                    setTimeout(() => {
+                        editorInstance.revealLineInCenter(line);
+                        editorInstance.setPosition({ lineNumber: line, column: 1 });
+                    }, 50);
+                }
                 return;
             }
             try {
@@ -2650,6 +2816,12 @@
                 });
                 renderTabs();
                 switchTab(openTabs.length - 1);
+                if (line && editorInstance) {
+                    setTimeout(() => {
+                        editorInstance.revealLineInCenter(line);
+                        editorInstance.setPosition({ lineNumber: line, column: 1 });
+                    }, 50);
+                }
                 debounceSaveSession();
             } catch (err) {
                 toast.error('Failed to read file: ' + err);
@@ -2680,6 +2852,7 @@
             updateGitGutter(tab.path);
             refreshDiagnosticsForFile(tab.path);
             renderGutterBreakpoints();
+            if (typeof updateMonacoTestGlyphs === 'function') updateMonacoTestGlyphs();
             if (isSplitOpen) loadActiveIntoSplit();
             debounceSaveSession();
         }
@@ -2712,6 +2885,8 @@
                 renderTabs();
                 updateGitGutter(tab.path);
                 refreshDiagnosticsForFile(tab.path);
+                if (typeof triggerTddWatchDebounced === 'function') triggerTddWatchDebounced();
+                if (typeof checkLivePreviewReload === 'function') checkLivePreviewReload();
                 toast.success(`Saved: ${tab.name}`);
             } catch (err) {
                 toast.error('Save failed: ' + err);
@@ -3326,6 +3501,12 @@
                                 }
                             }
                         }
+
+                        // 3. Phase 8A & 8B: Continuous TDD watch loop & Live Preview auto-reload
+                        if (kind === 'modify' || kind === 'create') {
+                            if (typeof triggerTddWatchDebounced === 'function') triggerTddWatchDebounced();
+                            if (typeof checkLivePreviewReload === 'function') checkLivePreviewReload();
+                        }
                     } catch (_) {}
                 };
 
@@ -3780,28 +3961,45 @@
             const diffBox = document.getElementById('diff-view-container');
             const sideBox = document.getElementById('side-view-container');
             const compBox = document.getElementById('composer-container');
+            const previewBox = document.getElementById('preview-container');
 
-            [document.getElementById('mode-editor'), document.getElementById('mode-diff'), document.getElementById('mode-side'), document.getElementById('mode-composer')].forEach(b => b.classList.remove('active'));
+            [document.getElementById('mode-editor'), document.getElementById('mode-diff'), document.getElementById('mode-side'), document.getElementById('mode-composer'), document.getElementById('mode-preview')].filter(Boolean).forEach(b => b.classList.remove('active'));
 
             diffBox.style.display = 'none';
             sideBox.style.display = 'none';
             compBox.style.display = 'none';
+            if (previewBox) previewBox.style.display = 'none';
             if (isUsingFallback) fallbackBox.style.display = 'none';
             else editorBox.style.display = 'none';
 
             if (view === 'editor') {
                 if (isUsingFallback) fallbackBox.style.display = 'block';
-                else editorBox.style.display = 'block';
-                document.getElementById('mode-editor').classList.add('active');
+                else {
+                    editorBox.style.display = 'block';
+                    if (editorInstance) editorInstance.layout();
+                    if (editorInstanceSplit && isSplitOpen) editorInstanceSplit.layout();
+                }
+                const b = document.getElementById('mode-editor');
+                if (b) b.classList.add('active');
             } else if (view === 'diff') {
                 diffBox.style.display = 'block';
-                document.getElementById('mode-diff').classList.add('active');
+                const b = document.getElementById('mode-diff');
+                if (b) b.classList.add('active');
             } else if (view === 'side') {
                 sideBox.style.display = 'block';
-                document.getElementById('mode-side').classList.add('active');
+                const b = document.getElementById('mode-side');
+                if (b) b.classList.add('active');
             } else if (view === 'composer') {
                 compBox.style.display = 'block';
-                document.getElementById('mode-composer').classList.add('active');
+                const b = document.getElementById('mode-composer');
+                if (b) b.classList.add('active');
+            } else if (view === 'preview') {
+                if (previewBox) previewBox.style.display = 'flex';
+                const b = document.getElementById('mode-preview');
+                if (b) b.classList.add('active');
+                if (typeof detectAndInitLivePreview === 'function') {
+                    detectAndInitLivePreview();
+                }
             }
         }
 
@@ -4623,6 +4821,7 @@
             const gitView = document.getElementById('sidebar-view-git');
             const zigView = document.getElementById('sidebar-view-zig');
             const debugView = document.getElementById('sidebar-view-debug');
+            const testsView = document.getElementById('sidebar-view-tests');
             const swarmView = document.getElementById('sidebar-view-swarm');
 
             const btnFiles = document.getElementById('tab-nav-files');
@@ -4630,15 +4829,17 @@
             const btnGit = document.getElementById('tab-nav-git');
             const btnZig = document.getElementById('tab-nav-zig');
             const btnDebug = document.getElementById('tab-nav-debug');
+            const btnTests = document.getElementById('tab-nav-tests');
             const btnSwarm = document.getElementById('tab-nav-swarm');
 
             if (!filesView || !searchView || !gitView) return;
-            [btnFiles, btnSearch, btnGit, btnZig, btnDebug, btnSwarm].filter(Boolean).forEach(b => b.classList.remove('active'));
+            [btnFiles, btnSearch, btnGit, btnZig, btnDebug, btnTests, btnSwarm].filter(Boolean).forEach(b => b.classList.remove('active'));
             filesView.style.display = 'none';
             searchView.style.display = 'none';
             gitView.style.display = 'none';
             if (zigView) zigView.style.display = 'none';
             if (debugView) debugView.style.display = 'none';
+            if (testsView) testsView.style.display = 'none';
             if (swarmView) swarmView.style.display = 'none';
 
             // Synchronize Activity Bar
@@ -4668,6 +4869,12 @@
                 if (debugView) debugView.style.display = 'flex';
                 if (btnDebug) btnDebug.classList.add('active');
                 refreshDapStatus();
+            } else if (tab === 'tests') {
+                if (testsView) testsView.style.display = 'flex';
+                if (btnTests) btnTests.classList.add('active');
+                if (typeof discoveredWorkspaceTests !== 'undefined' && discoveredWorkspaceTests.length === 0) {
+                    discoverTests();
+                }
             } else if (tab === 'swarm') {
                 if (swarmView) swarmView.style.display = 'flex';
                 if (btnSwarm) btnSwarm.classList.add('active');
@@ -6094,6 +6301,608 @@
             }
         }
 
+        function handleGutterClick(line) {
+            if (activeTabIdx >= 0 && openTabs[activeTabIdx]) {
+                const curTab = openTabs[activeTabIdx];
+                const matchingTest = discoveredWorkspaceTests.find(t => 
+                    t.line === line && (t.file === curTab.path || curTab.path.endsWith(t.file) || t.file.endsWith(curTab.name))
+                );
+                if (matchingTest) {
+                    runSingleTest(matchingTest.id);
+                    return;
+                }
+            }
+            toggleGutterBreakpoint(line);
+        }
+
+        // =========================================================================
+        // Phase 8A: Visual Test Explorer & TDD Green-Light Runner
+        // =========================================================================
+        let discoveredWorkspaceTests = [];
+        let testRunResults = { total: 0, passed: 0, failed: 0, duration_ms: 0, failures: [] };
+        let isRunningTests = false;
+        let isTddWatchEnabled = false;
+        let tddDebounceTimer = null;
+        let activeFailedTestDetail = null;
+        let monacoTestGlyphDecorations = [];
+        let currentTestFilterQuery = '';
+
+        async function discoverTests() {
+            try {
+                const res = await apiInvoke('tests_discover');
+                discoveredWorkspaceTests = (res && res.tests) ? res.tests : [];
+                
+                // Update Badge Counts
+                const badge = document.getElementById('tests-summary-badge');
+                if (badge) badge.innerText = `${discoveredWorkspaceTests.length} Tests`;
+                const actBadge = document.getElementById('act-tests-badge');
+                if (actBadge) {
+                    actBadge.innerText = discoveredWorkspaceTests.length;
+                    actBadge.style.display = discoveredWorkspaceTests.length > 0 ? 'inline-block' : 'none';
+                }
+
+                renderTestsTree(currentTestFilterQuery);
+                updateMonacoTestGlyphs();
+            } catch (err) {
+                console.warn('Test discovery notice:', err);
+            }
+        }
+
+        function filterTestsList(query) {
+            currentTestFilterQuery = (query || '').toLowerCase().trim();
+            renderTestsTree(currentTestFilterQuery);
+        }
+
+        function renderTestsTree(filter = '') {
+            const container = document.getElementById('tests-tree-container');
+            if (!container) return;
+
+            let tests = discoveredWorkspaceTests;
+            if (filter) {
+                tests = tests.filter(t => 
+                    (t.name && t.name.toLowerCase().includes(filter)) ||
+                    (t.file && t.file.toLowerCase().includes(filter)) ||
+                    (t.framework && t.framework.toLowerCase().includes(filter))
+                );
+            }
+
+            if (tests.length === 0) {
+                container.innerHTML = `<div style="padding:14px; color:#71717a; text-align:center; font-size:12px;">
+                    ${filter ? 'No tests match filter' : 'No tests found in workspace'}
+                </div>`;
+                return;
+            }
+
+            // Group tests by file
+            const fileGroups = {};
+            tests.forEach(t => {
+                const f = t.file || 'unknown';
+                if (!fileGroups[f]) fileGroups[f] = [];
+                fileGroups[f].push(t);
+            });
+
+            let html = '';
+            for (const [file, group] of Object.entries(fileGroups)) {
+                const fileName = file.split('/').pop();
+                const passedCount = group.filter(t => t.status === 'passed').length;
+                const failedCount = group.filter(t => t.status === 'failed').length;
+
+                html += `
+                <div style="margin-bottom:8px;">
+                    <div style="font-size:11px; font-weight:600; color:#cbd5e1; display:flex; align-items:center; justify-content:space-between; padding:3px 4px; background:#18181b; border-radius:4px; margin-bottom:2px; cursor:pointer;" onclick="openFile('${escapeHtml(file)}')">
+                        <span style="display:flex; align-items:center; gap:5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+                            <i class="fa fa-file-code" style="color:#0284c7; font-size:11px;"></i>
+                            <span>${escapeHtml(fileName)}</span>
+                        </span>
+                        <span style="font-size:10px; color:#a1a1aa;">
+                            ${failedCount > 0 ? `<span style="color:#ef4444; font-weight:700;">${failedCount} ✖</span> ` : ''}
+                            <span style="color:#10b981;">${passedCount}✔</span> / ${group.length}
+                        </span>
+                    </div>
+                `;
+
+                group.forEach(t => {
+                    const status = t.status || 'pending';
+                    let icon = '<i class="fa fa-circle-dot" style="color:#64748b;"></i>';
+                    if (status === 'passed') icon = '<i class="fa fa-circle-check" style="color:#10b981;"></i>';
+                    else if (status === 'failed') icon = '<i class="fa fa-circle-xmark" style="color:#ef4444;"></i>';
+                    else if (status === 'running') icon = '<i class="fa fa-spinner fa-spin" style="color:#f59e0b;"></i>';
+
+                    html += `
+                    <div class="test-tree-item ${status}" onclick="handleTestItemClick('${escapeHtml(t.id)}')">
+                        <div style="display:flex; align-items:center; gap:6px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1;">
+                            ${icon}
+                            <span style="color:#e4e4e7; font-family:monospace; font-size:11px;" title="${escapeHtml(t.name)}">${escapeHtml(t.name)}</span>
+                            <span style="color:#71717a; font-size:10px;">:${t.line}</span>
+                        </div>
+                        <div style="display:flex; align-items:center; gap:4px;">
+                            ${status === 'failed' ? `<button class="btn btn-sm btn-indigo" style="padding:1px 5px; font-size:9px;" onclick="event.stopPropagation(); triggerAiTestFix('${escapeHtml(t.id)}');" title="AI Fix Test"><i class="fa fa-wand-magic-sparkles"></i> Fix</button>` : ''}
+                            <button class="btn btn-sm" style="padding:1px 5px; font-size:9px;" onclick="event.stopPropagation(); runSingleTest('${escapeHtml(t.id)}');" title="Run this test"><i class="fa fa-play" style="font-size:9px;"></i></button>
+                        </div>
+                    </div>`;
+                });
+
+                html += `</div>`;
+            }
+
+            container.innerHTML = html;
+        }
+
+        function handleTestItemClick(testId) {
+            const test = discoveredWorkspaceTests.find(t => t.id === testId);
+            if (!test) return;
+
+            // Jump to file and line in Monaco
+            openFile(test.file, test.line);
+
+            // If failed, open failure inspector
+            if (test.status === 'failed') {
+                const failure = (testRunResults.failures || []).find(f => f.test_id === testId);
+                if (failure) {
+                    showFailureInspector(failure);
+                }
+            }
+        }
+
+        async function runAllTests() {
+            if (isRunningTests) return;
+            isRunningTests = true;
+
+            const summaryBadge = document.getElementById('tests-summary-badge');
+            if (summaryBadge) {
+                summaryBadge.innerHTML = `<i class="fa fa-spinner fa-spin"></i> Running...`;
+                summaryBadge.style.background = '#854d0e';
+                summaryBadge.style.color = '#fef08a';
+            }
+
+            // Mark all running in tree
+            discoveredWorkspaceTests.forEach(t => t.status = 'running');
+            renderTestsTree(currentTestFilterQuery);
+            updateMonacoTestGlyphs();
+
+            try {
+                const res = await apiInvoke('tests_run', { test_id: null });
+                testRunResults = res;
+
+                // Mark passed / failed
+                const failedIds = new Set((res.failures || []).map(f => f.test_id));
+                discoveredWorkspaceTests.forEach(t => {
+                    t.status = failedIds.has(t.id) ? 'failed' : 'passed';
+                });
+
+                // Update metrics bar
+                const passedStat = document.getElementById('tests-passed-stat');
+                const failedStat = document.getElementById('tests-failed-stat');
+                if (passedStat) passedStat.innerText = `${res.passed} passed`;
+                if (failedStat) failedStat.innerText = `${res.failed} failed (${res.duration_ms}ms)`;
+
+                // Toggle failed button
+                const btnFailed = document.getElementById('btn-run-failed-tests');
+                if (btnFailed) btnFailed.style.display = res.failed > 0 ? 'inline-block' : 'none';
+
+                if (summaryBadge) {
+                    if (res.failed === 0 && res.passed > 0) {
+                        summaryBadge.innerHTML = `<i class="fa fa-check"></i> All Pass (${res.duration_ms}ms)`;
+                        summaryBadge.style.background = '#064e3b';
+                        summaryBadge.style.color = '#6ee7b7';
+                        toast.success(`Green Light: All ${res.passed} tests passed in ${res.duration_ms}ms!`);
+                    } else if (res.failed > 0) {
+                        summaryBadge.innerHTML = `<i class="fa fa-xmark"></i> ${res.failed} Failed`;
+                        summaryBadge.style.background = '#7f1d1d';
+                        summaryBadge.style.color = '#fca5a5';
+                        toast.error(`${res.failed} test(s) failed in ${res.duration_ms}ms.`);
+                        if (res.failures && res.failures.length > 0) {
+                            showFailureInspector(res.failures[0]);
+                        }
+                    } else {
+                        summaryBadge.innerText = `${discoveredWorkspaceTests.length} Tests`;
+                        summaryBadge.style.background = '#064e3b';
+                        summaryBadge.style.color = '#6ee7b7';
+                    }
+                }
+
+                renderTestsTree(currentTestFilterQuery);
+                updateMonacoTestGlyphs();
+            } catch (err) {
+                toast.error('Test run failed: ' + err);
+                discoveredWorkspaceTests.forEach(t => t.status = 'pending');
+                renderTestsTree(currentTestFilterQuery);
+            } finally {
+                isRunningTests = false;
+            }
+        }
+
+        async function runSingleTest(testId) {
+            const test = discoveredWorkspaceTests.find(t => t.id === testId);
+            if (!test) return;
+
+            test.status = 'running';
+            renderTestsTree(currentTestFilterQuery);
+            updateMonacoTestGlyphs();
+
+            try {
+                const res = await apiInvoke('tests_run', { test_id: testId });
+                const failed = (res.failures || []).some(f => f.test_id === testId);
+                test.status = failed ? 'failed' : 'passed';
+
+                if (failed && res.failures && res.failures.length > 0) {
+                    showFailureInspector(res.failures[0]);
+                    toast.error(`Test ${test.name} failed!`);
+                } else {
+                    toast.success(`Test ${test.name} passed! (${res.duration_ms}ms)`);
+                }
+
+                renderTestsTree(currentTestFilterQuery);
+                updateMonacoTestGlyphs();
+            } catch (err) {
+                test.status = 'failed';
+                renderTestsTree(currentTestFilterQuery);
+                toast.error('Test execution failed: ' + err);
+            }
+        }
+
+        async function runFailedTests() {
+            const failedTests = discoveredWorkspaceTests.filter(t => t.status === 'failed');
+            if (failedTests.length === 0) {
+                toast.info('No failed tests to re-run.');
+                return;
+            }
+            await runAllTests();
+        }
+
+        function showFailureInspector(failure) {
+            activeFailedTestDetail = failure;
+            const inspector = document.getElementById('test-failure-inspector');
+            const nameEl = document.getElementById('test-failure-name');
+            const msgEl = document.getElementById('test-failure-message');
+            if (!inspector || !nameEl || !msgEl) return;
+
+            nameEl.innerText = failure.test_id || 'Test Failure';
+            let detail = failure.message || '';
+            if (failure.stdout) detail += '\n\n' + failure.stdout;
+            msgEl.innerText = detail || 'Assertion failure occurred.';
+            inspector.style.display = 'block';
+        }
+
+        function closeFailureInspector() {
+            const inspector = document.getElementById('test-failure-inspector');
+            if (inspector) inspector.style.display = 'none';
+            activeFailedTestDetail = null;
+        }
+
+        async function triggerAiTestFixActive() {
+            if (!activeFailedTestDetail) {
+                toast.warning('No failing test selected for AI fix.');
+                return;
+            }
+            await triggerAiTestFix(activeFailedTestDetail.test_id);
+        }
+
+        async function triggerAiTestFix(testId) {
+            const failure = (testRunResults.failures || []).find(f => f.test_id === testId) || activeFailedTestDetail;
+            const errorOutput = failure ? (failure.message + '\n' + (failure.stdout || '')) : 'Test failed with assertion error.';
+
+            toast.info(`AI Synthesizing test fix for ${testId}...`);
+            try {
+                const res = await apiInvoke('tests_ai_fix', { test_id: testId, error_output: errorOutput });
+                
+                // Switch to Composer and pre-fill prompt
+                switchView('composer');
+                const composerPrompt = document.getElementById('composer-prompt');
+                if (composerPrompt) {
+                    composerPrompt.value = res.prompt || `Fix failing test ${testId}`;
+                    composerPrompt.focus();
+                }
+                toast.success('Test failure analyzed. Prompt loaded into Composer Orchestrator!');
+            } catch (err) {
+                toast.error('AI test fix synthesis failed: ' + err);
+            }
+        }
+
+        function toggleTddWatch(enabled) {
+            isTddWatchEnabled = enabled;
+            toast.info(enabled ? 'Continuous TDD Watch Loop Activated (auto-runs on save)' : 'TDD Watch Loop Deactivated');
+        }
+
+        function triggerTddWatchDebounced() {
+            if (!isTddWatchEnabled || isRunningTests) return;
+            clearTimeout(tddDebounceTimer);
+            tddDebounceTimer = setTimeout(() => {
+                runAllTests();
+            }, 600);
+        }
+
+        function updateMonacoTestGlyphs() {
+            if (!editorInstance || isUsingFallback || activeTabIdx < 0) return;
+            const curTab = openTabs[activeTabIdx];
+            if (!curTab) return;
+
+            const matchingTests = discoveredWorkspaceTests.filter(t => 
+                t.file === curTab.path || curTab.path.endsWith(t.file) || t.file.endsWith(curTab.name)
+            );
+
+            const newDecorations = matchingTests.map(t => {
+                const status = t.status || 'pending';
+                return {
+                    range: new monaco.Range(t.line, 1, t.line, 1),
+                    options: {
+                        isWholeLine: false,
+                        glyphMarginClassName: `test-gutter-glyph-${status}`,
+                        glyphMarginHoverMessage: { value: `**Test: ${t.name}**\nStatus: ${status.toUpperCase()}\nClick to run.` }
+                    }
+                };
+            });
+
+            monacoTestGlyphDecorations = editorInstance.deltaDecorations(monacoTestGlyphDecorations, newDecorations);
+        }
+
+        // =========================================================================
+        // Phase 8B: In-IDE Live Web Preview & Responsive Browser Canvas
+        // =========================================================================
+        let livePreviewCurrentUrl = "http://localhost:3000";
+        let livePreviewDebounceTimer = null;
+
+        async function detectAndInitLivePreview() {
+            try {
+                const res = await apiInvoke('preview_ports');
+                const ports = (res && res.active_ports) ? res.active_ports : [];
+                const badge = document.getElementById('preview-active-ports-badge');
+
+                if (ports.length > 0) {
+                    const firstPort = ports[0];
+                    livePreviewCurrentUrl = `http://localhost:${firstPort}`;
+                    const inp = document.getElementById('preview-url-input');
+                    if (inp) inp.value = livePreviewCurrentUrl;
+                    
+                    const iframe = document.getElementById('live-preview-iframe');
+                    if (iframe && (iframe.src === 'about:blank' || !iframe.src)) {
+                        iframe.src = livePreviewCurrentUrl;
+                    }
+
+                    if (badge) {
+                        badge.innerHTML = `<span class="badge" style="background:#064e3b; color:#6ee7b7; font-size:10px;" title="Active dev servers detected on ports: ${ports.join(', ')}"><i class="fa fa-circle-check"></i> :${firstPort} Active</span>`;
+                    }
+                } else {
+                    if (badge) {
+                        badge.innerHTML = `<span class="badge" style="background:#27272a; color:#a1a1aa; font-size:10px;" onclick="detectAndInitLivePreview()" title="Click to rescan dev ports"><i class="fa fa-rotate-right"></i> Probing...</span>`;
+                    }
+                }
+            } catch (err) {
+                console.warn('Live preview port scan notice:', err);
+            }
+        }
+
+        function navigateLivePreview() {
+            const inp = document.getElementById('preview-url-input');
+            const iframe = document.getElementById('live-preview-iframe');
+            if (!inp || !iframe) return;
+
+            let url = inp.value.trim();
+            if (!url) url = 'about:blank';
+            else if (!url.startsWith('http://') && !url.startsWith('https://') && !url.startsWith('about:')) {
+                url = 'http://' + url;
+            }
+            inp.value = url;
+            livePreviewCurrentUrl = url;
+            iframe.src = url;
+        }
+
+        function reloadLivePreview() {
+            const iframe = document.getElementById('live-preview-iframe');
+            if (iframe) {
+                const current = iframe.src;
+                iframe.src = 'about:blank';
+                setTimeout(() => { iframe.src = current; }, 50);
+            }
+        }
+
+        function setPreviewViewport(width) {
+            const iframe = document.getElementById('live-preview-iframe');
+            if (iframe) {
+                iframe.style.width = width;
+            }
+
+            // Update active preset button style
+            ['preset-mobile', 'preset-tablet', 'preset-laptop', 'preset-full'].forEach(id => {
+                const btn = document.getElementById(id);
+                if (btn) btn.classList.remove('preview-btn-active');
+            });
+
+            if (width === '375px') {
+                const b = document.getElementById('preset-mobile');
+                if (b) b.classList.add('preview-btn-active');
+            } else if (width === '768px') {
+                const b = document.getElementById('preset-tablet');
+                if (b) b.classList.add('preview-btn-active');
+            } else if (width === '1024px') {
+                const b = document.getElementById('preset-laptop');
+                if (b) b.classList.add('preview-btn-active');
+            } else {
+                const b = document.getElementById('preset-full');
+                if (b) b.classList.add('preview-btn-active');
+            }
+        }
+
+        function openPreviewExternal() {
+            const inp = document.getElementById('preview-url-input');
+            const url = inp ? inp.value.trim() : livePreviewCurrentUrl;
+            if (url && url !== 'about:blank') {
+                window.open(url, '_blank');
+            }
+        }
+
+        function checkLivePreviewReload() {
+            const toggle = document.getElementById('preview-auto-reload-toggle');
+            if (!toggle || !toggle.checked) return;
+
+            clearTimeout(livePreviewDebounceTimer);
+            livePreviewDebounceTimer = setTimeout(() => {
+                reloadLivePreview();
+            }, 500);
+        }
+
+        // =========================================================================
+        // Phase 8C: Visual Git History DAG Graph, AI Staging & Stash Manager
+        // =========================================================================
+        async function generateAiCommitMessage() {
+            const btn = document.getElementById('git-ai-msg-btn');
+            const originalHtml = btn ? btn.innerHTML : '';
+            if (btn) {
+                btn.innerHTML = `<i class="fa fa-spinner fa-spin"></i> Generating...`;
+                btn.disabled = true;
+            }
+
+            try {
+                const res = await apiInvoke('git_generate_commit_msg', {});
+                const msgInput = document.getElementById('git-commit-msg');
+                if (msgInput && res && res.message) {
+                    msgInput.value = res.message;
+                    msgInput.focus();
+                    toast.success('AI Synthesized conventional commit message!');
+                }
+            } catch (err) {
+                toast.error('AI commit message generation failed: ' + err);
+            } finally {
+                if (btn) {
+                    btn.innerHTML = originalHtml;
+                    btn.disabled = false;
+                }
+            }
+        }
+
+        // Git DAG History Graph Modal
+        async function openGitHistoryModal() {
+            const modal = document.getElementById('git-history-modal');
+            if (!modal) return;
+            modal.style.display = 'flex';
+            await loadGitHistory();
+        }
+
+        function closeGitHistoryModal(e) {
+            if (e && e.target !== e.currentTarget) return;
+            const modal = document.getElementById('git-history-modal');
+            if (modal) modal.style.display = 'none';
+        }
+
+        async function loadGitHistory() {
+            const container = document.getElementById('git-history-container');
+            if (!container) return;
+            container.innerHTML = `<div style="padding:16px; color:#71717a; text-align:center;"><i class="fa fa-spinner fa-spin"></i> Fetching commit DAG topology...</div>`;
+
+            try {
+                const res = await apiInvoke('git_history');
+                const commits = (res && res.commits) ? res.commits : [];
+
+                if (commits.length === 0) {
+                    container.innerHTML = `<div style="padding:16px; color:#71717a; text-align:center;">No commit history found in repository.</div>`;
+                    return;
+                }
+
+                let html = '';
+                commits.forEach(c => {
+                    const refsBadge = c.refs ? `<span class="badge" style="background:#083344; color:#22d3ee; font-size:10px; margin-left:6px;"><i class="fa fa-code-branch"></i> ${escapeHtml(c.refs)}</span>` : '';
+
+                    html += `
+                    <div class="dag-node-card">
+                        <div style="display:flex; align-items:center; justify-content:space-between;">
+                            <div style="display:flex; align-items:center; gap:6px;">
+                                <span class="dag-graph-line">${escapeHtml(c.graph || '*')}</span>
+                                <span style="font-family:monospace; color:#38bdf8; font-weight:700; font-size:11px;">${escapeHtml(c.hash || '').substring(0, 7)}</span>
+                                ${refsBadge}
+                            </div>
+                            <div style="font-size:10px; color:#71717a;">
+                                <span>${escapeHtml(c.author || '')}</span> · 
+                                <span>${escapeHtml(c.relative_time || '')}</span>
+                            </div>
+                        </div>
+                        <div style="font-size:12px; color:#f4f4f5; margin-left:16px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+                            ${escapeHtml(c.subject || '')}
+                        </div>
+                    </div>`;
+                });
+
+                container.innerHTML = html;
+            } catch (err) {
+                container.innerHTML = `<div style="color:#ef4444; padding:16px; text-align:center;">Failed to load DAG history: ${err}</div>`;
+            }
+        }
+
+        // Git Stash Manager Modal
+        async function openGitStashModal() {
+            const modal = document.getElementById('git-stash-modal');
+            if (!modal) return;
+            modal.style.display = 'flex';
+            await loadGitStashes();
+        }
+
+        function closeGitStashModal(e) {
+            if (e && e.target !== e.currentTarget) return;
+            const modal = document.getElementById('git-stash-modal');
+            if (modal) modal.style.display = 'none';
+        }
+
+        async function loadGitStashes() {
+            const container = document.getElementById('git-stash-list-container');
+            if (!container) return;
+            container.innerHTML = `<div style="padding:14px; color:#71717a; text-align:center;"><i class="fa fa-spinner fa-spin"></i> Loading stashes...</div>`;
+
+            try {
+                const res = await apiInvoke('git_stashes');
+                const stashes = (res && res.stashes) ? res.stashes : [];
+
+                if (stashes.length === 0) {
+                    container.innerHTML = `<div style="padding:14px; color:#71717a; text-align:center; font-size:12px;">No stashed changes found.</div>`;
+                    return;
+                }
+
+                let html = '';
+                stashes.forEach(s => {
+                    html += `
+                    <div style="display:flex; align-items:center; justify-content:space-between; padding:8px 10px; background:#141416; border:1px solid #27272a; border-radius:5px; margin-bottom:5px;">
+                        <div style="display:flex; flex-direction:column; gap:2px; overflow:hidden; flex:1; margin-right:8px;">
+                            <span style="font-size:11px; font-weight:700; color:#f59e0b; font-family:monospace;">${escapeHtml(s.index)}</span>
+                            <span style="font-size:12px; color:#f4f4f5; text-overflow:ellipsis; overflow:hidden; white-space:nowrap;">${escapeHtml(s.message)}</span>
+                        </div>
+                        <div style="display:flex; gap:4px;">
+                            <button class="btn btn-sm btn-primary" onclick="handleStashAction('apply', '${escapeHtml(s.index)}')" title="Apply Stash"><i class="fa fa-check"></i> Apply</button>
+                            <button class="btn btn-sm btn-indigo" onclick="handleStashAction('pop', '${escapeHtml(s.index)}')" title="Pop Stash"><i class="fa fa-arrow-up-from-bracket"></i> Pop</button>
+                            <button class="btn btn-sm" style="color:#ef4444;" onclick="handleStashAction('drop', '${escapeHtml(s.index)}')" title="Drop Stash"><i class="fa fa-trash"></i></button>
+                        </div>
+                    </div>`;
+                });
+
+                container.innerHTML = html;
+            } catch (err) {
+                container.innerHTML = `<div style="color:#ef4444; padding:14px; text-align:center;">Failed to load stashes: ${err}</div>`;
+            }
+        }
+
+        async function pushGitStash() {
+            const inp = document.getElementById('git-stash-msg-input');
+            const msg = inp ? inp.value.trim() : '';
+
+            try {
+                await apiInvoke('git_stash_action', { action: 'push', message: msg || null });
+                if (inp) inp.value = '';
+                toast.success('Working changes stashed successfully!');
+                await loadGitStashes();
+                refreshGitStatus();
+            } catch (err) {
+                toast.error('Stash failed: ' + err);
+            }
+        }
+
+        async function handleStashAction(action, index) {
+            try {
+                await apiInvoke('git_stash_action', { action, index });
+                toast.success(`Stash ${action} succeeded for ${index}!`);
+                await loadGitStashes();
+                refreshGitStatus();
+            } catch (err) {
+                toast.error(`Stash ${action} failed: ` + err);
+            }
+        }
+
         // Initialize Everything
         initEditor();
         initResizers();
@@ -6109,6 +6918,7 @@
         initPtyTerminal();
         initFsWatcher();
         loadCloudSettingsIntoUi();
+        discoverTests();
         initServiceWorker();
     </script>
 </body>

@@ -520,6 +520,17 @@ impl VisualIdeServer {
             .route("/api/git/branch/checkout", post(Self::handle_git_branch_checkout))
             .route("/api/git/conflicts", get(Self::handle_git_conflicts))
             .route("/api/git/conflicts/resolve", post(Self::handle_git_conflicts_resolve))
+            // Phase 8A: Visual Test Explorer & TDD Green-Light Runner
+            .route("/api/tests/discover", get(Self::handle_tests_discover))
+            .route("/api/tests/run", post(Self::handle_tests_run))
+            .route("/api/tests/ai_fix", post(Self::handle_tests_ai_fix))
+            // Phase 8B: In-IDE Live Web Preview & Responsive Browser Canvas
+            .route("/api/preview/ports", get(Self::handle_preview_ports))
+            // Phase 8C: Visual Git History DAG Graph & AI Staging
+            .route("/api/git/history", get(Self::handle_git_history))
+            .route("/api/git/generate_commit_msg", post(Self::handle_git_generate_commit_msg))
+            .route("/api/git/stashes", get(Self::handle_git_stashes))
+            .route("/api/git/stash_action", post(Self::handle_git_stash_action))
             .layer(axum::middleware::from_fn_with_state(
                 Arc::new(self.clone()),
                 Self::auth_middleware,
@@ -2910,6 +2921,467 @@ impl VisualIdeServer {
             ).into_response(),
         }
     }
+
+    // =========================================================================
+    // Phase 8A: Visual Test Explorer & TDD Green-Light Runner Handlers
+    // =========================================================================
+
+    async fn handle_tests_discover(State(state): State<Arc<Self>>) -> impl IntoResponse {
+        let mut tests = Vec::new();
+        let workspace_root = &state.workspace_root;
+
+        // 1. Run cargo test -- --list for accurate Rust unit/integration test names
+        if workspace_root.join("Cargo.toml").exists() {
+            let output = tokio::process::Command::new("cargo")
+                .args(["test", "--", "--list"])
+                .current_dir(workspace_root)
+                .output()
+                .await;
+
+            if let Ok(out) = output {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                for line in stdout.lines() {
+                    let trimmed = line.trim();
+                    if trimmed.ends_with(": test") {
+                        if let Some(test_name) = trimmed.strip_suffix(": test") {
+                            let name = test_name.trim();
+                            let file_guess = if name.contains("::") {
+                                let parts: Vec<&str> = name.split("::").collect();
+                                format!("{}.rs", parts[0])
+                            } else {
+                                "tests".to_string()
+                            };
+                            tests.push(TestCaseItem {
+                                id: name.to_string(),
+                                name: name.to_string(),
+                                file: file_guess,
+                                line: 1,
+                                framework: "cargo".to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Walk directory for source-level test discovery (matching #[test], #[tokio::test], test "...", def test_)
+        async fn scan_dir_for_tests(dir: &Path, base: &Path, tests: &mut Vec<TestCaseItem>, depth: usize) {
+            if depth > 4 { return; }
+            if let Ok(mut entries) = fs::read_dir(dir).await {
+                while let Ok(Some(entry)) = entries.next_entry().await {
+                    let p = entry.path();
+                    if p.is_dir() {
+                        let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                        if name != "target" && name != ".git" && name != "node_modules" && !name.starts_with('.') {
+                            Box::pin(scan_dir_for_tests(&p, base, tests, depth + 1)).await;
+                        }
+                    } else if p.is_file() {
+                        let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
+                        if ext == "rs" || ext == "zig" || ext == "py" || ext == "js" || ext == "ts" {
+                            if let Ok(content) = fs::read_to_string(&p).await {
+                                let rel = p.strip_prefix(base).unwrap_or(&p).to_string_lossy().to_string();
+                                for (idx, line) in content.lines().enumerate() {
+                                    let trimmed = line.trim();
+                                    if ext == "rs" && (trimmed.starts_with("#[test]") || trimmed.starts_with("#[tokio::test]")) {
+                                        let next_lines: Vec<&str> = content.lines().skip(idx + 1).take(3).collect();
+                                        for nl in next_lines {
+                                            let nlt = nl.trim();
+                                            if nlt.starts_with("fn ") || nlt.starts_with("async fn ") || nlt.starts_with("pub fn ") || nlt.starts_with("pub async fn ") {
+                                                let fn_name = nlt.split_whitespace().find(|w| !w.starts_with("fn") && !w.starts_with("async") && !w.starts_with("pub")).unwrap_or("test");
+                                                let clean_name = fn_name.trim_end_matches("()").split('(').next().unwrap_or("test");
+                                                let item_id = format!("{}::{}", rel, clean_name);
+                                                if !tests.iter().any(|t| t.id == item_id || t.name == clean_name) {
+                                                    tests.push(TestCaseItem {
+                                                        id: item_id,
+                                                        name: clean_name.to_string(),
+                                                        file: rel.clone(),
+                                                        line: idx + 1,
+                                                        framework: "cargo".to_string(),
+                                                    });
+                                                }
+                                                break;
+                                            }
+                                        }
+                                    } else if ext == "zig" && trimmed.starts_with("test \"") {
+                                        if let Some(t_name) = trimmed.strip_prefix("test \"").and_then(|s| s.split('"').next()) {
+                                            let item_id = format!("{}::{}", rel, t_name);
+                                            if !tests.iter().any(|t| t.id == item_id) {
+                                                tests.push(TestCaseItem {
+                                                    id: item_id,
+                                                    name: t_name.to_string(),
+                                                    file: rel.clone(),
+                                                    line: idx + 1,
+                                                    framework: "zig".to_string(),
+                                                });
+                                            }
+                                        }
+                                    } else if ext == "py" && trimmed.starts_with("def test_") {
+                                        let fn_name = trimmed.strip_prefix("def ").and_then(|s| s.split('(').next()).unwrap_or("test");
+                                        let item_id = format!("{}::{}", rel, fn_name);
+                                        if !tests.iter().any(|t| t.id == item_id) {
+                                            tests.push(TestCaseItem {
+                                                id: item_id,
+                                                name: fn_name.to_string(),
+                                                file: rel.clone(),
+                                                line: idx + 1,
+                                                framework: "pytest".to_string(),
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        scan_dir_for_tests(workspace_root, workspace_root, &mut tests, 0).await;
+
+        (StatusCode::OK, Json(serde_json::json!({
+            "framework": "cargo",
+            "count": tests.len(),
+            "tests": tests,
+        }))).into_response()
+    }
+
+    async fn handle_tests_run(
+        State(state): State<Arc<Self>>,
+        Json(payload): Json<RunTestsPayload>,
+    ) -> impl IntoResponse {
+        let start = std::time::Instant::now();
+        let mut cmd = tokio::process::Command::new("cargo");
+        cmd.arg("test");
+
+        if let Some(ref t_id) = payload.test_id {
+            let test_target = if t_id.contains("::") {
+                t_id.split("::").last().unwrap_or(t_id)
+            } else {
+                t_id.as_str()
+            };
+            cmd.arg(test_target);
+        } else if let Some(ref filter) = payload.filter {
+            cmd.arg(filter);
+        }
+
+        cmd.args(["--", "--nocapture"]);
+        cmd.current_dir(&state.workspace_root);
+
+        let output = cmd.output().await;
+        let duration_ms = start.elapsed().as_millis() as u64;
+
+        match output {
+            Ok(out) => {
+                let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                let combined = format!("{}\n{}", stdout, stderr);
+                let success = out.status.success();
+
+                let mut passed = 0u32;
+                let mut failed = 0u32;
+                let mut ignored = 0u32;
+                let mut failures = Vec::new();
+
+                for line in combined.lines() {
+                    let trimmed = line.trim();
+                    if trimmed.starts_with("test result:") {
+                        for part in trimmed.split(';') {
+                            let p = part.trim();
+                            if p.contains("passed") {
+                                if let Some(n) = p.split_whitespace().find_map(|s| s.parse::<u32>().ok()) {
+                                    passed = n;
+                                }
+                            }
+                            if p.contains("failed") {
+                                if let Some(n) = p.split_whitespace().find_map(|s| s.parse::<u32>().ok()) {
+                                    failed = n;
+                                }
+                            }
+                            if p.contains("ignored") {
+                                if let Some(n) = p.split_whitespace().find_map(|s| s.parse::<u32>().ok()) {
+                                    ignored = n;
+                                }
+                            }
+                        }
+                    } else if trimmed.starts_with("test ") && trimmed.ends_with(" ... FAILED") {
+                        if let Some(t_name) = trimmed.strip_prefix("test ").and_then(|s| s.strip_suffix(" ... FAILED")) {
+                            failures.push(TestFailureItem {
+                                test_id: t_name.trim().to_string(),
+                                message: "Assertion or execution failure".to_string(),
+                                file: None,
+                                line: None,
+                            });
+                        }
+                    }
+                }
+
+                if !success && failed == 0 && passed == 0 {
+                    failed = 1;
+                }
+
+                (StatusCode::OK, Json(RunTestsResponse {
+                    success,
+                    duration_ms,
+                    passed,
+                    failed,
+                    ignored,
+                    output: combined,
+                    failures,
+                })).into_response()
+            }
+            Err(e) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+                    "success": false,
+                    "error": format!("Failed to spawn test runner: {}", e)
+                }))).into_response()
+            }
+        }
+    }
+
+    async fn handle_tests_ai_fix(
+        State(state): State<Arc<Self>>,
+        Json(payload): Json<TestAiFixPayload>,
+    ) -> impl IntoResponse {
+        let mut file_content = String::new();
+        if let Some(ref fp) = payload.file_path {
+            let full = state.workspace_root.join(fp.trim_start_matches('/'));
+            if let Ok(c) = fs::read_to_string(&full).await {
+                file_content = c;
+            }
+        }
+
+        let prompt = format!(
+            "Fix the failing test `{}`.\n\nFailing Test Output:\n```\n{}\n```\n\nFile Context ({}):\n```\n{}\n```\n\nIdentify why the test failed and provide the exact code modification required to make the test pass.",
+            payload.test_id,
+            payload.error_output.chars().take(2000).collect::<String>(),
+            payload.file_path.as_deref().unwrap_or("unknown"),
+            file_content.chars().take(4000).collect::<String>()
+        );
+
+        (StatusCode::OK, Json(serde_json::json!({
+            "prompt": prompt,
+            "test_id": payload.test_id,
+            "file_path": payload.file_path,
+        }))).into_response()
+    }
+
+    // =========================================================================
+    // Phase 8B: In-IDE Live Web Preview & Responsive Browser Canvas Handlers
+    // =========================================================================
+
+    async fn handle_preview_ports(State(_state): State<Arc<Self>>) -> impl IntoResponse {
+        let candidate_ports = [3000, 3001, 5173, 8080, 8000, 4173, 8081, 4000, 5000, 1234, 4200, 9000];
+        let mut active_ports = Vec::new();
+
+        for &port in &candidate_ports {
+            let addr = format!("127.0.0.1:{}", port);
+            if let Ok(Ok(_)) = tokio::time::timeout(
+                std::time::Duration::from_millis(35),
+                tokio::net::TcpStream::connect(&addr),
+            ).await {
+                active_ports.push(port);
+            }
+        }
+
+        let recommended_port = active_ports.iter().find(|&&p| p != 4173).copied().unwrap_or_else(|| {
+            if active_ports.contains(&4173) { 4173 } else { 3000 }
+        });
+        let recommended_url = format!("http://127.0.0.1:{}", recommended_port);
+
+        (StatusCode::OK, Json(serde_json::json!({
+            "active_ports": active_ports,
+            "recommended_url": recommended_url,
+        }))).into_response()
+    }
+
+    // =========================================================================
+    // Phase 8C: Visual Git History DAG Graph & AI Staging Handlers
+    // =========================================================================
+
+    async fn handle_git_history(State(state): State<Arc<Self>>) -> impl IntoResponse {
+        let output = tokio::process::Command::new("git")
+            .args(["log", "-n", "40", "--graph", "--format=format:GIT_SEP%H|%h|%p|%an|%ae|%ar|%d|%s"])
+            .current_dir(&state.workspace_root)
+            .output()
+            .await;
+
+        let mut commits = Vec::new();
+        if let Ok(out) = output {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            for line in stdout.lines() {
+                if let Some(pos) = line.find("GIT_SEP") {
+                    let graph_prefix = line[..pos].trim_end().to_string();
+                    let payload = &line[pos + 7..];
+                    let parts: Vec<&str> = payload.split('|').collect();
+                    if parts.len() >= 8 {
+                        let hash = parts[0].to_string();
+                        let short_hash = parts[1].to_string();
+                        let parents = parts[2].split_whitespace().map(|s| s.to_string()).collect();
+                        let author_name = parts[3].to_string();
+                        let author_email = parts[4].to_string();
+                        let date = parts[5].to_string();
+                        let refs = parts[6].trim().to_string();
+                        let subject = parts[7..].join("|");
+
+                        commits.push(GitCommitNode {
+                            hash,
+                            short_hash,
+                            parents,
+                            author_name,
+                            author_email,
+                            date,
+                            refs,
+                            subject,
+                            graph_prefix,
+                        });
+                    }
+                }
+            }
+        }
+
+        (StatusCode::OK, Json(serde_json::json!({
+            "commits": commits,
+            "count": commits.len(),
+        }))).into_response()
+    }
+
+    async fn handle_git_generate_commit_msg(State(state): State<Arc<Self>>) -> impl IntoResponse {
+        let cached_diff_out = tokio::process::Command::new("git")
+            .args(["diff", "--cached"])
+            .current_dir(&state.workspace_root)
+            .output()
+            .await;
+
+        let mut diff_text = cached_diff_out.map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
+        let mut is_staged = true;
+
+        if diff_text.trim().is_empty() {
+            let working_diff_out = tokio::process::Command::new("git")
+                .args(["diff"])
+                .current_dir(&state.workspace_root)
+                .output()
+                .await;
+            diff_text = working_diff_out.map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
+            is_staged = false;
+        }
+
+        if diff_text.trim().is_empty() {
+            return (StatusCode::OK, Json(serde_json::json!({
+                "commit_message": "chore: sync workspace changes"
+            }))).into_response();
+        }
+
+        let stat_out = tokio::process::Command::new("git")
+            .args(if is_staged { vec!["diff", "--cached", "--stat"] } else { vec!["diff", "--stat"] })
+            .current_dir(&state.workspace_root)
+            .output()
+            .await;
+        let stat_text = stat_out.map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
+
+        let mut prefix = "feat";
+        let mut scope = "core";
+        let lower_stat = stat_text.to_lowercase();
+
+        if lower_stat.contains("test") {
+            prefix = "test";
+            scope = "suite";
+        } else if lower_stat.contains("index.html") || lower_stat.contains(".css") || lower_stat.contains("pwa") {
+            prefix = "feat";
+            scope = "pwa";
+        } else if lower_stat.contains("readme") || lower_stat.contains(".md") {
+            prefix = "docs";
+            scope = "spec";
+        } else if lower_stat.contains("cargo.toml") || lower_stat.contains("package.json") {
+            prefix = "chore";
+            scope = "deps";
+        } else if lower_stat.contains("fix") || diff_text.contains("bug") || diff_text.contains("error") {
+            prefix = "fix";
+            scope = "engine";
+        } else if lower_stat.contains("perf") || diff_text.contains("optimiz") {
+            prefix = "perf";
+            scope = "runtime";
+        }
+
+        let first_file = stat_text.lines().next().and_then(|l| l.split('|').next()).map(|s| s.trim()).unwrap_or("files");
+        let file_basename = std::path::Path::new(first_file).file_name().and_then(|n| n.to_str()).unwrap_or("workspace");
+
+        let commit_msg = format!("{}({}): update {} and related components", prefix, scope, file_basename);
+
+        (StatusCode::OK, Json(serde_json::json!({
+            "commit_message": commit_msg,
+            "stat": stat_text,
+        }))).into_response()
+    }
+
+    async fn handle_git_stashes(State(state): State<Arc<Self>>) -> impl IntoResponse {
+        let output = tokio::process::Command::new("git")
+            .args(["stash", "list"])
+            .current_dir(&state.workspace_root)
+            .output()
+            .await;
+
+        let mut stashes = Vec::new();
+        if let Ok(out) = output {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            for line in stdout.lines() {
+                let trimmed = line.trim();
+                if !trimmed.is_empty() {
+                    let parts: Vec<&str> = trimmed.splitn(2, ':').collect();
+                    let idx_str = parts[0].trim();
+                    let desc = if parts.len() > 1 { parts[1].trim().to_string() } else { trimmed.to_string() };
+                    stashes.push(serde_json::json!({
+                        "id": idx_str,
+                        "description": desc,
+                    }));
+                }
+            }
+        }
+
+        (StatusCode::OK, Json(serde_json::json!({ "stashes": stashes }))).into_response()
+    }
+
+    async fn handle_git_stash_action(
+        State(state): State<Arc<Self>>,
+        Json(payload): Json<GitStashActionPayload>,
+    ) -> impl IntoResponse {
+        let mut cmd = tokio::process::Command::new("git");
+        cmd.current_dir(&state.workspace_root);
+
+        match payload.action.as_str() {
+            "create" => {
+                let msg = payload.message.unwrap_or_else(|| "WIP stash".to_string());
+                cmd.args(["stash", "push", "-m", &msg]);
+            }
+            "pop" => {
+                if let Some(idx) = payload.index {
+                    cmd.args(["stash", "pop", &format!("stash@{{{}}}", idx)]);
+                } else {
+                    cmd.args(["stash", "pop"]);
+                }
+            }
+            "drop" => {
+                if let Some(idx) = payload.index {
+                    cmd.args(["stash", "drop", &format!("stash@{{{}}}", idx)]);
+                } else {
+                    cmd.args(["stash", "drop"]);
+                }
+            }
+            "apply" => {
+                if let Some(idx) = payload.index {
+                    cmd.args(["stash", "apply", &format!("stash@{{{}}}", idx)]);
+                } else {
+                    cmd.args(["stash", "apply"]);
+                }
+            }
+            _ => return (StatusCode::BAD_REQUEST, "Unknown stash action").into_response(),
+        }
+
+        match cmd.output().await {
+            Ok(out) if out.status.success() => (StatusCode::OK, Json(serde_json::json!({ "success": true, "action": payload.action }))).into_response(),
+            Ok(out) => (StatusCode::INTERNAL_SERVER_ERROR, String::from_utf8_lossy(&out.stderr).to_string()).into_response(),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -3007,6 +3479,70 @@ pub struct SwarmSpawnPayload {
 #[derive(Deserialize)]
 pub struct SwarmMergePayload {
     pub task_id: String,
+}
+
+// Phase 8A Structs
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TestCaseItem {
+    pub id: String,
+    pub name: String,
+    pub file: String,
+    pub line: usize,
+    pub framework: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RunTestsPayload {
+    pub test_id: Option<String>,
+    pub filter: Option<String>,
+    pub framework: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TestFailureItem {
+    pub test_id: String,
+    pub message: String,
+    pub file: Option<String>,
+    pub line: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RunTestsResponse {
+    pub success: bool,
+    pub duration_ms: u64,
+    pub passed: u32,
+    pub failed: u32,
+    pub ignored: u32,
+    pub output: String,
+    pub failures: Vec<TestFailureItem>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TestAiFixPayload {
+    pub test_id: String,
+    pub error_output: String,
+    pub file_path: Option<String>,
+}
+
+// Phase 8C Structs
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitCommitNode {
+    pub hash: String,
+    pub short_hash: String,
+    pub parents: Vec<String>,
+    pub author_name: String,
+    pub author_email: String,
+    pub date: String,
+    pub refs: String,
+    pub subject: String,
+    pub graph_prefix: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GitStashActionPayload {
+    pub action: String,
+    pub index: Option<usize>,
+    pub message: Option<String>,
 }
 
 const INDEX_HTML: &str = include_str!("../dist/index.html");
@@ -3165,5 +3701,39 @@ mod tests {
         assert_eq!(icon_resp.status(), StatusCode::OK);
         let icon_ct = icon_resp.headers().get(axum::http::header::CONTENT_TYPE).unwrap();
         assert_eq!(icon_ct, "image/svg+xml");
+    }
+
+    #[tokio::test]
+    async fn test_visual_ide_tests_discover_and_run() {
+        let server = Arc::new(VisualIdeServer::new(4173, PathBuf::from(".")));
+        let disc_resp = VisualIdeServer::handle_tests_discover(State(server.clone())).await.into_response();
+        assert_eq!(disc_resp.status(), StatusCode::OK);
+
+        let run_resp = VisualIdeServer::handle_tests_run(
+            State(server),
+            Json(RunTestsPayload {
+                test_id: Some("visual_ide::tests::test_visual_ide_server_creation".to_string()),
+                filter: None,
+                framework: Some("cargo".to_string()),
+            }),
+        ).await.into_response();
+        assert_eq!(run_resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_visual_ide_preview_ports() {
+        let server = Arc::new(VisualIdeServer::new(4173, PathBuf::from(".")));
+        let resp = VisualIdeServer::handle_preview_ports(State(server)).await.into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_visual_ide_git_history_and_commit_msg() {
+        let server = Arc::new(VisualIdeServer::new(4173, PathBuf::from(".")));
+        let hist_resp = VisualIdeServer::handle_git_history(State(server.clone())).await.into_response();
+        assert_eq!(hist_resp.status(), StatusCode::OK);
+
+        let msg_resp = VisualIdeServer::handle_git_generate_commit_msg(State(server)).await.into_response();
+        assert_eq!(msg_resp.status(), StatusCode::OK);
     }
 }
