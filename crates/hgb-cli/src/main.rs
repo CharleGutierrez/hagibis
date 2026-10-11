@@ -2171,22 +2171,26 @@ enum Commands {
         interactive: bool,
     },
 
-    /// Hagibis Web Visual IDE & Inline Diffing Cockpit (Axum + WebSockets + Monaco)
-    #[command(alias = "gui", alias = "visual-ide")]
+    /// Hagibis Sovereign PWA Studio & Cursor IDE Cockpit (Axum + WebSockets + Monaco + ServiceWorker)
+    #[command(alias = "gui", alias = "pwa", alias = "visual-ide")]
     Ide {
         /// Optional workspace directory or file path to open (defaults to current directory)
         #[arg(value_name = "PATH")]
         path: Option<std::path::PathBuf>,
 
-        /// Unified Web mode (default: true)
+        /// Launch as standalone desktop PWA app (default: true)
         #[arg(long, default_value_t = true)]
+        pwa: bool,
+
+        /// Unified Web mode (deprecated alias for --pwa)
+        #[arg(long, default_value_t = true, hide = true)]
         web: bool,
 
-        /// Custom port for visual IDE server (default: 4173)
+        /// Custom port for PWA Studio server (default: 4173)
         #[arg(short, long, default_value_t = 4173)]
         port: u16,
 
-        /// Do not automatically launch browser
+        /// Do not automatically launch PWA browser/standalone window
         #[arg(long)]
         no_open: bool,
 
@@ -2226,7 +2230,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     let mut raw_args: Vec<String> = std::env::args().collect();
     if raw_args.len() >= 3 && raw_args[1] == "visual" && raw_args[2] == "ide" {
         raw_args.remove(1); // removes "visual", leaving ["hgb", "ide", ...]
-    } else if raw_args.len() >= 2 && raw_args[1] == "visual" {
+    } else if raw_args.len() >= 2 && (raw_args[1] == "visual" || raw_args[1] == "pwa") {
         raw_args[1] = "ide".to_string();
     }
     let cli = Cli::parse_from(&raw_args);
@@ -2254,7 +2258,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
         return state.run_interactive().await.map_err(|e| Box::new(e) as Box<dyn std::error::Error>);
     }
 
-    if let Commands::Ide { path, web: _, port, no_open, token, generate_token } = command {
+    if let Commands::Ide { path, pwa: _, web: _, port, no_open, token, generate_token } = command {
         let target_dir = path
             .as_ref()
             .map(|p| {
@@ -2286,7 +2290,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
 
         tokio::spawn(async move {
             if let Err(e) = server.run().await {
-                eprintln!("Visual IDE Server error: {}", e);
+                eprintln!("PWA Studio Server error: {}", e);
             }
         });
 
@@ -2296,16 +2300,38 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             format!("http://127.0.0.1:{}", port)
         };
 
-        println!("🚀 Hagibis Web Visual IDE active at {}", url);
+        println!("🚀 Hagibis Sovereign PWA Studio & Cursor IDE active at {}", url);
+        println!("📱 Standalone Desktop PWA Mode: READY (Service Worker + Web App Manifest)");
         if let Some(ref t) = active_token {
             println!("🔒 Remote Auth Token Gatekeeper: ACTIVE (Token: {})", t);
         }
         println!("📂 Workspace directory: {}", target_dir.display());
-        println!("Press Ctrl+C to terminate the Visual IDE server.");
+        println!("Press Ctrl+C to terminate the PWA Studio server.");
 
         if !no_open {
-            if std::process::Command::new("xdg-open").arg(&url).status().is_err() {
-                let _ = std::process::Command::new("firefox").arg("--new-window").arg(&url).status();
+            // Attempt to launch in dedicated standalone desktop PWA window via Chromium --app flag
+            let app_arg = format!("--app={}", url);
+            let chromium_bins = [
+                "google-chrome",
+                "google-chrome-stable",
+                "chromium",
+                "chromium-browser",
+                "brave-browser",
+                "microsoft-edge",
+            ];
+            let mut launched_standalone = false;
+            for bin in &chromium_bins {
+                if let Ok(child) = std::process::Command::new(bin).arg(&app_arg).spawn() {
+                    let _ = child;
+                    launched_standalone = true;
+                    break;
+                }
+            }
+
+            if !launched_standalone {
+                if std::process::Command::new("xdg-open").arg(&url).spawn().is_err() {
+                    let _ = std::process::Command::new("firefox").arg("--new-window").arg(&url).spawn();
+                }
             }
         }
         tokio::signal::ctrl_c().await?;

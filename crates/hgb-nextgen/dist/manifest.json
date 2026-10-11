@@ -1,0 +1,47 @@
+{
+  "name": "Hagibis PWA Studio & Cursor IDE",
+  "short_name": "Hagibis",
+  "description": "Sovereign AI-Native Cursor IDE & PWA Studio with Local PTY, Myers SES Diff, and Devin Autonomous Tool Loop",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone"],
+  "orientation": "any",
+  "theme_color": "#121214",
+  "background_color": "#09090b",
+  "categories": ["developer", "productivity", "utilities"],
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Sovereign Terminal",
+      "short_name": "Terminal",
+      "url": "/?action=terminal",
+      "icons": [{ "src": "/icon.svg", "sizes": "any" }]
+    },
+    {
+      "name": "Devin Autonomous Agent",
+      "short_name": "Devin Agent",
+      "url": "/?action=agent",
+      "icons": [{ "src": "/icon.svg", "sizes": "any" }]
+    },
+    {
+      "name": "Composer Multi-File",
+      "short_name": "Composer",
+      "url": "/?action=composer",
+      "icons": [{ "src": "/icon.svg", "sizes": "any" }]
+    }
+  ]
+}

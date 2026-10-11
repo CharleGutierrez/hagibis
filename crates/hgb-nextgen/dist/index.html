@@ -3,7 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🪽 Hagibis Visual IDE & Cursor Studio</title>
+    <title>🪽 Hagibis Sovereign PWA Studio & Cursor IDE</title>
+    <!-- Sovereign PWA Meta & Web App Manifest -->
+    <link rel="manifest" href="/manifest.json">
+    <link rel="icon" type="image/svg+xml" href="/icon.svg">
+    <link rel="apple-touch-icon" href="/icon.svg">
+    <meta name="theme-color" content="#121214">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Hagibis PWA">
+    <meta name="application-name" content="Hagibis PWA">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Phase 6A: Real Interactive Sovereign Terminal (xterm.js + fit addon) -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
@@ -374,12 +383,13 @@
 <body>
     <header>
         <div class="logo-box">
-            <span>🪽 HAGIBIS VISUAL IDE</span>
-            <span class="badge" id="tauri-badge" style="background:#065f46; color:#a7f3d0; border-color:#059669;">AXUM + WEBSOCKET</span>
+            <span>🪽 HAGIBIS PWA STUDIO</span>
+            <span class="badge" id="pwa-status-badge" style="background:#065f46; color:#a7f3d0; border-color:#059669;"><i class="fa fa-cubes"></i> STANDALONE PWA</span>
             <span class="badge" style="background:#1e1b4b; color:#818cf8; border-color:#4338ca;">ZIG MYERS SES</span>
             <span class="badge badge-rules" id="rules-badge" onclick="showRules()"><i class="fa fa-scroll"></i> Rules</span>
         </div>
         <div class="header-actions">
+            <button class="btn btn-indigo" id="pwa-install-btn" style="display:none; background:#4338ca; border-color:#6366f1;" onclick="installPwaApp()" title="Install Hagibis as Native Desktop PWA"><i class="fa fa-download"></i> Install App</button>
             <select id="model-select" class="btn" style="background:#18181b; color:#38bdf8; border-color:#0284c7; padding: 4px 8px; font-weight:600;" onchange="handleModelChange()" title="Select Active LLM Provider & Model">
                 <option value="dynabook-coder:latest">dynabook-coder (Local)</option>
                 <option value="qwen2.5-coder:1.5b">qwen2.5-coder:1.5b (Local)</option>
@@ -1044,7 +1054,7 @@
                 </div>
             </div>
             <div style="padding:16px 20px;">
-                <p style="font-size:13px; color:#94a3b8; margin-bottom:14px;">This Hagibis Web Visual IDE instance is protected by a remote auth token. Enter your security token to continue.</p>
+                <p style="font-size:13px; color:#94a3b8; margin-bottom:14px;">This Hagibis Sovereign PWA Studio instance is protected by a remote auth token. Enter your security token to continue.</p>
                 <input type="password" id="auth-token-input" placeholder="Enter security token (e.g. hgb-...)" style="width:100%; padding:10px 12px; background:#1e293b; border:1px solid #334155; border-radius:6px; color:#f8fafc; font-family:monospace; font-size:13px; outline:none;" onkeydown="if(event.key==='Enter') verifyAndSubmitAuthToken();">
                 <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:16px;">
                     <button class="btn btn-primary" onclick="verifyAndSubmitAuthToken()" style="background:#0284c7; border-color:#0369a1; padding:8px 16px;"><i class="fa fa-unlock"></i> Unlock IDE</button>
@@ -5451,6 +5461,47 @@
             }
         }
 
+        // Sovereign PWA Studio Installation & Service Worker Lifecycle
+        let deferredPrompt = null;
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            deferredPrompt = e;
+            const installBtn = document.getElementById('pwa-install-btn');
+            if (installBtn) installBtn.style.display = 'inline-flex';
+        });
+
+        async function installPwaApp() {
+            if (deferredPrompt) {
+                deferredPrompt.prompt();
+                const { outcome } = await deferredPrompt.userChoice;
+                if (outcome === 'accepted') {
+                    toast.success('Hagibis PWA Studio installed to desktop!');
+                }
+                deferredPrompt = null;
+                const installBtn = document.getElementById('pwa-install-btn');
+                if (installBtn) installBtn.style.display = 'none';
+            } else {
+                toast.info('To install Hagibis PWA: Click the install icon in your browser address bar.');
+            }
+        }
+
+        window.addEventListener('appinstalled', () => {
+            deferredPrompt = null;
+            const installBtn = document.getElementById('pwa-install-btn');
+            if (installBtn) installBtn.style.display = 'none';
+            toast.success('Hagibis PWA Studio is now installed as a standalone desktop app!');
+        });
+
+        function initServiceWorker() {
+            if ('serviceWorker' in navigator) {
+                navigator.serviceWorker.register('/sw.js').then((reg) => {
+                    console.log('Hagibis PWA ServiceWorker registered with scope:', reg.scope);
+                }).catch((err) => {
+                    console.warn('PWA ServiceWorker registration notice:', err);
+                });
+            }
+        }
+
         // Initialize Everything
         initEditor();
         initResizers();
@@ -5465,6 +5516,7 @@
         initPtyTerminal();
         initFsWatcher();
         loadCloudSettingsIntoUi();
+        initServiceWorker();
     </script>
 </body>
 </html>

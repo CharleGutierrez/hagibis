@@ -426,6 +426,10 @@ impl VisualIdeServer {
 
         let app = Router::new()
             .route("/", get(Self::serve_index))
+            .route("/manifest.json", get(Self::serve_manifest))
+            .route("/manifest.webmanifest", get(Self::serve_manifest))
+            .route("/sw.js", get(Self::serve_sw))
+            .route("/icon.svg", get(Self::serve_icon))
             .route("/api/workspace", get(Self::handle_workspace))
             .route("/api/file", get(Self::handle_get_file))
             .route("/api/save_file", post(Self::handle_save_file))
@@ -603,6 +607,30 @@ impl VisualIdeServer {
 
     async fn serve_index() -> Html<&'static str> {
         Html(INDEX_HTML)
+    }
+
+    async fn serve_manifest() -> impl IntoResponse {
+        (
+            [(axum::http::header::CONTENT_TYPE, "application/manifest+json")],
+            MANIFEST_JSON,
+        )
+    }
+
+    async fn serve_sw() -> impl IntoResponse {
+        (
+            [
+                (axum::http::header::CONTENT_TYPE, "application/javascript"),
+                (axum::http::header::CACHE_CONTROL, "no-cache"),
+            ],
+            SW_JS,
+        )
+    }
+
+    async fn serve_icon() -> impl IntoResponse {
+        (
+            [(axum::http::header::CONTENT_TYPE, "image/svg+xml")],
+            ICON_SVG,
+        )
     }
 
     async fn handle_workspace(State(state): State<Arc<Self>>) -> impl IntoResponse {
@@ -2982,6 +3010,9 @@ pub struct SwarmMergePayload {
 }
 
 const INDEX_HTML: &str = include_str!("../dist/index.html");
+const MANIFEST_JSON: &str = include_str!("../dist/manifest.json");
+const SW_JS: &str = include_str!("../dist/sw.js");
+const ICON_SVG: &str = include_str!("../dist/icon.svg");
 
 #[cfg(test)]
 mod tests {
@@ -3060,7 +3091,7 @@ mod tests {
                 model: "qwen2.5-coder:1.5b".to_string(),
             }),
         ).await;
-        let (parts, body) = created_resp.into_response().into_parts();
+        let (parts, _body) = created_resp.into_response().into_parts();
         assert_eq!(parts.status, StatusCode::OK);
 
         // List
@@ -3111,5 +3142,28 @@ mod tests {
     async fn test_visual_ide_zig_telemetry() {
         let resp = VisualIdeServer::handle_zig_telemetry().await.into_response();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_visual_ide_pwa_endpoints() {
+        // Verify manifest endpoint
+        let manifest_resp = VisualIdeServer::serve_manifest().await.into_response();
+        assert_eq!(manifest_resp.status(), StatusCode::OK);
+        let ct = manifest_resp.headers().get(axum::http::header::CONTENT_TYPE).unwrap();
+        assert_eq!(ct, "application/manifest+json");
+
+        // Verify Service Worker endpoint
+        let sw_resp = VisualIdeServer::serve_sw().await.into_response();
+        assert_eq!(sw_resp.status(), StatusCode::OK);
+        let sw_ct = sw_resp.headers().get(axum::http::header::CONTENT_TYPE).unwrap();
+        assert_eq!(sw_ct, "application/javascript");
+        let sw_cc = sw_resp.headers().get(axum::http::header::CACHE_CONTROL).unwrap();
+        assert_eq!(sw_cc, "no-cache");
+
+        // Verify SVG icon endpoint
+        let icon_resp = VisualIdeServer::serve_icon().await.into_response();
+        assert_eq!(icon_resp.status(), StatusCode::OK);
+        let icon_ct = icon_resp.headers().get(axum::http::header::CONTENT_TYPE).unwrap();
+        assert_eq!(icon_ct, "image/svg+xml");
     }
 }
