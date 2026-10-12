@@ -77,14 +77,14 @@ pub use checkpoint::{FileSnapshotState, RollbackReport, SwarmCheckpoint, SwarmCh
 pub use chrono_warp::{ChronoWarpEngine, ChronoWarpRollbackReport, ChronoWarpSnapshot, ProcessStatus, TrackedProcess};
 pub use clipboard_xerox::{ClipboardXeroxEngine, ColorRole, DominantColor, LayoutRegion, XeroxSynthesisResult};
 pub use cockpit::{
-    ChronoWarpCardItem, ClipboardXeroxCardItem, CockpitActiveTab, CockpitApp,
+    AttachmentKind, ChronoWarpCardItem, ClipboardXeroxCardItem, CockpitActiveTab, CockpitApp,
     CockpitArtifactDiff, CockpitBackgroundTask, CockpitChatItem, CockpitChatSender,
     CockpitDagNode, CockpitInputMode, CockpitItem, CockpitNodeStatus, CockpitOverlay,
     CockpitState, CockpitTelemetry, CockpitToolCall, CockpitVibeManager, CockpitViewMode,
     CouncilCardItem, CrashBannerItem, DbTimeMachineCardItem, DiffAction, DiffActionHitbox,
     DiffCardItem, DiffCardStatus, GhostCardItem, GreenLightCardItem,
     HallucinationSentryCardItem, HealHitbox, ImagePreviewItem, PhantomSwarmCardItem,
-    PixelRadarCardItem, SteeringAction, TelepathyCardItem, TunnelCardItem,
+    PixelRadarCardItem, PromptAttachment, SteeringAction, TelepathyCardItem, TunnelCardItem,
     WattageGovernorCardItem, WiretapCardItem, WebBrowseCardItem, WebSearchCardItem,
     MemoryCardItem, AmbientCardItem, ValidationCardItem, ForgeCardItem, PruneCardItem,
     PortCardItem, ShipCardItem,

@@ -7,7 +7,8 @@
 use chrono::Utc;
 use crossterm::{
     event::{
-        self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
+        self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEventKind,
+        KeyModifiers, MouseButton, MouseEventKind,
     },
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -586,6 +587,7 @@ pub struct CockpitState {
     pub history_index: usize,
     pub draft_prompt: String,
     pub kill_ring: String,
+    pub attached_files: Vec<PromptAttachment>,
     pub model_pill: String,
     pub reasoning_effort: String,
     pub auth_account: String,
@@ -724,6 +726,147 @@ pub enum DiffCardStatus {
     Pending,
     Accepted,
     Rejected,
+}
+
+/// Attachment category: either code/text file or image/picture
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AttachmentKind {
+    File,
+    Image,
+}
+
+/// Authentic file or image attachment staged in Hagibis Cockpit
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromptAttachment {
+    pub path: String,
+    pub filename: String,
+    pub kind: AttachmentKind,
+    pub size_bytes: u64,
+    pub preview_info: String,
+    pub content: Option<String>,
+}
+
+/// Format byte size into human readable string
+fn format_file_size(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{} B", bytes)
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    }
+}
+
+/// Fast zero-dependency image header reader to detect dimensions
+fn detect_image_dimensions(path: &std::path::Path) -> Option<(u32, u32)> {
+    let file = std::fs::File::open(path).ok()?;
+    let mut data = Vec::with_capacity(4096);
+    use std::io::Read;
+    file.take(65536).read_to_end(&mut data).ok()?;
+
+    if data.len() >= 24 && &data[0..8] == b"\x89PNG\r\n\x1a\n" {
+        let w = u32::from_be_bytes([data[16], data[17], data[18], data[19]]);
+        let h = u32::from_be_bytes([data[20], data[21], data[22], data[23]]);
+        return Some((w, h));
+    }
+    if data.len() >= 10 && (&data[0..6] == b"GIF87a" || &data[0..6] == b"GIF89a") {
+        let w = u16::from_le_bytes([data[6], data[7]]) as u32;
+        let h = u16::from_le_bytes([data[8], data[9]]) as u32;
+        return Some((w, h));
+    }
+    if data.len() >= 26 && &data[0..2] == b"BM" {
+        let w = u32::from_le_bytes([data[18], data[19], data[20], data[21]]);
+        let h = (i32::from_le_bytes([data[22], data[23], data[24], data[25]])).unsigned_abs();
+        return Some((w, h));
+    }
+    if data.len() >= 30 && &data[0..4] == b"RIFF" && &data[8..12] == b"WEBP" {
+        if &data[12..16] == b"VP8 " && data.len() >= 30 {
+            let w = (u16::from_le_bytes([data[26], data[27]]) & 0x3fff) as u32;
+            let h = (u16::from_le_bytes([data[28], data[29]]) & 0x3fff) as u32;
+            return Some((w, h));
+        } else if &data[12..16] == b"VP8L" && data.len() >= 25 {
+            let b0 = data[21] as u32;
+            let b1 = data[22] as u32;
+            let b2 = data[23] as u32;
+            let b3 = data[24] as u32;
+            let w = 1 + (((b1 & 0x3f) << 8) | b0);
+            let h = 1 + (((b3 & 0xf) << 10) | (b2 << 2) | ((b1 & 0xc0) >> 6));
+            return Some((w, h));
+        }
+    }
+    if data.len() >= 4 && data[0] == 0xFF && data[1] == 0xD8 {
+        let mut idx = 2;
+        while idx + 4 <= data.len() {
+            if data[idx] != 0xFF {
+                idx += 1;
+                continue;
+            }
+            let marker = data[idx + 1];
+            idx += 2;
+            if marker == 0xD9 || marker == 0xDA {
+                break;
+            }
+            if idx + 2 > data.len() {
+                break;
+            }
+            let seg_len = u16::from_be_bytes([data[idx], data[idx + 1]]) as usize;
+            if matches!(marker, 0xC0..=0xC3 | 0xC5..=0xC7 | 0xC9..=0xCB | 0xCD..=0xCF) {
+                if idx + 7 <= data.len() {
+                    let h = u16::from_be_bytes([data[idx + 3], data[idx + 4]]) as u32;
+                    let w = u16::from_be_bytes([data[idx + 5], data[idx + 6]]) as u32;
+                    return Some((w, h));
+                }
+            }
+            idx += seg_len;
+        }
+    }
+    None
+}
+
+/// Scan prompt text for inline `@<filepath>` or `@"<filepath with spaces>"` mentions
+pub fn scan_at_mentions(text: &str) -> Vec<String> {
+    let mut mentions = Vec::new();
+    let chars: Vec<char> = text.chars().collect();
+    let len = chars.len();
+    let mut i = 0;
+
+    while i < len {
+        if chars[i] == '@' {
+            let is_start = i == 0 || chars[i - 1].is_whitespace() || matches!(chars[i - 1], '(' | '[' | '{' | ',' | ':');
+            if is_start && i + 1 < len {
+                i += 1;
+                if chars[i] == '"' || chars[i] == '\'' {
+                    let quote = chars[i];
+                    i += 1;
+                    let mut path = String::new();
+                    while i < len && chars[i] != quote {
+                        path.push(chars[i]);
+                        i += 1;
+                    }
+                    if i < len && chars[i] == quote {
+                        i += 1;
+                    }
+                    if !path.trim().is_empty() {
+                        mentions.push(path.trim().to_string());
+                    }
+                } else {
+                    let mut path = String::new();
+                    while i < len && !chars[i].is_whitespace() && !matches!(chars[i], ',' | ';' | ')' | ']' | '}' | '>' | '"' | '\'') {
+                        path.push(chars[i]);
+                        i += 1;
+                    }
+                    let clean = path.trim_end_matches(|c| matches!(c, '.' | ':' | '?' | '!'));
+                    if !clean.is_empty() {
+                        mentions.push(clean.to_string());
+                    }
+                }
+                continue;
+            }
+        }
+        i += 1;
+    }
+
+    mentions
 }
 
 /// An in-terminal visual image preview card
@@ -2161,6 +2304,7 @@ impl CockpitState {
             history_index: 0,
             draft_prompt: String::new(),
             kill_ring: String::new(),
+            attached_files: Vec::new(),
             model_pill: default_model,
             reasoning_effort: "High".to_string(),
             auth_account,
@@ -2604,7 +2748,8 @@ impl CockpitState {
     }
 
     pub fn insert_str(&mut self, s: &str) {
-        for c in s.chars() {
+        let normalized = s.replace("\r\n", "\n").replace('\r', "\n");
+        for c in normalized.chars() {
             self.insert_char(c);
         }
     }
@@ -2747,6 +2892,280 @@ impl CockpitState {
             let text = self.kill_ring.clone();
             self.insert_str(&text);
         }
+    }
+
+    pub fn is_cursor_on_first_line(&self) -> bool {
+        let chars: Vec<char> = self.prompt_input.chars().collect();
+        let mut line_ranges = Vec::new();
+        let mut line_start = 0;
+        for (i, &ch) in chars.iter().enumerate() {
+            if ch == '\n' {
+                line_ranges.push((line_start, i));
+                line_start = i + 1;
+            }
+        }
+        line_ranges.push((line_start, chars.len()));
+        if line_ranges.len() <= 1 {
+            return true;
+        }
+        self.cursor_position <= line_ranges[0].1
+    }
+
+    pub fn is_cursor_on_last_line(&self) -> bool {
+        let chars: Vec<char> = self.prompt_input.chars().collect();
+        let mut line_ranges = Vec::new();
+        let mut line_start = 0;
+        for (i, &ch) in chars.iter().enumerate() {
+            if ch == '\n' {
+                line_ranges.push((line_start, i));
+                line_start = i + 1;
+            }
+        }
+        line_ranges.push((line_start, chars.len()));
+        if line_ranges.len() <= 1 {
+            return true;
+        }
+        let last_idx = line_ranges.len() - 1;
+        self.cursor_position >= line_ranges[last_idx].0
+    }
+
+    pub fn move_cursor_up_line(&mut self) -> bool {
+        let chars: Vec<char> = self.prompt_input.chars().collect();
+        let mut line_ranges = Vec::new();
+        let mut line_start = 0;
+        for (i, &ch) in chars.iter().enumerate() {
+            if ch == '\n' {
+                line_ranges.push((line_start, i));
+                line_start = i + 1;
+            }
+        }
+        line_ranges.push((line_start, chars.len()));
+
+        if line_ranges.len() <= 1 {
+            return false;
+        }
+
+        let mut cur_line = 0;
+        let mut cur_col = 0;
+        for (idx, &(start, end)) in line_ranges.iter().enumerate() {
+            if self.cursor_position <= end || idx == line_ranges.len() - 1 {
+                cur_line = idx;
+                cur_col = self.cursor_position.saturating_sub(start);
+                break;
+            }
+        }
+
+        if cur_line == 0 {
+            return false;
+        }
+
+        let prev_line = cur_line - 1;
+        let (p_start, p_end) = line_ranges[prev_line];
+        let p_len = p_end.saturating_sub(p_start);
+        let new_col = cur_col.min(p_len);
+        self.cursor_position = p_start + new_col;
+        true
+    }
+
+    pub fn move_cursor_down_line(&mut self) -> bool {
+        let chars: Vec<char> = self.prompt_input.chars().collect();
+        let mut line_ranges = Vec::new();
+        let mut line_start = 0;
+        for (i, &ch) in chars.iter().enumerate() {
+            if ch == '\n' {
+                line_ranges.push((line_start, i));
+                line_start = i + 1;
+            }
+        }
+        line_ranges.push((line_start, chars.len()));
+
+        if line_ranges.len() <= 1 {
+            return false;
+        }
+
+        let mut cur_line = 0;
+        let mut cur_col = 0;
+        for (idx, &(start, end)) in line_ranges.iter().enumerate() {
+            if self.cursor_position <= end || idx == line_ranges.len() - 1 {
+                cur_line = idx;
+                cur_col = self.cursor_position.saturating_sub(start);
+                break;
+            }
+        }
+
+        if cur_line >= line_ranges.len() - 1 {
+            return false;
+        }
+
+        let next_line = cur_line + 1;
+        let (n_start, n_end) = line_ranges[next_line];
+        let n_len = n_end.saturating_sub(n_start);
+        let new_col = cur_col.min(n_len);
+        self.cursor_position = n_start + new_col;
+        true
+    }
+
+    pub fn move_to_home(&mut self) {
+        let chars: Vec<char> = self.prompt_input.chars().collect();
+        let mut line_ranges = Vec::new();
+        let mut line_start = 0;
+        for (i, &ch) in chars.iter().enumerate() {
+            if ch == '\n' {
+                line_ranges.push((line_start, i));
+                line_start = i + 1;
+            }
+        }
+        line_ranges.push((line_start, chars.len()));
+
+        let mut cur_line = 0;
+        for (idx, &(_start, end)) in line_ranges.iter().enumerate() {
+            if self.cursor_position <= end || idx == line_ranges.len() - 1 {
+                cur_line = idx;
+                break;
+            }
+        }
+
+        let line_start_pos = line_ranges[cur_line].0;
+        if self.cursor_position == line_start_pos {
+            self.cursor_position = 0;
+        } else {
+            self.cursor_position = line_start_pos;
+        }
+    }
+
+    pub fn move_to_end_multiline(&mut self) {
+        let chars: Vec<char> = self.prompt_input.chars().collect();
+        let mut line_ranges = Vec::new();
+        let mut line_start = 0;
+        for (i, &ch) in chars.iter().enumerate() {
+            if ch == '\n' {
+                line_ranges.push((line_start, i));
+                line_start = i + 1;
+            }
+        }
+        line_ranges.push((line_start, chars.len()));
+
+        let mut cur_line = 0;
+        for (idx, &(_start, end)) in line_ranges.iter().enumerate() {
+            if self.cursor_position <= end || idx == line_ranges.len() - 1 {
+                cur_line = idx;
+                break;
+            }
+        }
+
+        let line_end_pos = line_ranges[cur_line].1;
+        if self.cursor_position == line_end_pos {
+            self.cursor_position = chars.len();
+        } else {
+            self.cursor_position = line_end_pos;
+        }
+    }
+
+    pub fn attach_path(&mut self, input_path: &str) -> std::result::Result<PromptAttachment, String> {
+        let clean = input_path.trim().trim_matches(|c| c == '"' || c == '\'' || c == '`');
+        if clean.is_empty() {
+            return Err("Empty path provided".to_string());
+        }
+
+        let raw_path = std::path::Path::new(clean);
+        let full_path = if raw_path.is_relative() {
+            std::path::Path::new(&self.workspace_path).join(raw_path)
+        } else {
+            raw_path.to_path_buf()
+        };
+
+        if !full_path.exists() {
+            return Err(format!("File not found: {}", full_path.display()));
+        }
+        if !full_path.is_file() {
+            return Err(format!("Path is not a regular file: {}", full_path.display()));
+        }
+
+        let metadata = std::fs::metadata(&full_path).map_err(|e| format!("Cannot read file metadata: {}", e))?;
+        let size_bytes = metadata.len();
+
+        let ext = full_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        let is_image = matches!(
+            ext.as_str(),
+            "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp" | "svg"
+        );
+
+        let filename = full_path
+            .file_name()
+            .and_then(|f| f.to_str())
+            .unwrap_or(clean)
+            .to_string();
+        let path_str = full_path.display().to_string();
+
+        let (kind, preview_info, content) = if is_image {
+            let dim_opt = detect_image_dimensions(&full_path);
+            let size_str = format_file_size(size_bytes);
+            let p_info = if let Some((w, h)) = dim_opt {
+                format!("{}x{} • {}", w, h, size_str)
+            } else {
+                size_str
+            };
+            self.add_image_preview(&filename, &path_str);
+            (AttachmentKind::Image, p_info, None)
+        } else {
+            let size_str = format_file_size(size_bytes);
+            let text_content = match std::fs::read(&full_path) {
+                Ok(bytes) => {
+                    let max_bytes = 512 * 1024;
+                    let slice = if bytes.len() > max_bytes { &bytes[..max_bytes] } else { &bytes[..] };
+                    Some(String::from_utf8_lossy(slice).to_string())
+                }
+                Err(_) => None,
+            };
+            (AttachmentKind::File, size_str, text_content)
+        };
+
+        if let Some(existing_idx) = self.attached_files.iter().position(|a| a.path == path_str) {
+            let attachment = PromptAttachment {
+                path: path_str,
+                filename,
+                kind,
+                size_bytes,
+                preview_info,
+                content,
+            };
+            self.attached_files[existing_idx] = attachment.clone();
+            Ok(attachment)
+        } else {
+            let attachment = PromptAttachment {
+                path: path_str,
+                filename,
+                kind,
+                size_bytes,
+                preview_info,
+                content,
+            };
+            self.attached_files.push(attachment.clone());
+            Ok(attachment)
+        }
+    }
+
+    pub fn detach_path(&mut self, target: &str) -> bool {
+        let clean = target.trim();
+        if clean.is_empty() || clean == "all" {
+            let had_any = !self.attached_files.is_empty();
+            self.attached_files.clear();
+            return had_any;
+        }
+
+        let prev_len = self.attached_files.len();
+        self.attached_files.retain(|a| {
+            a.filename != clean && a.path != clean && !a.path.ends_with(clean)
+        });
+        self.attached_files.len() < prev_len
+    }
+
+    pub fn clear_attachments(&mut self) {
+        self.attached_files.clear();
     }
 
     pub fn clear_prompt(&mut self) {
@@ -3012,6 +3431,12 @@ impl CockpitState {
             return None;
         }
 
+        // Inline @ mentions:
+        let mentions = scan_at_mentions(&prompt);
+        for m in mentions {
+            let _ = self.attach_path(&m);
+        }
+
         self.prompt_history.push(prompt.clone());
         self.history_index = self.prompt_history.len();
         self.draft_prompt.clear();
@@ -3019,8 +3444,54 @@ impl CockpitState {
         self.cursor_position = 0;
         self.chat_scroll = 0;
 
-        // 1. Record User message in Chat Canvas
-        self.add_user_message(prompt.clone());
+        // 1. Record User message in Chat Canvas with attachment chips above prompt text
+        let user_msg_text = if !self.attached_files.is_empty() {
+            let mut chips_line = String::new();
+            for att in &self.attached_files {
+                if !chips_line.is_empty() {
+                    chips_line.push(' ');
+                }
+                match att.kind {
+                    AttachmentKind::File => {
+                        chips_line.push_str(&format!("📎 [{} ({})]", att.filename, att.preview_info));
+                    }
+                    AttachmentKind::Image => {
+                        chips_line.push_str(&format!("🖼️ [{} ({})]", att.filename, att.preview_info));
+                    }
+                }
+            }
+            format!("{}\n\n{}", chips_line, prompt)
+        } else {
+            prompt.clone()
+        };
+        self.add_user_message(user_msg_text);
+
+        // 2. Synthesize attached file contents into the prompt sent to the LLM
+        let mut synthesized_prompt = prompt.clone();
+        if !self.attached_files.is_empty() {
+            synthesized_prompt.push_str("\n\n=== ATTACHED CONTEXT ===");
+            for att in &self.attached_files {
+                match att.kind {
+                    AttachmentKind::File => {
+                        synthesized_prompt.push_str(&format!("\n\n--- Attached File: {} ({}) ---\n", att.filename, att.preview_info));
+                        if let Some(ref text) = att.content {
+                            synthesized_prompt.push_str("```\n");
+                            synthesized_prompt.push_str(text);
+                            if !text.ends_with('\n') {
+                                synthesized_prompt.push('\n');
+                            }
+                            synthesized_prompt.push_str("```\n");
+                        }
+                    }
+                    AttachmentKind::Image => {
+                        synthesized_prompt.push_str(&format!("\n\n--- Attached Image: {} ({}) ---\nPath: {}\n", att.filename, att.preview_info, att.path));
+                    }
+                }
+            }
+        }
+
+        // Clear staged attachments
+        self.attached_files.clear();
 
         let node_id = format!("task-{}", self.nodes.len() + 1);
         let prompt_preview = if prompt.len() > 28 {
@@ -3031,7 +3502,7 @@ impl CockpitState {
 
         let mut node = CockpitDagNode::new(&node_id, format!("Prompt: {}", prompt_preview), &self.model_pill);
         node.status = CockpitNodeStatus::Running { progress_pct: 10 };
-        node.scratchpad = format!("Dispatched prompt: {}\nAwaiting AI microkernel execution...", prompt);
+        node.scratchpad = format!("Dispatched prompt: {}\nAwaiting AI microkernel execution...", synthesized_prompt);
         self.add_node(node);
         self.selected_index = self.nodes.len() - 1;
         self.add_log(format!("[EXEC] Dispatched prompt '{}'", prompt_preview));
@@ -3045,7 +3516,7 @@ impl CockpitState {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let nid = node_id;
         let model = self.model_pill.clone();
-        let p = prompt;
+        let p = synthesized_prompt;
 
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             handle.spawn(async move {
@@ -3794,15 +4265,41 @@ impl CockpitState {
     pub fn render_chat_canvas(&self, frame: &mut Frame) {
         let area = frame.area();
 
+        // Dynamic calculation of prompt input box height based on multiline lines + attachments
+        let usable_input_width = (area.width.saturating_sub(4) as usize).max(10);
+        let prompt_chars: Vec<char> = self.prompt_input.chars().collect();
+        let mut line_ranges = Vec::new();
+        let mut line_start = 0;
+        for (i, &ch) in prompt_chars.iter().enumerate() {
+            if ch == '\n' {
+                line_ranges.push((line_start, i));
+                line_start = i + 1;
+            }
+        }
+        line_ranges.push((line_start, prompt_chars.len()));
+
+        let mut prompt_visual_lines = 0;
+        for &(start, end) in &line_ranges {
+            let line_len = end.saturating_sub(start);
+            let wrapped = (line_len + usable_input_width - 1) / usable_input_width;
+            prompt_visual_lines += wrapped.max(1);
+        }
+
+        let attachment_rows = if !self.attached_files.is_empty() { 1 } else { 0 };
+        let total_content_lines = prompt_visual_lines + attachment_rows;
+        let required_box_height = (total_content_lines as u16).saturating_add(2);
+        let max_allowed_height = ((area.height as f32 * 0.40).floor() as u16).clamp(5, 12);
+        let input_box_height = required_box_height.clamp(3, max_allowed_height);
+
         // Vertical layout:
-        // Top Header (1 line), Divider (1 line), Chat Viewport (Min 5), Input Box (3 lines), Statusline (1 line)
+        // Top Header (1 line), Divider (1 line), Chat Viewport (Min 5), Input Box (dynamic lines), Statusline (1 line)
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(1),
                 Constraint::Length(1),
                 Constraint::Min(5),
-                Constraint::Length(3),
+                Constraint::Length(input_box_height),
                 Constraint::Length(1),
             ])
             .split(area);
@@ -5181,33 +5678,92 @@ impl CockpitState {
             }
         }
 
-        // 4. Input Box (Always Focused, authentic AGY box with accurate cursor)
-        let chars: Vec<char> = self.prompt_input.chars().collect();
-        let prompt_prefix = Span::styled("> ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+        // 4. Input Box (Always Focused, multiline AGY cockpit design with attachment badges and accurate cursor)
+        let mut input_lines: Vec<Line> = Vec::new();
 
-        let prompt_content = if chars.is_empty() {
-            Line::from(vec![
-                prompt_prefix,
-                Span::styled("█", Style::default().fg(Color::Cyan)),
-            ])
-        } else if self.cursor_position < chars.len() {
-            let before: String = chars[..self.cursor_position].iter().collect();
-            let at_char: String = chars[self.cursor_position].to_string();
-            let after: String = chars[self.cursor_position + 1..].iter().collect();
-            Line::from(vec![
-                prompt_prefix,
-                Span::styled(before, Style::default().fg(Color::White)),
-                Span::styled(at_char, Style::default().fg(Color::Black).bg(Color::Cyan)),
-                Span::styled(after, Style::default().fg(Color::White)),
-            ])
-        } else {
-            let text: String = chars.iter().collect();
-            Line::from(vec![
-                prompt_prefix,
-                Span::styled(text, Style::default().fg(Color::White)),
-                Span::styled("█", Style::default().fg(Color::Cyan)),
-            ])
-        };
+        // 4a. Attachment badges chip row (if any files or pictures are attached)
+        if !self.attached_files.is_empty() {
+            let mut att_spans = vec![
+                Span::styled("📎 Staged Attachments: ", Style::default().fg(Color::DarkGray)),
+            ];
+            for (idx, att) in self.attached_files.iter().enumerate() {
+                if idx > 0 {
+                    att_spans.push(Span::raw(" "));
+                }
+                match att.kind {
+                    AttachmentKind::File => {
+                        att_spans.push(Span::styled(
+                            format!("📄 [{} ({})]", att.filename, att.preview_info),
+                            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                        ));
+                    }
+                    AttachmentKind::Image => {
+                        att_spans.push(Span::styled(
+                            format!("🖼️ [{} ({})]", att.filename, att.preview_info),
+                            Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+                        ));
+                    }
+                }
+            }
+            input_lines.push(Line::from(att_spans));
+        }
+
+        // 4b. Find active cursor line index
+        let mut cursor_line_idx = 0;
+        for (idx, &(_start, end)) in line_ranges.iter().enumerate() {
+            if self.cursor_position <= end || idx == line_ranges.len() - 1 {
+                cursor_line_idx = idx;
+                break;
+            }
+        }
+
+        // 4c. Render each multiline prompt line with accurate cursor placement
+        for (idx, &(start, end)) in line_ranges.iter().enumerate() {
+            let prefix_span = if idx == 0 {
+                Span::styled("> ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+            } else {
+                Span::styled("· ", Style::default().fg(Color::DarkGray))
+            };
+
+            let line_chars = if start <= end && end <= prompt_chars.len() {
+                &prompt_chars[start..end]
+            } else {
+                &[]
+            };
+
+            if idx == cursor_line_idx {
+                let col = self.cursor_position.saturating_sub(start);
+                if line_chars.is_empty() {
+                    input_lines.push(Line::from(vec![
+                        prefix_span,
+                        Span::styled("█", Style::default().fg(Color::Cyan)),
+                    ]));
+                } else if col < line_chars.len() {
+                    let before: String = line_chars[..col].iter().collect();
+                    let at_char: String = line_chars[col].to_string();
+                    let after: String = line_chars[col + 1..].iter().collect();
+                    input_lines.push(Line::from(vec![
+                        prefix_span,
+                        Span::styled(before, Style::default().fg(Color::White)),
+                        Span::styled(at_char, Style::default().fg(Color::Black).bg(Color::Cyan)),
+                        Span::styled(after, Style::default().fg(Color::White)),
+                    ]));
+                } else {
+                    let text: String = line_chars.iter().collect();
+                    input_lines.push(Line::from(vec![
+                        prefix_span,
+                        Span::styled(text, Style::default().fg(Color::White)),
+                        Span::styled("█", Style::default().fg(Color::Cyan)),
+                    ]));
+                }
+            } else {
+                let text: String = line_chars.iter().collect();
+                input_lines.push(Line::from(vec![
+                    prefix_span,
+                    Span::styled(text, Style::default().fg(Color::White)),
+                ]));
+            }
+        }
 
         let (prompt_title, border_color) = if self.is_processing {
             const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -5223,20 +5779,33 @@ impl CockpitState {
                 Color::Yellow,
             )
         } else {
-            let title = match self.execution_mode.as_str() {
-                "plan" => " ❯ type a prompt (plan mode · Shift+Tab to switch) ".to_string(),
-                "accept-edits" => " ❯ type a prompt (accept-edits mode · Shift+Tab to switch) ".to_string(),
-                _ => " ❯ type a prompt (? shortcuts, / commands, Ctrl+T cockpit) ".to_string(),
+            let mut title = match self.execution_mode.as_str() {
+                "plan" => " ❯ type a prompt (plan mode · Shift+Enter newline · /attach file) ".to_string(),
+                "accept-edits" => " ❯ type a prompt (accept-edits mode · Shift+Enter newline) ".to_string(),
+                _ => " ❯ type a prompt (Shift+Enter multiline · /attach or @file · Ctrl+T cockpit) ".to_string(),
             };
+            if !self.attached_files.is_empty() {
+                title = format!("{} [{} attached] ", title.trim_end(), self.attached_files.len());
+            }
             (title, Color::Cyan)
         };
 
-        let input_box = Paragraph::new(prompt_content).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(border_color))
-                .title(prompt_title),
-        );
+        let inner_height = chunks[3].height.saturating_sub(2) as usize;
+        let cursor_visual_line = attachment_rows + cursor_line_idx;
+        let scroll_y = if inner_height > 0 && cursor_visual_line >= inner_height {
+            (cursor_visual_line + 1 - inner_height) as u16
+        } else {
+            0
+        };
+
+        let input_box = Paragraph::new(input_lines)
+            .scroll((scroll_y, 0))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(border_color))
+                    .title(prompt_title),
+            );
         frame.render_widget(input_box, chunks[3]);
 
         // 5. Statusline Footer
@@ -5472,14 +6041,14 @@ impl CockpitState {
     pub async fn run_interactive(&mut self) -> io::Result<()> {
         enable_raw_mode()?;
         let mut stdout_handle = stdout();
-        crossterm::execute!(stdout_handle, EnterAlternateScreen, crossterm::event::EnableMouseCapture)?;
+        crossterm::execute!(stdout_handle, EnterAlternateScreen, crossterm::event::EnableMouseCapture, EnableBracketedPaste)?;
         let backend = CrosstermBackend::new(stdout_handle);
         let mut terminal = Terminal::new(backend)?;
 
         let res = self.event_loop(&mut terminal).await;
 
         disable_raw_mode()?;
-        crossterm::execute!(terminal.backend_mut(), LeaveAlternateScreen, crossterm::event::DisableMouseCapture)?;
+        crossterm::execute!(terminal.backend_mut(), LeaveAlternateScreen, crossterm::event::DisableMouseCapture, DisableBracketedPaste)?;
         terminal.show_cursor()?;
 
         res
@@ -5526,6 +6095,9 @@ impl CockpitState {
 
             if event::poll(Duration::from_millis(50))? {
                 match event::read()? {
+                    Event::Paste(text) => {
+                        self.insert_str(&text);
+                    }
                     Event::Mouse(mouse_event) => {
                         match mouse_event.kind {
                             MouseEventKind::ScrollUp => {
@@ -5647,6 +6219,10 @@ impl CockpitState {
                                 }
                                 KeyCode::Char('y') | KeyCode::Char('Y') => {
                                     self.yank();
+                                    continue;
+                                }
+                                KeyCode::Char('o') | KeyCode::Char('O') => {
+                                    self.add_system_notice("📎 Attachments: Use /attach <path>, /image <path>, /detach, or mention @filepath inline in prompt".to_string());
                                     continue;
                                 }
                                 KeyCode::Left => {
@@ -5891,7 +6467,7 @@ impl CockpitState {
                                         "browse", "search", "memory", "mem",
                                         "ambient", "focus", "validate", "forge", "prune", "ports", "ship", "commit",
                                         "hud", "snoop", "seed", "rewind", "redteam", "audit", "blueprint", "sentinel",
-                                        "model", "cockpit", "chat", "tasks", "plan", "mcp", "clear", "help", "exit", "quit"
+                                        "model", "cockpit", "chat", "tasks", "plan", "mcp", "attach", "image", "img", "detach", "clear-attachments", "clear", "help", "exit", "quit"
                                     ];
                                     for cmd in commands {
                                         if cmd.starts_with(prefix) {
@@ -6122,6 +6698,46 @@ impl CockpitState {
                                         "/tasks" => {
                                             self.overlay = CockpitOverlay::Tasks;
                                         }
+                                        "/attach" | "/image" | "/img" => {
+                                            let target = if parts.len() > 1 {
+                                                parts[1..].join(" ")
+                                            } else {
+                                                arg.to_string()
+                                            };
+                                            if target.trim().is_empty() {
+                                                self.add_system_notice("Usage: /attach <path> or /image <path>".to_string());
+                                            } else {
+                                                match self.attach_path(&target) {
+                                                    Ok(att) => {
+                                                        let icon = match att.kind {
+                                                            AttachmentKind::File => "📎",
+                                                            AttachmentKind::Image => "🖼️",
+                                                        };
+                                                        self.add_system_notice(format!("{} Attached {} ({})", icon, att.filename, att.preview_info));
+                                                        hgb_core::play_vibe_chime(true);
+                                                    }
+                                                    Err(e) => {
+                                                        self.add_system_notice(format!("Attachment error: {}", e));
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        "/detach" => {
+                                            let target = if parts.len() > 1 {
+                                                parts[1..].join(" ")
+                                            } else {
+                                                arg.to_string()
+                                            };
+                                            if self.detach_path(&target) {
+                                                self.add_system_notice(format!("Detached: {}", if target.is_empty() { "all" } else { &target }));
+                                            } else {
+                                                self.add_system_notice(format!("No matching attachment found for: {}", target));
+                                            }
+                                        }
+                                        "/clear-attachments" | "/detach-all" => {
+                                            self.clear_attachments();
+                                            self.add_system_notice("Cleared all staged attachments".to_string());
+                                        }
                                         "/plan" => {
                                             self.execution_mode = "plan".to_string();
                                             self.add_system_notice("Switched execution mode to: plan");
@@ -6155,26 +6771,26 @@ impl CockpitState {
                                 self.move_cursor_right();
                             }
                             KeyCode::Home => {
-                                self.move_to_start();
+                                self.move_to_home();
                             }
                             KeyCode::End => {
                                 if self.chat_scroll > 0 {
                                     self.scroll_chat_to_bottom();
                                 } else {
-                                    self.move_to_end();
+                                    self.move_to_end_multiline();
                                 }
                             }
                             KeyCode::Up => {
                                 if self.view_mode == CockpitViewMode::CockpitSplit && self.input_mode == CockpitInputMode::Normal {
                                     self.select_prev();
-                                } else {
+                                } else if !self.move_cursor_up_line() {
                                     self.history_prev();
                                 }
                             }
                             KeyCode::Down => {
                                 if self.view_mode == CockpitViewMode::CockpitSplit && self.input_mode == CockpitInputMode::Normal {
                                     self.select_next();
-                                } else {
+                                } else if !self.move_cursor_down_line() {
                                     self.history_next();
                                 }
                             }
@@ -6352,5 +6968,84 @@ async fn test_scroll_pill_click_to_bottom() {
         let handled = state.handle_mouse_click(45, 5);
         assert!(handled);
         assert_eq!(state.chat_scroll, 0);
+    }
+
+    #[test]
+    fn test_multiline_prompt_cursor_navigation() {
+        let mut state = CockpitState::new();
+        state.insert_str("line1\nline2\nline3");
+        assert_eq!(state.prompt_input, "line1\nline2\nline3");
+        assert_eq!(state.cursor_position, 17);
+
+        // Move to home of line 3
+        state.move_to_home();
+        assert_eq!(state.cursor_position, 12);
+
+        // Repeated Home moves to buffer start
+        state.move_to_home();
+        assert_eq!(state.cursor_position, 0);
+
+        // Move cursor down line
+        let moved = state.move_cursor_down_line();
+        assert!(moved);
+        assert_eq!(state.cursor_position, 6); // line2 col 0
+
+        // Move cursor down line
+        let moved = state.move_cursor_down_line();
+        assert!(moved);
+        assert_eq!(state.cursor_position, 12); // line3 col 0
+
+        // Moving down on last line returns false (signals history navigation)
+        let moved = state.move_cursor_down_line();
+        assert!(!moved);
+
+        // Move cursor up line
+        let moved = state.move_cursor_up_line();
+        assert!(moved);
+        assert_eq!(state.cursor_position, 6);
+
+        // Move to end of line
+        state.move_to_end_multiline();
+        assert_eq!(state.cursor_position, 11); // line2 end
+    }
+
+    #[test]
+    fn test_scan_at_mentions() {
+        let text = "Check out @src/main.rs and @\"assets/logo preview.png\" and test@example.com for @Cargo.toml.";
+        let mentions = scan_at_mentions(text);
+        assert_eq!(mentions, vec![
+            "src/main.rs".to_string(),
+            "assets/logo preview.png".to_string(),
+            "Cargo.toml".to_string(),
+        ]);
+    }
+
+    #[tokio::test]
+    async fn test_submit_prompt_with_attachments_synthesis() {
+        let mut state = CockpitState::new();
+        state.attached_files.push(PromptAttachment {
+            path: "test.rs".to_string(),
+            filename: "test.rs".to_string(),
+            kind: AttachmentKind::File,
+            size_bytes: 42,
+            preview_info: "42 B".to_string(),
+            content: Some("fn main() {}".to_string()),
+        });
+
+        state.prompt_input = "Refactor this code".to_string();
+        let _ = state.submit_current_prompt();
+
+        // Staged attachments must be cleared
+        assert!(state.attached_files.is_empty());
+
+        // Conversation history must have chips recorded
+        let user_msg = state.conversation.last().unwrap();
+        assert!(user_msg.content.contains("📎 [test.rs (42 B)]"));
+        assert!(user_msg.content.contains("Refactor this code"));
+
+        // Dag Node scratchpad must contain synthesized context
+        let node = state.nodes.last().unwrap();
+        assert!(node.scratchpad.contains("--- Attached File: test.rs (42 B) ---"));
+        assert!(node.scratchpad.contains("fn main() {}"));
     }
 }
