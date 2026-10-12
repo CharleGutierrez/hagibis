@@ -129,6 +129,7 @@ fn wrap_line_to_width(text: &str, max_width: usize) -> Vec<String> {
 }
 
 /// Wrap a code line cleanly to fit within max_width without stripping indentation
+#[allow(dead_code)]
 fn wrap_code_line_to_width(line: &str, max_width: usize) -> Vec<String> {
     if max_width == 0 {
         return vec![line.to_string()];
@@ -3188,18 +3189,6 @@ pub async fn execute_prompt_core(
                         if let Ok(resp) = bincode::deserialize::<hgb_core::HgbResponse>(&buf[..n]) {
                             match resp {
                                 hgb_core::HgbResponse::Complete { output, tokens_used, duration_ms } => {
-                                    let tool_name = if hgb_core::OllamaProvider::is_ollama_model(&model_pill) {
-                                        "hgbd_ollama_local"
-                                    } else {
-                                        "hgbd_gemini_inference"
-                                    };
-                                    let tool = CockpitToolCall::new(
-                                        tool_name,
-                                        format!("model={}", model_pill),
-                                        "SUCCESS",
-                                        duration_ms,
-                                        Some(output.clone()),
-                                    );
                                     let log_msg = format!("[DAEMON] Prompt finished in {}ms ({} tok)", duration_ms, tokens_used);
                                     return PromptExecutionResult {
                                         node_id,
@@ -3208,7 +3197,7 @@ pub async fn execute_prompt_core(
                                         output,
                                         tokens_used: tokens_used as u64,
                                         duration_ms,
-                                        tool_call: Some(tool),
+                                        tool_call: None,
                                         is_error: false,
                                         error_msg: None,
                                         log_msg,
@@ -3250,7 +3239,7 @@ pub async fn execute_prompt_core(
             match res {
                 Ok(output) => {
                     let calls = hgb_core::agent::ReActAgentEngine::extract_tool_calls(&output);
-                    let (final_output, tool_name_used) = if !calls.is_empty() {
+                    let (final_output, tool_call_opt) = if !calls.is_empty() {
                         let engine = hgb_core::agent::ReActAgentEngine::new(
                             std::sync::Arc::new(ollama_prov.clone()),
                             hgb_core::agent::AgentLoopConfig::default(),
@@ -3269,18 +3258,18 @@ pub async fn execute_prompt_core(
                             prompt, output, tool_results.join("\n\n")
                         );
                         let synth = ollama_prov.complete(&followup, Some(&model_pill)).await.unwrap_or(output);
-                        (synth, format!("tool_executed: {}", first_tool))
+                        let tool = CockpitToolCall::new(
+                            first_tool.clone(),
+                            format!("tool_executed: {}", first_tool),
+                            "SUCCESS",
+                            elapsed,
+                            Some(tool_results.join("\n\n")),
+                        );
+                        (synth, Some(tool))
                     } else {
-                        (output, format!("model={}", model_pill))
+                        (output, None)
                     };
                     let approx_tokens = (final_output.len() / 4 + prompt.len() / 4).max(1) as u64;
-                    let tool = CockpitToolCall::new(
-                        "ollama_local_inference",
-                        tool_name_used,
-                        "SUCCESS",
-                        elapsed,
-                        Some(final_output.clone()),
-                    );
                     let log_msg = format!("[OLLAMA] Completed in {}ms (~{} tok)", elapsed, approx_tokens);
                     return PromptExecutionResult {
                         node_id,
@@ -3289,7 +3278,7 @@ pub async fn execute_prompt_core(
                         output: final_output,
                         tokens_used: approx_tokens,
                         duration_ms: elapsed,
-                        tool_call: Some(tool),
+                        tool_call: tool_call_opt,
                         is_error: false,
                         error_msg: None,
                         log_msg,
@@ -3311,13 +3300,6 @@ pub async fn execute_prompt_core(
         match res {
             Ok(output) => {
                 let approx_tokens = (output.len() / 4 + prompt.len() / 4).max(1) as u64;
-                let tool = CockpitToolCall::new(
-                    "gemini_api_direct",
-                    format!("model={}", model_pill),
-                    "SUCCESS",
-                    elapsed,
-                    Some(output.clone()),
-                );
                 let log_msg = format!("[GEMINI] Completed in {}ms (~{} tok)", elapsed, approx_tokens);
                 return PromptExecutionResult {
                     node_id,
@@ -3326,7 +3308,7 @@ pub async fn execute_prompt_core(
                     output,
                     tokens_used: approx_tokens,
                     duration_ms: elapsed,
-                    tool_call: Some(tool),
+                    tool_call: None,
                     is_error: false,
                     error_msg: None,
                     log_msg,
@@ -3345,13 +3327,6 @@ pub async fn execute_prompt_core(
         "Prompt recorded in Cockpit Dag:\n\"{}\"\n\n[INFO] hgbd daemon is offline and Gemini credentials unconfigured.\nStart daemon with `hgbd` or authenticate with `hgb login` to query models.",
         prompt
     );
-    let tool = CockpitToolCall::new(
-        "cockpit_local_eval",
-        "mode=standalone",
-        "SUCCESS",
-        elapsed,
-        Some(prompt.chars().take(80).collect()),
-    );
     let log_msg = format!("[STANDALONE] Executed prompt node '{}' ({} tok)", node_id, approx_tokens);
     PromptExecutionResult {
         node_id,
@@ -3360,7 +3335,7 @@ pub async fn execute_prompt_core(
         output: fallback_output,
         tokens_used: approx_tokens,
         duration_ms: elapsed,
-        tool_call: Some(tool),
+        tool_call: None,
         is_error: false,
         error_msg: None,
         log_msg,
@@ -4690,7 +4665,7 @@ impl CockpitState {
                             let copy_btn_preview_w = if is_copied { 1 } else { 2 };
                             let mut natural_w = (title_w + icon_w + copy_btn_preview_w + 10).max(status_row_w + 2);
                             if let Some(ref snippet) = tool.output_snippet {
-                                for s_line in snippet.trim().lines().take(50) {
+                                for s_line in snippet.trim().lines() {
                                     let sw = visual_str_width(s_line) + 6;
                                     if sw > natural_w {
                                         natural_w = sw;
@@ -4795,35 +4770,34 @@ impl CockpitState {
                                 Span::styled("│", Style::default().fg(Color::Cyan)),
                             ]));
 
-                            // 3. Output Snippet Lines (cleanly wrapped to inner width with closed borders)
+                            // 3. Output Snippet Lines (cleanly wrapped to inner width with closed borders, no truncation)
                             if let Some(ref snippet) = tool.output_snippet {
                                 let trimmed = snippet.trim();
                                 if !trimmed.is_empty() {
                                     let max_chunk_w = banner_width.saturating_sub(6);
-                                    let line_count = trimmed.lines().count();
-                                    for raw_line in trimmed.lines().take(50) {
+                                    for raw_line in trimmed.lines() {
                                         let chunks = wrap_line_to_width(raw_line, max_chunk_w);
                                         for chunk in chunks {
                                             let chunk_w = visual_str_width(chunk.as_str());
                                             let pad_w = max_chunk_w.saturating_sub(chunk_w);
+                                            let line_color = if chunk.starts_with('+') && !chunk.starts_with("+++") {
+                                                Color::Green
+                                            } else if chunk.starts_with('-') && !chunk.starts_with("---") {
+                                                Color::Red
+                                            } else if chunk.starts_with("error") || chunk.contains("Error") {
+                                                Color::LightRed
+                                            } else if chunk.starts_with("warning") || chunk.contains("Warning") {
+                                                Color::Yellow
+                                            } else {
+                                                Color::White
+                                            };
                                             chat_lines.push(Line::from(vec![
                                                 Span::styled("│   ", Style::default().fg(Color::Cyan)),
-                                                Span::styled(chunk, Style::default().fg(Color::White)),
+                                                Span::styled(chunk, Style::default().fg(line_color)),
                                                 Span::raw(" ".repeat(pad_w)),
                                                 Span::styled(" │", Style::default().fg(Color::Cyan)),
                                             ]));
                                         }
-                                    }
-                                    if line_count > 50 {
-                                        let more_msg = format!("... ({} more lines truncated)", line_count - 50);
-                                        let more_w = visual_str_width(more_msg.as_str());
-                                        let pad_w = max_chunk_w.saturating_sub(more_w);
-                                        chat_lines.push(Line::from(vec![
-                                            Span::styled("│   ", Style::default().fg(Color::Cyan)),
-                                            Span::styled(more_msg, Style::default().fg(Color::DarkGray)),
-                                            Span::raw(" ".repeat(pad_w)),
-                                            Span::styled(" │", Style::default().fg(Color::Cyan)),
-                                        ]));
                                     }
                                 }
                             }
@@ -4836,62 +4810,19 @@ impl CockpitState {
                             )));
                         }
 
-                        // Check if the message content was already rendered inside a tool call card box
-                        let already_rendered_in_box = item.tool_calls.iter().any(|tool| {
-                            if let Some(ref snippet) = tool.output_snippet {
-                                let s = snippet.trim();
-                                let c = item.content.trim();
-                                !s.is_empty() && (s == c || s.starts_with(c) || c.starts_with(s))
-                            } else {
-                                false
-                            }
-                        });
-
-                        if !already_rendered_in_box {
-                            // Parse markdown lines, grouping code blocks for auto-width banner rendering
-                            enum MarkdownItem<'a> {
-                                Line(&'a str),
-                                CodeBlock {
-                                    lang: &'a str,
-                                    lines: Vec<&'a str>,
-                                },
-                            }
-
-                            let mut md_items = Vec::new();
-                            let mut in_block = false;
-                            let mut block_lang = "";
-                            let mut block_lines = Vec::new();
-
-                            for line in item.content.lines() {
-                                if line.starts_with("```") {
-                                    if in_block {
-                                        in_block = false;
-                                        md_items.push(MarkdownItem::CodeBlock {
-                                            lang: block_lang,
-                                            lines: std::mem::take(&mut block_lines),
-                                        });
-                                    } else {
-                                        in_block = true;
-                                        block_lang = line.trim_start_matches("```").trim();
-                                        block_lines.clear();
-                                    }
-                                } else if in_block {
-                                    block_lines.push(line);
-                                } else {
-                                    md_items.push(MarkdownItem::Line(line));
-                                }
-                            }
-                            if in_block {
-                                md_items.push(MarkdownItem::CodeBlock {
-                                    lang: block_lang,
-                                    lines: block_lines,
-                                });
-                            }
+                        // Render assistant message content with rich markdown & full syntax-highlighted code blocks
+                        if !item.content.trim().is_empty() {
+                            let md_items = crate::tui_syntax::parse_markdown(&item.content);
 
                             for md_item in md_items {
                                 match md_item {
-                                    MarkdownItem::CodeBlock { lang, lines } => {
-                                        let tag = if lang.is_empty() { "code" } else { lang };
+                                    crate::tui_syntax::MarkdownItem::CodeBlock { lang, lines } => {
+                                        let detected_lang = if lang.is_empty() || lang == "code" {
+                                            crate::tui_syntax::detect_code_language_lines(&lines)
+                                        } else {
+                                            lang
+                                        };
+                                        let tag = if detected_lang.is_empty() { "code" } else { detected_lang };
                                         let tag_w = visual_str_width(tag);
                                         let max_content_w = lines.iter().map(|l| visual_str_width(*l)).max().unwrap_or(0);
 
@@ -4904,11 +4835,11 @@ impl CockpitState {
                                         // 1. Top border: "╭─── [tag] ────╮"
                                         let max_tag_w = code_box_w.saturating_sub(10);
                                         let (display_tag, display_tag_w) = if tag_w > max_tag_w && max_tag_w > 2 {
-                                            let trunc = truncate_str_by_width(tag, max_tag_w.saturating_sub(1));
-                                            let tw = visual_str_width(trunc.as_str()) + 1;
-                                            (format!("{}…", trunc), tw)
+                                             let trunc = truncate_str_by_width(tag, max_tag_w.saturating_sub(1));
+                                             let tw = visual_str_width(trunc.as_str()) + 1;
+                                             (format!("{}…", trunc), tw)
                                         } else {
-                                            (tag.to_string(), tag_w)
+                                             (tag.to_string(), tag_w)
                                         };
 
                                         let used_top_w = 6 + display_tag_w + 3; // "╭─── [" (6) + tag + "] " (2) + "╮" (1)
@@ -4921,19 +4852,20 @@ impl CockpitState {
                                             Span::styled(format!("] {}╮", top_dashes), Style::default().fg(Color::Cyan)),
                                         ]));
 
-                                        // 2. Content lines: wrapped preserving indentation with closed right border
+                                        // 2. Content lines: wrapped preserving indentation with closed right border and colorized syntax highlighting!
                                         let max_chunk_w = code_box_w.saturating_sub(4);
                                         for code_l in lines {
-                                            let chunks = wrap_code_line_to_width(code_l, max_chunk_w);
-                                            for chunk in chunks {
-                                                let chunk_w = visual_str_width(chunk.as_str());
+                                            let wrapped_spans = crate::tui_syntax::highlight_and_wrap_code_line(code_l, max_chunk_w, Some(tag));
+                                            for spans in wrapped_spans {
+                                                let chunk_w: usize = spans.iter().map(|s| visual_str_width(s.content.as_ref())).sum();
                                                 let pad_w = max_chunk_w.saturating_sub(chunk_w);
-                                                chat_lines.push(Line::from(vec![
+                                                let mut row_spans = vec![
                                                     Span::styled("│ ", Style::default().fg(Color::Cyan)),
-                                                    Span::styled(chunk, Style::default().fg(Color::White)),
-                                                    Span::raw(" ".repeat(pad_w)),
-                                                    Span::styled(" │", Style::default().fg(Color::Cyan)),
-                                                ]));
+                                                ];
+                                                row_spans.extend(spans);
+                                                row_spans.push(Span::raw(" ".repeat(pad_w)));
+                                                row_spans.push(Span::styled(" │", Style::default().fg(Color::Cyan)));
+                                                chat_lines.push(Line::from(row_spans));
                                             }
                                         }
 
@@ -4944,7 +4876,7 @@ impl CockpitState {
                                             Style::default().fg(Color::Cyan),
                                         )));
                                     }
-                                    MarkdownItem::Line(line) => {
+                                    crate::tui_syntax::MarkdownItem::Line(line) => {
                                         if line.starts_with("+ ") || line.starts_with("+\t") {
                                             chat_lines.push(Line::from(Span::styled(line, Style::default().fg(Color::Green))));
                                         } else if line.starts_with("- ") || line.starts_with("-\t") {

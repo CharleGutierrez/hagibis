@@ -138,7 +138,7 @@ impl ToolCallCard {
         }
 
         if let Some(ref snippet) = self.output_snippet {
-            for line in snippet.trim().lines().take(25) {
+            for line in snippet.trim().lines() {
                 let lw = visual_str_width(line) + 6;
                 if lw > natural_w {
                     natural_w = lw;
@@ -224,7 +224,7 @@ impl ToolCallCard {
             if !trimmed.is_empty() {
                 out.push_str(&format!("├{}┤\n", "─".repeat(width.saturating_sub(2)).dimmed()));
                 let max_inner = width.saturating_sub(6).max(10);
-                for line in trimmed.lines().take(25) {
+                for line in trimmed.lines() {
                     let formatted_line = if line.starts_with('+') && !line.starts_with("+++") {
                         line.green().to_string()
                     } else if line.starts_with('-') && !line.starts_with("---") {
@@ -255,13 +255,6 @@ impl ToolCallCard {
                     };
                     let pad = max_inner.saturating_sub(safe_lw);
                     out.push_str(&format!("│  {}  {}{}\n", safe_line, " ".repeat(pad), "│".dimmed()));
-                }
-                let line_count = trimmed.lines().count();
-                if line_count > 25 {
-                    let trunc_msg = format!("... ({} more lines truncated)", line_count - 25);
-                    let tw = visual_str_width(trunc_msg.as_str());
-                    let pad = max_inner.saturating_sub(tw);
-                    out.push_str(&format!("│  {}  {}{}\n", trunc_msg.dimmed(), " ".repeat(pad), "│".dimmed()));
                 }
             }
         }

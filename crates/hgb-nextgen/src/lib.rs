@@ -64,6 +64,7 @@ pub mod pty_engine;
 pub mod fs_watcher;
 pub mod cloud_settings;
 pub mod agent_loop;
+pub mod tui_syntax;
 
 pub use visual_ide::VisualIdeServer;
 pub use inline_diff_engine::{
@@ -145,6 +146,11 @@ pub use ghost_typing::{GhostPrediction, GhostTypingEngine};
 pub use invariant_shield::{HazardKind, InvariantAuditReport, InvariantShieldEngine, PanicHazard};
 pub use architecture_dag::{ArchitectureDagVisualizer, ArchitectureTopology, DagEdge, DagNode};
 pub use voice_stream::{VoicePacket, VoiceStreamCoPilot, VoiceTranscriptionEvent};
+pub use tui_syntax::{
+    detect_code_language, detect_code_language_lines, highlight_and_wrap_code_line,
+    highlight_code_line, parse_markdown, score_code_line, tokenize_code_line,
+    wrap_tokens_to_width, CodeToken, MarkdownItem,
+};
 
 
 
