@@ -150,9 +150,9 @@ impl ToolCallCard {
         let width = natural_w.max(50).min(max_bound);
         let mut out = String::new();
 
-        // 1. Header line: ╭─── 🔧 tool_name ────────────────── 📋 ─╮
+        // 1. Header line: ╭─── 🔧 tool_name ────────────────── [📋 Copy] ─╮
         let header_prefix = format!("╭─── {} {} ", tool_icon, self.tool_name.bold().cyan());
-        let copy_badge_w = 2; // "📋"
+        let copy_badge_w = 9; // "[📋 Copy]"
         let dashes_len = if width > prefix_len + copy_badge_w + 4 {
             width - prefix_len - copy_badge_w - 4
         } else if width > prefix_len + 1 {
@@ -162,7 +162,7 @@ impl ToolCallCard {
         };
         let dashes = "─".repeat(dashes_len);
         if width > prefix_len + copy_badge_w + 4 {
-            let copy_badge = "📋".yellow();
+            let copy_badge = format!("{}[{}]{}", "[".dimmed(), "📋 Copy".yellow().bold(), "]".dimmed());
             out.push_str(&format!("{}{} {} ─{}\n", header_prefix, dashes.dimmed(), copy_badge, "╮".dimmed()));
         } else {
             out.push_str(&format!("{}{}{}\n", header_prefix, dashes.dimmed(), "╮".dimmed()));

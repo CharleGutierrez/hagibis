@@ -2544,7 +2544,20 @@ impl CockpitState {
                     break;
                 }
                 if !item.content.trim().is_empty() {
-                    target = Some((item.content.clone(), "latest".to_string(), "assistant response".to_string()));
+                    let md_items = crate::tui_syntax::parse_markdown(&item.content);
+                    let mut code_block = None;
+                    for it in md_items {
+                        if let crate::tui_syntax::MarkdownItem::CodeBlock { lang, lines } = it {
+                            let tag = if lang.is_empty() { "code" } else { &lang };
+                            code_block = Some((lines.join("\n"), "latest".to_string(), format!("{} code", tag)));
+                            break;
+                        }
+                    }
+                    if let Some(cb) = code_block {
+                        target = Some(cb);
+                    } else {
+                        target = Some((item.content.clone(), "latest".to_string(), "assistant response".to_string()));
+                    }
                     break;
                 }
             }
@@ -5159,8 +5172,8 @@ impl CockpitState {
                                 + visual_str_width(dur_part.as_str());
 
                             // Calculate auto-width: find max width across header, status, and snippet lines
-                            let copy_btn_preview_w = if is_copied { 1 } else { 2 };
-                            let mut natural_w = (title_w + icon_w + copy_btn_preview_w + 10).max(status_row_w + 2);
+                            let copy_btn_preview_w = if is_copied { 10 } else { 9 };
+                            let mut natural_w = (title_w + icon_w + copy_btn_preview_w + 14).max(status_row_w + 2);
                             if let Some(ref snippet) = tool.output_snippet {
                                 for s_line in snippet.trim().lines() {
                                     let sw = visual_str_width(s_line) + 6;
@@ -5174,20 +5187,24 @@ impl CockpitState {
                             let max_allowed = usable_width.saturating_sub(2).max(40);
                             let banner_width = natural_w.max(48).min(max_allowed);
 
-                            // 1. Header Line (Top Border) with Copy Icon on Top Right Near Corner (Only Icon, No Brackets)
+                            // 1. Header Line (Top Border) with [📋 Copy] Button on Top Right Near Corner
                             let (copy_spans, copy_btn_w) = if is_copied {
                                 (
                                     vec![
-                                        Span::styled("✓", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                                        Span::styled("[", Style::default().fg(Color::DarkGray)),
+                                        Span::styled("✓ Copied", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                                        Span::styled("]", Style::default().fg(Color::DarkGray)),
                                     ],
-                                    1,
+                                    10,
                                 )
                             } else {
                                 (
                                     vec![
-                                        Span::styled("📋", Style::default().fg(Color::Yellow)),
+                                        Span::styled("[", Style::default().fg(Color::DarkGray)),
+                                        Span::styled("📋 Copy", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                                        Span::styled("]", Style::default().fg(Color::DarkGray)),
                                     ],
-                                    2,
+                                    9,
                                 )
                             };
 
@@ -5310,6 +5327,7 @@ impl CockpitState {
                         // Render assistant message content with rich markdown & full syntax-highlighted code blocks
                         if !item.content.trim().is_empty() {
                             let md_items = crate::tui_syntax::parse_markdown(&item.content);
+                            let mut code_block_idx = 0;
 
                             for md_item in md_items {
                                 match md_item {
@@ -5323,14 +5341,52 @@ impl CockpitState {
                                         let tag_w = visual_str_width(tag);
                                         let max_content_w = lines.iter().map(|l| visual_str_width(*l)).max().unwrap_or(0);
 
-                                        // Natural width auto-fits content: "│ " (2) + content + " │" (2) = content + 4,
-                                        // and header "╭─── [" (6) + tag (tag_w) + "] " (2) + "─" (1) + "╮" (1) = tag_w + 10
-                                        let natural_w = (max_content_w + 4).max(tag_w + 10);
-                                        let max_allowed = usable_width.saturating_sub(2).max(36);
-                                        let code_box_w = natural_w.max(36).min(max_allowed);
+                                        let card_id = format!("code_{}_{}", item_idx, code_block_idx);
+                                        code_block_idx += 1;
 
-                                        // 1. Top border: "╭─── [tag] ────╮"
-                                        let max_tag_w = code_box_w.saturating_sub(10);
+                                        let is_copied = if let Some(ref last_id) = self.last_copied_id {
+                                            if last_id == &card_id {
+                                                if let Some(t) = self.last_copied_time {
+                                                    t.elapsed().as_secs() < 3
+                                                } else {
+                                                    false
+                                                }
+                                            } else {
+                                                false
+                                            }
+                                        } else {
+                                            false
+                                        };
+
+                                        let (copy_spans, copy_btn_w) = if is_copied {
+                                            (
+                                                vec![
+                                                    Span::styled("[", Style::default().fg(Color::DarkGray)),
+                                                    Span::styled("✓ Copied", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                                                    Span::styled("]", Style::default().fg(Color::DarkGray)),
+                                                ],
+                                                10,
+                                            )
+                                        } else {
+                                            (
+                                                vec![
+                                                    Span::styled("[", Style::default().fg(Color::DarkGray)),
+                                                    Span::styled("📋 Copy", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                                                    Span::styled("]", Style::default().fg(Color::DarkGray)),
+                                                ],
+                                                9,
+                                            )
+                                        };
+
+                                        // Natural width auto-fits content: "│ " (2) + content + " │" (2) = content + 4,
+                                        // and header "╭─── [" (6) + tag (tag_w) + "] " (2) + dashes (min 3) + " " (1) + copy_btn (copy_btn_w) + " ─╮" (3)
+                                        let header_min_w = 6 + tag_w + 2 + 3 + 1 + copy_btn_w + 3;
+                                        let natural_w = (max_content_w + 4).max(header_min_w);
+                                        let max_allowed = usable_width.saturating_sub(2).max(42);
+                                        let code_box_w = natural_w.max(42).min(max_allowed);
+
+                                        // 1. Top border: "╭─── [tag] ────────────── [📋 Copy] ─╮"
+                                        let max_tag_w = code_box_w.saturating_sub(copy_btn_w + 14);
                                         let (display_tag, display_tag_w) = if tag_w > max_tag_w && max_tag_w > 2 {
                                              let trunc = truncate_str_by_width(tag, max_tag_w.saturating_sub(1));
                                              let tw = visual_str_width(trunc.as_str()) + 1;
@@ -5339,15 +5395,31 @@ impl CockpitState {
                                              (tag.to_string(), tag_w)
                                         };
 
-                                        let used_top_w = 6 + display_tag_w + 3; // "╭─── [" (6) + tag + "] " (2) + "╮" (1)
+                                        let used_top_w = 6 + display_tag_w + 2 + 1 + copy_btn_w + 3;
                                         let dashes_count = code_box_w.saturating_sub(used_top_w).max(1);
                                         let top_dashes = "─".repeat(dashes_count);
 
-                                        chat_lines.push(Line::from(vec![
+                                        let mut top_header_spans = vec![
                                             Span::styled("╭─── [", Style::default().fg(Color::Cyan)),
                                             Span::styled(display_tag, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-                                            Span::styled(format!("] {}╮", top_dashes), Style::default().fg(Color::Cyan)),
-                                        ]));
+                                            Span::styled("] ", Style::default().fg(Color::Cyan)),
+                                            Span::styled(top_dashes, Style::default().fg(Color::Cyan)),
+                                            Span::raw(" "),
+                                        ];
+                                        top_header_spans.extend(copy_spans);
+                                        top_header_spans.push(Span::styled(" ─╮", Style::default().fg(Color::Cyan)));
+
+                                        let code_content = lines.join("\n");
+                                        pending_copy_targets.push(PendingCopyTarget {
+                                            line_idx: chat_lines.len(),
+                                            banner_w: code_box_w,
+                                            copy_btn_w,
+                                            content: code_content,
+                                            card_id,
+                                            label: format!("{} code", tag),
+                                        });
+
+                                        chat_lines.push(Line::from(top_header_spans));
 
                                         // 2. Content lines: wrapped preserving indentation with closed right border and colorized syntax highlighting!
                                         let max_chunk_w = code_box_w.saturating_sub(4);
@@ -7047,5 +7119,32 @@ async fn test_scroll_pill_click_to_bottom() {
         let node = state.nodes.last().unwrap();
         assert!(node.scratchpad.contains("--- Attached File: test.rs (42 B) ---"));
         assert!(node.scratchpad.contains("fn main() {}"));
+    }
+
+    #[tokio::test]
+    async fn test_code_block_copy_button_and_hitbox() {
+        let mut state = CockpitState::new();
+        state.add_assistant_message("Here is the code:\n```rust\nfn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n```\nEnjoy!".to_string(), "ollama".to_string(), 20, 150, None, Vec::new());
+
+        // Render UI with a virtual terminal to populate hitboxes
+        let backend = ratatui::backend::TestBackend::new(100, 30);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| state.render_ui(f)).unwrap();
+
+        // Check that a copy hitbox was populated for the code block
+        let hitboxes = state.copy_hitboxes.lock().unwrap().clone();
+        assert!(!hitboxes.is_empty(), "Expected at least one copy hitbox for code block");
+        let code_hb = hitboxes.iter().find(|hb| hb.label == "rust code").expect("Expected 'rust code' hitbox");
+        assert!(code_hb.content.contains("fn add(a: i32, b: i32) -> i32"));
+
+        // Click the copy button
+        let handled = state.handle_mouse_click((code_hb.x_start + code_hb.x_end) / 2, code_hb.screen_y);
+        assert!(handled);
+        assert!(state.last_copied_id.is_some());
+
+        // Test copy_latest_response
+        state.last_copied_id = None;
+        state.copy_latest_response();
+        assert!(state.last_copied_id.is_some());
     }
 }
