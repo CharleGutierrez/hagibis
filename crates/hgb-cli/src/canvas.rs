@@ -438,20 +438,28 @@ impl ChatCanvas {
         let line_num_digits = lines.len().to_string().len().max(2);
         let line_num_prefix_w = line_num_digits + 5; // "│ " (2) + digits + " │ " (3)
 
+        let copy_badge_w = 9; // "[📋 Copy]"
         // Calculate auto-width: fits the code content up to terminal width
-        let natural_w = (max_content_w + line_num_prefix_w + 3).max(prefix_len + 6);
+        let natural_w = (max_content_w + line_num_prefix_w + 3).max(prefix_len + copy_badge_w + 6);
         let max_bound = if width < 40 { 80 } else { width };
         let box_w = natural_w.max(44).min(max_bound);
 
-        // 1. Header line: ╭─── [code] ────────╮
+        // 1. Header line: ╭─── [code] ──────── [📋 Copy] ─╮
         let header = format!("╭─── [{}] ", lang_tag.cyan().bold());
-        let remaining = if box_w > prefix_len + 1 {
-            box_w - prefix_len - 1
+        if box_w > prefix_len + copy_badge_w + 4 {
+            let remaining = box_w - prefix_len - copy_badge_w - 4;
+            let dashes = "─".repeat(remaining);
+            let copy_badge = format!("{}[{}]{}", "[".dimmed(), "📋 Copy".yellow().bold(), "]".dimmed());
+            out.push_str(&format!("{}{} {} ─{}\n", header, dashes.dimmed(), copy_badge, "╮".dimmed()));
         } else {
-            1
-        };
-        let dashes = "─".repeat(remaining);
-        out.push_str(&format!("{}{}{}\n", header, dashes.dimmed(), "╮".dimmed()));
+            let remaining = if box_w > prefix_len + 1 {
+                box_w - prefix_len - 1
+            } else {
+                1
+            };
+            let dashes = "─".repeat(remaining);
+            out.push_str(&format!("{}{}{}\n", header, dashes.dimmed(), "╮".dimmed()));
+        }
 
         // 2. Content lines with line numbers and closed right border │
         let max_inner = box_w.saturating_sub(line_num_prefix_w + 2);

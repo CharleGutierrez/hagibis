@@ -5184,8 +5184,10 @@ impl CockpitState {
                             }
 
                             // Banner auto-fits information, bounded between 48 and usable_width - 2
-                            let max_allowed = usable_width.saturating_sub(2).max(40);
-                            let banner_width = natural_w.max(48).min(max_allowed);
+                            let min_tool_w = 32.min(usable_width);
+                            let max_allowed = usable_width.saturating_sub(2).max(min_tool_w);
+                            let min_preferred = min_tool_w.max(48).min(max_allowed);
+                            let banner_width = natural_w.clamp(min_preferred, max_allowed);
 
                             // 1. Header Line (Top Border) with [📋 Copy] Button on Top Right Near Corner
                             let (copy_spans, copy_btn_w) = if is_copied {
@@ -5382,17 +5384,27 @@ impl CockpitState {
                                         // and header "╭─── [" (6) + tag (tag_w) + "] " (2) + dashes (min 3) + " " (1) + copy_btn (copy_btn_w) + " ─╮" (3)
                                         let header_min_w = 6 + tag_w + 2 + 3 + 1 + copy_btn_w + 3;
                                         let natural_w = (max_content_w + 4).max(header_min_w);
-                                        let max_allowed = usable_width.saturating_sub(2).max(42);
-                                        let code_box_w = natural_w.max(42).min(max_allowed);
+                                        let min_box_w = 28.min(usable_width);
+                                        let max_allowed = usable_width.saturating_sub(2).max(min_box_w);
+                                        let min_preferred = min_box_w.max(42).min(max_allowed);
+                                        let code_box_w = natural_w.clamp(min_preferred, max_allowed);
 
                                         // 1. Top border: "╭─── [tag] ────────────── [📋 Copy] ─╮"
                                         let max_tag_w = code_box_w.saturating_sub(copy_btn_w + 14);
-                                        let (display_tag, display_tag_w) = if tag_w > max_tag_w && max_tag_w > 2 {
-                                             let trunc = truncate_str_by_width(tag, max_tag_w.saturating_sub(1));
-                                             let tw = visual_str_width(trunc.as_str()) + 1;
-                                             (format!("{}…", trunc), tw)
+                                        let (display_tag, display_tag_w) = if tag_w > max_tag_w {
+                                            if max_tag_w > 2 {
+                                                let trunc = truncate_str_by_width(tag, max_tag_w.saturating_sub(1));
+                                                let tw = visual_str_width(trunc.as_str()) + 1;
+                                                (format!("{}…", trunc), tw)
+                                            } else if max_tag_w > 0 {
+                                                let trunc = truncate_str_by_width(tag, max_tag_w);
+                                                let tw = visual_str_width(trunc.as_str());
+                                                (trunc, tw)
+                                            } else {
+                                                ("".to_string(), 0)
+                                            }
                                         } else {
-                                             (tag.to_string(), tag_w)
+                                            (tag.to_string(), tag_w)
                                         };
 
                                         let used_top_w = 6 + display_tag_w + 2 + 1 + copy_btn_w + 3;
@@ -7126,7 +7138,7 @@ async fn test_scroll_pill_click_to_bottom() {
         let mut state = CockpitState::new();
         state.add_assistant_message("Here is the code:\n```rust\nfn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n```\nEnjoy!".to_string(), "ollama".to_string(), 20, 150, None, Vec::new());
 
-        // Render UI with a virtual terminal to populate hitboxes
+        // 1. Render UI with standard 100-col virtual terminal to populate hitboxes
         let backend = ratatui::backend::TestBackend::new(100, 30);
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
         terminal.draw(|f| state.render_ui(f)).unwrap();
@@ -7136,11 +7148,35 @@ async fn test_scroll_pill_click_to_bottom() {
         assert!(!hitboxes.is_empty(), "Expected at least one copy hitbox for code block");
         let code_hb = hitboxes.iter().find(|hb| hb.label == "rust code").expect("Expected 'rust code' hitbox");
         assert!(code_hb.content.contains("fn add(a: i32, b: i32) -> i32"));
+        assert!(code_hb.x_end <= 100);
+        assert!(code_hb.x_start < code_hb.x_end);
 
         // Click the copy button
         let handled = state.handle_mouse_click((code_hb.x_start + code_hb.x_end) / 2, code_hb.screen_y);
         assert!(handled);
         assert!(state.last_copied_id.is_some());
+
+        // 2. Stress-test narrow 50-col terminal
+        let backend_50 = ratatui::backend::TestBackend::new(50, 30);
+        let mut term_50 = ratatui::Terminal::new(backend_50).unwrap();
+        term_50.draw(|f| state.render_ui(f)).unwrap();
+        let hitboxes_50 = state.copy_hitboxes.lock().unwrap().clone();
+        let code_hb_50 = hitboxes_50.iter().find(|hb| hb.label == "rust code").expect("Expected 'rust code' hitbox in 50 cols");
+        assert!(code_hb_50.x_end <= 50, "Hitbox must not exceed terminal width: {}", code_hb_50.x_end);
+        assert!(code_hb_50.x_start < code_hb_50.x_end);
+        let handled_50 = state.handle_mouse_click((code_hb_50.x_start + code_hb_50.x_end) / 2, code_hb_50.screen_y);
+        assert!(handled_50);
+
+        // 3. Stress-test very narrow 40-col terminal
+        let backend_40 = ratatui::backend::TestBackend::new(40, 30);
+        let mut term_40 = ratatui::Terminal::new(backend_40).unwrap();
+        term_40.draw(|f| state.render_ui(f)).unwrap();
+        let hitboxes_40 = state.copy_hitboxes.lock().unwrap().clone();
+        let code_hb_40 = hitboxes_40.iter().find(|hb| hb.label == "rust code").expect("Expected 'rust code' hitbox in 40 cols");
+        assert!(code_hb_40.x_end <= 40, "Hitbox must not exceed terminal width: {}", code_hb_40.x_end);
+        assert!(code_hb_40.x_start < code_hb_40.x_end);
+        let handled_40 = state.handle_mouse_click((code_hb_40.x_start + code_hb_40.x_end) / 2, code_hb_40.screen_y);
+        assert!(handled_40);
 
         // Test copy_latest_response
         state.last_copied_id = None;
