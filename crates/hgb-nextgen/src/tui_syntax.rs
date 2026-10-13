@@ -76,7 +76,8 @@ impl<'a> CodeToken<'a> {
 }
 
 /// Tokenize a line of source code into typed `CodeToken`s
-pub fn tokenize_code_line<'a>(line: &'a str, _lang: Option<&str>) -> Vec<CodeToken<'a>> {
+pub fn tokenize_code_line<'a>(line: &'a str, lang: Option<&str>) -> Vec<CodeToken<'a>> {
+    let norm_lang = lang.map(detect_code_language).unwrap_or("code");
     let mut tokens = Vec::new();
     let chars: Vec<(usize, char)> = line.char_indices().collect();
     let num_chars = chars.len();
@@ -86,12 +87,21 @@ pub fn tokenize_code_line<'a>(line: &'a str, _lang: Option<&str>) -> Vec<CodeTok
         let byte_pos = chars[idx].0;
         let c = chars[idx].1;
 
-        // 1. Comments: //, #, --
+        // 1. Comments:
+        // // (Rust, Zig, JS/TS, C/C++)
+        // # (Python, Bash, YAML, TOML)
+        // -- (SQL)
         if (c == '/' && idx + 1 < num_chars && chars[idx + 1].1 == '/')
-            || c == '#'
-            || (c == '-' && idx + 1 < num_chars && chars[idx + 1].1 == '-')
+            || (c == '#' && matches!(norm_lang, "python" | "bash" | "code"))
+            || (c == '-' && idx + 1 < num_chars && chars[idx + 1].1 == '-' && matches!(norm_lang, "sql" | "code"))
         {
             tokens.push(CodeToken::Comment(&line[byte_pos..]));
+            break;
+        }
+
+        // Zig multiline string literals: \\
+        if norm_lang == "zig" && c == '\\' && idx + 1 < num_chars && chars[idx + 1].1 == '\\' {
+            tokens.push(CodeToken::StringLiteral(&line[byte_pos..]));
             break;
         }
 
@@ -113,16 +123,30 @@ pub fn tokenize_code_line<'a>(line: &'a str, _lang: Option<&str>) -> Vec<CodeTok
             continue;
         }
 
-        // 3. String & Char Literals: "...", '...', b"...", r"..."
-        if c == '"'
-            || c == '\''
-            || (c == 'b' && idx + 1 < num_chars && (chars[idx + 1].1 == '"' || chars[idx + 1].1 == '\''))
-            || (c == 'r' && idx + 1 < num_chars && (chars[idx + 1].1 == '"' || chars[idx + 1].1 == '#'))
-        {
+        // 3. String & Char Literals:
+        // "...", '...', `...` (backticks for JS/TS/Bash/Go)
+        // Python / Rust prefixes: b"...", r"...", f"...", u"...", etc.
+        let is_quote = c == '"' || c == '\'' || c == '`';
+        let is_prefixed_quote = if !is_quote && (c == 'b' || c == 'r' || c == 'f' || c == 'u' || c == 'B' || c == 'R' || c == 'F' || c == 'U') {
+            if idx + 1 < num_chars && (chars[idx + 1].1 == '"' || chars[idx + 1].1 == '\'' || chars[idx + 1].1 == '`' || chars[idx + 1].1 == '#') {
+                true
+            } else if idx + 2 < num_chars && (chars[idx + 1].1 == 'r' || chars[idx + 1].1 == 'R') && (chars[idx + 2].1 == '"' || chars[idx + 2].1 == '\'') {
+                true // fr"..." or rf"..."
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        if is_quote || is_prefixed_quote {
             let start = byte_pos;
-            let quote = if c == 'b' || c == 'r' {
+            let quote = if is_prefixed_quote {
                 idx += 1;
-                if idx < num_chars && chars[idx].1 == '#' {
+                if idx < num_chars && (chars[idx].1 == 'r' || chars[idx].1 == 'R') {
+                    idx += 1;
+                }
+                while idx < num_chars && chars[idx].1 == '#' {
                     idx += 1;
                 }
                 if idx < num_chars { chars[idx].1 } else { '"' }
@@ -144,16 +168,68 @@ pub fn tokenize_code_line<'a>(line: &'a str, _lang: Option<&str>) -> Vec<CodeTok
                 idx += 1;
             }
             let end = if idx < num_chars { chars[idx].0 } else { line.len() };
-            tokens.push(CodeToken::StringLiteral(&line[start..end]));
+            let raw_str = &line[start..end];
+
+            // In JSON: if a string literal is followed by a colon ':', it's an object key!
+            if norm_lang == "json" {
+                let mut peek = idx;
+                while peek < num_chars && chars[peek].1.is_whitespace() {
+                    peek += 1;
+                }
+                if peek < num_chars && chars[peek].1 == ':' {
+                    tokens.push(CodeToken::Type(raw_str));
+                    continue;
+                }
+            }
+
+            tokens.push(CodeToken::StringLiteral(raw_str));
             continue;
         }
 
-        // 4. Numbers: digits, 0x.., 0b..
+        // 4. Zig builtins starting with '@' (e.g. @import, @as)
+        if c == '@' && idx + 1 < num_chars && (chars[idx + 1].1.is_alphabetic() || chars[idx + 1].1 == '_') {
+            let start = byte_pos;
+            idx += 1;
+            while idx < num_chars && (chars[idx].1.is_alphanumeric() || chars[idx].1 == '_') {
+                idx += 1;
+            }
+            let end = if idx < num_chars { chars[idx].0 } else { line.len() };
+            tokens.push(CodeToken::MacroCall(&line[start..end]));
+            continue;
+        }
+
+        // 5. Bash variables: $VAR, ${VAR}, $?, $@, $*, $#, $0..$9
+        if c == '$' && matches!(norm_lang, "bash" | "code") {
+            let start = byte_pos;
+            idx += 1;
+            if idx < num_chars && chars[idx].1 == '{' {
+                idx += 1;
+                while idx < num_chars && chars[idx].1 != '}' {
+                    idx += 1;
+                }
+                if idx < num_chars {
+                    idx += 1;
+                }
+            } else if idx < num_chars && matches!(chars[idx].1, '?' | '!' | '@' | '*' | '#' | '$' | '0'..='9') {
+                idx += 1;
+            } else {
+                while idx < num_chars && (chars[idx].1.is_alphanumeric() || chars[idx].1 == '_') {
+                    idx += 1;
+                }
+            }
+            let end = if idx < num_chars { chars[idx].0 } else { line.len() };
+            if end > start + 1 {
+                tokens.push(CodeToken::Type(&line[start..end]));
+                continue;
+            }
+        }
+
+        // 6. Numbers: digits, 0x.., 0b.., 0o..
         if c.is_ascii_digit()
             || (c == '.' && idx + 1 < num_chars && chars[idx + 1].1.is_ascii_digit() && (idx == 0 || !chars[idx - 1].1.is_alphanumeric()))
         {
             let start = byte_pos;
-            if c == '0' && idx + 1 < num_chars && matches!(chars[idx + 1].1, 'x' | 'X' | 'b' | 'o') {
+            if c == '0' && idx + 1 < num_chars && matches!(chars[idx + 1].1, 'x' | 'X' | 'b' | 'B' | 'o' | 'O') {
                 idx += 2;
             }
             while idx < num_chars && (chars[idx].1.is_ascii_alphanumeric() || chars[idx].1 == '.' || chars[idx].1 == '_') {
@@ -164,7 +240,7 @@ pub fn tokenize_code_line<'a>(line: &'a str, _lang: Option<&str>) -> Vec<CodeTok
             continue;
         }
 
-        // 5. Identifiers and Keywords
+        // 7. Identifiers and Keywords
         if c.is_alphabetic() || c == '_' {
             let start = byte_pos;
             while idx < num_chars && (chars[idx].1.is_alphanumeric() || chars[idx].1 == '_') {
@@ -188,19 +264,19 @@ pub fn tokenize_code_line<'a>(line: &'a str, _lang: Option<&str>) -> Vec<CodeTok
                 idx += 1;
                 let macro_end = if idx < num_chars { chars[idx].0 } else { line.len() };
                 tokens.push(CodeToken::MacroCall(&line[start..macro_end]));
-            } else if is_func && !is_keyword(word) && !is_builtin_type(word) {
-                tokens.push(CodeToken::FunctionCall(word));
-            } else if is_keyword(word) {
+            } else if is_keyword(word, norm_lang) {
                 tokens.push(CodeToken::Keyword(word));
-            } else if is_builtin_type(word) || starts_with_uppercase(word) {
+            } else if is_builtin_type(word, norm_lang) || (norm_lang != "sql" && starts_with_uppercase(word)) {
                 tokens.push(CodeToken::Type(word));
+            } else if is_func {
+                tokens.push(CodeToken::FunctionCall(word));
             } else {
                 tokens.push(CodeToken::Plain(word));
             }
             continue;
         }
 
-        // 6. Multi-character Operators: &mut, ->, =>, ::, ==, !=, <=, >=, &&, ||, ..
+        // 8. Multi-character Operators: &mut, ->, =>, ::, ==, !=, <=, >=, &&, ||, ..
         if c == '&' && idx + 3 < num_chars && chars[idx + 1].1 == 'm' && chars[idx + 2].1 == 'u' && chars[idx + 3].1 == 't' {
             let start = byte_pos;
             idx += 4;
@@ -466,31 +542,55 @@ pub fn detect_code_language_lines(lines: &[&str]) -> &'static str {
     let mut python_score = 0;
     let mut js_ts_score = 0;
     let mut zig_score = 0;
+    let mut bash_score = 0;
+    let mut json_score = 0;
+    let mut sql_score = 0;
 
     for line in lines {
         let t = line.trim();
-        if t.starts_with("fn ") || t.contains("->") || t.contains("::") || t.contains("&mut") || t.contains("match ") {
+        // Rust
+        if t.starts_with("fn ") || t.contains("->") || t.contains("::") || t.contains("&mut") || t.contains("match ") || t.contains("let mut ") {
             rust_score += 3;
         }
-        if t.starts_with("def ") || t.starts_with("import ") || t.starts_with("from ") || t.ends_with(':') {
+        // Python
+        if t.starts_with("def ") || t.starts_with("import ") || t.starts_with("from ") || (t.ends_with(':') && (t.starts_with("if ") || t.starts_with("for ") || t.starts_with("while "))) {
             python_score += 3;
         }
-        if t.starts_with("const ") || t.starts_with("function ") || t.contains("=>") || t.starts_with("import ") {
+        // JS/TS
+        if t.starts_with("const ") || t.starts_with("function ") || t.contains("=>") || t.starts_with("export ") || t.contains("console.log") {
             js_ts_score += 2;
         }
-        if t.contains("pub fn") || t.contains("!void") || t.contains("@import") {
-            zig_score += 3;
+        // Zig
+        if t.contains("pub fn") || t.contains("!void") || t.contains("@import") || t.starts_with("const std =") {
+            zig_score += 4;
+        }
+        // Bash
+        if t.starts_with("#!/") || t.starts_with("echo ") || t.contains("grep ") || t.contains("| awk") || t.starts_with("export ") || t.starts_with("set -e") {
+            bash_score += 3;
+        }
+        // JSON
+        if (t.starts_with('{') || t.starts_with('[')) || (t.starts_with('"') && t.contains("\":")) {
+            json_score += 3;
+        }
+        // SQL
+        let upper = t.to_ascii_uppercase();
+        if upper.starts_with("SELECT ") || upper.starts_with("INSERT INTO ") || upper.starts_with("CREATE TABLE ") || upper.starts_with("UPDATE ") || upper.starts_with("DELETE FROM ") {
+            sql_score += 4;
         }
     }
 
-    if rust_score >= python_score && rust_score >= js_ts_score && rust_score >= zig_score && rust_score > 0 {
-        "rust"
-    } else if python_score > js_ts_score && python_score > 0 {
-        "python"
-    } else if js_ts_score > 0 {
-        "typescript"
-    } else if zig_score > 0 {
-        "zig"
+    let mut scores = [
+        ("rust", rust_score),
+        ("zig", zig_score),
+        ("python", python_score),
+        ("typescript", js_ts_score),
+        ("bash", bash_score),
+        ("json", json_score),
+        ("sql", sql_score),
+    ];
+    scores.sort_by(|a, b| b.1.cmp(&a.1));
+    if scores[0].1 > 0 {
+        scores[0].0
     } else {
         "code"
     }
@@ -516,33 +616,146 @@ pub fn detect_code_language(hint: &str) -> &'static str {
     }
 }
 
-fn is_keyword(word: &str) -> bool {
-    matches!(
-        word,
-        "fn" | "let" | "mut" | "match" | "if" | "else" | "return" | "struct"
-            | "enum" | "impl" | "pub" | "use" | "unsafe" | "async" | "await"
-            | "for" | "in" | "while" | "loop" | "break" | "continue" | "const"
-            | "static" | "type" | "dyn" | "trait" | "mod" | "as" | "ref"
-            | "move" | "where" | "crate" | "super" | "self" | "def" | "class"
-            | "import" | "from" | "export" | "function" | "val" | "var"
-            | "package" | "func" | "interface" | "select" | "insert" | "update"
-            | "delete" | "throw" | "try" | "catch" | "finally" | "yield"
-            | "lambda" | "with" | "pass" | "assert" | "case" | "switch"
-            | "default" | "typedef" | "inline" | "volatile"
-    )
+fn is_keyword(word: &str, lang: &str) -> bool {
+    let lower_buf;
+    let w = if lang == "sql" {
+        lower_buf = word.to_ascii_lowercase();
+        lower_buf.as_str()
+    } else {
+        word
+    };
+
+    match lang {
+        "rust" => matches!(
+            w,
+            "as" | "async" | "await" | "break" | "const" | "continue" | "crate" | "dyn"
+                | "else" | "enum" | "extern" | "false" | "fn" | "for" | "if" | "impl" | "in"
+                | "let" | "loop" | "match" | "mod" | "move" | "mut" | "pub" | "ref"
+                | "return" | "self" | "Self" | "static" | "struct" | "super" | "trait"
+                | "true" | "type" | "unsafe" | "use" | "where" | "while"
+        ),
+        "zig" => matches!(
+            w,
+            "addrspace" | "align" | "allowzero" | "and" | "anyframe" | "anytype" | "asm"
+                | "async" | "await" | "break" | "catch" | "comptime" | "const" | "continue"
+                | "defer" | "else" | "enum" | "errdefer" | "error" | "export" | "extern"
+                | "fn" | "for" | "if" | "inline" | "noalias" | "noinline" | "nosuspend"
+                | "opaque" | "or" | "orelse" | "packed" | "pub" | "resume" | "return"
+                | "struct" | "suspend" | "switch" | "test" | "threadlocal" | "try" | "union"
+                | "unreachable" | "usingnamespace" | "var" | "volatile" | "while"
+        ),
+        "python" => matches!(
+            w,
+            "and" | "as" | "assert" | "async" | "await" | "break" | "class" | "continue"
+                | "def" | "del" | "elif" | "else" | "except" | "finally" | "for" | "from"
+                | "global" | "if" | "import" | "in" | "is" | "lambda" | "nonlocal" | "not"
+                | "or" | "pass" | "raise" | "return" | "try" | "while" | "with" | "yield"
+        ),
+        "javascript" | "typescript" => matches!(
+            w,
+            "abstract" | "any" | "as" | "async" | "await" | "break" | "case" | "catch"
+                | "class" | "const" | "continue" | "debugger" | "default" | "delete" | "do"
+                | "else" | "enum" | "export" | "extends" | "finally" | "for" | "from"
+                | "function" | "if" | "implements" | "import" | "in" | "instanceof"
+                | "interface" | "let" | "new" | "of" | "package" | "private" | "protected"
+                | "public" | "readonly" | "return" | "static" | "super" | "switch" | "this"
+                | "throw" | "try" | "type" | "typeof" | "var" | "void" | "while" | "with"
+                | "yield"
+        ),
+        "bash" => matches!(
+            w,
+            "alias" | "case" | "declare" | "do" | "done" | "echo" | "elif" | "else" | "esac"
+                | "eval" | "exec" | "exit" | "export" | "fi" | "for" | "function" | "if"
+                | "in" | "local" | "readonly" | "return" | "select" | "set" | "shift"
+                | "source" | "test" | "then" | "time" | "trap" | "typeset" | "unalias"
+                | "unset" | "until" | "while"
+        ),
+        "sql" => matches!(
+            w,
+            "all" | "alter" | "and" | "as" | "asc" | "begin" | "between" | "by" | "cascade"
+                | "case" | "check" | "commit" | "constraint" | "count" | "create" | "cross"
+                | "database" | "default" | "delete" | "desc" | "distinct" | "drop" | "else"
+                | "end" | "exists" | "foreign" | "from" | "full" | "group" | "having"
+                | "ilike" | "in" | "index" | "inner" | "insert" | "into" | "is" | "join"
+                | "key" | "left" | "like" | "limit" | "not" | "null" | "offset" | "on" | "or"
+                | "order" | "outer" | "primary" | "references" | "right" | "rollback"
+                | "schema" | "select" | "set" | "table" | "then" | "transaction" | "truncate"
+                | "union" | "unique" | "update" | "values" | "view" | "when" | "where" | "with"
+        ),
+        _ => matches!(
+            w,
+            "fn" | "let" | "mut" | "match" | "if" | "else" | "return" | "struct" | "enum"
+                | "impl" | "pub" | "use" | "unsafe" | "async" | "await" | "for" | "in"
+                | "while" | "loop" | "break" | "continue" | "const" | "static" | "type"
+                | "dyn" | "trait" | "mod" | "as" | "ref" | "move" | "where" | "crate"
+                | "super" | "self" | "def" | "class" | "import" | "from" | "export"
+                | "function" | "val" | "var" | "package" | "func" | "interface" | "select"
+                | "insert" | "update" | "delete" | "throw" | "try" | "catch" | "finally"
+                | "yield" | "lambda" | "with" | "pass" | "assert" | "case" | "switch"
+                | "default" | "typedef" | "inline" | "volatile" | "echo"
+        ),
+    }
 }
 
-fn is_builtin_type(word: &str) -> bool {
-    matches!(
-        word,
-        "u8" | "u16" | "u32" | "u64" | "u128" | "usize"
-            | "i8" | "i16" | "i32" | "i64" | "i128" | "isize"
-            | "f32" | "f64" | "bool" | "char" | "str"
-            | "String" | "Vec" | "Option" | "Result" | "Some" | "None" | "Ok" | "Err"
-            | "Self" | "Box" | "Rc" | "Arc" | "RefCell" | "Mutex" | "RwLock"
-            | "HashMap" | "HashSet" | "BTreeMap" | "BTreeSet"
-            | "true" | "false" | "null" | "nil" | "undefined"
-    )
+fn is_builtin_type(word: &str, lang: &str) -> bool {
+    let lower_buf;
+    let w = if lang == "sql" {
+        lower_buf = word.to_ascii_lowercase();
+        lower_buf.as_str()
+    } else {
+        word
+    };
+
+    match lang {
+        "rust" => matches!(
+            w,
+            "u8" | "u16" | "u32" | "u64" | "u128" | "usize"
+                | "i8" | "i16" | "i32" | "i64" | "i128" | "isize"
+                | "f32" | "f64" | "bool" | "char" | "str"
+                | "String" | "Vec" | "Option" | "Result" | "Some" | "None" | "Ok" | "Err"
+                | "Self" | "Box" | "Rc" | "Arc" | "RefCell" | "Mutex" | "RwLock"
+                | "HashMap" | "HashSet" | "BTreeMap" | "BTreeSet"
+        ),
+        "zig" => matches!(
+            w,
+            "bool" | "void" | "noreturn" | "type" | "anyerror" | "anyopaque"
+                | "u8" | "u16" | "u32" | "u64" | "u128" | "usize"
+                | "i8" | "i16" | "i32" | "i64" | "i128" | "isize"
+                | "f16" | "f32" | "f64" | "f80" | "f128"
+                | "c_short" | "c_ushort" | "c_int" | "c_uint" | "c_long" | "c_ulong"
+                | "c_longlong" | "c_ulonglong" | "c_longdouble" | "c_void"
+        ),
+        "python" => matches!(
+            w,
+            "True" | "False" | "None" | "int" | "float" | "str" | "bool" | "list"
+                | "dict" | "set" | "tuple" | "bytes" | "self" | "cls" | "Exception"
+                | "range" | "object"
+        ),
+        "javascript" | "typescript" => matches!(
+            w,
+            "true" | "false" | "null" | "undefined" | "NaN" | "Infinity"
+                | "string" | "number" | "boolean" | "symbol" | "bigint" | "any" | "unknown"
+                | "never" | "void" | "Object" | "Array" | "Promise" | "Map" | "Set" | "Record"
+        ),
+        "sql" => matches!(
+            w,
+            "int" | "integer" | "bigint" | "smallint" | "tinyint" | "varchar" | "char"
+                | "text" | "boolean" | "bool" | "date" | "time" | "timestamp" | "datetime"
+                | "numeric" | "decimal" | "real" | "float" | "double" | "serial"
+                | "bigserial" | "json" | "jsonb" | "blob" | "bytea" | "uuid"
+        ),
+        "json" => matches!(w, "true" | "false" | "null"),
+        _ => matches!(
+            w,
+            "u8" | "u16" | "u32" | "u64" | "u128" | "usize"
+                | "i8" | "i16" | "i32" | "i64" | "i128" | "isize"
+                | "f32" | "f64" | "bool" | "char" | "str"
+                | "String" | "Vec" | "Option" | "Result" | "Some" | "None" | "Ok" | "Err"
+                | "Self" | "Box" | "Rc" | "Arc" | "RefCell" | "Mutex" | "RwLock"
+                | "HashMap" | "HashSet" | "BTreeMap" | "BTreeSet"
+                | "True" | "False"
+        ),
+    }
 }
 
 fn starts_with_uppercase(word: &str) -> bool {
@@ -596,5 +809,116 @@ mod tests {
         let line = "    let extremely_long_variable_name_with_lots_of_details = [0u8; 1024];";
         let wrapped = highlight_and_wrap_code_line(line, 35, Some("rust"));
         assert!(wrapped.len() >= 2);
+    }
+
+    #[test]
+    fn test_zig_tokenization() {
+        let line = "pub fn main() !void { const std = @import(\"std\"); }";
+        let tokens = tokenize_code_line(line, Some("zig"));
+        assert!(tokens.iter().any(|t| matches!(t, CodeToken::Keyword("pub"))));
+        assert!(tokens.iter().any(|t| matches!(t, CodeToken::Keyword("fn"))));
+        assert!(tokens.iter().any(|t| matches!(t, CodeToken::Type("void"))));
+        assert!(tokens.iter().any(|t| matches!(t, CodeToken::Keyword("const"))));
+        assert!(tokens.iter().any(|t| matches!(t, CodeToken::MacroCall("@import"))));
+        assert!(tokens.iter().any(|t| matches!(t, CodeToken::StringLiteral("\"std\""))));
+
+        // Multiline zig string
+        let ml = "\\\\Hello from multiline Zig string";
+        let ml_tokens = tokenize_code_line(ml, Some("zig"));
+        assert!(matches!(ml_tokens[0], CodeToken::StringLiteral(_)));
+    }
+
+    #[test]
+    fn test_python_tokenization() {
+        let line = "def calculate_sum(items: list) -> int: # calculate sum";
+        let tokens = tokenize_code_line(line, Some("python"));
+        assert!(tokens.iter().any(|t| matches!(t, CodeToken::Keyword("def"))));
+        assert!(tokens.iter().any(|t| matches!(t, CodeToken::Type("list"))));
+        assert!(tokens.iter().any(|t| matches!(t, CodeToken::Type("int"))));
+        assert!(tokens.iter().any(|t| matches!(t, CodeToken::Comment("# calculate sum"))));
+
+        let f_str = "msg = f\"Hello, {name}!\"";
+        let f_tokens = tokenize_code_line(f_str, Some("python"));
+        assert!(f_tokens.iter().any(|t| matches!(t, CodeToken::StringLiteral("f\"Hello, {name}!\""))));
+    }
+
+    #[test]
+    fn test_javascript_typescript_tokenization() {
+        let line = "export interface User { id: number; name: string; }";
+        let tokens = tokenize_code_line(line, Some("typescript"));
+        assert!(tokens.iter().any(|t| matches!(t, CodeToken::Keyword("export"))));
+        assert!(tokens.iter().any(|t| matches!(t, CodeToken::Keyword("interface"))));
+        assert!(tokens.iter().any(|t| matches!(t, CodeToken::Type("number"))));
+        assert!(tokens.iter().any(|t| matches!(t, CodeToken::Type("string"))));
+
+        // Template literal with backticks
+        let tmpl = "const greeting = `Hello ${name}`;";
+        let tmpl_tokens = tokenize_code_line(tmpl, Some("javascript"));
+        assert!(tmpl_tokens.iter().any(|t| matches!(t, CodeToken::Keyword("const"))));
+        assert!(tmpl_tokens.iter().any(|t| matches!(t, CodeToken::StringLiteral("`Hello ${name}`"))));
+    }
+
+    #[test]
+    fn test_bash_tokenization() {
+        let line = "export PORT=${CUSTOM_PORT:-8080} # Set default port";
+        let tokens = tokenize_code_line(line, Some("bash"));
+        assert!(tokens.iter().any(|t| matches!(t, CodeToken::Keyword("export"))));
+        assert!(tokens.iter().any(|t| matches!(t, CodeToken::Type("${CUSTOM_PORT:-8080}"))));
+        assert!(tokens.iter().any(|t| matches!(t, CodeToken::Comment("# Set default port"))));
+    }
+
+    #[test]
+    fn test_json_tokenization() {
+        let line = "{\"name\": \"Alice\", \"count\": 42, \"active\": true, \"data\": null}";
+        let tokens = tokenize_code_line(line, Some("json"));
+        // Object keys in JSON are highlighted as Type tokens
+        assert!(tokens.iter().any(|t| matches!(t, CodeToken::Type("\"name\""))));
+        assert!(tokens.iter().any(|t| matches!(t, CodeToken::StringLiteral("\"Alice\""))));
+        assert!(tokens.iter().any(|t| matches!(t, CodeToken::Type("\"count\""))));
+        assert!(tokens.iter().any(|t| matches!(t, CodeToken::Number("42"))));
+        assert!(tokens.iter().any(|t| matches!(t, CodeToken::Type("true"))));
+        assert!(tokens.iter().any(|t| matches!(t, CodeToken::Type("null"))));
+    }
+
+    #[test]
+    fn test_sql_tokenization() {
+        let line = "SELECT id, username FROM users WHERE active = true; -- get users";
+        let tokens = tokenize_code_line(line, Some("sql"));
+        assert!(tokens.iter().any(|t| matches!(t, CodeToken::Keyword("SELECT"))));
+        assert!(tokens.iter().any(|t| matches!(t, CodeToken::Keyword("FROM"))));
+        assert!(tokens.iter().any(|t| matches!(t, CodeToken::Keyword("WHERE"))));
+        assert!(tokens.iter().any(|t| matches!(t, CodeToken::Comment("-- get users"))));
+
+        // Lowercase SQL
+        let lower_line = "select * from accounts where balance > 100.50";
+        let lower_tokens = tokenize_code_line(lower_line, Some("sql"));
+        assert!(lower_tokens.iter().any(|t| matches!(t, CodeToken::Keyword("select"))));
+        assert!(lower_tokens.iter().any(|t| matches!(t, CodeToken::Keyword("from"))));
+        assert!(lower_tokens.iter().any(|t| matches!(t, CodeToken::Keyword("where"))));
+        assert!(lower_tokens.iter().any(|t| matches!(t, CodeToken::Number("100.50"))));
+    }
+
+    #[test]
+    fn test_malformed_code_safety_no_panics() {
+        // Unclosed string
+        let unclosed = "let x = \"unclosed string without closing quote";
+        let spans = highlight_code_line(unclosed, Some("rust"));
+        assert!(!spans.is_empty());
+
+        // Unclosed block comment
+        let unclosed_comment = "/* unclosed comment at EOF";
+        let spans2 = highlight_code_line(unclosed_comment, Some("rust"));
+        assert!(!spans2.is_empty());
+
+        // UTF-8 multibyte, emoji, and weird operators
+        let weird = "fn 🦀_function() -> 🚀 { let αβγ = 42.0; \"🌟 hello\"; }";
+        let spans3 = highlight_code_line(weird, Some("rust"));
+        assert!(!spans3.is_empty());
+        let reconstructed: String = spans3.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(reconstructed, weird);
+
+        // Extreme wrap width 1
+        let wrapped_tight = highlight_and_wrap_code_line("fn foo() {}", 1, Some("rust"));
+        assert!(!wrapped_tight.is_empty());
     }
 }

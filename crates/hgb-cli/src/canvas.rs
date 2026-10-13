@@ -937,4 +937,35 @@ Evaluating invariant boundaries across subagents...
         assert!(hud.contains("╭─── 🪟"));
         assert!(hud.contains("╰"));
     }
+
+    #[test]
+    fn test_code_box_copy_badge_rendering() {
+        let lines = vec![
+            "fn add(a: i32, b: i32) -> i32 {".to_string(),
+            "    a + b".to_string(),
+            "}".to_string(),
+        ];
+        let rendered_80 = ChatCanvas::render_code_box("rust", &lines, 80);
+        assert!(rendered_80.contains("📋 Copy"));
+        assert!(rendered_80.contains("╭─── ["));
+        assert!(rendered_80.contains("─╮"));
+
+        // Test very narrow fallback
+        let rendered_20 = ChatCanvas::render_code_box("rust", &lines, 20);
+        assert!(rendered_20.contains("╭─── ["));
+        assert!(rendered_20.contains("╮"));
+
+        // Test ToolCardCanvas copy badge
+        let tool = ToolCardCanvas::new(
+            "view_file",
+            ToolStatus::Success,
+            "read source code",
+            Some("fn main() {}"),
+            Some(12),
+        );
+        let tool_rendered = tool.render(80);
+        assert!(tool_rendered.contains("📋 Copy"));
+        assert!(tool_rendered.contains("╭───"));
+        assert!(tool_rendered.contains("─╮"));
+    }
 }

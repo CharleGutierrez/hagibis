@@ -3832,7 +3832,7 @@ impl CockpitState {
     pub fn render_ui(&self, frame: &mut Frame) {
         let area = frame.area();
 
-        if area.width < 40 || area.height < 10 {
+        if area.width < 20 || area.height < 6 {
             let warning = Paragraph::new("Terminal too small for Hagibis. Please resize.")
                 .style(Style::default().fg(Color::Yellow));
             frame.render_widget(warning, area);
@@ -3841,7 +3841,13 @@ impl CockpitState {
 
         match self.view_mode {
             CockpitViewMode::ChatCanvas => self.render_chat_canvas(frame),
-            CockpitViewMode::CockpitSplit => self.render_cockpit_split(frame),
+            CockpitViewMode::CockpitSplit => {
+                if area.width < 50 {
+                    self.render_chat_canvas(frame);
+                } else {
+                    self.render_cockpit_split(frame);
+                }
+            }
         }
 
         // Render modal overlay if active
@@ -5184,29 +5190,25 @@ impl CockpitState {
                             }
 
                             // Banner auto-fits information, bounded between 48 and usable_width - 2
-                            let min_tool_w = 32.min(usable_width);
+                            let min_tool_w = 16.min(usable_width);
                             let max_allowed = usable_width.saturating_sub(2).max(min_tool_w);
                             let min_preferred = min_tool_w.max(48).min(max_allowed);
                             let banner_width = natural_w.clamp(min_preferred, max_allowed);
 
-                            // 1. Header Line (Top Border) with [📋 Copy] Button on Top Right Near Corner
+                            // 1. Header Line (Top Border) with 📋 Button on Top Right Near Corner
                             let (copy_spans, copy_btn_w) = if is_copied {
                                 (
                                     vec![
-                                        Span::styled("[", Style::default().fg(Color::DarkGray)),
-                                        Span::styled("✓ Copied", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                                        Span::styled("]", Style::default().fg(Color::DarkGray)),
+                                        Span::styled("✓", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
                                     ],
-                                    10,
+                                    1,
                                 )
                             } else {
                                 (
                                     vec![
-                                        Span::styled("[", Style::default().fg(Color::DarkGray)),
-                                        Span::styled("📋 Copy", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-                                        Span::styled("]", Style::default().fg(Color::DarkGray)),
+                                        Span::styled("📋", Style::default().fg(Color::Yellow)),
                                     ],
-                                    9,
+                                    2,
                                 )
                             };
 
@@ -5359,38 +5361,61 @@ impl CockpitState {
                                         } else {
                                             false
                                         };
-
-                                        let (copy_spans, copy_btn_w) = if is_copied {
-                                            (
-                                                vec![
-                                                    Span::styled("[", Style::default().fg(Color::DarkGray)),
-                                                    Span::styled("✓ Copied", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                                                    Span::styled("]", Style::default().fg(Color::DarkGray)),
-                                                ],
-                                                10,
-                                            )
+                                        let compact_badge = usable_width < 26;
+                                        let (copy_spans, copy_btn_w) = if compact_badge {
+                                            if is_copied {
+                                                (
+                                                    vec![
+                                                        Span::styled("[", Style::default().fg(Color::DarkGray)),
+                                                        Span::styled("✓", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                                                        Span::styled("]", Style::default().fg(Color::DarkGray)),
+                                                    ],
+                                                    3,
+                                                )
+                                            } else {
+                                                (
+                                                    vec![
+                                                        Span::styled("[", Style::default().fg(Color::DarkGray)),
+                                                        Span::styled("📋", Style::default().fg(Color::Yellow)),
+                                                        Span::styled("]", Style::default().fg(Color::DarkGray)),
+                                                    ],
+                                                    4,
+                                                )
+                                            }
                                         } else {
-                                            (
-                                                vec![
-                                                    Span::styled("[", Style::default().fg(Color::DarkGray)),
-                                                    Span::styled("📋 Copy", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-                                                    Span::styled("]", Style::default().fg(Color::DarkGray)),
-                                                ],
-                                                9,
-                                            )
+                                            if is_copied {
+                                                (
+                                                    vec![
+                                                        Span::styled("[", Style::default().fg(Color::DarkGray)),
+                                                        Span::styled("✓ Copied", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                                                        Span::styled("]", Style::default().fg(Color::DarkGray)),
+                                                    ],
+                                                    10,
+                                                )
+                                            } else {
+                                                (
+                                                    vec![
+                                                        Span::styled("[", Style::default().fg(Color::DarkGray)),
+                                                        Span::styled("📋 Copy", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                                                        Span::styled("]", Style::default().fg(Color::DarkGray)),
+                                                    ],
+                                                    9,
+                                                )
+                                            }
                                         };
 
-                                        // Natural width auto-fits content: "│ " (2) + content + " │" (2) = content + 4,
-                                        // and header "╭─── [" (6) + tag (tag_w) + "] " (2) + dashes (min 3) + " " (1) + copy_btn (copy_btn_w) + " ─╮" (3)
-                                        let header_min_w = 6 + tag_w + 2 + 3 + 1 + copy_btn_w + 3;
+                                        let prefix_str = if compact_badge { "╭─ [" } else { "╭─── [" };
+                                        let prefix_w = if compact_badge { 4 } else { 6 };
+                                        let header_min_w = prefix_w + tag_w + 2 + 1 + 1 + copy_btn_w + 3;
                                         let natural_w = (max_content_w + 4).max(header_min_w);
-                                        let min_box_w = 28.min(usable_width);
+                                        let min_box_w = 16.min(usable_width);
                                         let max_allowed = usable_width.saturating_sub(2).max(min_box_w);
                                         let min_preferred = min_box_w.max(42).min(max_allowed);
                                         let code_box_w = natural_w.clamp(min_preferred, max_allowed);
 
                                         // 1. Top border: "╭─── [tag] ────────────── [📋 Copy] ─╮"
-                                        let max_tag_w = code_box_w.saturating_sub(copy_btn_w + 14);
+                                        let fixed_top_w = prefix_w + 2 + 1 + copy_btn_w + 3;
+                                        let max_tag_w = code_box_w.saturating_sub(fixed_top_w + 1);
                                         let (display_tag, display_tag_w) = if tag_w > max_tag_w {
                                             if max_tag_w > 2 {
                                                 let trunc = truncate_str_by_width(tag, max_tag_w.saturating_sub(1));
@@ -5407,12 +5432,12 @@ impl CockpitState {
                                             (tag.to_string(), tag_w)
                                         };
 
-                                        let used_top_w = 6 + display_tag_w + 2 + 1 + copy_btn_w + 3;
+                                        let used_top_w = prefix_w + display_tag_w + 2 + 1 + copy_btn_w + 3;
                                         let dashes_count = code_box_w.saturating_sub(used_top_w).max(1);
                                         let top_dashes = "─".repeat(dashes_count);
 
                                         let mut top_header_spans = vec![
-                                            Span::styled("╭─── [", Style::default().fg(Color::Cyan)),
+                                            Span::styled(prefix_str, Style::default().fg(Color::Cyan)),
                                             Span::styled(display_tag, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
                                             Span::styled("] ", Style::default().fg(Color::Cyan)),
                                             Span::styled(top_dashes, Style::default().fg(Color::Cyan)),
@@ -7138,49 +7163,196 @@ async fn test_scroll_pill_click_to_bottom() {
         let mut state = CockpitState::new();
         state.add_assistant_message("Here is the code:\n```rust\nfn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n```\nEnjoy!".to_string(), "ollama".to_string(), 20, 150, None, Vec::new());
 
-        // 1. Render UI with standard 100-col virtual terminal to populate hitboxes
-        let backend = ratatui::backend::TestBackend::new(100, 30);
-        let mut terminal = ratatui::Terminal::new(backend).unwrap();
-        terminal.draw(|f| state.render_ui(f)).unwrap();
+        // Stress-test all requested terminal widths: 20 cols, 32 cols, 40 cols, 80 cols, 200 cols
+        let test_widths = [20, 32, 40, 80, 200];
+        for &w in &test_widths {
+            let backend = ratatui::backend::TestBackend::new(w, 30);
+            let mut terminal = ratatui::Terminal::new(backend).unwrap();
+            terminal.draw(|f| state.render_ui(f)).unwrap();
 
-        // Check that a copy hitbox was populated for the code block
-        let hitboxes = state.copy_hitboxes.lock().unwrap().clone();
-        assert!(!hitboxes.is_empty(), "Expected at least one copy hitbox for code block");
-        let code_hb = hitboxes.iter().find(|hb| hb.label == "rust code").expect("Expected 'rust code' hitbox");
-        assert!(code_hb.content.contains("fn add(a: i32, b: i32) -> i32"));
-        assert!(code_hb.x_end <= 100);
-        assert!(code_hb.x_start < code_hb.x_end);
+            let hitboxes = state.copy_hitboxes.lock().unwrap().clone();
+            assert!(!hitboxes.is_empty(), "Expected at least one copy hitbox for code block at width {}", w);
+            let code_hb = hitboxes.iter().find(|hb| hb.label == "rust code").expect(&format!("Expected 'rust code' hitbox at width {}", w));
+            assert!(code_hb.content.contains("fn add(a: i32, b: i32) -> i32"));
+            assert!(code_hb.x_end <= w, "Hitbox x_end ({}) must not exceed terminal width ({})", code_hb.x_end, w);
+            assert!(code_hb.x_start < code_hb.x_end, "Hitbox x_start ({}) must be < x_end ({}) at width {}", code_hb.x_start, code_hb.x_end, w);
 
-        // Click the copy button
-        let handled = state.handle_mouse_click((code_hb.x_start + code_hb.x_end) / 2, code_hb.screen_y);
-        assert!(handled);
-        assert!(state.last_copied_id.is_some());
+            // Click the copy button
+            let handled = state.handle_mouse_click((code_hb.x_start + code_hb.x_end) / 2, code_hb.screen_y);
+            assert!(handled, "Click on copy button failed at width {}", w);
+            assert!(state.last_copied_id.is_some(), "Expected last_copied_id to be set after copy at width {}", w);
 
-        // 2. Stress-test narrow 50-col terminal
-        let backend_50 = ratatui::backend::TestBackend::new(50, 30);
-        let mut term_50 = ratatui::Terminal::new(backend_50).unwrap();
-        term_50.draw(|f| state.render_ui(f)).unwrap();
-        let hitboxes_50 = state.copy_hitboxes.lock().unwrap().clone();
-        let code_hb_50 = hitboxes_50.iter().find(|hb| hb.label == "rust code").expect("Expected 'rust code' hitbox in 50 cols");
-        assert!(code_hb_50.x_end <= 50, "Hitbox must not exceed terminal width: {}", code_hb_50.x_end);
-        assert!(code_hb_50.x_start < code_hb_50.x_end);
-        let handled_50 = state.handle_mouse_click((code_hb_50.x_start + code_hb_50.x_end) / 2, code_hb_50.screen_y);
-        assert!(handled_50);
-
-        // 3. Stress-test very narrow 40-col terminal
-        let backend_40 = ratatui::backend::TestBackend::new(40, 30);
-        let mut term_40 = ratatui::Terminal::new(backend_40).unwrap();
-        term_40.draw(|f| state.render_ui(f)).unwrap();
-        let hitboxes_40 = state.copy_hitboxes.lock().unwrap().clone();
-        let code_hb_40 = hitboxes_40.iter().find(|hb| hb.label == "rust code").expect("Expected 'rust code' hitbox in 40 cols");
-        assert!(code_hb_40.x_end <= 40, "Hitbox must not exceed terminal width: {}", code_hb_40.x_end);
-        assert!(code_hb_40.x_start < code_hb_40.x_end);
-        let handled_40 = state.handle_mouse_click((code_hb_40.x_start + code_hb_40.x_end) / 2, code_hb_40.screen_y);
-        assert!(handled_40);
+            // Render again to verify copied state visual feedback without panics
+            terminal.draw(|f| state.render_ui(f)).unwrap();
+        }
 
         // Test copy_latest_response
         state.last_copied_id = None;
         state.copy_latest_response();
         assert!(state.last_copied_id.is_some());
+    }
+
+    #[test]
+    fn test_multiline_editing_stress_deletion_and_paste() {
+        let mut state = CockpitState::new();
+
+        // 1. Bracketed paste with CRLF and mixed line endings
+        state.insert_str("line1\r\nline2\rline3\nline4");
+        assert_eq!(state.prompt_input, "line1\nline2\nline3\nline4");
+        assert_eq!(state.cursor_position, 23);
+
+        // 2. Cursor navigation across line boundaries
+        state.cursor_position = 6; // start of line2 ("line2")
+        state.move_cursor_left();
+        assert_eq!(state.cursor_position, 5); // end of line1 (before '\n')
+        state.move_cursor_right();
+        assert_eq!(state.cursor_position, 6); // start of line2 (after '\n')
+
+        // 3. Line deletion crossing newline boundaries: Backspace at column 0
+        state.delete_backward();
+        assert_eq!(state.prompt_input, "line1line2\nline3\nline4");
+        assert_eq!(state.cursor_position, 5);
+
+        // 4. Line deletion crossing newline boundaries: Delete at line end
+        state.clear_prompt();
+        state.insert_str("foo\nbar");
+        state.cursor_position = 3; // at end of "foo", pointing to '\n'
+        state.delete_forward();
+        assert_eq!(state.prompt_input, "foobar");
+        assert_eq!(state.cursor_position, 3);
+    }
+
+    #[test]
+    fn test_dynamic_layout_height_clamping_and_scrolling() {
+        let mut state = CockpitState::new();
+
+        // 1. Single line without attachments -> 3 rows (1 line + 2 borders)
+        state.prompt_input = "short prompt".to_string();
+        let rendered_3 = state.render_headless_to_string(100, 30);
+        assert!(rendered_3.contains("short prompt"));
+
+        // 2. Multiline prompt expanding within limits
+        state.prompt_input = "1\n2\n3\n4\n5\n6\n7".to_string();
+        let rendered_multiline = state.render_headless_to_string(100, 30);
+        assert!(rendered_multiline.contains("1"));
+        assert!(rendered_multiline.contains("7"));
+
+        // 3. Very long prompt exceeding clamped max (12 rows on 30-height terminal)
+        state.prompt_input = (1..=25).map(|i| format!("line_{}", i)).collect::<Vec<_>>().join("\n");
+        state.cursor_position = state.prompt_input.len(); // at bottom
+        let rendered_clamped = state.render_headless_to_string(100, 30);
+        assert!(rendered_clamped.contains("line_25"));
+
+        // 4. Attachment row expansion
+        state.prompt_input = "prompt with attachment".to_string();
+        state.attached_files.push(PromptAttachment {
+            path: "sample.rs".to_string(),
+            filename: "sample.rs".to_string(),
+            kind: AttachmentKind::File,
+            size_bytes: 100,
+            preview_info: "100 B".to_string(),
+            content: None,
+        });
+        let rendered_att = state.render_headless_to_string(100, 30);
+        assert!(rendered_att.contains("sample.rs"));
+        assert!(rendered_att.contains("Staged Attachments") || rendered_att.contains("attached"));
+    }
+
+    #[test]
+    fn test_multimodal_attachment_stress_edge_cases() {
+        let mut state = CockpitState::new();
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        // 1. Missing file error
+        let err_res = state.attach_path("non_existent_file_xyz_123.rs");
+        assert!(err_res.is_err());
+        assert!(err_res.unwrap_err().contains("File not found"));
+
+        // 2. Zero-byte file
+        let zero_path = temp_dir.path().join("empty.txt");
+        std::fs::write(&zero_path, b"").unwrap();
+        let att_zero = state.attach_path(zero_path.to_str().unwrap()).unwrap();
+        assert_eq!(att_zero.size_bytes, 0);
+        assert_eq!(att_zero.preview_info, "0 B");
+        assert_eq!(att_zero.content, Some("".to_string()));
+
+        // 3. Very large file (> 512 KB truncation safety)
+        let large_path = temp_dir.path().join("large.txt");
+        let large_data = vec![b'X'; 700 * 1024];
+        std::fs::write(&large_path, &large_data).unwrap();
+        let att_large = state.attach_path(large_path.to_str().unwrap()).unwrap();
+        assert_eq!(att_large.size_bytes, 700 * 1024);
+        assert_eq!(att_large.content.unwrap().len(), 512 * 1024);
+
+        // 4. Duplicate attachment replacement
+        let count_before = state.attached_files.len();
+        let _ = state.attach_path(zero_path.to_str().unwrap()).unwrap();
+        assert_eq!(state.attached_files.len(), count_before);
+
+        // 5. Detach path
+        assert!(state.detach_path("empty.txt"));
+        assert!(!state.attached_files.iter().any(|a| a.filename == "empty.txt"));
+
+        // 6. Clear attachments
+        state.clear_attachments();
+        assert!(state.attached_files.is_empty());
+    }
+
+    #[test]
+    fn test_image_dimension_parser_synthetic_formats() {
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        // 1. Synthetic PNG (1920 x 1080)
+        let mut png = vec![0u8; 32];
+        png[0..8].copy_from_slice(b"\x89PNG\r\n\x1a\n");
+        png[16..20].copy_from_slice(&1920u32.to_be_bytes());
+        png[20..24].copy_from_slice(&1080u32.to_be_bytes());
+        let png_path = temp_dir.path().join("test.png");
+        std::fs::write(&png_path, &png).unwrap();
+        assert_eq!(detect_image_dimensions(&png_path), Some((1920, 1080)));
+
+        // 2. Synthetic GIF (800 x 600)
+        let mut gif = vec![0u8; 16];
+        gif[0..6].copy_from_slice(b"GIF89a");
+        gif[6..8].copy_from_slice(&800u16.to_le_bytes());
+        gif[8..10].copy_from_slice(&600u16.to_le_bytes());
+        let gif_path = temp_dir.path().join("test.gif");
+        std::fs::write(&gif_path, &gif).unwrap();
+        assert_eq!(detect_image_dimensions(&gif_path), Some((800, 600)));
+
+        // 3. Synthetic BMP (640 x 480)
+        let mut bmp = vec![0u8; 30];
+        bmp[0..2].copy_from_slice(b"BM");
+        bmp[18..22].copy_from_slice(&640u32.to_le_bytes());
+        bmp[22..26].copy_from_slice(&480i32.to_le_bytes());
+        let bmp_path = temp_dir.path().join("test.bmp");
+        std::fs::write(&bmp_path, &bmp).unwrap();
+        assert_eq!(detect_image_dimensions(&bmp_path), Some((640, 480)));
+
+        // 4. Synthetic WebP VP8 (1280 x 720)
+        let mut webp = vec![0u8; 32];
+        webp[0..4].copy_from_slice(b"RIFF");
+        webp[8..12].copy_from_slice(b"WEBP");
+        webp[12..16].copy_from_slice(b"VP8 ");
+        webp[26..28].copy_from_slice(&1280u16.to_le_bytes());
+        webp[28..30].copy_from_slice(&720u16.to_le_bytes());
+        let webp_path = temp_dir.path().join("test.webp");
+        std::fs::write(&webp_path, &webp).unwrap();
+        assert_eq!(detect_image_dimensions(&webp_path), Some((1280, 720)));
+
+        // 5. Synthetic JPEG (1920 x 1080)
+        let mut jpg = vec![0xFF, 0xD8];
+        jpg.extend_from_slice(&[0xFF, 0xC0, 0x00, 0x11, 0x08]);
+        jpg.extend_from_slice(&1080u16.to_be_bytes()); // height
+        jpg.extend_from_slice(&1920u16.to_be_bytes()); // width
+        jpg.extend_from_slice(&[0x03, 0x01, 0x11, 0x00, 0x02, 0x11, 0x01, 0x03, 0x11, 0x01]);
+        let jpg_path = temp_dir.path().join("test.jpg");
+        std::fs::write(&jpg_path, &jpg).unwrap();
+        assert_eq!(detect_image_dimensions(&jpg_path), Some((1920, 1080)));
+
+        // 6. Corrupt / Unsupported format gracefully returns None
+        let bad_path = temp_dir.path().join("bad.png");
+        std::fs::write(&bad_path, b"not an image").unwrap();
+        assert_eq!(detect_image_dimensions(&bad_path), None);
     }
 }
