@@ -17,6 +17,7 @@ pub enum GeminiAuth {
     OAuth(GeminiOAuthManager),
 }
 
+#[derive(Clone)]
 pub struct GeminiProvider {
     auth: GeminiAuth,
     client: reqwest::Client,

@@ -592,6 +592,7 @@ pub struct CockpitState {
     pub reasoning_effort: String,
     pub auth_account: String,
     pub workspace_path: String,
+    pub session_id: String,
     pub input_mode: CockpitInputMode,
     pub view_mode: CockpitViewMode,
     pub overlay: CockpitOverlay,
@@ -2309,6 +2310,7 @@ impl CockpitState {
             reasoning_effort: "High".to_string(),
             auth_account,
             workspace_path,
+            session_id: format!("ses_{}", uuid::Uuid::new_v4().simple()),
             input_mode: CockpitInputMode::Normal,
             view_mode: CockpitViewMode::ChatCanvas,
             overlay: CockpitOverlay::None,
@@ -2376,6 +2378,142 @@ impl CockpitState {
             voice_copilot_cards: Vec::new(),
             needs_clear: false,
         }
+    }
+
+    /// Construct Cockpit state restored from a saved session snapshot
+    pub fn from_session(session: hgb_core::CockpitSessionData) -> Self {
+        let mut state = Self::new();
+        state.session_id = session.id;
+        state.model_pill = session.active_model;
+        if !session.workspace_root.is_empty() {
+            state.workspace_path = session.workspace_root;
+        }
+        state.pinned_goal = session.pinned_goal;
+        state.prompt_history = session.prompt_history;
+        state.history_index = state.prompt_history.len();
+
+        state.conversation = session.messages.into_iter().map(|m| {
+            let sender = match m.role.to_lowercase().as_str() {
+                "user" => CockpitChatSender::User,
+                "system" => CockpitChatSender::System,
+                _ => CockpitChatSender::Assistant {
+                    model: m.model.unwrap_or_else(|| state.model_pill.clone()),
+                },
+            };
+            let tool_calls = m.tool_calls.into_iter().map(|tc| {
+                CockpitToolCall {
+                    tool_name: tc.tool_name,
+                    parameters_summary: tc.parameters_summary,
+                    status: tc.status,
+                    duration_ms: tc.duration_ms,
+                    output_snippet: tc.output_snippet,
+                }
+            }).collect();
+
+            CockpitChatItem {
+                sender,
+                content: m.content,
+                tokens: m.tokens,
+                duration_ms: 0,
+                timestamp: m.timestamp,
+                thinking: m.thinking,
+                tool_calls,
+            }
+        }).collect();
+
+        if !session.dag_nodes.is_empty() {
+            state.nodes = session.dag_nodes.into_iter().map(|n| {
+                let mut node = CockpitDagNode::new(n.id, n.name, n.model);
+                node.scratchpad = n.scratchpad;
+                node.tokens_used = n.tokens_used;
+                node.status = match n.status.as_str() {
+                    "running" => CockpitNodeStatus::Running { progress_pct: 50 },
+                    "failed" => CockpitNodeStatus::Failed { error: "Failed in prior session".to_string() },
+                    _ => CockpitNodeStatus::Succeeded { duration_ms: 0 },
+                };
+                node
+            }).collect();
+            state.selected_index = state.nodes.len().saturating_sub(1);
+        }
+
+        state.add_system_notice(format!(
+            "✓ Resumed Cockpit session '{}' ({} messages, model: {})",
+            state.session_id,
+            state.conversation.len(),
+            state.model_pill
+        ));
+        state
+    }
+
+    /// Resume the latest saved session if present, or create a new session
+    pub fn resume_or_new() -> Self {
+        let ws = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        match hgb_core::session::load_latest(Some(&ws)) {
+            Ok(sess) => Self::from_session(sess),
+            Err(_) => Self::new(),
+        }
+    }
+
+    /// Atomically persist current Cockpit session state to `.hgb/sessions/`
+    pub fn save_session_to_disk(&self) {
+        let mut sess = hgb_core::CockpitSessionData::new(&self.workspace_path, &self.model_pill);
+        sess.id = self.session_id.clone();
+        sess.pinned_goal = self.pinned_goal.clone();
+        sess.prompt_history = self.prompt_history.clone();
+
+        for item in &self.conversation {
+            let role = match &item.sender {
+                CockpitChatSender::User => "user".to_string(),
+                CockpitChatSender::System => "system".to_string(),
+                CockpitChatSender::Assistant { .. } => "assistant".to_string(),
+            };
+            let model = match &item.sender {
+                CockpitChatSender::Assistant { model } => Some(model.clone()),
+                _ => None,
+            };
+            let tool_calls = item.tool_calls.iter().map(|tc| {
+                hgb_core::SessionToolCall {
+                    tool_name: tc.tool_name.clone(),
+                    parameters_summary: tc.parameters_summary.clone(),
+                    status: tc.status.clone(),
+                    duration_ms: tc.duration_ms,
+                    output_snippet: tc.output_snippet.clone(),
+                }
+            }).collect();
+
+            sess.messages.push(hgb_core::SessionChatMessage {
+                role,
+                content: item.content.clone(),
+                model,
+                tokens: item.tokens,
+                timestamp: item.timestamp.clone(),
+                thinking: item.thinking.clone(),
+                tool_calls,
+            });
+        }
+
+        for node in &self.nodes {
+            let status = match &node.status {
+                CockpitNodeStatus::Pending => "pending".to_string(),
+                CockpitNodeStatus::Running { .. } => "running".to_string(),
+                CockpitNodeStatus::Succeeded { .. } => "succeeded".to_string(),
+                CockpitNodeStatus::Failed { .. } => "failed".to_string(),
+                CockpitNodeStatus::Paused => "paused".to_string(),
+                CockpitNodeStatus::Steered { .. } => "steered".to_string(),
+            };
+            sess.dag_nodes.push(hgb_core::SessionDagNode {
+                id: node.id.clone(),
+                name: node.name.clone(),
+                model: node.model.clone(),
+                status,
+                tokens_used: node.tokens_used,
+                scratchpad: node.scratchpad.clone(),
+                tool_calls: Vec::new(),
+                parent_id: None,
+            });
+        }
+
+        let _ = hgb_core::session::save(&sess, Some(std::path::Path::new(&self.workspace_path)));
     }
 
     pub fn set_pinned_goal(&mut self, goal: impl Into<String>) {
@@ -3526,14 +3664,26 @@ impl CockpitState {
         self.processing_prompt_preview = prompt_preview;
         self.needs_clear = true;
 
+        let history_context: Vec<(String, String)> = self.conversation.iter().map(|item| {
+            let role = match &item.sender {
+                CockpitChatSender::User => "user".to_string(),
+                CockpitChatSender::System => "system".to_string(),
+                CockpitChatSender::Assistant { .. } => "assistant".to_string(),
+            };
+            (role, item.content.clone())
+        }).collect();
+
+        self.save_session_to_disk();
+
         let (tx, rx) = tokio::sync::oneshot::channel();
         let nid = node_id;
         let model = self.model_pill.clone();
         let p = synthesized_prompt;
+        let hist = history_context;
 
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             handle.spawn(async move {
-                let res = execute_prompt_core(nid, model, p).await;
+                let res = execute_prompt_with_history(nid, model, p, hist).await;
                 let _ = tx.send(res);
             });
         }
@@ -3586,6 +3736,7 @@ impl CockpitState {
             tools,
         );
         self.chat_scroll = 0;
+        self.save_session_to_disk();
     }
 
     /// Cancel active in-flight prompt processing (triggered by Esc or Ctrl+C)
@@ -3641,11 +3792,21 @@ pub struct PromptExecutionResult {
     pub log_msg: String,
 }
 
-/// Core prompt execution logic isolated for asynchronous background execution
+/// Backward-compatible wrapper for execute_prompt_with_history without prior history
 pub async fn execute_prompt_core(
     node_id: String,
     model_pill: String,
     prompt: String,
+) -> PromptExecutionResult {
+    execute_prompt_with_history(node_id, model_pill, prompt, Vec::new()).await
+}
+
+/// Multi-turn autonomous agent execution engine with frontier model agnosticism and live tool loop
+pub async fn execute_prompt_with_history(
+    node_id: String,
+    model_pill: String,
+    prompt: String,
+    history: Vec<(String, String)>,
 ) -> PromptExecutionResult {
     let start_time = Utc::now().timestamp_millis();
 
@@ -3711,14 +3872,214 @@ pub async fn execute_prompt_core(
         }
     }
 
-    // 1.5. Try Local Ollama Provider if requested model is local or if Gemini is unconfigured
+    // Common system instructions enabling autonomous ReAct tools across all models
+    let system_instructions = "\
+You are Hagibis (hgb), an elite Systems Rust & Autonomous AI Agent runtime.
+You have access to live tools: run_command, view_file, write_to_file, replace_file_content, grep_search, find_by_name, list_dir, browse_web, search_web, record_memory, search_memory.
+When you need to execute an action or gather info, emit:
+```tool_call
+{
+  \"call_id\": \"call_1\",
+  \"tool_name\": \"<name>\",
+  \"arguments\": { ... }
+}
+```
+Otherwise, answer directly with high precision.";
+
+    // 2. Anthropic Claude Provider (Claude 3.7 / 3.5 Sonnet / Haiku / Opus)
+    let is_anthropic_model = model_pill.contains("claude")
+        || model_pill.contains("sonnet")
+        || model_pill.contains("haiku")
+        || model_pill.contains("opus");
+
+    if (is_anthropic_model || (!hgb_core::GeminiProvider::is_available() && !hgb_core::OllamaProvider::is_available()))
+        && hgb_core::AnthropicProvider::is_available()
+    {
+        if let Some(anthropic) = hgb_core::AnthropicProvider::auto_discover() {
+            let mut anthropic_msgs = Vec::new();
+            for (role, content) in &history {
+                if role == "user" {
+                    anthropic_msgs.push(hgb_core::AnthropicMessage::user(content));
+                } else if role == "assistant" {
+                    anthropic_msgs.push(hgb_core::AnthropicMessage::assistant(content));
+                }
+            }
+            anthropic_msgs.push(hgb_core::AnthropicMessage::user(&prompt));
+
+            match anthropic.messages(&anthropic_msgs, Some(&model_pill), None, Some(system_instructions), None).await {
+                Ok(output) => {
+                    let elapsed = (Utc::now().timestamp_millis() - start_time).max(1) as u64;
+                    let calls = hgb_core::agent::ReActAgentEngine::extract_tool_calls(&output);
+                    let (final_output, tool_call_opt) = if !calls.is_empty() {
+                        let engine = hgb_core::agent::ReActAgentEngine::new(
+                            std::sync::Arc::new(anthropic.clone()),
+                            hgb_core::agent::AgentLoopConfig::default(),
+                        );
+                        let mut tool_results = Vec::new();
+                        let first_tool = calls[0].tool_name.clone();
+                        for call in calls {
+                            let out = match engine.execute_tool(&call.tool_name, &call.arguments).await {
+                                Ok(res) => res,
+                                Err(e) => format!("Error executing {}: {}", call.tool_name, e),
+                            };
+                            tool_results.push(format!("[Tool Output for {}]:\n{}", call.tool_name, out));
+                        }
+                        let followup = format!(
+                            "<tool_results>\n{}\n</tool_results>\nPlease synthesize your final answer using the above tool results.",
+                            tool_results.join("\n\n")
+                        );
+                        anthropic_msgs.push(hgb_core::AnthropicMessage::assistant(&output));
+                        anthropic_msgs.push(hgb_core::AnthropicMessage::user(&followup));
+
+                        let synth = anthropic.messages(&anthropic_msgs, Some(&model_pill), None, Some(system_instructions), None).await.unwrap_or(output);
+                        let tool = CockpitToolCall::new(
+                            first_tool.clone(),
+                            format!("tool_executed: {}", first_tool),
+                            "SUCCESS",
+                            elapsed,
+                            Some(tool_results.join("\n\n")),
+                        );
+                        (synth, Some(tool))
+                    } else {
+                        (output, None)
+                    };
+
+                    let approx_tokens = (final_output.len() / 4 + prompt.len() / 4).max(1) as u64;
+                    let log_msg = format!("[ANTHROPIC] Completed in {}ms (~{} tok)", elapsed, approx_tokens);
+                    return PromptExecutionResult {
+                        node_id,
+                        model: model_pill,
+                        prompt,
+                        output: final_output,
+                        tokens_used: approx_tokens,
+                        duration_ms: elapsed,
+                        tool_call: tool_call_opt,
+                        is_error: false,
+                        error_msg: None,
+                        log_msg,
+                    };
+                }
+                Err(err) => {
+                    let _ = err;
+                }
+            }
+        }
+    }
+
+    // 3. OpenAI-Compatible Provider (OpenAI, DeepSeek, OpenRouter, Custom)
+    let is_openai_family = model_pill.starts_with("gpt-")
+        || model_pill.starts_with("o1")
+        || model_pill.starts_with("o3")
+        || model_pill.contains("deepseek")
+        || model_pill.contains("openrouter")
+        || model_pill.contains('/');
+
+    let openai_prov_opt = if model_pill.contains("deepseek") {
+        hgb_core::OpenAiCompatibleProvider::discover_deepseek()
+            .or_else(|| hgb_core::OpenAiCompatibleProvider::discover_openrouter())
+            .or_else(|| hgb_core::OpenAiCompatibleProvider::auto_discover())
+    } else if model_pill.contains('/') {
+        hgb_core::OpenAiCompatibleProvider::discover_openrouter()
+            .or_else(|| hgb_core::OpenAiCompatibleProvider::auto_discover())
+    } else if is_openai_family {
+        hgb_core::OpenAiCompatibleProvider::discover_openai()
+            .or_else(|| hgb_core::OpenAiCompatibleProvider::auto_discover())
+    } else if !hgb_core::GeminiProvider::is_available() && !hgb_core::OllamaProvider::is_available() {
+        hgb_core::OpenAiCompatibleProvider::auto_discover()
+    } else {
+        None
+    };
+
+    if let Some(openai_prov) = openai_prov_opt {
+        let mut chat_msgs = Vec::new();
+        chat_msgs.push(hgb_core::ChatMessage::system(system_instructions));
+        for (role, content) in &history {
+            match role.as_str() {
+                "assistant" => chat_msgs.push(hgb_core::ChatMessage::assistant(content)),
+                "system" => chat_msgs.push(hgb_core::ChatMessage::system(content)),
+                _ => chat_msgs.push(hgb_core::ChatMessage::user(content)),
+            }
+        }
+        chat_msgs.push(hgb_core::ChatMessage::user(&prompt));
+
+        match openai_prov.chat_completion(&chat_msgs, Some(&model_pill), None, None).await {
+            Ok(output) => {
+                let elapsed = (Utc::now().timestamp_millis() - start_time).max(1) as u64;
+                let calls = hgb_core::agent::ReActAgentEngine::extract_tool_calls(&output);
+                let (final_output, tool_call_opt) = if !calls.is_empty() {
+                    let engine = hgb_core::agent::ReActAgentEngine::new(
+                        std::sync::Arc::new(openai_prov.clone()),
+                        hgb_core::agent::AgentLoopConfig::default(),
+                    );
+                    let mut tool_results = Vec::new();
+                    let first_tool = calls[0].tool_name.clone();
+                    for call in calls {
+                        let out = match engine.execute_tool(&call.tool_name, &call.arguments).await {
+                            Ok(res) => res,
+                            Err(e) => format!("Error executing {}: {}", call.tool_name, e),
+                        };
+                        tool_results.push(format!("[Tool Output for {}]:\n{}", call.tool_name, out));
+                    }
+                    let followup = format!(
+                        "<tool_results>\n{}\n</tool_results>\nPlease synthesize your final answer using the above tool results.",
+                        tool_results.join("\n\n")
+                    );
+                    chat_msgs.push(hgb_core::ChatMessage::assistant(&output));
+                    chat_msgs.push(hgb_core::ChatMessage::user(&followup));
+
+                    let synth = openai_prov.chat_completion(&chat_msgs, Some(&model_pill), None, None).await.unwrap_or(output);
+                    let tool = CockpitToolCall::new(
+                        first_tool.clone(),
+                        format!("tool_executed: {}", first_tool),
+                        "SUCCESS",
+                        elapsed,
+                        Some(tool_results.join("\n\n")),
+                    );
+                    (synth, Some(tool))
+                } else {
+                    (output, None)
+                };
+
+                let approx_tokens = (final_output.len() / 4 + prompt.len() / 4).max(1) as u64;
+                let log_msg = format!("[{}] Completed in {}ms (~{} tok)", openai_prov.flavor().provider_name().to_uppercase(), elapsed, approx_tokens);
+                return PromptExecutionResult {
+                    node_id,
+                    model: model_pill,
+                    prompt,
+                    output: final_output,
+                    tokens_used: approx_tokens,
+                    duration_ms: elapsed,
+                    tool_call: tool_call_opt,
+                    is_error: false,
+                    error_msg: None,
+                    log_msg,
+                };
+            }
+            Err(err) => {
+                let _ = err;
+            }
+        }
+    }
+
+    // 4. Local Ollama Provider if requested or available
     let is_ollama = hgb_core::OllamaProvider::is_ollama_model(&model_pill)
         || (!hgb_core::GeminiProvider::is_available() && hgb_core::OllamaProvider::is_available());
 
     if is_ollama && hgb_core::OllamaProvider::is_available() {
         if let Some(ollama_prov) = hgb_core::OllamaProvider::auto_discover() {
             use hgb_core::traits::HgbProvider;
-            let res = ollama_prov.complete(&prompt, Some(&model_pill)).await;
+            let multi_prompt = if history.is_empty() {
+                prompt.clone()
+            } else {
+                let mut buf = String::new();
+                for (role, cnt) in history.iter().rev().take(6).rev() {
+                    buf.push_str(&format!("{}: {}\n\n", role.to_uppercase(), cnt));
+                }
+                buf.push_str(&format!("USER: {}\n\nASSISTANT: ", prompt));
+                buf
+            };
+
+            let res = ollama_prov.complete(&multi_prompt, Some(&model_pill)).await;
             let elapsed = (Utc::now().timestamp_millis() - start_time).max(1) as u64;
             match res {
                 Ok(output) => {
@@ -3738,8 +4099,8 @@ pub async fn execute_prompt_core(
                             tool_results.push(format!("[Tool Output for {}]:\n{}", call.tool_name, out));
                         }
                         let followup = format!(
-                            "<user>\n{}\n</user>\n<assistant>\n{}\n</assistant>\n<tool_results>\n{}\n</tool_results>\nPlease synthesize your final answer using the above tool results.",
-                            prompt, output, tool_results.join("\n\n")
+                            "{}\n<tool_results>\n{}\n</tool_results>\nPlease synthesize your final answer using the above tool results.",
+                            multi_prompt, tool_results.join("\n\n")
                         );
                         let synth = ollama_prov.complete(&followup, Some(&model_pill)).await.unwrap_or(output);
                         let tool = CockpitToolCall::new(
@@ -3769,30 +4130,72 @@ pub async fn execute_prompt_core(
                     };
                 }
                 Err(err) => {
-                    // Ollama error, log and fall through to Gemini or standalone fallback
                     let _ = err;
                 }
             }
         }
     }
 
-    // 2. Try In-Process GeminiProvider if credentials exist
+    // 5. In-Process GeminiProvider if credentials exist
     if let Some(provider) = hgb_core::GeminiProvider::auto_discover() {
         use hgb_core::traits::HgbProvider;
-        let res = provider.complete(&prompt, Some(&model_pill)).await;
+        let multi_prompt = if history.is_empty() {
+            prompt.clone()
+        } else {
+            let mut buf = String::from("Conversation History:\n");
+            for (role, cnt) in history.iter().rev().take(8).rev() {
+                buf.push_str(&format!("{}: {}\n", role.to_uppercase(), cnt));
+            }
+            buf.push_str(&format!("\nCurrent Request:\n{}\n", prompt));
+            buf
+        };
+
+        let res = provider.complete(&multi_prompt, Some(&model_pill)).await;
         let elapsed = (Utc::now().timestamp_millis() - start_time).max(1) as u64;
         match res {
             Ok(output) => {
-                let approx_tokens = (output.len() / 4 + prompt.len() / 4).max(1) as u64;
+                let calls = hgb_core::agent::ReActAgentEngine::extract_tool_calls(&output);
+                let (final_output, tool_call_opt) = if !calls.is_empty() {
+                    let engine = hgb_core::agent::ReActAgentEngine::new(
+                        std::sync::Arc::new(provider.clone()),
+                        hgb_core::agent::AgentLoopConfig::default(),
+                    );
+                    let mut tool_results = Vec::new();
+                    let first_tool = calls[0].tool_name.clone();
+                    for call in calls {
+                        let out = match engine.execute_tool(&call.tool_name, &call.arguments).await {
+                            Ok(res) => res,
+                            Err(e) => format!("Error executing {}: {}", call.tool_name, e),
+                        };
+                        tool_results.push(format!("[Tool Output for {}]:\n{}", call.tool_name, out));
+                    }
+                    let followup = format!(
+                        "{}\n<tool_results>\n{}\n</tool_results>\nPlease synthesize your final answer using the above tool results.",
+                        multi_prompt, tool_results.join("\n\n")
+                    );
+                    let synth = provider.complete(&followup, Some(&model_pill)).await.unwrap_or(output);
+                    let tool = CockpitToolCall::new(
+                        first_tool.clone(),
+                        format!("tool_executed: {}", first_tool),
+                        "SUCCESS",
+                        elapsed,
+                        Some(tool_results.join("\n\n")),
+                    );
+                    (synth, Some(tool))
+                } else {
+                    (output, None)
+                };
+
+                let approx_tokens = (final_output.len() / 4 + prompt.len() / 4).max(1) as u64;
                 let log_msg = format!("[GEMINI] Completed in {}ms (~{} tok)", elapsed, approx_tokens);
                 return PromptExecutionResult {
                     node_id,
                     model: model_pill,
                     prompt,
-                    output,
+                    output: final_output,
                     tokens_used: approx_tokens,
                     duration_ms: elapsed,
-                    tool_call: None,
+                    tool_call: tool_call_opt,
                     is_error: false,
                     error_msg: None,
                     log_msg,
@@ -3804,11 +4207,20 @@ pub async fn execute_prompt_core(
         }
     }
 
-    // 3. Fallback: Standalone local execution simulation
+    // 6. Standalone Local Fallback with Diagnostic Guidance
     let elapsed = (Utc::now().timestamp_millis() - start_time).max(1) as u64;
     let approx_tokens = (prompt.len() / 4).max(1) as u64;
     let fallback_output = format!(
-        "Prompt recorded in Cockpit Dag:\n\"{}\"\n\n[INFO] hgbd daemon is offline and Gemini credentials unconfigured.\nStart daemon with `hgbd` or authenticate with `hgb login` to query models.",
+        "Prompt recorded in Cockpit Dag:\n\"{}\"\n\n\
+[INFO] No active model provider credentials discovered.\n\
+Available options:\n\
+  • Anthropic Claude: export ANTHROPIC_API_KEY\n\
+  • OpenAI / o3-mini: export OPENAI_API_KEY\n\
+  • DeepSeek V3/R1:   export DEEPSEEK_API_KEY\n\
+  • OpenRouter:       export OPENROUTER_API_KEY\n\
+  • Google Gemini:    hgb login  or export GEMINI_API_KEY\n\
+  • Local Ollama:     ollama serve (auto-discovered on localhost:11434)\n\n\
+Type `/doctor` or run `hgb doctor` to test clipboard, system, and providers.",
         prompt
     );
     let log_msg = format!("[STANDALONE] Executed prompt node '{}' ({} tok)", node_id, approx_tokens);
@@ -6031,6 +6443,26 @@ impl CockpitState {
 
         list.push(("gemini-2.5-flash".to_string(), "Google Gemini Cloud (Recommended default)".to_string()));
         list.push(("gemini-2.5-pro".to_string(), "Google Gemini Cloud (Deep reasoning pro)".to_string()));
+
+        if hgb_core::AnthropicProvider::is_available() {
+            list.push(("claude-3-7-sonnet".to_string(), "Anthropic Claude 3.7 Sonnet (Frontier reasoning)".to_string()));
+            list.push(("claude-3-5-sonnet".to_string(), "Anthropic Claude 3.5 Sonnet (State-of-the-art coding)".to_string()));
+        }
+
+        if std::env::var("OPENAI_API_KEY").map(|k| !k.trim().is_empty()).unwrap_or(false) {
+            list.push(("gpt-4o".to_string(), "OpenAI GPT-4o (Frontier multimodal)".to_string()));
+            list.push(("o3-mini".to_string(), "OpenAI o3-mini (High-speed reasoning)".to_string()));
+        }
+
+        if std::env::var("DEEPSEEK_API_KEY").map(|k| !k.trim().is_empty()).unwrap_or(false) {
+            list.push(("deepseek-chat".to_string(), "DeepSeek-V3 (Sovereign high performance)".to_string()));
+            list.push(("deepseek-reasoner".to_string(), "DeepSeek-R1 (Deep chain-of-thought)".to_string()));
+        }
+
+        if std::env::var("OPENROUTER_API_KEY").map(|k| !k.trim().is_empty()).unwrap_or(false) {
+            list.push(("deepseek/deepseek-r1".to_string(), "OpenRouter DeepSeek R1".to_string()));
+        }
+
         list
     }
 
@@ -6570,6 +7002,7 @@ impl CockpitState {
                                 // Slash command autocompletion
                                 if let Some(prefix) = self.prompt_input.strip_prefix('/') {
                                     let commands = [
+                                        "doctor", "session", "resume",
                                         "goal", "compact", "heal", "share", "tunnel", "preview", "listen",
                                         "copy", "telepathy", "ghost", "council", "pixel", "spec", "db",
                                         "warp", "traffic", "wiretap", "sentry", "xerox", "governor",
@@ -6854,6 +7287,102 @@ impl CockpitState {
                                         "/clear" => {
                                             self.conversation.clear();
                                             self.chat_scroll = 0;
+                                        }
+                                        "/doctor" => {
+                                            let doc = hgb_core::HgbDoctor::new();
+                                            let diag = doc.run_diagnostics().await;
+                                            let count_ok = diag.summary.passed;
+                                            let total = diag.summary.total;
+                                            self.add_system_notice(format!(
+                                                "🩺 HGB DOCTOR: {}/{} diagnostics passed ({} warnings, {} failed)",
+                                                count_ok, total, diag.summary.warnings, diag.summary.failed
+                                            ));
+                                            for c in &diag.checks {
+                                                if c.status == hgb_core::DiagnosticStatus::Fail {
+                                                    self.add_system_notice(format!("✖ [FAIL] {}: {}", c.name, c.details));
+                                                    if let Some(rem) = &c.remediation {
+                                                        self.add_system_notice(format!("  💡 Remedy: {}", rem));
+                                                    }
+                                                } else if c.status == hgb_core::DiagnosticStatus::Warn {
+                                                    self.add_system_notice(format!("⚠️ [WARN] {}: {}", c.name, c.details));
+                                                    if let Some(rem) = &c.remediation {
+                                                        self.add_system_notice(format!("  💡 Remedy: {}", rem));
+                                                    }
+                                                }
+                                            }
+                                            if diag.all_passed() {
+                                                self.add_system_notice("✓ All system, clipboard, AI providers, and toolchain checks optimal!".to_string());
+                                            }
+                                            hgb_core::play_vibe_chime(true);
+                                        }
+                                        "/session" => {
+                                            let sub_parts: Vec<&str> = if parts.len() > 1 {
+                                                parts[1..].to_vec()
+                                            } else {
+                                                Vec::new()
+                                            };
+                                            let sub = sub_parts.first().copied().unwrap_or("status");
+                                            let ws = std::path::Path::new(&self.workspace_path);
+                                            match sub {
+                                                "list" | "ls" => {
+                                                    match hgb_core::session::list_sessions(Some(ws)) {
+                                                        Ok(list) => {
+                                                            if list.is_empty() {
+                                                                self.add_system_notice("No saved sessions found in .hgb/sessions/".to_string());
+                                                            } else {
+                                                                self.add_system_notice(format!("Found {} saved session(s):", list.len()));
+                                                                for s in list.iter().take(6) {
+                                                                    self.add_system_notice(format!(
+                                                                        "  • [{}] {} ({} msgs, model: {})",
+                                                                        s.id, s.title, s.message_count, s.active_model
+                                                                    ));
+                                                                }
+                                                            }
+                                                        }
+                                                        Err(e) => self.add_system_notice(format!("Session list error: {}", e)),
+                                                    }
+                                                }
+                                                "save" => {
+                                                    self.save_session_to_disk();
+                                                    self.add_system_notice(format!("✓ Session '{}' saved to disk (.hgb/sessions/)", self.session_id));
+                                                }
+                                                "status" => {
+                                                    self.add_system_notice(format!(
+                                                        "Session ID: {} | Model: {} | Messages: {} | DAG Nodes: {}",
+                                                        self.session_id, self.model_pill, self.conversation.len(), self.nodes.len()
+                                                    ));
+                                                }
+                                                "load" => {
+                                                    if let Some(target_id) = sub_parts.get(1) {
+                                                        match hgb_core::session::load(target_id, Some(ws)) {
+                                                            Ok(sess) => {
+                                                                *self = Self::from_session(sess);
+                                                            }
+                                                            Err(e) => self.add_system_notice(format!("Failed to load session '{}': {}", target_id, e)),
+                                                        }
+                                                    } else {
+                                                        self.add_system_notice("Usage: /session load <session-id>".to_string());
+                                                    }
+                                                }
+                                                "new" => {
+                                                    let prev_id = self.session_id.clone();
+                                                    self.save_session_to_disk();
+                                                    *self = Self::new();
+                                                    self.add_system_notice(format!("Started new session '{}' (previous '{}' saved)", self.session_id, prev_id));
+                                                }
+                                                _ => {
+                                                    self.add_system_notice("Session subcommands: list, save, status, load <id>, new".to_string());
+                                                }
+                                            }
+                                        }
+                                        "/resume" => {
+                                            let ws = std::path::Path::new(&self.workspace_path);
+                                            match hgb_core::session::load_latest(Some(ws)) {
+                                                Ok(sess) => {
+                                                    *self = Self::from_session(sess);
+                                                }
+                                                Err(e) => self.add_system_notice(format!("Could not resume latest session: {}", e)),
+                                            }
                                         }
                                         "/exit" | "/quit" => {
                                             break;

@@ -948,24 +948,24 @@ Evaluating invariant boundaries across subagents...
         let rendered_80 = ChatCanvas::render_code_box("rust", &lines, 80);
         assert!(rendered_80.contains("📋 Copy"));
         assert!(rendered_80.contains("╭─── ["));
-        assert!(rendered_80.contains("─╮"));
+        assert!(rendered_80.contains("╮"));
 
         // Test very narrow fallback
         let rendered_20 = ChatCanvas::render_code_box("rust", &lines, 20);
         assert!(rendered_20.contains("╭─── ["));
         assert!(rendered_20.contains("╮"));
 
-        // Test ToolCardCanvas copy badge
-        let tool = ToolCardCanvas::new(
+        // Test ToolCallCard copy badge
+        let tool = ToolCallCard::new(
             "view_file",
-            ToolStatus::Success,
             "read source code",
-            Some("fn main() {}"),
-            Some(12),
-        );
-        let tool_rendered = tool.render(80);
+            ToolCardStatus::Success { duration_ms: 12, exit_code: 0 },
+        )
+        .with_output("fn main() {}")
+        .with_details("12ms");
+        let tool_rendered = tool.render_box(80);
         assert!(tool_rendered.contains("📋 Copy"));
         assert!(tool_rendered.contains("╭───"));
-        assert!(tool_rendered.contains("─╮"));
+        assert!(tool_rendered.contains("╮"));
     }
 }

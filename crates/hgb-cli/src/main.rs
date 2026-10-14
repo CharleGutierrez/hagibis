@@ -22,6 +22,10 @@ struct Cli {
     #[arg(long, global = true)]
     classic: bool,
 
+    /// Resume the latest saved Cockpit session
+    #[arg(long, global = true)]
+    resume: bool,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -209,6 +213,20 @@ enum Commands {
     #[command(alias = "chat-canvas", alias = "c")]
     Chat,
 
+    /// Systems Self-Diagnosis & Environment Health Audit
+    #[command(alias = "diag", alias = "check")]
+    Doctor {
+        /// Output diagnosis report in JSON format
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Resume Cockpit session from disk (.hgb/sessions/)
+    Resume {
+        /// Optional specific session ID to resume (defaults to latest)
+        id: Option<String>,
+    },
+
     /// Execute a prompt directly through the microkernel swarm
     #[command(alias = "ask", alias = "p")]
     Run {
@@ -228,10 +246,6 @@ enum Commands {
     /// Inspect daemon status, uptime, active models, and memory RSS
     #[command(alias = "info")]
     Status,
-
-    /// Run diagnostic check across all microkernel pillars
-    #[command(alias = "doc")]
-    Doctor,
 
     /// Authenticate Hagibis with Google Account via OAuth 2.0 Web Login
     Login,
@@ -2236,6 +2250,11 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse_from(&raw_args);
     let client = HgbClient::new();
 
+    if cli.resume {
+        let mut state = hgb_nextgen::CockpitState::resume_or_new();
+        return state.run_interactive().await.map_err(|e| Box::new(e) as Box<dyn std::error::Error>);
+    }
+
     // Default to AGY Chat Canvas & Cockpit if no subcommand provided, or classic REPL if --classic is specified
     let command = match cli.command {
         Some(cmd) => cmd,
@@ -2373,6 +2392,30 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     match command {
         Commands::Classic | Commands::Chat => unreachable!(),
         Commands::Cockpit { .. } => unreachable!(),
+        Commands::Doctor { json } => {
+            let doctor = hgb_core::HgbDoctor::new();
+            let diag = doctor.run_diagnostics().await;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&diag)?);
+            } else {
+                println!("{}", diag.format_terminal());
+            }
+            Ok(())
+        }
+        Commands::Resume { id } => {
+            let ws = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let mut state = match id {
+                Some(target_id) => match hgb_core::session::load(&target_id, Some(&ws)) {
+                    Ok(sess) => hgb_nextgen::CockpitState::from_session(sess),
+                    Err(e) => {
+                        eprintln!("Failed to load session '{}': {}", target_id, e);
+                        std::process::exit(1);
+                    }
+                },
+                None => hgb_nextgen::CockpitState::resume_or_new(),
+            };
+            state.run_interactive().await.map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+        }
         Commands::LspGhostBridge => {
             println!("{}", "👻 Initializing LSP Ghost Bridge over Unix Domain Sockets...".magenta().bold());
             let _bridge = hgb_core::LspGhostBridge::new();
@@ -2779,12 +2822,6 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Status => {
             let repl_helper = HagibisRepl::new(client);
             let resp = repl_helper.dispatch(HgbRequest::Status).await;
-            repl_helper.render_response(resp);
-            Ok(())
-        }
-        Commands::Doctor => {
-            let repl_helper = HagibisRepl::new(client);
-            let resp = repl_helper.dispatch(HgbRequest::Doctor).await;
             repl_helper.render_response(resp);
             Ok(())
         }

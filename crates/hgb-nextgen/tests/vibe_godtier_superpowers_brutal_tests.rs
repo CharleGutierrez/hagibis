@@ -65,8 +65,8 @@ async fn test_superpower_1_browser_hud_cdp_streaming_and_heal() {
     assert_eq!(hud.telemetry().unresolved_count, 1);
 }
 
-#[tokio::test]
-async fn test_superpower_2_instant_persona_and_synthetic_seed_engine() {
+#[test]
+fn test_superpower_2_instant_persona_and_synthetic_seed_engine() {
     // 1. Generate standalone users batch with 25 records and seed 42
     let user_batch = PersonaSeedEngine::generate_batch("users", 25, Some(42))
         .expect("Must generate users seed batch");
@@ -158,7 +158,11 @@ pub fn brand_new_currency_formatter(cents: u64) -> String {
 
 #[tokio::test]
 async fn test_superpower_4_living_architecture_blueprint_and_mermaid() {
-    let workspace = PathBuf::from("/home/dyna/TGS Projects/hagibis");
+    let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .find(|p| p.join("Cargo.lock").exists() || p.join("crates").is_dir())
+        .expect("Must find workspace root")
+        .to_path_buf();
     let blueprint = ArchitectureBlueprint::scan_workspace(&workspace).expect("Scan workspace");
 
     assert!(blueprint.nodes.len() >= 3, "Should discover crates and core components");

@@ -19,6 +19,10 @@ pub mod memory;
 pub mod package_guard;
 pub mod protocol;
 pub mod providers;
+#[path = "providers/openai_compatible.rs"]
+pub mod openai_compatible;
+pub mod session;
+pub mod doctor;
 pub mod repomap;
 pub mod rescue;
 pub mod rules;
@@ -440,6 +444,18 @@ pub use memory::{
 pub use package_guard::{PackageEcosystem, PackageGuard, PackageStatus, PackageVerificationReport};
 pub use protocol::{DaemonStatus, DevServerEndpointInfo, DoctorPillar, HgbRequest, HgbResponse, SwarmPodResult};
 pub use providers::{GeminiProvider, OllamaModelDetails, OllamaModelTag, OllamaProvider};
+pub use openai_compatible::{
+    AnthropicMessage, AnthropicProvider, ChatMessage, OpenAiCompatibleFlavor,
+    OpenAiCompatibleProvider, DEFAULT_ANTHROPIC_MODEL,
+};
+pub use session::{
+    CockpitSessionData, SessionArtifactDiff, SessionChatMessage, SessionDagNode,
+    SessionSummary, SessionToolCall,
+};
+pub use doctor::{
+    DiagnosticCategory, DiagnosticCheck, DiagnosticStatus, DoctorReport,
+    DoctorSummary, HgbDoctor,
+};
 pub use repomap::{CodeSymbol, FileSymbols, RepoMap, RepoMapReport, SymbolKind};
 pub use rescue::{CorrectiveAction, FailureCategory, RescueReport, TerminalRescue};
 pub use rules::{RuleDocument, RuleSourceType, WorkspaceRulesManager};
