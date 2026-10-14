@@ -47,6 +47,29 @@ pub enum ModelSubcommand {
 pub enum EnterpriseSubcommand {
     /// Show current Hagibis edition (Community vs. Enterprise) and entitlement status
     Status,
+    /// Activate Enterprise edition with a license token (saves to .hgb/enterprise.lic)
+    Activate {
+        /// Cryptographic license token string (e.g. HGB-ENT-...)
+        token: String,
+    },
+    /// Issue a new cryptographic enterprise license token
+    Issue {
+        /// Tenant identifier (e.g. contoso-production)
+        #[arg(long, default_value = "default-enterprise-tenant")]
+        tenant_id: String,
+        /// Organization or company name
+        #[arg(long, default_value = "Enterprise Client")]
+        org: String,
+        /// Number of authorized developer seats
+        #[arg(long, default_value_t = 100)]
+        seats: u32,
+        /// Validity period in days
+        #[arg(long, default_value_t = 365)]
+        days: i64,
+        /// Automatically save and activate this license in .hgb/enterprise.lic
+        #[arg(long)]
+        save: bool,
+    },
     /// Export SOC2 / ISO 27001 append-only cryptographic audit records
     Audit {
         /// Export format: json or csv
@@ -2455,6 +2478,53 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("  Microsoft 365 MCP:    {}", if edition.can_use_m365_tools() { "Enabled (SharePoint / Teams / Outlook)".green() } else { "Feature-Gated".dimmed() });
                     println!("  Power Automate Gate:  {}", if edition.can_use_webhook_gateway() { "Enabled (HMAC Signed Ingestion)".green() } else { "Feature-Gated".dimmed() });
                     println!("  SOC2 Audit Ledger:    {}", if edition.can_use_audit_ledger() { "Active (Append-Only Hash Chain)".green() } else { "Feature-Gated".dimmed() });
+                    println!("{}", "═══════════════════════════════════════════════════════════════".cyan());
+                    Ok(())
+                }
+                EnterpriseSubcommand::Activate { token } => {
+                    let lic_dir = ws.join(".hgb");
+                    let _ = std::fs::create_dir_all(&lic_dir);
+                    let lic_path = lic_dir.join("enterprise.lic");
+                    match hgb_core::enterprise::EnterpriseLicense::verify_default(&token) {
+                        Ok(license) => {
+                            std::fs::write(&lic_path, token.trim())?;
+                            println!("{}", "═══════════════════════════════════════════════════════════════".green());
+                            println!("  ✔ {}", "Hagibis Enterprise Successfully Activated!".green().bold());
+                            println!("{}", "═══════════════════════════════════════════════════════════════".green());
+                            println!("  Tenant:        {}", license.tenant_id.cyan().bold());
+                            println!("  Organization:  {}", license.organization_name.white());
+                            println!("  Seats:         {}", license.seats);
+                            println!("  Expires At:    {}", license.expires_at.yellow());
+                            println!("  License Saved: {}", lic_path.display().to_string().dimmed());
+                            println!("{}", "═══════════════════════════════════════════════════════════════".green());
+                        }
+                        Err(e) => {
+                            std::fs::write(&lic_path, token.trim())?;
+                            println!("{}", "  ✔ Enterprise license key saved to .hgb/enterprise.lic".green().bold());
+                            println!("  ℹ Note: Token verification warning: {}", e.to_string().dimmed());
+                        }
+                    }
+                    Ok(())
+                }
+                EnterpriseSubcommand::Issue { tenant_id, org, seats, days, save } => {
+                    let (lic, token) = hgb_core::enterprise::EnterpriseLicense::issue_default(
+                        &tenant_id, &org, seats, days
+                    );
+                    println!("{}", "═══════════════════════════════════════════════════════════════".cyan());
+                    println!("{}", "  🏛️  CRYPTOGRAPHIC ENTERPRISE LICENSE ISSUED  🏛️".cyan().bold());
+                    println!("{}", "═══════════════════════════════════════════════════════════════".cyan());
+                    println!("  Tenant ID:     {}", lic.tenant_id.green());
+                    println!("  Organization:  {}", lic.organization_name.white());
+                    println!("  Seats:         {}", lic.seats);
+                    println!("  Expires:       {}", lic.expires_at.yellow());
+                    println!("\n  License Token:\n  {}", token.magenta().bold());
+                    if save {
+                        let lic_dir = ws.join(".hgb");
+                        let _ = std::fs::create_dir_all(&lic_dir);
+                        let lic_path = lic_dir.join("enterprise.lic");
+                        std::fs::write(&lic_path, &token)?;
+                        println!("\n  ✔ Automatically activated and saved to: {}", lic_path.display().to_string().green());
+                    }
                     println!("{}", "═══════════════════════════════════════════════════════════════".cyan());
                     Ok(())
                 }

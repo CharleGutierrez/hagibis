@@ -116,6 +116,30 @@ pub struct EnterpriseLicense {
 }
 
 impl EnterpriseLicense {
+    pub const DEFAULT_MASTER_SECRET: &'static str = "hgb_enterprise_master_vault_key_2026_blake3";
+
+    /// Issues an enterprise license using the default master secret
+    pub fn issue_default(
+        tenant_id: impl Into<String>,
+        organization_name: impl Into<String>,
+        seats: u32,
+        validity_days: i64,
+    ) -> (Self, String) {
+        Self::generate(
+            tenant_id,
+            organization_name,
+            seats,
+            validity_days,
+            EnterpriseEntitlements::default(),
+            Self::DEFAULT_MASTER_SECRET,
+        )
+    }
+
+    /// Verifies a license token using the default master secret
+    pub fn verify_default(token: &str) -> Result<Self> {
+        Self::parse_and_verify(token, Self::DEFAULT_MASTER_SECRET)
+    }
+
     /// Generates a signed license and returns `(EnterpriseLicense, raw_license_token)`
     pub fn generate(
         tenant_id: impl Into<String>,
