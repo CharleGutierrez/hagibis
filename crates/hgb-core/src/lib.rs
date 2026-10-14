@@ -21,8 +21,14 @@ pub mod protocol;
 pub mod providers;
 #[path = "providers/openai_compatible.rs"]
 pub mod openai_compatible;
+#[path = "providers/azure_openai.rs"]
+pub mod azure_openai;
 pub mod session;
 pub mod doctor;
+pub mod mcp_microsoft;
+pub mod webhook_gateway;
+pub mod onnx_runtime;
+pub mod enterprise;
 pub mod repomap;
 pub mod rescue;
 pub mod rules;

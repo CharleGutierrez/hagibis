@@ -12,6 +12,21 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+pub use crate::azure_openai::{AzureAuth, AzureOpenAiProvider, AzureTokenUsage, DEFAULT_AZURE_API_VERSION};
+pub use crate::enterprise::{
+    EnterpriseAuditLedger, EnterpriseAuditRecord, EnterpriseEntitlements, EnterpriseLicense,
+    HgbEdition,
+};
+pub use crate::mcp_microsoft::{
+    GraphSearchTribalTool, McpMicrosoftBridge, MicrosoftMcpConfig, OutlookSendDigestTool,
+    SharePointReadSpecTool, TeamsSendAdaptiveCardTool, TribalSearchResult,
+};
+pub use crate::onnx_runtime::{CodeSearchHit, ExecutionProvider, OnnxModelMetadata, OnnxRuntimeEngine};
+pub use crate::webhook_gateway::{
+    AgentMissionDispatch, EnterpriseEvent, GenericEvent, MissionPriority,
+    ServiceNowIncident, StripeAnomaly, TeamsApproval, WebhookGateway,
+};
+
 /// A recorded tool invocation within a session
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SessionToolCall {

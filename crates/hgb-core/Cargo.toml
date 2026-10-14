@@ -42,3 +42,9 @@ wasmtime = "18.0"
 tokio-tungstenite = "0.21"
 futures-util = "0.3"
 ndarray = "0.15"
+
+[features]
+default = []
+enterprise = ["azure", "onnx"]
+azure = []
+onnx = []

@@ -44,6 +44,24 @@ pub enum ModelSubcommand {
 }
 
 #[derive(Subcommand, Debug, Clone)]
+pub enum EnterpriseSubcommand {
+    /// Show current Hagibis edition (Community vs. Enterprise) and entitlement status
+    Status,
+    /// Export SOC2 / ISO 27001 append-only cryptographic audit records
+    Audit {
+        /// Export format: json or csv
+        #[arg(long, default_value = "json")]
+        format: String,
+    },
+    /// Generate a Microsoft 365 MCP configuration (.hgb/mcp.microsoft.json)
+    McpConfig {
+        /// Optional tenant ID
+        #[arg(long)]
+        tenant_id: Option<String>,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
 pub enum StyleSubcommand {
     /// Record accepted style pattern or rejected anti-pattern
     Learn {
@@ -225,6 +243,13 @@ enum Commands {
     Resume {
         /// Optional specific session ID to resume (defaults to latest)
         id: Option<String>,
+    },
+
+    /// Enterprise Fleet & Microsoft 365 Architecture Management
+    #[command(alias = "ent")]
+    Enterprise {
+        #[command(subcommand)]
+        action: EnterpriseSubcommand,
     },
 
     /// Execute a prompt directly through the microkernel swarm
@@ -2415,6 +2440,48 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
                 None => hgb_nextgen::CockpitState::resume_or_new(),
             };
             state.run_interactive().await.map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+        }
+        Commands::Enterprise { action } => {
+            let ws = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            match action {
+                EnterpriseSubcommand::Status => {
+                    let edition = hgb_core::enterprise::HgbEdition::detect(Some(&ws));
+                    println!("{}", "═══════════════════════════════════════════════════════════════".cyan());
+                    println!("{}", "  🏛️  HAGIBIS ENTERPRISE ARCHITECTURE STATUS  🏛️".cyan().bold());
+                    println!("{}", "═══════════════════════════════════════════════════════════════".cyan());
+                    println!("  Edition:              {}", edition.name().green().bold());
+                    println!("  Is Enterprise Active: {}", if edition.is_enterprise() { "YES (Licensed)".green() } else { "NO (Community Sovereign)".yellow() });
+                    println!("  Azure OpenAI:         {}", if edition.can_use_azure_openai() { "Enabled (Private VNet / Entra ID)".green() } else { "Feature-Gated".dimmed() });
+                    println!("  Microsoft 365 MCP:    {}", if edition.can_use_m365_tools() { "Enabled (SharePoint / Teams / Outlook)".green() } else { "Feature-Gated".dimmed() });
+                    println!("  Power Automate Gate:  {}", if edition.can_use_webhook_gateway() { "Enabled (HMAC Signed Ingestion)".green() } else { "Feature-Gated".dimmed() });
+                    println!("  SOC2 Audit Ledger:    {}", if edition.can_use_audit_ledger() { "Active (Append-Only Hash Chain)".green() } else { "Feature-Gated".dimmed() });
+                    println!("{}", "═══════════════════════════════════════════════════════════════".cyan());
+                    Ok(())
+                }
+                EnterpriseSubcommand::Audit { format } => {
+                    let ledger_path = ws.join(".hgb").join("audit_ledger.json");
+                    let ledger = hgb_core::enterprise::EnterpriseAuditLedger::new(Some(ledger_path));
+                    let integrity = ledger.verify_integrity().unwrap_or(false);
+                    println!("Audit Ledger Integrity: {}", if integrity { "VALID (Cryptographically Intact)".green() } else { "TAMPERED / CORRUPTED".red() });
+                    println!("Total Blocks: {}", ledger.records().len());
+                    if format.to_lowercase() == "csv" {
+                        println!("\n{}", ledger.export_csv()?);
+                    } else {
+                        println!("\n{}", ledger.export_json()?);
+                    }
+                    Ok(())
+                }
+                EnterpriseSubcommand::McpConfig { tenant_id } => {
+                    let bridge = hgb_core::mcp_microsoft::McpMicrosoftBridge::from_env(&ws);
+                    let cfg_path = ws.join(".hgb").join("mcp.microsoft.json");
+                    let out = bridge.generate_mcp_config(Some(&cfg_path))?;
+                    println!("  ✔ Generated Microsoft 365 MCP Config: {}", out.display().to_string().green());
+                    if let Some(t) = tenant_id {
+                        println!("  ✔ Tenant ID configured: {}", t.cyan());
+                    }
+                    Ok(())
+                }
+            }
         }
         Commands::LspGhostBridge => {
             println!("{}", "👻 Initializing LSP Ghost Bridge over Unix Domain Sockets...".magenta().bold());
