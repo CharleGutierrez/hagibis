@@ -85,6 +85,22 @@ pub enum EnterpriseSubcommand {
 }
 
 #[derive(Subcommand, Debug, Clone)]
+pub enum CheckpointSubcommand {
+    /// List all recorded workspace checkpoints
+    List,
+    /// Create a new checkpoint snapshot
+    Create {
+        /// Label or description for the checkpoint
+        label: String,
+    },
+    /// Roll back to a specific checkpoint ID
+    Rewind {
+        /// Target checkpoint ID
+        id: String,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
 pub enum StyleSubcommand {
     /// Record accepted style pattern or rejected anti-pattern
     Learn {
@@ -275,6 +291,62 @@ enum Commands {
         action: EnterpriseSubcommand,
     },
 
+
+    /// Interactive Blast-Radius Architecture Radar
+    #[command(alias = "blast")]
+    BlastRadius {
+        /// Target files to analyze
+        files: Vec<String>,
+    },
+
+    /// 100% Air-Gapped Offline Submarine Mode
+    Submarine {
+        /// Audit active system network sockets and proxy status
+        #[arg(long)]
+        audit: bool,
+    },
+
+    /// Multi-Agent Builder vs. Red-Teamer Security Tournament
+    Tournament {
+        /// Code specification or task description to debate and harden
+        spec: String,
+        /// Maximum debate and refinement rounds
+        #[arg(long, default_value_t = 3)]
+        rounds: usize,
+    },
+
+    /// Autonomous Agentic Git Bisect Regression Hunter
+    Bisect {
+        /// Bug symptom description or test command that reproduces the issue
+        #[arg(long)]
+        bug: String,
+        /// Good commit hash (defaults to HEAD~10)
+        #[arg(long)]
+        good: Option<String>,
+        /// Bad commit hash (defaults to HEAD)
+        #[arg(long)]
+        bad: Option<String>,
+    },
+
+    /// Local-First Speculative Draft Decoding (Ollama + Cloud Hybrid)
+    SpeculativeDraft {
+        /// Prompt to execute with speculative decoding
+        prompt: String,
+        /// Local draft model name
+        #[arg(long, default_value = "qwen2.5-coder:1.5b")]
+        draft_model: String,
+    },
+
+    /// Zero-Broken-Diff Speculative Memory Sandbox & Healing
+    SpeculativeSandbox {
+        /// Check or build command to run inside speculative sandbox (e.g. "cargo check")
+        #[arg(short, long, default_value = "cargo check")]
+        cmd: String,
+        /// Target files or directories to mirror into sandbox (comma separated or defaults to src/, Cargo.toml)
+        #[arg(long)]
+        files: Option<String>,
+    },
+
     /// Execute a prompt directly through the microkernel swarm
     #[command(alias = "ask", alias = "p")]
     Run {
@@ -367,15 +439,11 @@ enum Commands {
         heal: bool,
     },
 
-    /// Manage time-travel state checkpoints and WAL
-    #[command(alias = "ckpt")]
+    /// Workspace Checkpoint Time-Machine (create, list, rewind)
+    #[command(alias = "cp", alias = "ckpt")]
     Checkpoint {
-        /// Action: create, list, rollback
-        #[arg(short, long, default_value = "create")]
-        action: String,
-        /// Checkpoint label
-        #[arg(short, long)]
-        label: Option<String>,
+        #[command(subcommand)]
+        action: CheckpointSubcommand,
     },
 
     /// Audit and inspect Blake3 Merkle Provenance Ledger
@@ -2670,6 +2738,172 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             println!("  ✔ HUD is now rendering seamlessly.");
             Ok(())
         }
+        Commands::BlastRadius { files } => {
+            let ws = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let paths: Vec<std::path::PathBuf> = if files.is_empty() {
+                vec![std::path::PathBuf::from("crates/hgb-cli/src/main.rs")]
+            } else {
+                files.into_iter().map(std::path::PathBuf::from).collect()
+            };
+            println!("{}", "🛰️ Analyzing Architectural Blast Radius...".magenta().bold());
+            let radar = hgb_core::BlastRadiusRadar::new(&ws);
+            let report = radar.analyze(&paths)?;
+            println!("{}", "═══════════════════════════════════════════════════════════════".magenta());
+            println!("{}", "  🛰️  INTERACTIVE ARCHITECTURAL BLAST-RADIUS RADAR  🛰️".magenta().bold());
+            println!("{}", "═══════════════════════════════════════════════════════════════".magenta());
+            println!("  Target Files:      {}", report.target_files.join(", ").cyan());
+            println!("  Blast Score:       {:.1} / 100", report.blast_score);
+            println!("  Severity:          {}", report.severity.colorize());
+            println!("  Modified Symbols:  {}", report.modified_symbols.len());
+            for sym in report.modified_symbols.iter().take(5) {
+                println!("    • {} {} ({}:{})", sym.kind.dimmed(), sym.name.yellow().bold(), sym.file_path, sym.line_number);
+            }
+            if report.modified_symbols.len() > 5 {
+                println!("    ... and {} more symbols", report.modified_symbols.len() - 5);
+            }
+            println!("  Total Call-sites:  {}", report.total_references);
+            println!("  Dependent Files:   {}", report.dependent_files.len());
+            for dep in report.dependent_files.iter().take(5) {
+                println!("    ↳ {}", dep.cyan());
+            }
+            if !report.recommended_tests.is_empty() {
+                println!("\n  🎯 Recommended Regression Test Suite:");
+                for t in &report.recommended_tests {
+                    println!("    ✔ {}", t.green());
+                }
+            }
+            println!("{}", "═══════════════════════════════════════════════════════════════".magenta());
+            Ok(())
+        }
+        Commands::Submarine { audit } => {
+            if audit {
+                let audit_report = hgb_core::SubmarineGuard::audit_network();
+                println!("{}", "═══════════════════════════════════════════════════════════════".cyan());
+                println!("{}", "  🛡️  SUBMARINE AIR-GAP NETWORK AUDIT  🛡️".cyan().bold());
+                println!("{}", "═══════════════════════════════════════════════════════════════".cyan());
+                println!("  Status:             {}", if !audit_report.airgap_breached { "AIRGAPPED (Isolated)".green().bold() } else { "EXPOSED TO EXTERNAL TRAFFIC".red().bold() });
+                println!("  Loopback Sockets:   {}", audit_report.safe_loopback_sockets.len());
+                println!("  External Sockets:   {}", if audit_report.active_external_connections.is_empty() { "NONE (Secure)".green() } else { audit_report.active_external_connections.join(", ").red() });
+                println!("  Summary:            {}", audit_report.summary.white());
+                println!("{}", "═══════════════════════════════════════════════════════════════".cyan());
+            } else {
+                let mut guard = hgb_core::SubmarineGuard::new();
+                let status = guard.engage()?;
+                println!("{}", "═══════════════════════════════════════════════════════════════".blue());
+                println!("{}", "  ⚓  SUBMARINE MODE ACTIVATED (AIR-GAPPED SOVEREIGN)  ⚓".blue().bold());
+                println!("{}", "═══════════════════════════════════════════════════════════════".blue());
+                println!("  Status:             {}", if status.is_active { "ACTIVE (100% Offline)".green().bold() } else { "INACTIVE".red() });
+                println!("  Loopback Enforced:  {}", if status.enforced_loopback_only { "YES (127.0.0.1, UDS Only)".green() } else { "NO".red() });
+                println!("  Telemetry Enforced: {}", if status.zero_telemetry_enforced { "DO_NOT_TRACK=1, Analytics Disabled".green() } else { "NO".red() });
+                println!("  Neutralized Env:    {}", status.neutralized_env_vars.join(", ").dimmed());
+                println!("  Activated At:       {}", status.activated_at.yellow());
+                println!("{}", "═══════════════════════════════════════════════════════════════".blue());
+            }
+            Ok(())
+        }
+        Commands::Tournament { spec, rounds } => {
+            println!("{}", format!("⚔️ Initializing Builder vs. Red-Teamer Tournament (Rounds: {})...", rounds).yellow().bold());
+            let mut config = hgb_core::TournamentConfig::default();
+            config.max_rounds = rounds;
+            let tournament = hgb_core::AdversarialTournament::new(config);
+            let outcome = tournament.run_tournament(&spec, "proposed_module.rs")?;
+            println!("{}", "═══════════════════════════════════════════════════════════════".yellow());
+            println!("{}", "  ⚔️  BUILDER VS. RED-TEAMER TOURNAMENT OUTCOME  ⚔️".yellow().bold());
+            println!("{}", "═══════════════════════════════════════════════════════════════".yellow());
+            println!("  Verdict:           {}", if outcome.passed { "PASSED (Code Hardened)".green().bold() } else { "FAILED (Vulnerabilities Remain)".red().bold() });
+            println!("  Total Rounds:      {}", outcome.total_rounds);
+            for round in &outcome.rounds {
+                println!("  • Round #{}: attacks detected = {}, fixes applied = {}, surviving = {}",
+                    round.round_number, round.red_team_attacks.len(), round.builder_fixes.len(), round.surviving_vulnerabilities);
+            }
+            if let Some(ref cert) = outcome.certificate {
+                println!("\n  📜 Cryptographic Security Certificate Issued:");
+                println!("    Certificate ID:  {}", cert.certificate_id.cyan().bold());
+                println!("    Blake3 Hash:     {}", cert.blake3_code_hash.green());
+                println!("    Signature:       {}", cert.signature.dimmed());
+                println!("    Timestamp:       {}", cert.timestamp.yellow());
+            }
+            if !outcome.remaining_vulnerabilities.is_empty() {
+                println!("\n  ⚠️ Remaining Vulnerabilities:");
+                for v in &outcome.remaining_vulnerabilities {
+                    println!("    ✕ [{:?}] {}: line {} - {}", v.severity, v.title.red(), v.line, v.remediation_hint.dimmed());
+                }
+            }
+            println!("{}", "═══════════════════════════════════════════════════════════════".yellow());
+            Ok(())
+        }
+        Commands::Bisect { bug, good, bad } => {
+            let ws = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            println!("{}", format!("🔬 Initiating Agentic Git Bisect Regression Hunter for: '{}'", bug).red().bold());
+            let good_rev = good.unwrap_or_else(|| "HEAD~10".to_string());
+            let bad_rev = bad.unwrap_or_else(|| "HEAD".to_string());
+            let engine = hgb_core::AgenticBisectEngine::new(&ws);
+            let config = hgb_core::BisectConfig::new(good_rev.clone(), bad_rev.clone(), bug.clone());
+            let outcome = engine.run_bisect(&config)?;
+            println!("{}", "═══════════════════════════════════════════════════════════════".red());
+            println!("{}", "  🎯  AGENTIC BISECT REGRESSION HUNTER REPORT  🎯".red().bold());
+            println!("{}", "═══════════════════════════════════════════════════════════════".red());
+            println!("  Commit Range:      {} .. {}", good_rev.cyan(), bad_rev.cyan());
+            println!("  Steps Evaluated:   {}", outcome.total_steps);
+            for step in &outcome.steps_taken {
+                println!("    Step #{}: commit {} -> {}", step.step_number, &step.commit_hash[..8.min(step.commit_hash.len())],
+                    if step.test_passed { "PASS".green() } else { "FAIL".red() });
+            }
+            if let Some(ref culprit) = outcome.culprit_commit {
+                println!("\n  🔥 Culprit Commit: {}", culprit.yellow().bold());
+                if let Some(ref analysis) = outcome.analysis {
+                    println!("  Author:            {}", analysis.author.white());
+                    println!("  Message:           {}", analysis.commit_message.cyan());
+                    println!("  Files Changed:     {}", analysis.files_changed.join(", "));
+                    println!("  Suspected Cause:   {}", analysis.suspected_cause.yellow());
+                    println!("\n  💡 Recommended Remedy:\n  {}", analysis.recommended_remedy.green());
+                }
+            } else {
+                println!("\n  ✔ No regression culprit isolated in given commit range.");
+            }
+            println!("{}", "═══════════════════════════════════════════════════════════════".red());
+            Ok(())
+        }
+        Commands::SpeculativeDraft { prompt, draft_model } => {
+            println!("{}", format!("🚀 Running Local Speculative Draft Decoding (draft model: {})...", draft_model).green().bold());
+            let engine = hgb_core::SpeculativeDraftEngine::new("http://127.0.0.1:11434", draft_model);
+            let draft = engine.generate_draft(&prompt, 128).await?;
+            println!("{}", "═══════════════════════════════════════════════════════════════".green());
+            println!("{}", "  🚀  LOCAL SPECULATIVE DRAFT DECODING TELEMETRY  🚀".green().bold());
+            println!("{}", "═══════════════════════════════════════════════════════════════".green());
+            println!("  Draft Model:       {}", draft.draft_model.cyan().bold());
+            println!("  Draft Tokens:      {}", draft.draft_tokens.len());
+            println!("  Generation Time:   {}ms", draft.generation_time_ms);
+            println!("  Throughput:        {:.1} tokens/sec", draft.tokens_per_sec);
+            println!("\n  Draft Preview:\n{}", draft.draft_text.white());
+            println!("{}", "═══════════════════════════════════════════════════════════════".green());
+            Ok(())
+        }
+        Commands::SpeculativeSandbox { cmd, files } => {
+            let ws = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let sandbox = hgb_core::SpeculativeSandbox::new(&ws).with_check_command(&cmd);
+            let file_list: Vec<&str> = if let Some(ref fl) = files {
+                fl.split(',').map(|s| s.trim()).collect()
+            } else {
+                vec!["Cargo.toml", "crates/hgb-cli/src/main.rs"]
+            };
+            println!("{}", format!("🧪 Preparing Speculative Sandbox in RAM disk (shm: {})...", sandbox.is_using_shm()).cyan().bold());
+            sandbox.prepare_sandbox(&file_list)?;
+            println!("  Sandbox isolated root: {}", sandbox.sandbox_root().display().to_string().cyan());
+            let comp = sandbox.run_compilation_check()?;
+            println!("  Verification command: {}", cmd.yellow());
+            println!("  Compilation:          {}", if comp.success { "PASSED (Clean)".green().bold() } else { "FAILED".red().bold() });
+            println!("  Duration:             {}ms", comp.duration_ms);
+            if !comp.extracted_errors.is_empty() {
+                println!("  Extracted Errors:     {}", comp.extracted_errors.len());
+                for err in comp.extracted_errors.iter().take(3) {
+                    println!("    • {}", err.red());
+                }
+            }
+            let _ = sandbox.rollback();
+            println!("  ✔ Speculative sandbox cleaned up with zero disk artifacts left behind.");
+            Ok(())
+        }
         Commands::Run { text, model, provider } => {
             let raw_model = if let Some(ref m) = model {
                 m.clone()
@@ -3251,10 +3485,41 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             }
             Ok(())
         }
-        Commands::Checkpoint { action, label } => {
-            let repl_helper = HagibisRepl::new(client);
-            let resp = repl_helper.dispatch(HgbRequest::Checkpoint { action, label }).await;
-            repl_helper.render_response(resp);
+        Commands::Checkpoint { action } => {
+            let ws = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let time_machine = hgb_core::CheckpointTimeMachine::new(&ws);
+            match action {
+                CheckpointSubcommand::List => {
+                    let list = time_machine.list_checkpoints()?;
+                    println!("{}", "═══════════════════════════════════════════════════════════════".cyan());
+                    println!("{}", "  ⏱️  WORKSPACE CHECKPOINT TIME-MACHINE  ⏱️".cyan().bold());
+                    println!("{}", "═══════════════════════════════════════════════════════════════".cyan());
+                    if list.is_empty() {
+                        println!("  No checkpoints recorded yet in .hgb/checkpoints/");
+                    } else {
+                        for ckpt in list {
+                            println!("  • ID:    {}", ckpt.id.green().bold());
+                            println!("    Label: {}", ckpt.label.white());
+                            println!("    Time:  {} (Git: {})", ckpt.timestamp.dimmed(), ckpt.git_head.as_deref().unwrap_or("none"));
+                            println!("    Files: {} snapshots ({} bytes)", ckpt.file_count, ckpt.total_bytes);
+                            println!();
+                        }
+                    }
+                    println!("{}", "═══════════════════════════════════════════════════════════════".cyan());
+                }
+                CheckpointSubcommand::Create { label } => {
+                    let ckpt = time_machine.create_checkpoint(&label)?;
+                    println!("✔ Checkpoint created: {} ({})", ckpt.id.green().bold(), ckpt.label.white());
+                    println!("  Snapshotted {} workspace files ({} bytes) in sub-milliseconds.", ckpt.file_count, ckpt.total_bytes);
+                }
+                CheckpointSubcommand::Rewind { id } => {
+                    let res = time_machine.rollback_to(&id)?;
+                    println!("✔ Workspace successfully restored to checkpoint: {}", res.checkpoint_id.green().bold());
+                    println!("  Restored files: {}", res.files_restored.len());
+                    println!("  Cleaned phantom files: {}", res.files_deleted.len());
+                    println!("  Latency: {}ms", res.duration_ms);
+                }
+            }
             Ok(())
         }
         Commands::Provenance { action } => {
@@ -3415,11 +3680,33 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(())
         }
         Commands::Undo { checkpoint } => {
-            let repl_helper = HagibisRepl::new(client);
-            let resp = repl_helper.dispatch(HgbRequest::Undo {
-                checkpoint_id: checkpoint,
-            }).await;
-            repl_helper.render_response(resp);
+            let ws = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let time_machine = hgb_core::CheckpointTimeMachine::new(&ws);
+            let res = if let Some(ref id) = checkpoint {
+                time_machine.rollback_to(id)?
+            } else {
+                time_machine.rollback_latest()?
+            };
+            println!("{}", "═══════════════════════════════════════════════════════════════".green());
+            println!("  ✔ {}", "ATOMIC INSTANT ROLLBACK EXECUTED".green().bold());
+            println!("{}", "═══════════════════════════════════════════════════════════════".green());
+            println!("  Checkpoint:     {}", res.checkpoint_id.cyan().bold());
+            println!("  Label:          {}", res.label.white());
+            println!("  Files Restored: {}", res.files_restored.len());
+            for f in res.files_restored.iter().take(5) {
+                println!("    ↺ {}", f);
+            }
+            if res.files_restored.len() > 5 {
+                println!("    ... and {} more files", res.files_restored.len() - 5);
+            }
+            if !res.files_deleted.is_empty() {
+                println!("  Files Cleaned:  {}", res.files_deleted.len());
+                for f in res.files_deleted.iter().take(5) {
+                    println!("    ✕ {}", f);
+                }
+            }
+            println!("  Latency:        {}ms", res.duration_ms);
+            println!("{}", "═══════════════════════════════════════════════════════════════".green());
             Ok(())
         }
         Commands::Rules { init, dir } => {

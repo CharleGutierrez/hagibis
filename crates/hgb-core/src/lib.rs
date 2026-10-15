@@ -674,3 +674,37 @@ pub use stakeholder_portal::{StakeholderPortal, PortalConfig, PortalStatus};
 pub use enterprise_gateway::{EnterpriseGateway, EnterpriseCompliance, GatewayAuthResult};
 pub mod visionary;
 pub mod zig_accelerate;
+
+pub mod speculative_sandbox;
+pub mod speculative_draft;
+pub mod submarine;
+pub mod blast_radius;
+pub mod adversarial_tournament;
+pub mod checkpoint_time_machine;
+pub mod agentic_bisect;
+
+pub use speculative_sandbox::{
+    CompilationResult, HealingReport, HealingRound, SandboxPatch, SpeculativeSandbox,
+};
+pub use speculative_draft::{
+    DraftProposal, SpeculativeDraftEngine, SpeculativeMetrics, VerificationResult,
+};
+pub use submarine::{
+    AirgapStatus, NetworkAuditReport, SubmarineGuard,
+};
+pub use blast_radius::{
+    AffectedSymbol, ArchitecturalBlastRadiusReport, BlastRadiusRadar, BlastSeverity, CallsiteReference,
+};
+pub use adversarial_tournament::{
+    AdversarialTournament, RemediationAction, SecurityCertificate, TournamentConfig,
+    TournamentOutcome, TournamentRound, VulnCategory,
+    VulnSeverity as TournamentVulnSeverity,
+    VulnerabilityFinding as TournamentVulnerabilityFinding,
+};
+pub use checkpoint_time_machine::{
+    CheckpointMetadata, CheckpointTimeMachine, RollbackReport,
+};
+pub use agentic_bisect::{
+    AgenticBisectEngine, BisectConfig, BisectOutcome, BisectStep, CulpritAnalysis,
+};
+
