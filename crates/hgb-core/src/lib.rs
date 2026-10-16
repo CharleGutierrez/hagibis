@@ -708,3 +708,29 @@ pub use agentic_bisect::{
     AgenticBisectEngine, BisectConfig, BisectOutcome, BisectStep, CulpritAnalysis,
 };
 
+// ---------------------------------------------------------------------------
+// 4-PHASE RE-ENGINEERING CORE MODULES
+// ---------------------------------------------------------------------------
+pub mod embedded_infer;
+pub mod overlayfs_sandbox;
+pub mod graph_of_thought;
+pub mod ambient_dream;
+
+pub use embedded_infer::{
+    EmbeddedInferenceEngine, EmbeddedTokenizer, GgufModel, GgufTensorInfo, GgufValue,
+    InferenceConfig, InferenceResult, InferenceTelemetry, LogitsProcessor,
+};
+pub use overlayfs_sandbox::{
+    CommitReport as SandboxCommitReport, OverlaySandbox, RollbackReport as SandboxRollbackReport,
+    SandboxBackend, SandboxDiff, SandboxExecutionReport,
+};
+pub use graph_of_thought::{
+    BranchExecutionResult, EdgeType, FitnessScore, GoTArbiter, ThoughtCertificate,
+    ThoughtEdge, ThoughtGraph, ThoughtNode, ThoughtNodeId, ThoughtState, ThoughtStrategy,
+};
+pub use ambient_dream::{
+    AmbientDreamEngine, DpoMetadata, DpoPreferencePair as DistillDpoPair, DreamCycleReport, GitCommitRecord,
+    LoRAConfig, PowerState, SystemHeadroom,
+};
+
+
