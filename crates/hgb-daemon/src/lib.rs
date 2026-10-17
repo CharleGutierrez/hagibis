@@ -126,3 +126,14 @@ mod tests {
         assert!(rendered.contains("RAM:"));
     }
 }
+
+// ===========================================================================
+// ADDITIONS FOR crates/hgb-daemon/src/lib.rs
+// ===========================================================================
+
+pub mod p2p_tunnel;
+
+pub use p2p_tunnel::{
+    build_tunnel_router, P2pAuthToken, P2pClientMetrics, P2pSessionManager,
+    P2pTunnelServer, TerminalQrRasterizer, TunnelState,
+};

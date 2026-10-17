@@ -346,6 +346,48 @@ impl InteractiveCommandCatalog {
                 syntax: "hgb finops <report|budget>",
                 description: "LLM token cost gateway, speculative cache hits, and automated arbitrage reporting.",
             },
+            CommandEntry {
+                name: "voice",
+                aliases: &["mic", "listen"],
+                category: "Audio/Voice",
+                syntax: "hgb voice [--file <audio.wav>] [--record] [--groq]",
+                description: "Voice-to-Intent Engine: WAV/PCM parser, VAD silence trimming, Whisper transcription, and structured intent classification.",
+            },
+            CommandEntry {
+                name: "visual-loop",
+                aliases: &["visual-debug", "cdp-debug"],
+                category: "Visual/CDP",
+                syntax: "hgb visual-loop [--url <url>] [--port <9222>] [--screenshot <out.png>]",
+                description: "Visual Multimodal Debugger: Chromium CDP WebSocket client, Page screenshot capture, JS exception extraction, and vision prompt generator.",
+            },
+            CommandEntry {
+                name: "time-machine",
+                aliases: &["chrono", "tm"],
+                category: "Storage/History",
+                syntax: "hgb time-machine [--list] [--restore <id>] [--scrub]",
+                description: "ChronoWarp Time-Machine: Persistent .hgb/timelines/ snapshot ledger, BLAKE3 checksums, diff restoring, and interactive ASCII scrubber graph.",
+            },
+            CommandEntry {
+                name: "ast-query",
+                aliases: &["ast-refactor"],
+                category: "AST/Refactor",
+                syntax: "hgb ast-query [--query <fn:async,returns:Result>] [--path <file.rs>] [--preview]",
+                description: "Deterministic AST Query & Refactor: syn/quote structural pattern query engine with delimiter and syntax invariant enforcement.",
+            },
+            CommandEntry {
+                name: "p2p-tunnel",
+                aliases: &["p2p", "share-p2p"],
+                category: "P2P/Network",
+                syntax: "hgb p2p-tunnel [--port <local_port>] [--bind <ip>] [--qr]",
+                description: "Zero-Config P2P Encrypted Tunnel: Axum reverse proxy, BLAKE3 authentication, and native Unicode half-block terminal QR rasterizer.",
+            },
+            CommandEntry {
+                name: "budget",
+                aliases: &["spending", "finops-budget"],
+                category: "FinOps/Budget",
+                syntax: "hgb budget [--set-limit <usd>] [--record <model,in_tok,out_tok>]",
+                description: "Smart FinOps & Token Budget Envelope: .hgb/budget.json ledger, pricing tables, daily USD cap enforcement, and dynamic routing to Local Ollama.",
+            },
         ]
     }
 

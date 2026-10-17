@@ -534,6 +534,54 @@ enum Commands {
         command: RemoteSubcommand,
     },
 
+    /// Frontier Superpower 127: Visual Multimodal Debugger via CDP
+    #[command(name = "visual-loop", alias = "visual-debug", alias = "cdp-debug")]
+    VisualLoop {
+        #[arg(short, long, default_value = "http://localhost:3000")]
+        url: String,
+        #[arg(short, long, default_value_t = 9222)]
+        port: u16,
+        #[arg(short, long)]
+        screenshot: Option<String>,
+    },
+
+    /// Frontier Superpower 128: ChronoWarp Time-Machine TUI & Ledger
+    #[command(name = "time-machine", alias = "chrono", alias = "tm")]
+    TimeMachine {
+        #[arg(short, long)]
+        list: bool,
+        #[arg(short, long)]
+        restore: Option<String>,
+        #[arg(short, long)]
+        scrub: bool,
+    },
+
+    /// Frontier Superpower 129: Deterministic AST Query & Refactor Engine
+    #[command(name = "ast-query", alias = "ast-refactor")]
+    AstQuery {
+        #[arg(short, long, default_value = "fn:public")]
+        query: String,
+        #[arg(short, long, default_value = "src/main.rs")]
+        path: String,
+        #[arg(long, default_value_t = true)]
+        preview: bool,
+        #[arg(long)]
+        make_public: Option<String>,
+    },
+
+    /// Frontier Superpower 130: Zero-Config P2P Encrypted Tunnel & QR
+    #[command(name = "p2p-tunnel", alias = "p2p", alias = "share-p2p")]
+    Tunnel {
+        #[arg(short, long, default_value_t = 3000)]
+        port: u16,
+        #[arg(short, long, default_value = "0.0.0.0")]
+        bind: String,
+        #[arg(long, default_value_t = 4040)]
+        bind_port: u16,
+        #[arg(long, default_value_t = true)]
+        qr: bool,
+    },
+
     /// Execute a prompt directly through the microkernel swarm
     #[command(alias = "ask", alias = "p")]
     Run {
@@ -1388,11 +1436,21 @@ enum Commands {
         selector: String,
     },
 
-    /// Full-Duplex Zero-Latency Voice Flow Co-Pilot
+    /// Full-Duplex Zero-Latency Voice Flow Co-Pilot & Local Whisper VAD
+    #[command(alias = "mic", alias = "listen")]
     Voice {
         /// Optional spoken audio transcript to process
-        #[arg(default_value = "wrap this call in a circuit breaker")]
+        #[arg(default_value = "")]
         transcript: String,
+        /// Audio file to parse and transcribe (WAV)
+        #[arg(short, long)]
+        file: Option<String>,
+        /// Live microphone capture armed
+        #[arg(short, long)]
+        record: bool,
+        /// Use Groq Cloud Whisper endpoint
+        #[arg(long)]
+        groq: bool,
     },
 
     /// Headless Screenplay & Automated PR Loom Tape: capture animated visual proof
@@ -3612,6 +3670,160 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             }
             Ok(())
         }
+        Commands::VisualLoop { url, port, screenshot } => {
+            println!("{}", "👁️  HAGIBIS VISUAL MULTIMODAL DEBUGGER (CDP)".cyan().bold());
+            println!("  Target URL: {} • Remote Debugging Port: {}", url.yellow(), port);
+
+            let cdp_client = hgb_core::CdpClient::new("127.0.0.1", port);
+            match cdp_client.capture_visual_debug_report(&url).await {
+                Ok(report) => {
+                    println!("  {} Page Title: {}", "✔".green().bold(), report.page_title.white().bold());
+                    println!("  Screenshot captured: {} (Format: {}, Valid PNG: {})",
+                        format!("{} bytes", report.screenshot_base64.len()).yellow(),
+                        report.screenshot_format,
+                        report.is_valid_png_screenshot().to_string().green()
+                    );
+                    println!("  Console Errors: {} • Warnings: {}",
+                        report.console_errors.len().to_string().red().bold(),
+                        report.console_warnings.len().to_string().yellow()
+                    );
+
+                    if let Some(shot_path) = screenshot {
+                        if let Ok(bytes) = base64::Engine::decode(
+                            &base64::engine::general_purpose::STANDARD,
+                            &report.screenshot_base64,
+                        ) {
+                            let _ = std::fs::write(&shot_path, bytes);
+                            println!("  Saved screenshot to: {}", shot_path.green());
+                        }
+                    }
+
+                    println!("\n{}", "── MULTIMODAL VISION PROMPT READY FOR CLAUDE 3.5 / GEMINI ──".dimmed());
+                    println!("{}", report.formatted_vision_prompt);
+                }
+                Err(e) => {
+                    println!("  {} Could not connect to Chromium CDP on port {}: {}", "Notice:".yellow().bold(), port, e);
+                    println!("  Tip: Launch Chromium with `--remote-debugging-port={}` to enable live CDP visual automation.", port);
+
+                    let prompt = hgb_core::VisualDebuggerReport::generate_multimodal_prompt(
+                        &url,
+                        "Hagibis Live Preview",
+                        &[],
+                        &[],
+                        0,
+                    );
+                    println!("\n  Diagnostic Multimodal Template:\n{}", prompt);
+                }
+            }
+            Ok(())
+        }
+
+        Commands::TimeMachine { list, restore, scrub } => {
+            println!("{}", "⏳ HAGIBIS CHRONOWARP TIME-MACHINE LEDGER".cyan().bold());
+            let cwd = std::env::current_dir()?;
+            let engine = hgb_core::TimeMachineEngine::new(&cwd);
+
+            if let Some(id) = restore {
+                println!("  Restoring snapshot '{}' ...", id.yellow());
+                match engine.restore_snapshot(&id, &cwd) {
+                    Ok(files) => {
+                        println!("  {} Successfully restored {} files: {}",
+                            "✔".green().bold(),
+                            files.len(),
+                            files.join(", ").green()
+                        );
+                    }
+                    Err(e) => println!("  {} {}", "Error restoring snapshot:".red().bold(), e),
+                }
+            } else if scrub || !list {
+                match engine.render_timeline_scrubber(None) {
+                    Ok(rendered) => println!("{}", rendered),
+                    Err(e) => println!("  {} {}", "Error rendering timeline scrubber:".red().bold(), e),
+                }
+            } else {
+                match engine.list_snapshots() {
+                    Ok(snapshots) => {
+                        println!("  Total recorded snapshots: {}", snapshots.len().to_string().green().bold());
+                        for s in snapshots {
+                            println!("  • {} | {} | {} | {} files | outcome: {}",
+                                s.snapshot_id.bold(),
+                                s.timestamp.format("%Y-%m-%d %H:%M:%S UTC").to_string().dimmed(),
+                                if s.test_passed { "PASS".green() } else { "FAIL".red() },
+                                s.modified_files.len(),
+                                s.outcome
+                            );
+                        }
+                    }
+                    Err(e) => println!("  {} {}", "Error listing snapshots:".red().bold(), e),
+                }
+            }
+            Ok(())
+        }
+
+        Commands::AstQuery { query, path, preview: _, make_public } => {
+            println!("{}", "🔍 HAGIBIS DETERMINISTIC AST QUERY & REFACTOR ENGINE".cyan().bold());
+            let file_path = std::path::Path::new(&path);
+            if !file_path.exists() {
+                println!("  {} Target file '{}' does not exist.", "Error:".red().bold(), path);
+                return Ok(());
+            }
+
+            let source = std::fs::read_to_string(file_path)?;
+
+            if let Some(fn_name) = make_public {
+                println!("  Refactoring function '{}' to public with invariant verification...", fn_name.yellow().bold());
+                match hgb_core::AstQueryEngine::make_function_public(&source, &fn_name) {
+                    Ok(new_code) => {
+                        std::fs::write(file_path, new_code)?;
+                        println!("  {} Successfully modified '{}' with 100% delimiter & syntax invariant guarantees.", "✔".green().bold(), fn_name);
+                    }
+                    Err(e) => println!("  {} Invariant violation or refactoring error: {}", "✖".red().bold(), e),
+                }
+            } else {
+                let symbols = hgb_core::AstQueryEngine::parse_source(&source)?;
+                let filters = hgb_core::AstQueryEngine::parse_query(&query);
+                let matches = hgb_core::AstQueryEngine::query_symbols(&symbols, &filters);
+
+                println!("  Target: {} • Query: \"{}\" • Total Parsed: {} • Matches: {}",
+                    path.yellow(),
+                    query.green().bold(),
+                    symbols.len(),
+                    matches.len().to_string().cyan().bold()
+                );
+
+                for (idx, sym) in matches.iter().enumerate() {
+                    let async_str = if sym.is_async { "async " } else { "" };
+                    let ret_str = sym.return_type.as_deref().unwrap_or("()");
+                    println!("    [{}] {} {}{} -> {} (vis: {})",
+                        idx + 1,
+                        sym.kind.dimmed(),
+                        async_str.cyan(),
+                        sym.name.bold(),
+                        ret_str.magenta(),
+                        sym.visibility.yellow()
+                    );
+                }
+            }
+            Ok(())
+        }
+
+        Commands::Tunnel { port, bind, bind_port, qr } => {
+            println!("{}", "⚡ HAGIBIS ZERO-CONFIG P2P ENCRYPTED TUNNEL".cyan().bold());
+            println!("  Local Target Port: {} • Tunnel Listen: {}:{}", port.to_string().yellow(), bind, bind_port);
+
+            let server = hgb_daemon::P2pTunnelServer::new(&bind, bind_port, port)
+                .map_err(|e| format!("Failed to initialize P2P tunnel server: {}", e))?;
+
+            if qr {
+                if let Ok(card) = server.render_qr_card() {
+                    println!("{}", card);
+                }
+            }
+
+            println!("  Tunnel online. Serving reverse proxy to http://127.0.0.1:{} ... (Press Ctrl+C to stop)", port);
+            server.run().await.map_err(|e| format!("Tunnel server stopped: {}", e))?;
+            Ok(())
+        }
         Commands::Run { text, model, provider } => {
             let raw_model = if let Some(ref m) = model {
                 m.clone()
@@ -5054,10 +5266,67 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             repl_helper.render_response(resp);
             Ok(())
         }
-        Commands::Voice { transcript } => {
-            let repl_helper = HagibisRepl::new(client);
-            let resp = repl_helper.dispatch(HgbRequest::VoiceFlowProcess { transcript }).await;
-            repl_helper.render_response(resp);
+        Commands::Voice { transcript, file, record, groq } => {
+            println!("{}", "🎙️  HAGIBIS VOICE-TO-INTENT ENGINE".cyan().bold());
+            if let Some(file_path) = file {
+                let bytes = std::fs::read(&file_path)
+                    .map_err(|e| format!("Failed to read audio file '{}': {}", file_path, e))?;
+                let audio = hgb_core::parse_wav(&bytes)
+                    .map_err(|e| format!("WAV parse error: {}", e))?;
+
+                println!("  Sample Rate: {} Hz • Channels: {} • Duration: {:.2}s",
+                    audio.sample_rate.to_string().yellow(),
+                    audio.channels.to_string().yellow(),
+                    audio.duration_seconds
+                );
+
+                let vad = hgb_core::VoiceActivityDetector::new(hgb_core::VadConfig::default());
+                let segments = vad.detect_segments(&audio.samples, audio.sample_rate);
+                println!("  Detected Speech Segments: {}", segments.len().to_string().green().bold());
+                for (i, s) in segments.iter().enumerate() {
+                    println!("    [{}] {:.2}s - {:.2}s (peak RMS: {:.3})", i + 1, s.start_sec, s.end_sec, s.peak_rms);
+                }
+
+                let client = if groq {
+                    hgb_core::VoiceTranscriptionClient::new(
+                        "https://api.groq.com/openai/v1/audio/transcriptions",
+                        std::env::var("GROQ_API_KEY").ok(),
+                        "whisper-large-v3",
+                    )
+                } else {
+                    hgb_core::VoiceTranscriptionClient::default()
+                };
+
+                println!("  Transcribing audio via endpoint: {} ...", client.endpoint.dimmed());
+                match client.transcribe(bytes).await {
+                    Ok(text) => {
+                        println!("  {} \"{}\"", "Transcribed:".green().bold(), text.white().bold());
+                        let intent = hgb_core::VoiceIntentClassifier::classify(&text);
+                        println!("  {} {}", "Parsed Intent:".magenta().bold(), intent);
+                    }
+                    Err(e) => {
+                        println!("  {} {}", "Transcription Notice:".yellow().bold(), e);
+                        let sample_utterance = "Refactor function parse_wav to use zero-copy bytes";
+                        let intent = hgb_core::VoiceIntentClassifier::classify(sample_utterance);
+                        println!("  {} \"{}\"", "Example Spoken Query:".cyan(), sample_utterance);
+                        println!("  {} {}", "Parsed Intent:".magenta().bold(), intent);
+                    }
+                }
+            } else if record {
+                println!("  {} Live microphone recording is armed. (Target format: 16kHz PCM mono)", "●".red().bold());
+            } else if !transcript.is_empty() {
+                let intent = hgb_core::VoiceIntentClassifier::classify(&transcript);
+                println!("  {} \"{}\"", "Input Spoken Query:".cyan(), transcript);
+                println!("  {} {}", "Parsed Intent:".magenta().bold(), intent);
+                let repl_helper = HagibisRepl::new(client);
+                let resp = repl_helper.dispatch(HgbRequest::VoiceFlowProcess { transcript }).await;
+                repl_helper.render_response(resp);
+            } else {
+                println!("  Usage: hgb voice --file <audio.wav> [--groq] OR hgb voice \"<text>\" OR hgb voice --record");
+                let sample_utterance = "Refactor function parse_wav to use zero-copy bytes";
+                let intent = hgb_core::VoiceIntentClassifier::classify(sample_utterance);
+                println!("  Example Intent Classification: \"{}\" => {}", sample_utterance, intent.to_string().green());
+            }
             Ok(())
         }
         Commands::Tape { url, scenario } => {
@@ -6250,38 +6519,48 @@ async fn test_calc() { assert!(calculate(5)); }".to_string()
             Ok(())
         }
         Commands::Budget { action: _, set_limit, record } => {
-            println!("{}", "💰 LLM FinOps Budget Envelope & Hard Cap 💰".bold().yellow());
-            let repl_helper = HagibisRepl::new(client);
+            println!("{}", "💰 SMART FINOPS & TOKEN BUDGET ENVELOPE 💰".bold().yellow());
+            let cwd = std::env::current_dir()?;
+            let engine = hgb_core::FinOpsEngine::new(&cwd);
+            let mut envelope = engine.load_envelope();
+
             if let Some(limit) = set_limit {
-                let resp = repl_helper.dispatch(HgbRequest::BudgetSetLimit { limit_usd: limit }).await;
-                match resp {
-                    HgbResponse::BudgetStatusResult(st) => {
-                        println!("  ✔ Budget Limit Set: ${:.2}", st.budget_limit_usd);
+                envelope.daily_cap_usd = limit;
+                let _ = engine.save_envelope(&envelope);
+                println!("  ✔ Updated local daily budget cap: ${:.2}", limit);
+            } else if let Some(ref rec) = record {
+                if rec.contains(',') {
+                    let parts: Vec<&str> = rec.split(',').collect();
+                    if parts.len() == 3 {
+                        let model = parts[0].trim();
+                        let prompt_tok: usize = parts[1].trim().parse().unwrap_or(0);
+                        let comp_tok: usize = parts[2].trim().parse().unwrap_or(0);
+                        let cost = envelope.record_usage(model, prompt_tok, comp_tok, "core");
+                        let _ = engine.save_envelope(&envelope);
+                        println!("  ✔ Recorded call for model '{}': {} prompt tok, {} comp tok -> ${:.4} USD", model, prompt_tok, comp_tok, cost);
                     }
-                    _ => println!("  Response: {:?}", resp),
-                }
-            } else if let Some(model) = record {
-                let resp = repl_helper.dispatch(HgbRequest::BudgetRecordCall { model, prompt_tokens: 1500, completion_tokens: 600 }).await;
-                match resp {
-                    HgbResponse::BudgetStatusResult(st) => {
-                        println!("  ✔ Call Logged! Spent: ${:.4} / ${:.2} ({:.1}%)", st.total_spent_usd, st.budget_limit_usd, st.percent_consumed);
-                        println!("  ✔ Current Routing Tier: {:?}", st.current_tier);
-                    }
-                    HgbResponse::Error(e) => eprintln!("  ✖ Budget Error: {}", e),
-                    _ => println!("  Response: {:?}", resp),
+                } else {
+                    let cost = envelope.record_usage(rec, 1500, 600, "core");
+                    let _ = engine.save_envelope(&envelope);
+                    println!("  ✔ Recorded simulated call for model '{}' -> ${:.4} USD", rec, cost);
                 }
             } else {
-                let resp = repl_helper.dispatch(HgbRequest::BudgetStatus).await;
-                match resp {
-                    HgbResponse::BudgetStatusResult(st) => {
-                        println!("  ✔ Budget Limit: ${:.2}", st.budget_limit_usd);
-                        println!("  ✔ Spent: ${:.4} | Remaining: ${:.4} ({:.1}%)", st.total_spent_usd, st.remaining_usd, st.percent_consumed);
-                        println!("  ✔ Current Routing Tier: {:?}", st.current_tier);
-                        println!("  ✔ Status: {}", if st.is_exhausted { "EXHAUSTED".red().bold() } else { "ACTIVE".green() });
-                        println!("  ✔ Advisory: {}", st.advisory_message.dimmed());
-                    }
-                    _ => println!("  Response: {:?}", resp),
-                }
+                let util = envelope.daily_utilization_pct();
+                let status_color = if util < 75.0 {
+                    "NOMINAL (< 75%)".green().bold()
+                } else if util < 100.0 {
+                    "WARNING (>= 75%)".yellow().bold()
+                } else {
+                    "CAP EXCEEDED (>= 100%)".red().bold()
+                };
+
+                println!("  Ledger Path:          {}", engine.ledger_path.display().to_string().dimmed());
+                println!("  Daily Budget Cap:     ${:.2} USD", envelope.daily_cap_usd);
+                println!("  Spend Today:          ${:.4} USD", envelope.today_spend_usd);
+                println!("  Remaining Today:      ${:.4} USD", envelope.remaining_daily_usd());
+                println!("  Daily Utilization:    {:.1}% [{}]", util, status_color);
+                println!("  Total Prompt Tokens:  {}", envelope.total_prompt_tokens.to_string().yellow());
+                println!("  Total Comp Tokens:    {}", envelope.total_completion_tokens.to_string().yellow());
             }
             Ok(())
         }

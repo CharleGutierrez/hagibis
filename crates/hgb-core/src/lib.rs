@@ -770,3 +770,46 @@ pub use cloud_fabric::{
 
 
 
+
+// ===========================================================================
+// ADDITIONS FOR crates/hgb-core/src/lib.rs
+// ===========================================================================
+
+pub mod voice_loop;
+pub mod visual_loop;
+pub mod time_machine;
+pub mod ast_query;
+pub mod finops_budget;
+
+// Re-export core dependencies for daemon and CLI
+pub use blake3;
+pub use qrcode;
+
+// Voice-to-Intent Engine exports
+pub use voice_loop::{
+    compute_frame_rms, encode_wav_pcm16, parse_wav, ParsedAudio, SpeechSegment,
+    VadConfig, VoiceActivityDetector, VoiceIntent, VoiceIntentClassifier,
+    VoiceTranscriptionClient, WavHeader,
+};
+
+// Visual Multimodal Debugger via CDP exports
+pub use visual_loop::{
+    CdpClient, CdpConsoleMessage, CdpRequest, CdpResponse, ConsoleLevel,
+    VisualDebuggerReport,
+};
+
+// ChronoWarp Time-Machine Ledger exports
+pub use time_machine::{
+    SnapshotOutcome, TimeMachineEngine, TimelineSnapshot,
+};
+
+// Deterministic AST Query & Refactor Engine exports
+pub use ast_query::{
+    AstQueryEngine, AstQueryFilter, AstSymbol, SyntaxInvariantValidator,
+};
+
+// Smart FinOps & Token Budget Envelope exports
+pub use finops_budget::{
+    BudgetEnvelope, FinOpsEngine, ModelPricing, ModelPricingCatalog, RoutingDecision,
+    UsageRecord,
+};
