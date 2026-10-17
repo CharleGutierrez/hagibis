@@ -411,7 +411,7 @@ pub enum CockpitViewMode {
 pub enum CockpitOverlay {
     None,
     Shortcuts,
-    ModelPicker { selected: usize },
+    ModelPicker { selected: usize, filter: String },
     Tasks,
 }
 
@@ -3810,6 +3810,25 @@ pub async fn execute_prompt_with_history(
 ) -> PromptExecutionResult {
     let start_time = Utc::now().timestamp_millis();
 
+    // Resolve "auto" to optimal available model
+    let model_pill = if model_pill == "auto" {
+        if hgb_core::GeminiProvider::is_available() {
+            "gemini-2.5-flash".to_string()
+        } else if hgb_core::AnthropicProvider::is_available() {
+            "claude-3-5-sonnet".to_string()
+        } else if std::env::var("DEEPSEEK_API_KEY").map(|k| !k.trim().is_empty()).unwrap_or(false) {
+            "deepseek-chat".to_string()
+        } else if std::env::var("OPENAI_API_KEY").map(|k| !k.trim().is_empty()).unwrap_or(false) {
+            "gpt-4o".to_string()
+        } else if hgb_core::OllamaProvider::is_available() {
+            "qwen2.5-coder:1.5b".to_string()
+        } else {
+            "gemini-2.5-flash".to_string()
+        }
+    } else {
+        model_pill
+    };
+
     // 1. Try Unix Domain Socket IPC to resident hgbd daemon
     let socket_path = std::env::var("HGB_SOCKET")
         .map(std::path::PathBuf::from)
@@ -4265,7 +4284,7 @@ impl CockpitState {
         // Render modal overlay if active
         match &self.overlay {
             CockpitOverlay::Shortcuts => self.render_shortcuts_overlay(frame),
-            CockpitOverlay::ModelPicker { selected } => self.render_model_picker_overlay(frame, *selected),
+            CockpitOverlay::ModelPicker { selected, filter } => self.render_model_picker_overlay(frame, *selected, filter),
             CockpitOverlay::Tasks => self.render_tasks_overlay(frame),
             CockpitOverlay::None => {}
         }
@@ -4737,7 +4756,9 @@ impl CockpitState {
 
         // 1. Top Header Line: Workspace, Mode, Model, Account
         let is_local = hgb_core::OllamaProvider::is_ollama_model(&self.model_pill);
-        let model_span = if is_local {
+        let model_span = if self.model_pill == "auto" {
+            Span::styled(" [auto] (✨ smart router) ", Style::default().fg(Color::Black).bg(Color::LightGreen).add_modifier(Modifier::BOLD))
+        } else if is_local {
             Span::styled(format!(" [{}] (0ms local) ", self.model_pill), Style::default().fg(Color::Black).bg(Color::Magenta).add_modifier(Modifier::BOLD))
         } else {
             Span::styled(format!(" [{}] (auto-failover) ", self.model_pill), Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD))
@@ -6427,22 +6448,13 @@ impl CockpitState {
     /// Get available models dynamically from local Ollama and cloud
     pub fn get_available_models() -> Vec<(String, String)> {
         let mut list = Vec::new();
-        let installed = hgb_core::OllamaProvider::installed_models();
-        if !installed.is_empty() {
-            for tag in installed {
-                let desc = format!("Local Ollama ({} • {})", tag.param_summary(), tag.formatted_size());
-                list.push((tag.name, desc));
-            }
-        } else if hgb_core::OllamaProvider::is_available() {
-            list.push(("ollama".to_string(), "Local Ollama Engine (online)".to_string()));
-        }
 
-        if !list.iter().any(|(m, _)| m == "qwen2.5-coder:1.5b") {
-            list.push(("qwen2.5-coder:1.5b".to_string(), "Local Ollama (0ms latency, zero cloud cost)".to_string()));
-        }
+        // 1. Smart Autonomous Task Router
+        list.push(("auto".to_string(), "✨ Smart Auto-Route (Intelligently selects optimal model per task)".to_string()));
 
-        list.push(("gemini-2.5-flash".to_string(), "Google Gemini Cloud (Recommended default)".to_string()));
-        list.push(("gemini-2.5-pro".to_string(), "Google Gemini Cloud (Deep reasoning pro)".to_string()));
+        // 2. Frontier Cloud Providers
+        list.push(("gemini-2.5-flash".to_string(), "Google Gemini Cloud (Recommended default • High speed)".to_string()));
+        list.push(("gemini-2.5-pro".to_string(), "Google Gemini Cloud (Deep reasoning frontier)".to_string()));
 
         if hgb_core::AnthropicProvider::is_available() {
             list.push(("claude-3-7-sonnet".to_string(), "Anthropic Claude 3.7 Sonnet (Frontier reasoning)".to_string()));
@@ -6463,52 +6475,191 @@ impl CockpitState {
             list.push(("deepseek/deepseek-r1".to_string(), "OpenRouter DeepSeek R1".to_string()));
         }
 
+        // 3. Local Ollama Models (Intelligently categorized: coding models first, then general models)
+        let installed = hgb_core::OllamaProvider::installed_models();
+        if !installed.is_empty() {
+            let mut code_models = Vec::new();
+            let mut general_models = Vec::new();
+
+            for tag in installed {
+                let name_lower = tag.name.to_lowercase();
+                let is_coder = name_lower.contains("code")
+                    || name_lower.contains("coder")
+                    || name_lower.contains("starcoder")
+                    || name_lower.contains("dynabook");
+
+                let desc = format!("Local Ollama ({} • {})", tag.param_summary(), tag.formatted_size());
+                if is_coder {
+                    code_models.push((tag.name, format!("💻 {}", desc)));
+                } else {
+                    general_models.push((tag.name, desc));
+                }
+            }
+
+            // Append code models first
+            list.extend(code_models);
+            // Append general models
+            list.extend(general_models);
+        } else if hgb_core::OllamaProvider::is_available() {
+            list.push(("ollama".to_string(), "Local Ollama Engine (online)".to_string()));
+        }
+
+        // Always ensure qwen2.5-coder:1.5b is present in list
+        if !list.iter().any(|(m, _)| m == "qwen2.5-coder:1.5b") {
+            list.push(("qwen2.5-coder:1.5b".to_string(), "Local Ollama (0ms latency, zero cloud cost)".to_string()));
+        }
+
+        // Deduplicate in case any model tag was added more than once
+        let mut seen = std::collections::HashSet::new();
+        list.retain(|(name, _)| seen.insert(name.clone()));
+
         list
     }
 
-    /// Render Model Picker Modal Overlay
-    pub fn render_model_picker_overlay(&self, frame: &mut Frame, selected: usize) {
+    /// Render Model Picker Modal Overlay with responsive viewport windowing and live filter
+    pub fn render_model_picker_overlay(&self, frame: &mut Frame, selected: usize, filter: &str) {
         let area = frame.area();
-        let width = 76.min(area.width.saturating_sub(4));
-        let height = 14.min(area.height.saturating_sub(4));
+        let all_models = Self::get_available_models();
+        let query = filter.trim().to_lowercase();
+        let filtered_models: Vec<(String, String)> = if query.is_empty() {
+            all_models
+        } else {
+            all_models
+                .into_iter()
+                .filter(|(name, desc)| {
+                    name.to_lowercase().contains(&query) || desc.to_lowercase().contains(&query)
+                })
+                .collect()
+        };
+
+        let total_count = filtered_models.len();
+        let width = 90.min(area.width.saturating_sub(4)).max(50);
+        let max_height = (area.height.saturating_sub(4)).min(22).max(10);
+        let desired_height = ((total_count as u16) + 6).min(max_height);
         let x = (area.width.saturating_sub(width)) / 2;
-        let y = (area.height.saturating_sub(height)) / 2;
-        let modal_area = Rect::new(x, y, width, height);
+        let y = (area.height.saturating_sub(desired_height)) / 2;
+        let modal_area = Rect::new(x, y, width, desired_height);
 
         frame.render_widget(Clear, modal_area);
 
-        let models = Self::get_available_models();
+        let sel = if total_count == 0 { 0 } else { selected.min(total_count - 1) };
 
-        let rows: Vec<Row> = models
-            .iter()
-            .enumerate()
-            .map(|(i, (name, desc))| {
-                let is_sel = i == selected;
-                let marker = if is_sel { "▶ " } else { "  " };
-                let is_active = *name == self.model_pill;
-                let active_badge = if is_active { " [ACTIVE]" } else { "" };
-                let row = Row::new(vec![
-                    Cell::from(format!("{}{}{}", marker, name, active_badge)),
-                    Cell::from(desc.as_str()),
-                ]);
-                if is_sel {
-                    row.style(Style::default().bg(Color::Rgb(35, 45, 75)).fg(Color::Yellow).add_modifier(Modifier::BOLD))
-                } else {
-                    row
-                }
-            })
-            .collect();
+        let title_counter = if total_count == 0 {
+            " [0 matches]".to_string()
+        } else {
+            format!(" [{}/{} models]", sel + 1, total_count)
+        };
 
-        let table = Table::new(rows, [Constraint::Percentage(45), Constraint::Percentage(55)])
-            .header(Row::new(vec!["Model", "Provider"]).style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)))
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Cyan))
-                    .title(" 🧠 Select AI Model (↑/↓ navigate, Enter select, Esc close) "),
-            );
+        let modal_block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan))
+            .title(Span::styled(
+                format!(" 🧠 Select AI Model{} ", title_counter),
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            ));
 
-        frame.render_widget(table, modal_area);
+        let inner = modal_block.inner(modal_area);
+        frame.render_widget(modal_block, modal_area);
+
+        if inner.height < 3 || inner.width < 10 {
+            return;
+        }
+
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1), // Live search input
+                Constraint::Min(1),    // Models viewport table
+                Constraint::Length(1), // Scroll indicator & hints
+            ])
+            .split(inner);
+
+        // 1. Search Query Bar
+        let search_line = if filter.is_empty() {
+            Line::from(vec![
+                Span::styled(" 🔍 Search: ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled("type letters to filter instantly...", Style::default().fg(Color::DarkGray)),
+            ])
+        } else {
+            Line::from(vec![
+                Span::styled(" 🔍 Search: ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled(filter, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled(" █", Style::default().fg(Color::Cyan)),
+                Span::styled(format!(" ({} matches)", total_count), Style::default().fg(Color::Green)),
+            ])
+        };
+        frame.render_widget(Paragraph::new(search_line), chunks[0]);
+
+        // 2. Viewport Table
+        let visible_capacity = (chunks[1].height.saturating_sub(1) as usize).max(1);
+
+        let start_idx = if sel >= visible_capacity {
+            sel.saturating_sub(visible_capacity - 1)
+        } else {
+            0
+        };
+        let end_idx = (start_idx + visible_capacity).min(total_count);
+        let visible_items = if total_count == 0 {
+            &[]
+        } else {
+            &filtered_models[start_idx..end_idx]
+        };
+
+        let rows: Vec<Row> = if visible_items.is_empty() {
+            vec![Row::new(vec![
+                Cell::from("  No matching models found"),
+                Cell::from("Press Backspace to edit search or Esc to reset"),
+            ]).style(Style::default().fg(Color::DarkGray))]
+        } else {
+            visible_items
+                .iter()
+                .enumerate()
+                .map(|(offset, (name, desc))| {
+                    let abs_index = start_idx + offset;
+                    let is_sel = abs_index == sel;
+                    let marker = if is_sel { "▶ " } else { "  " };
+                    let is_active = *name == self.model_pill;
+                    let active_badge = if is_active { " [ACTIVE]" } else { "" };
+                    let row = Row::new(vec![
+                        Cell::from(format!("{}{}{}", marker, name, active_badge)),
+                        Cell::from(desc.as_str()),
+                    ]);
+                    if is_sel {
+                        row.style(
+                            Style::default()
+                                .bg(Color::Rgb(35, 45, 75))
+                                .fg(Color::Yellow)
+                                .add_modifier(Modifier::BOLD),
+                        )
+                    } else if is_active {
+                        row.style(Style::default().fg(Color::Green))
+                    } else {
+                        row
+                    }
+                })
+                .collect()
+        };
+
+        let table = Table::new(rows, [Constraint::Percentage(44), Constraint::Percentage(56)])
+            .header(Row::new(vec!["Model", "Provider / Specification"]).style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)));
+
+        frame.render_widget(table, chunks[1]);
+
+        // 3. Scroll Indicator & Hotkey Navigation Footer
+        let more_above = start_idx > 0;
+        let more_below = end_idx < total_count;
+        let scroll_hint = match (more_above, more_below) {
+            (true, true) => format!(" ▲ {} above | {} below ▼ ", start_idx, total_count - end_idx),
+            (true, false) => format!(" ▲ {} above (bottom reached) ", start_idx),
+            (false, true) => format!(" ▼ {} below (scroll for more) ", total_count - end_idx),
+            (false, false) => " All models displayed ".to_string(),
+        };
+
+        let footer_line = Line::from(vec![
+            Span::styled(scroll_hint, Style::default().fg(Color::Rgb(140, 170, 240)).add_modifier(Modifier::BOLD)),
+            Span::styled("• ↑/↓/PgUp/PgDn: Scroll • Enter: Select • Esc: Close", Style::default().fg(Color::DarkGray)),
+        ]);
+        frame.render_widget(Paragraph::new(footer_line), chunks[2]);
     }
 
     /// Render Background Tasks Modal Overlay
@@ -6604,8 +6755,6 @@ impl CockpitState {
     }
 
     async fn event_loop<B: ratatui::backend::Backend>(&mut self, terminal: &mut Terminal<B>) -> io::Result<()> {
-        let models_list = Self::get_available_models();
-
         let mut prompt_rx: Option<tokio::sync::oneshot::Receiver<PromptExecutionResult>> = None;
 
         loop {
@@ -6664,28 +6813,79 @@ impl CockpitState {
                         // 1. If an overlay modal is active, modal takes priority
                         if self.overlay != CockpitOverlay::None {
                             match &mut self.overlay {
-                                CockpitOverlay::ModelPicker { ref mut selected } => match key.code {
-                                    KeyCode::Esc => {
-                                        self.overlay = CockpitOverlay::None;
-                                        self.needs_clear = true;
-                                    }
-                                    KeyCode::Up | KeyCode::Char('k') => {
-                                        *selected = selected.saturating_sub(1);
-                                    }
-                                    KeyCode::Down | KeyCode::Char('j') => {
-                                        *selected = (*selected + 1).min(models_list.len().saturating_sub(1));
-                                    }
-                                    KeyCode::Enter => {
-                                        if let Some((new_model, _)) = models_list.get(*selected) {
-                                            self.model_pill = new_model.clone();
-                                            let _ = hgb_core::persist_active_model(new_model);
-                                            self.add_system_notice(format!("Active model switched to: {}", new_model));
+                                CockpitOverlay::ModelPicker { ref mut selected, ref mut filter } => {
+                                    let all_models = Self::get_available_models();
+                                    let q = filter.trim().to_lowercase();
+                                    let filtered_models: Vec<(String, String)> = if q.is_empty() {
+                                        all_models
+                                    } else {
+                                        all_models
+                                            .into_iter()
+                                            .filter(|(name, desc)| {
+                                                name.to_lowercase().contains(&q) || desc.to_lowercase().contains(&q)
+                                            })
+                                            .collect()
+                                    };
+                                    let total_filtered = filtered_models.len();
+
+                                    match key.code {
+                                        KeyCode::Esc => {
+                                            if !filter.is_empty() {
+                                                filter.clear();
+                                                *selected = 0;
+                                            } else {
+                                                self.overlay = CockpitOverlay::None;
+                                                self.needs_clear = true;
+                                            }
                                         }
-                                        self.overlay = CockpitOverlay::None;
-                                        self.needs_clear = true;
+                                        KeyCode::Up => {
+                                            *selected = selected.saturating_sub(1);
+                                        }
+                                        KeyCode::Down => {
+                                            if total_filtered > 0 {
+                                                *selected = (*selected + 1).min(total_filtered - 1);
+                                            }
+                                        }
+                                        KeyCode::PageUp => {
+                                            *selected = selected.saturating_sub(6);
+                                        }
+                                        KeyCode::PageDown => {
+                                            if total_filtered > 0 {
+                                                *selected = (*selected + 6).min(total_filtered - 1);
+                                            }
+                                        }
+                                        KeyCode::Home => {
+                                            *selected = 0;
+                                        }
+                                        KeyCode::End => {
+                                            if total_filtered > 0 {
+                                                *selected = total_filtered - 1;
+                                            }
+                                        }
+                                        KeyCode::Backspace => {
+                                            filter.pop();
+                                            *selected = 0;
+                                        }
+                                        KeyCode::Char(c) => {
+                                            filter.push(c);
+                                            *selected = 0;
+                                        }
+                                        KeyCode::Enter => {
+                                            if let Some((new_model, _)) = filtered_models.get(*selected) {
+                                                self.model_pill = new_model.clone();
+                                                let _ = hgb_core::persist_active_model(new_model);
+                                                if new_model == "auto" {
+                                                    self.add_system_notice("Active model set to: ✨ Smart Auto-Route (Autonomous Task Router enabled)".to_string());
+                                                } else {
+                                                    self.add_system_notice(format!("Active model switched to: {}", new_model));
+                                                }
+                                            }
+                                            self.overlay = CockpitOverlay::None;
+                                            self.needs_clear = true;
+                                        }
+                                        _ => {}
                                     }
-                                    _ => {}
-                                },
+                                }
                                 CockpitOverlay::Shortcuts | CockpitOverlay::Tasks => match key.code {
                                     KeyCode::Esc | KeyCode::Enter | KeyCode::Char('?') | KeyCode::Char('q') => {
                                         self.overlay = CockpitOverlay::None;
@@ -7209,7 +7409,10 @@ impl CockpitState {
                                             let trimmed = arg.trim();
                                             let lower = trimmed.to_lowercase();
                                             if trimmed.is_empty() || lower == "list" || lower == "show" || lower == "ls" {
-                                                self.overlay = CockpitOverlay::ModelPicker { selected: 0 };
+                                                self.overlay = CockpitOverlay::ModelPicker { selected: 0, filter: String::new() };
+                                            } else if lower.starts_with("search ") || lower.starts_with("find ") {
+                                                let query = trimmed.split_whitespace().skip(1).collect::<Vec<_>>().join(" ");
+                                                self.overlay = CockpitOverlay::ModelPicker { selected: 0, filter: query };
                                             } else if lower == "current" || lower == "status" {
                                                 self.add_system_notice(format!("Current model: {}", self.model_pill));
                                             } else {

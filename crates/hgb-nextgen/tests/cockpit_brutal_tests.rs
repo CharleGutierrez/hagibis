@@ -456,11 +456,17 @@ fn test_brutal_overlays_rendering() {
     assert!(rendered_shortcuts.contains("/model"));
 
     // 2. ModelPicker overlay
-    state.overlay = CockpitOverlay::ModelPicker { selected: 0 };
+    state.overlay = CockpitOverlay::ModelPicker { selected: 0, filter: String::new() };
     let rendered_model_picker = state.render_headless_to_string(100, 30);
     assert!(rendered_model_picker.contains("Select AI Model"));
-    assert!(rendered_model_picker.contains("qwen2.5-coder:1.5b"));
+    assert!(rendered_model_picker.contains("Smart Auto-Route"));
     assert!(rendered_model_picker.contains("gemini-2.5-flash"));
+
+    // 2b. ModelPicker filter test
+    state.overlay = CockpitOverlay::ModelPicker { selected: 0, filter: "flash".to_string() };
+    let filtered_picker = state.render_headless_to_string(100, 30);
+    assert!(filtered_picker.contains("gemini-2.5-flash"));
+    assert!(filtered_picker.contains("1 matches"));
 
     // 3. Tasks overlay
     state.add_background_task(CockpitBackgroundTask::new(
