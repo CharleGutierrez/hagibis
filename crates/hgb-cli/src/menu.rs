@@ -128,6 +128,27 @@ impl InteractiveCommandCatalog {
                 description: "Real RFC 8628 OAuth Device Flow authentication for GitHub Copilot (Claude 3.5 Sonnet & GPT-4o).",
             },
             CommandEntry {
+                name: "auth-openai",
+                aliases: &["openai-auth", "openai-login"],
+                category: "Auth/OpenAI",
+                syntax: "hgb auth-openai [API_KEY]",
+                description: "Save OpenAI API key to ~/.hgb/credentials.json for GPT-4o, GPT-4o-mini, o1, and o3-mini.",
+            },
+            CommandEntry {
+                name: "auth-copilot",
+                aliases: &["copilot-auth", "copilot-login"],
+                category: "Auth/Copilot",
+                syntax: "hgb auth-copilot",
+                description: "Authenticate GitHub Copilot RFC 8628 OAuth device flow to power GPT-4o & Claude 3.5 Sonnet.",
+            },
+            CommandEntry {
+                name: "key",
+                aliases: &["set-key"],
+                category: "Auth/Keys",
+                syntax: "hgb key <openai|anthropic|deepseek> [API_KEY]",
+                description: "Save AI provider secret keys permanently to ~/.hgb/credentials.json.",
+            },
+            CommandEntry {
                 name: "cloud-fabric",
                 aliases: &["fabric", "cloud-bench"],
                 category: "Cloud/Fabric",

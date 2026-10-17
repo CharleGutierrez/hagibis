@@ -245,7 +245,168 @@ impl HagibisDaemon {
                 }
 
                 // Dual-Brain Check:
-                // 1. Explicit local Ollama model OR fallback if Gemini is unconfigured
+                // 1. OpenAI Routing (gpt-4o, gpt-4o-mini, o3-mini, o1, etc.)
+                let is_openai = req_model.starts_with("gpt-")
+                    || req_model.starts_with("o1")
+                    || req_model.starts_with("o3")
+                    || req_model.starts_with("chatgpt")
+                    || req_model.contains("openai");
+
+                if is_openai {
+                    // Try real OpenAI provider first
+                    if let Some(openai_prov) = hgb_core::OpenAiCompatibleProvider::discover_openai() {
+                        let msgs = vec![
+                            hgb_core::ChatMessage::system("You are an expert AI software engineer in Hagibis."),
+                            hgb_core::ChatMessage::user(&final_prompt),
+                        ];
+                        match openai_prov.chat_completion(&msgs, Some(&req_model), None, None).await {
+                            Ok(text) => {
+                                let duration_ms = start.elapsed().as_millis() as u64;
+                                return HgbResponse::Complete {
+                                    output: text,
+                                    tokens_used: final_prompt.len() / 4,
+                                    duration_ms,
+                                };
+                            }
+                            Err(e) => {
+                                // If OpenAI returned an error (e.g. rate limit / network), failover to Gemini
+                                if hgb_core::GeminiProvider::is_available() {
+                                    if let Some(gemini_prov) = hgb_core::GeminiProvider::auto_discover() {
+                                        if let Ok(text) = gemini_prov.complete(&final_prompt, None).await {
+                                            let duration_ms = start.elapsed().as_millis() as u64;
+                                            return HgbResponse::Complete {
+                                                output: format!("⚠️ [OpenAI API Error: {} -> Failover to Cloud Gemini]\n\n{}", e, text),
+                                                tokens_used: final_prompt.len() / 4,
+                                                duration_ms,
+                                            };
+                                        }
+                                    }
+                                }
+                                return HgbResponse::Error(format!("OpenAI API Error: {}", e));
+                            }
+                        }
+                    }
+
+                    // Try GitHub Copilot (which provides gpt-4o natively)
+                    let copilot = hgb_core::copilot_oauth::CopilotAuthEngine::default();
+                    if let Ok(Some(_)) = copilot.load_credentials() {
+                        let copilot_req = hgb_core::copilot_oauth::CopilotChatRequest {
+                            model: "gpt-4o".to_string(),
+                            messages: vec![
+                                hgb_core::copilot_oauth::CopilotChatMessage {
+                                    role: "user".to_string(),
+                                    content: final_prompt.clone(),
+                                }
+                            ],
+                            temperature: Some(0.2),
+                            stream: Some(false),
+                            max_tokens: Some(4096),
+                        };
+                        if let Ok(resp) = copilot.chat_completion(&copilot_req).await {
+                            let text = resp.choices.first().and_then(|c| c.message.as_ref().map(|m| m.content.clone())).unwrap_or_default();
+                            let duration_ms = start.elapsed().as_millis() as u64;
+                            return HgbResponse::Complete {
+                                output: text,
+                                tokens_used: final_prompt.len() / 4,
+                                duration_ms,
+                            };
+                        }
+                    }
+
+                    // Dual-Brain Resilience Failover: No OpenAI key configured, but Gemini or Ollama is online!
+                    if hgb_core::GeminiProvider::is_available() {
+                        if let Some(gemini_prov) = hgb_core::GeminiProvider::auto_discover() {
+                            if let Ok(text) = gemini_prov.complete(&final_prompt, None).await {
+                                let duration_ms = start.elapsed().as_millis() as u64;
+                                let email = hgb_core::GeminiProvider::credential_status();
+                                return HgbResponse::Complete {
+                                    output: format!("⚠️ [No OPENAI_API_KEY set (export OPENAI_API_KEY=... or run 'hgb auth-openai') -> Dual-Brain Resilience Auto-Routed via {}]\n\n{}", email, text),
+                                    tokens_used: final_prompt.len() / 4,
+                                    duration_ms,
+                                };
+                            }
+                        }
+                    } else if hgb_core::OllamaProvider::is_available() {
+                        if let Some(ollama_prov) = hgb_core::OllamaProvider::auto_discover() {
+                            if let Ok(text) = ollama_prov.complete(&final_prompt, None).await {
+                                let duration_ms = start.elapsed().as_millis() as u64;
+                                return HgbResponse::Complete {
+                                    output: format!("⚠️ [No OPENAI_API_KEY set -> Dual-Brain Switched to Local Ollama ({})]\n\n{}", ollama_prov.default_model(), text),
+                                    tokens_used: final_prompt.len() / 4,
+                                    duration_ms,
+                                };
+                            }
+                        }
+                    }
+
+                    return HgbResponse::Error(format!(
+                        "OpenAI GPT model '{}' requires an API key.\n\nTo connect:\n  - Set key: export OPENAI_API_KEY=sk-...\n  - Or save permanently: hgb auth-openai <KEY>\n  - Or authenticate free GitHub Copilot: hgb auth copilot\n  - Or switch model: /model gemini-2.5-flash",
+                        req_model
+                    ));
+                }
+
+                // 2. Anthropic Claude Routing
+                let is_anthropic = req_model.contains("claude")
+                    || req_model.contains("sonnet")
+                    || req_model.contains("haiku")
+                    || req_model.contains("opus");
+
+                if is_anthropic {
+                    if let Some(anthropic_prov) = hgb_core::AnthropicProvider::auto_discover() {
+                        let msgs = vec![hgb_core::AnthropicMessage::user(&final_prompt)];
+                        if let Ok(text) = anthropic_prov.messages(&msgs, Some(&req_model), None, Some("You are an expert coding assistant in Hagibis."), None).await {
+                            let duration_ms = start.elapsed().as_millis() as u64;
+                            return HgbResponse::Complete {
+                                output: text,
+                                tokens_used: final_prompt.len() / 4,
+                                duration_ms,
+                            };
+                        }
+                    }
+
+                    if hgb_core::GeminiProvider::is_available() {
+                        if let Some(gemini_prov) = hgb_core::GeminiProvider::auto_discover() {
+                            if let Ok(text) = gemini_prov.complete(&final_prompt, None).await {
+                                let duration_ms = start.elapsed().as_millis() as u64;
+                                return HgbResponse::Complete {
+                                    output: format!("⚠️ [No ANTHROPIC_API_KEY set -> Dual-Brain Resilience Auto-Routed via Google Gemini Cloud]\n\n{}", text),
+                                    tokens_used: final_prompt.len() / 4,
+                                    duration_ms,
+                                };
+                            }
+                        }
+                    }
+                }
+
+                // 3. DeepSeek Routing
+                let is_deepseek = req_model.contains("deepseek");
+                if is_deepseek {
+                    if let Some(ds_prov) = hgb_core::OpenAiCompatibleProvider::discover_deepseek().or_else(|| hgb_core::OpenAiCompatibleProvider::discover_openrouter()) {
+                        let msgs = vec![hgb_core::ChatMessage::user(&final_prompt)];
+                        if let Ok(text) = ds_prov.chat_completion(&msgs, Some(&req_model), None, None).await {
+                            let duration_ms = start.elapsed().as_millis() as u64;
+                            return HgbResponse::Complete {
+                                output: text,
+                                tokens_used: final_prompt.len() / 4,
+                                duration_ms,
+                            };
+                        }
+                    }
+                    if hgb_core::GeminiProvider::is_available() {
+                        if let Some(gemini_prov) = hgb_core::GeminiProvider::auto_discover() {
+                            if let Ok(text) = gemini_prov.complete(&final_prompt, None).await {
+                                let duration_ms = start.elapsed().as_millis() as u64;
+                                return HgbResponse::Complete {
+                                    output: format!("⚠️ [No DEEPSEEK_API_KEY set -> Dual-Brain Resilience Auto-Routed via Google Gemini Cloud]\n\n{}", text),
+                                    tokens_used: final_prompt.len() / 4,
+                                    duration_ms,
+                                };
+                            }
+                        }
+                    }
+                }
+
+                // 4. Local Ollama Routing
                 let is_ollama_explicit = hgb_core::OllamaProvider::is_ollama_model(&req_model);
                 let fallback_to_ollama = (req_model == "auto" || req_model == "default" || req_model == "gemini-2.5-flash") && !hgb_core::GeminiProvider::is_available();
 
@@ -288,7 +449,6 @@ impl HagibisDaemon {
                                 };
                             }
                             Err(e) => {
-                                // Automatic Dual-Brain failover: If Local Ollama fails (e.g. 404, uninstalled model, offline) and Gemini is available, failover to Gemini!
                                 if hgb_core::GeminiProvider::is_available() {
                                     if let Some(gemini_prov) = hgb_core::GeminiProvider::auto_discover() {
                                         if let Ok(text) = gemini_prov.complete(&final_prompt, None).await {
@@ -307,7 +467,7 @@ impl HagibisDaemon {
                     }
                 }
 
-                // 2. Google Gemini Cloud routing
+                // 5. Google Gemini Cloud routing
                 let is_gemini = req_model.contains("gemini") || req_model.contains("flash") || req_model.contains("pro") || req_model == "auto";
                 if is_gemini && hgb_core::GeminiProvider::is_available() {
                     if let Some(prov) = hgb_core::GeminiProvider::auto_discover() {
@@ -321,7 +481,6 @@ impl HagibisDaemon {
                                 };
                             }
                             Err(e) => {
-                                // Automatic Dual-Brain failover: If Gemini is overloaded (e.g. 503/429) and Ollama is available, failover locally!
                                 if hgb_core::OllamaProvider::is_available() {
                                     if let Some(ollama_prov) = hgb_core::OllamaProvider::auto_discover() {
                                         if let Ok(text) = ollama_prov.complete(&prompt, None).await {
@@ -340,18 +499,24 @@ impl HagibisDaemon {
                     }
                 }
 
-                // 3. Fallback: neither provider handled request
+                // 6. Fallback: neither provider handled request
                 let cred_status = hgb_core::GeminiProvider::credential_status();
                 let ollama_status = if hgb_core::OllamaProvider::is_available() {
                     "Connected (http://127.0.0.1:11434)"
                 } else {
                     "Offline"
                 };
+                let openai_status = if hgb_core::OpenAiCompatibleProvider::is_openai_available() {
+                    "Ready"
+                } else {
+                    "Unconfigured (run 'hgb auth-openai <KEY>' or export OPENAI_API_KEY)"
+                };
                 let output = format!(
-                    "🪽 Hagibis Microkernel: No active model connection for '{}'.\n• Google Gemini: {}\n• Local Ollama: {}\n\nTo connect:\n  - Gemini: run 'hgb login' or export GEMINI_API_KEY=...\n  - Ollama: run 'ollama serve' and specify '-m qwen2.5-coder:1.5b' or any installed model.",
+                    "🪽 Hagibis Microkernel: No active model connection for '{}'.\n• Google Gemini: {}\n• Local Ollama: {}\n• OpenAI: {}\n\nTo connect:\n  - OpenAI: run 'hgb auth-openai <KEY>' or export OPENAI_API_KEY=...\n  - Gemini: run 'hgb login' or export GEMINI_API_KEY=...\n  - Ollama: run 'ollama serve' and specify '-m qwen2.5-coder:1.5b' or any installed model.",
                     req_model,
                     cred_status,
-                    ollama_status
+                    ollama_status,
+                    openai_status
                 );
                 HgbResponse::Complete {
                     output,

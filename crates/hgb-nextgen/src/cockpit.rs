@@ -4080,6 +4080,66 @@ Otherwise, answer directly with high precision.";
         }
     }
 
+    // Copilot & Dual-Brain Failover for OpenAI models when API key is unconfigured
+    if is_openai_family {
+        let copilot = hgb_core::copilot_oauth::CopilotAuthEngine::default();
+        if let Ok(Some(_)) = copilot.load_credentials() {
+            let req = hgb_core::copilot_oauth::CopilotChatRequest {
+                model: "gpt-4o".to_string(),
+                messages: vec![hgb_core::copilot_oauth::CopilotChatMessage {
+                    role: "user".to_string(),
+                    content: prompt.clone(),
+                }],
+                temperature: Some(0.2),
+                stream: Some(false),
+                max_tokens: Some(4096),
+            };
+            if let Ok(resp) = copilot.chat_completion(&req).await {
+                let text = resp.choices.first().and_then(|c| c.message.as_ref().map(|m| m.content.clone())).unwrap_or_default();
+                let elapsed = (Utc::now().timestamp_millis() - start_time).max(1) as u64;
+                let approx_tokens = (text.len() / 4 + prompt.len() / 4).max(1) as u64;
+                return PromptExecutionResult {
+                    node_id,
+                    model: model_pill,
+                    prompt,
+                    output: text,
+                    tokens_used: approx_tokens,
+                    duration_ms: elapsed,
+                    tool_call: None,
+                    is_error: false,
+                    error_msg: None,
+                    log_msg: format!("[COPILOT/GPT-4O] Completed in {}ms (~{} tok)", elapsed, approx_tokens),
+                };
+            }
+        }
+
+        // Dual-Brain Resilience Failover: If Gemini is authenticated
+        if let Some(gemini_prov) = hgb_core::GeminiProvider::auto_discover() {
+            use hgb_core::traits::HgbProvider;
+            if let Ok(text) = gemini_prov.complete(&prompt, None).await {
+                let elapsed = (Utc::now().timestamp_millis() - start_time).max(1) as u64;
+                let approx_tokens = (text.len() / 4 + prompt.len() / 4).max(1) as u64;
+                let status_email = hgb_core::GeminiProvider::credential_status();
+                let output = format!(
+                    "⚠️ [No OPENAI_API_KEY set (run '/key openai <KEY>' or export OPENAI_API_KEY) -> Dual-Brain Resilience Auto-Routed via {}]\n\n{}",
+                    status_email, text
+                );
+                return PromptExecutionResult {
+                    node_id,
+                    model: model_pill,
+                    prompt,
+                    output,
+                    tokens_used: approx_tokens,
+                    duration_ms: elapsed,
+                    tool_call: None,
+                    is_error: false,
+                    error_msg: None,
+                    log_msg: format!("[DUAL-BRAIN/GEMINI] Fallback completed in {}ms (~{} tok)", elapsed, approx_tokens),
+                };
+            }
+        }
+    }
+
     // 4. Local Ollama Provider if requested or available
     let is_ollama = hgb_core::OllamaProvider::is_ollama_model(&model_pill)
         || (!hgb_core::GeminiProvider::is_available() && hgb_core::OllamaProvider::is_available());
@@ -6461,10 +6521,17 @@ impl CockpitState {
             list.push(("claude-3-5-sonnet".to_string(), "Anthropic Claude 3.5 Sonnet (State-of-the-art coding)".to_string()));
         }
 
-        if std::env::var("OPENAI_API_KEY").map(|k| !k.trim().is_empty()).unwrap_or(false) {
-            list.push(("gpt-4o".to_string(), "OpenAI GPT-4o (Frontier multimodal)".to_string()));
-            list.push(("o3-mini".to_string(), "OpenAI o3-mini (High-speed reasoning)".to_string()));
-        }
+        // OpenAI GPT Models (Always available & Dual-Brain failover protected)
+        let openai_ready = hgb_core::OpenAiCompatibleProvider::is_openai_available();
+        let openai_status_suffix = if openai_ready { " • Ready" } else { " • Auto-Failover" };
+
+        list.push(("gpt-4o".to_string(), format!("OpenAI GPT-4o (Omni multimodal flagship • High intelligence{})", openai_status_suffix)));
+        list.push(("gpt-4o-mini".to_string(), format!("OpenAI GPT-4o-mini (High-speed, cost-efficient multimodal{})", openai_status_suffix)));
+        list.push(("o3-mini".to_string(), format!("OpenAI o3-mini (Next-gen frontier reasoning & coding{})", openai_status_suffix)));
+        list.push(("o1".to_string(), format!("OpenAI o1 (Deep multi-step reasoning frontier{})", openai_status_suffix)));
+        list.push(("o1-mini".to_string(), format!("OpenAI o1-mini (Specialized fast coding & STEM reasoning{})", openai_status_suffix)));
+        list.push(("gpt-4-turbo".to_string(), format!("OpenAI GPT-4 Turbo (128k context window{})", openai_status_suffix)));
+        list.push(("chatgpt-4o-latest".to_string(), format!("OpenAI ChatGPT-4o Latest (Dynamic ChatGPT snapshot{})", openai_status_suffix)));
 
         if std::env::var("DEEPSEEK_API_KEY").map(|k| !k.trim().is_empty()).unwrap_or(false) {
             list.push(("deepseek-chat".to_string(), "DeepSeek-V3 (Sovereign high performance)".to_string()));
@@ -7431,6 +7498,36 @@ impl CockpitState {
                                                     self.model_pill = final_name.to_string();
                                                     let _ = hgb_core::persist_active_model(final_name);
                                                     self.add_system_notice(format!("Active model set to: {}", final_name));
+                                                }
+                                            }
+                                        }
+                                        "/key" | "/auth" | "/apikey" => {
+                                            let parts: Vec<&str> = arg.trim().split_whitespace().collect();
+                                            if parts.is_empty() {
+                                                let status = hgb_core::OpenAiCompatibleProvider::credential_status();
+                                                self.add_system_notice(format!("🔑 API Key Status: {}\nUsage: /key openai <sk-proj-...>", status));
+                                            } else if parts.len() == 1 {
+                                                let key = parts[0];
+                                                if key.starts_with("sk-") {
+                                                    let _ = hgb_core::OpenAiCompatibleProvider::save_stored_key("openai_api_key", key);
+                                                    self.add_system_notice("🔑 OpenAI API key saved to ~/.hgb/credentials.json! OpenAI GPT models are now ready.".to_string());
+                                                } else {
+                                                    self.add_system_notice("Usage: /key openai <sk-...> or /key deepseek <sk-...>".to_string());
+                                                }
+                                            } else {
+                                                let prov = parts[0].to_lowercase();
+                                                let key = parts[1];
+                                                if prov == "openai" {
+                                                    let _ = hgb_core::OpenAiCompatibleProvider::save_stored_key("openai_api_key", key);
+                                                    self.add_system_notice("🔑 OpenAI API key saved to ~/.hgb/credentials.json! OpenAI GPT models are now ready.".to_string());
+                                                } else if prov == "deepseek" {
+                                                    let _ = hgb_core::OpenAiCompatibleProvider::save_stored_key("deepseek_api_key", key);
+                                                    self.add_system_notice("🔑 DeepSeek API key saved to ~/.hgb/credentials.json!".to_string());
+                                                } else if prov == "anthropic" {
+                                                    let _ = hgb_core::OpenAiCompatibleProvider::save_stored_key("anthropic_api_key", key);
+                                                    self.add_system_notice("🔑 Anthropic API key saved to ~/.hgb/credentials.json!".to_string());
+                                                } else {
+                                                    self.add_system_notice("Unknown provider. Supported: openai, anthropic, deepseek".to_string());
                                                 }
                                             }
                                         }

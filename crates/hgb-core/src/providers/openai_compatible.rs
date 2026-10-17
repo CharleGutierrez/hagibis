@@ -212,7 +212,93 @@ impl OpenAiCompatibleProvider {
         )
     }
 
-    /// Auto-discover OpenAI credentials from `OPENAI_API_KEY`
+    /// Load an API key from persistent storage (~/.hgb/credentials.json, ~/.hgb/openai_key, or .env)
+    pub fn load_stored_key(field: &str) -> Option<String> {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        let hgb_dir = std::path::PathBuf::from(&home).join(".hgb");
+
+        // 1. Check ~/.hgb/credentials.json
+        let creds_file = hgb_dir.join("credentials.json");
+        if creds_file.exists() {
+            if let Ok(content) = std::fs::read_to_string(&creds_file) {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) {
+                    if let Some(key) = v.get(field).and_then(|k| k.as_str()) {
+                        let trimmed = key.trim();
+                        if !trimmed.is_empty() && !trimmed.starts_with("your_") {
+                            return Some(trimmed.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Check dedicated file e.g. ~/.hgb/openai_key
+        let direct_file = if field == "openai_api_key" {
+            hgb_dir.join("openai_key")
+        } else if field == "deepseek_api_key" {
+            hgb_dir.join("deepseek_key")
+        } else {
+            hgb_dir.join(format!("{}.key", field))
+        };
+        if direct_file.exists() {
+            if let Ok(content) = std::fs::read_to_string(&direct_file) {
+                let trimmed = content.trim();
+                if !trimmed.is_empty() && !trimmed.starts_with("your_") {
+                    return Some(trimmed.to_string());
+                }
+            }
+        }
+
+        // 3. Check workspace .env file
+        if let Ok(content) = std::fs::read_to_string(".env") {
+            let env_prefix = match field {
+                "openai_api_key" => "OPENAI_API_KEY=",
+                "deepseek_api_key" => "DEEPSEEK_API_KEY=",
+                "openrouter_api_key" => "OPENROUTER_API_KEY=",
+                _ => "",
+            };
+            if !env_prefix.is_empty() {
+                for line in content.lines() {
+                    let trimmed = line.trim();
+                    if let Some(rest) = trimmed.strip_prefix(env_prefix) {
+                        let val = rest.trim().trim_matches('"').trim_matches('\'').trim();
+                        if !val.is_empty() && !val.starts_with("your_") {
+                            return Some(val.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Save an API key permanently to ~/.hgb/credentials.json
+    pub fn save_stored_key(field: &str, key: &str) -> Result<()> {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        let hgb_dir = std::path::PathBuf::from(&home).join(".hgb");
+        std::fs::create_dir_all(&hgb_dir)?;
+
+        let creds_file = hgb_dir.join("credentials.json");
+        let mut map: serde_json::Map<String, serde_json::Value> = if creds_file.exists() {
+            let cnt = std::fs::read_to_string(&creds_file).unwrap_or_default();
+            serde_json::from_str(&cnt).unwrap_or_default()
+        } else {
+            serde_json::Map::new()
+        };
+
+        map.insert(field.to_string(), serde_json::Value::String(key.trim().to_string()));
+        let serialized = serde_json::to_string_pretty(&map).map_err(|e| HgbError::Serialization(e.to_string()))?;
+        std::fs::write(&creds_file, serialized)?;
+
+        if field == "openai_api_key" {
+            let _ = std::fs::write(hgb_dir.join("openai_key"), key.trim());
+        }
+
+        Ok(())
+    }
+
+    /// Auto-discover OpenAI credentials from `OPENAI_API_KEY`, credentials file, or .env
     pub fn discover_openai() -> Option<Self> {
         if let Ok(key) = std::env::var("OPENAI_API_KEY") {
             let trimmed = key.trim();
@@ -220,10 +306,18 @@ impl OpenAiCompatibleProvider {
                 return Some(Self::openai(trimmed));
             }
         }
+        if let Some(key) = Self::load_stored_key("openai_api_key") {
+            return Some(Self::openai(key));
+        }
         None
     }
 
-    /// Auto-discover DeepSeek credentials from `DEEPSEEK_API_KEY`
+    /// Check if OpenAI credentials are ready
+    pub fn is_openai_available() -> bool {
+        Self::discover_openai().is_some()
+    }
+
+    /// Auto-discover DeepSeek credentials from `DEEPSEEK_API_KEY`, credentials file, or .env
     pub fn discover_deepseek() -> Option<Self> {
         if let Ok(key) = std::env::var("DEEPSEEK_API_KEY") {
             let trimmed = key.trim();
@@ -231,16 +325,22 @@ impl OpenAiCompatibleProvider {
                 return Some(Self::deepseek(trimmed));
             }
         }
+        if let Some(key) = Self::load_stored_key("deepseek_api_key") {
+            return Some(Self::deepseek(key));
+        }
         None
     }
 
-    /// Auto-discover OpenRouter credentials from `OPENROUTER_API_KEY`
+    /// Auto-discover OpenRouter credentials from `OPENROUTER_API_KEY`, credentials file, or .env
     pub fn discover_openrouter() -> Option<Self> {
         if let Ok(key) = std::env::var("OPENROUTER_API_KEY") {
             let trimmed = key.trim();
             if !trimmed.is_empty() && !trimmed.starts_with("your_") {
                 return Some(Self::openrouter(trimmed));
             }
+        }
+        if let Some(key) = Self::load_stored_key("openrouter_api_key") {
+            return Some(Self::openrouter(key));
         }
         None
     }
@@ -269,18 +369,18 @@ impl OpenAiCompatibleProvider {
     /// Returns a human-friendly string of active credentials
     pub fn credential_status() -> String {
         let mut active = Vec::new();
-        if std::env::var("OPENAI_API_KEY").map(|k| !k.trim().is_empty()).unwrap_or(false) {
-            active.push("OpenAI (OPENAI_API_KEY)");
+        if Self::discover_openai().is_some() {
+            active.push("OpenAI (Configured)");
         }
-        if std::env::var("DEEPSEEK_API_KEY").map(|k| !k.trim().is_empty()).unwrap_or(false) {
-            active.push("DeepSeek (DEEPSEEK_API_KEY)");
+        if Self::discover_deepseek().is_some() {
+            active.push("DeepSeek (Configured)");
         }
-        if std::env::var("OPENROUTER_API_KEY").map(|k| !k.trim().is_empty()).unwrap_or(false) {
-            active.push("OpenRouter (OPENROUTER_API_KEY)");
+        if Self::discover_openrouter().is_some() {
+            active.push("OpenRouter (Configured)");
         }
 
         if active.is_empty() {
-            "No OpenAI-compatible credentials configured (export OPENAI_API_KEY, DEEPSEEK_API_KEY, or OPENROUTER_API_KEY)".to_string()
+            "No OpenAI-compatible credentials configured (export OPENAI_API_KEY or run 'hgb auth openai')".to_string()
         } else {
             active.join(", ")
         }

@@ -519,6 +519,23 @@ enum Commands {
     #[command(name = "auth-copilot", alias = "copilot-auth", alias = "copilot-login")]
     AuthCopilot,
 
+    /// Store OpenAI API key permanently (~/.hgb/credentials.json)
+    #[command(name = "auth-openai", alias = "openai-auth", alias = "openai-login")]
+    AuthOpenAi {
+        /// OpenAI API key (sk-...)
+        #[arg(value_name = "API_KEY")]
+        key: Option<String>,
+    },
+
+    /// Save provider API key permanently (~/.hgb/credentials.json)
+    #[command(name = "key", alias = "set-key")]
+    Key {
+        /// Provider name (openai, anthropic, deepseek, openrouter)
+        provider: String,
+        /// Secret API key
+        key: Option<String>,
+    },
+
     /// Universal Cloud Fabric: catalog inspection & multi-provider latency benchmark
     #[command(alias = "fabric", alias = "cloud-bench")]
     CloudFabric {
@@ -3587,6 +3604,54 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             engine.save_credentials(&creds)?;
             println!("  ✔ Credentials saved to ~/.hgb/copilot_auth.json");
             println!("  🎉 Successfully authenticated! Ready to power Claude 3.5 Sonnet & GPT-4o.\n");
+            Ok(())
+        }
+        Commands::AuthOpenAi { key } => {
+            let api_key = match key {
+                Some(k) if !k.trim().is_empty() => k.trim().to_string(),
+                _ => {
+                    print!("Enter OpenAI API Key (sk-...): ");
+                    use std::io::Write;
+                    std::io::stdout().flush().unwrap();
+                    let mut input = String::new();
+                    std::io::stdin().read_line(&mut input).unwrap();
+                    input.trim().to_string()
+                }
+            };
+            if api_key.is_empty() {
+                eprintln!("{}", "Error: No API key provided.".red());
+                std::process::exit(1);
+            }
+            hgb_core::OpenAiCompatibleProvider::save_stored_key("openai_api_key", &api_key)?;
+            println!("  ✔ {}", "OpenAI API key saved to ~/.hgb/credentials.json".green().bold());
+            println!("  🎉 Successfully configured! Ready to power gpt-4o, gpt-4o-mini, o1, and o3-mini in Cockpit and CLI.\n");
+            Ok(())
+        }
+        Commands::Key { provider, key } => {
+            let prov = provider.to_lowercase();
+            let field = match prov.as_str() {
+                "openai" => "openai_api_key",
+                "deepseek" => "deepseek_api_key",
+                "anthropic" => "anthropic_api_key",
+                "openrouter" => "openrouter_api_key",
+                other => {
+                    eprintln!("{}", format!("Unknown provider '{}'. Supported: openai, deepseek, anthropic, openrouter", other).red());
+                    std::process::exit(1);
+                }
+            };
+            let secret = match key {
+                Some(k) if !k.trim().is_empty() => k.trim().to_string(),
+                _ => {
+                    print!("Enter API Key for {}: ", prov);
+                    use std::io::Write;
+                    std::io::stdout().flush().unwrap();
+                    let mut input = String::new();
+                    std::io::stdin().read_line(&mut input).unwrap();
+                    input.trim().to_string()
+                }
+            };
+            hgb_core::OpenAiCompatibleProvider::save_stored_key(field, &secret)?;
+            println!("  ✔ {}", format!("{} API key saved to ~/.hgb/credentials.json", prov).green().bold());
             Ok(())
         }
         Commands::CloudFabric { ping } => {

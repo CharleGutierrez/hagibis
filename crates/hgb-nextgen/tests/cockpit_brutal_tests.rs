@@ -468,6 +468,12 @@ fn test_brutal_overlays_rendering() {
     assert!(filtered_picker.contains("gemini-2.5-flash"));
     assert!(filtered_picker.contains("1 matches"));
 
+    // 2c. ModelPicker OpenAI GPT filter test
+    state.overlay = CockpitOverlay::ModelPicker { selected: 0, filter: "gpt-4o".to_string() };
+    let gpt_picker = state.render_headless_to_string(100, 30);
+    assert!(gpt_picker.contains("gpt-4o"));
+    assert!(gpt_picker.contains("gpt-4o-mini"));
+
     // 3. Tasks overlay
     state.add_background_task(CockpitBackgroundTask::new(
         "task-99",
