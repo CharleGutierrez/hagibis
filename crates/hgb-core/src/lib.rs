@@ -733,4 +733,23 @@ pub use ambient_dream::{
     LoRAConfig, PowerState, SystemHeadroom,
 };
 
+// ---------------------------------------------------------------------------
+// ROADMAP PRIORITIES P1 - P6 MODULES
+// ---------------------------------------------------------------------------
+pub mod unified_driver;
+pub mod github_action_runner;
+pub mod gpu_accelerate;
+
+pub use unified_driver::{
+    UnifiedAutonomousDriver, UnifiedExecutionReport,
+};
+pub use github_action_runner::{
+    ActionConfig as GitHubActionConfig, ActionReport as GitHubActionReport, GitHubActionRunner,
+};
+pub use gpu_accelerate::{
+    ComputeBackend, GgufInspectionReport, GgufModelEntry, GgufModelManager, GpuBenchmarkReport,
+    GpuComputeEngine,
+};
+
+
 

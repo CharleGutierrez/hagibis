@@ -1,5 +1,7 @@
 pub mod server;
+pub mod ambient_service;
 pub use server::{DaemonState, HagibisDaemon};
+pub use ambient_service::{AmbientDaemonService, DreamJournal, DreamJournalEntry};
 
 use colored::Colorize;
 use std::path::Path;

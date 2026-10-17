@@ -1,0 +1,49 @@
+name: Hagibis CI Autonomous Verification
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  hagibis-ci:
+    name: "Autonomous Blast Radius & Invariant Gate"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Rust Toolchain Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Run Hagibis CI Action
+        uses: ./
+        with:
+          task: 'full'
+          audit-blast-radius: 'true'
+          slopsquatting-firewall: 'true'
+          verify-specs: 'true'
+          comment-pr: 'true'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Workspace Unit Test Verification
+        run: |
+          cargo test --workspace -- --nocapture

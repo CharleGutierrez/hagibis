@@ -224,7 +224,15 @@ impl ToolCallCard {
             if !trimmed.is_empty() {
                 out.push_str(&format!("├{}┤\n", "─".repeat(width.saturating_sub(2)).dimmed()));
                 let max_inner = width.saturating_sub(6).max(10);
-                for line in trimmed.lines() {
+                let all_lines: Vec<&str> = trimmed.lines().collect();
+                let limit = 25;
+                let display_lines = if all_lines.len() > limit {
+                    &all_lines[..limit]
+                } else {
+                    &all_lines[..]
+                };
+
+                for line in display_lines {
                     let formatted_line = if line.starts_with('+') && !line.starts_with("+++") {
                         line.green().to_string()
                     } else if line.starts_with('-') && !line.starts_with("---") {
@@ -255,6 +263,14 @@ impl ToolCallCard {
                     };
                     let pad = max_inner.saturating_sub(safe_lw);
                     out.push_str(&format!("│  {}  {}{}\n", safe_line, " ".repeat(pad), "│".dimmed()));
+                }
+
+                if all_lines.len() > limit {
+                    let remaining = all_lines.len() - limit;
+                    let msg = format!("... ({} more lines truncated)", remaining);
+                    let msg_len = visual_str_width(&msg);
+                    let pad = max_inner.saturating_sub(msg_len);
+                    out.push_str(&format!("│  {}  {}{}\n", msg.yellow().italic(), " ".repeat(pad), "│".dimmed()));
                 }
             }
         }

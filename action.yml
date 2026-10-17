@@ -1,0 +1,82 @@
+name: 'Hagibis Autonomous Verification & Blast-Radius Action'
+description: 'Autonomous AST blast radius radar, slopsquatting supply chain firewall, and golden invariant verification for pull requests.'
+author: 'Charle Gutierrez'
+branding:
+  icon: 'shield'
+  color: 'blue'
+
+inputs:
+  task:
+    description: 'CI audit task to execute: full, blast-radius, slopsquatting, verify'
+    required: false
+    default: 'full'
+  audit-blast-radius:
+    description: 'Perform AST-level blast radius analysis and dependent call site detection'
+    required: false
+    default: 'true'
+  slopsquatting-firewall:
+    description: 'Enforce supply chain firewall against hallucinated/typosquatted dependencies'
+    required: false
+    default: 'true'
+  verify-specs:
+    description: 'Execute workspace verification gates and compile checks'
+    required: false
+    default: 'true'
+  comment-pr:
+    description: 'Post or update the GitHub Flavored Markdown status comment on the active PR'
+    required: false
+    default: 'true'
+  github-token:
+    description: 'GitHub token for PR comment authoring'
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  blast-score:
+    description: 'Calculated architectural blast radius score (0-100)'
+    value: ${{ steps.hagibis-runner.outputs.blast_score }}
+  blast-severity:
+    description: 'Severity level: LOW, MEDIUM, HIGH, or CRITICAL'
+    value: ${{ steps.hagibis-runner.outputs.blast_severity }}
+  firewall-passed:
+    description: 'Whether dependency slopsquatting check passed'
+    value: ${{ steps.hagibis-runner.outputs.firewall_passed }}
+  verification-passed:
+    description: 'Whether all golden invariants and compilation passed'
+    value: ${{ steps.hagibis-runner.outputs.verification_passed }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Ensure Rust toolchain
+      shell: bash
+      run: |
+        if ! command -v cargo &> /dev/null; then
+          echo "Installing Rust toolchain..."
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+        fi
+
+    - name: Build Hagibis Engine Binary
+      shell: bash
+      run: |
+        if ! command -v hgb &> /dev/null; then
+          cargo build --release -p hgb-cli
+          mkdir -p "$HOME/.cargo/bin"
+          cp target/release/hgb "$HOME/.cargo/bin/hgb"
+        fi
+
+    - name: Run Hagibis CI Verification Suite
+      id: hagibis-runner
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        INPUT_TASK: ${{ inputs.task }}
+        INPUT_AUDIT_BLAST: ${{ inputs.audit-blast-radius }}
+        INPUT_SLOPSQUATTING: ${{ inputs.slopsquatting-firewall }}
+        INPUT_VERIFY: ${{ inputs.verify-specs }}
+        INPUT_COMMENT_PR: ${{ inputs.comment-pr }}
+      run: |
+        hgb ci-action \
+          --task "$INPUT_TASK" \
+          --summary

@@ -1,6 +1,8 @@
 pub mod canvas;
 mod client;
 mod repl;
+pub mod menu;
+pub mod desktop_ide;
 
 use canvas::{ChatCanvas, ToolCallCard, ToolCardStatus};
 use clap::{Parser, Subcommand};
@@ -82,6 +84,16 @@ pub enum EnterpriseSubcommand {
         #[arg(long)]
         tenant_id: Option<String>,
     },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum DaemonCliSubcommand {
+    /// Inspect daemon status, uptime, and ambient background service health
+    Status,
+    /// Read overnight dream journal (.hgb/dream_journal.json)
+    Journal,
+    /// Install systemd user service unit (~/.config/systemd/user/hgbd.service)
+    InstallService,
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -393,6 +405,77 @@ enum Commands {
         /// Max commits to inspect
         #[arg(short, long, default_value_t = 15)]
         limit: usize,
+    },
+
+    /// Unified autonomous driver with RAM CoW isolation, GoT reasoning, and DPO distillation
+    #[command(alias = "auto", alias = "one")]
+    Do {
+        /// Task or feature specification
+        spec: String,
+        /// Optional target file path
+        #[arg(short, long)]
+        target: Option<String>,
+        /// Automatically commit verified changes to real workspace
+        #[arg(long)]
+        commit: bool,
+    },
+
+    /// Control Hagibis microkernel resident daemon, ambient sleep-tuning, and dream journal
+    #[command(alias = "d")]
+    Daemon {
+        #[command(subcommand)]
+        action: DaemonCliSubcommand,
+    },
+
+    /// Interactive fuzzy command search and navigator menu
+    #[command(alias = "find-cmd", alias = "catalog")]
+    Menu {
+        /// Search query string
+        #[arg(short, long)]
+        query: Option<String>,
+    },
+
+    /// Official GitHub Action PR runner and blast radius auditor
+    #[command(alias = "gh-action")]
+    CiAction {
+        /// Specific task or "full"
+        #[arg(short, long, default_value = "full")]
+        task: String,
+        /// Custom PR diff string (optional; reads git diff if omitted)
+        #[arg(short, long)]
+        diff: Option<String>,
+        /// Print GitHub Flavored Markdown summary to stdout
+        #[arg(long)]
+        summary: bool,
+    },
+
+    /// Run direct GPU/Vulkan GEMM compute benchmark (GFLOPS/TFLOPS)
+    #[command(alias = "vulkan-bench")]
+    GpuBench {
+        /// Matrix dimension (M=N=K)
+        #[arg(short, long, default_value_t = 64)]
+        dim: usize,
+        /// Iterations to benchmark
+        #[arg(short, long, default_value_t = 5)]
+        iterations: usize,
+    },
+
+    /// Pull and verify canonical GGUF models into ~/.hgb/models/
+    #[command(alias = "pull")]
+    ModelPull {
+        /// Model identifier or alias (e.g. qwen2.5-coder:1.5b)
+        name: String,
+    },
+
+    /// Launch standalone borderless Desktop IDE connected to Axum PWA Studio
+    #[command(alias = "studio-app")]
+    DesktopIde {
+        /// Local port for PWA Studio
+        #[arg(short, long, default_value_t = 38472)]
+        port: u16,
+        /// Optional custom browser executable path
+        #[arg(short, long)]
+        browser: Option<String>,
     },
 
     /// Execute a prompt directly through the microkernel swarm
@@ -3149,6 +3232,179 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("  LoRA Config JSON:       {}", report.lora_config_path.display().to_string().cyan());
                 println!("  LoRA Runbook Script:    {}", report.runbook_path.display().to_string().green());
                 println!("  ✔ Ambient distillation cycle complete. Ready for local sleep-tuning.");
+            }
+            Ok(())
+        }
+        Commands::Do { spec, target, commit } => {
+            println!("{}", "🪽 Hagibis Unified Autonomous Driver (`hgb do`)".cyan().bold());
+            println!("  Task Spec:    {}", spec.yellow().bold());
+            if let Some(ref t) = target {
+                println!("  Target File:  {}", t.cyan());
+            }
+            println!("  Auto-Commit:  {}", if commit { "ENABLED (Will write verified changes to disk)".green().bold() } else { "DISABLED (CoW Sandbox isolation only)".yellow().bold() });
+
+            let cwd = std::env::current_dir()?;
+            let driver = hgb_core::UnifiedAutonomousDriver::new(&cwd)
+                .with_auto_commit(commit);
+
+            println!("  Executing 7-stage autonomous pipeline (Sandbox -> GoT -> Blast -> Certify -> DPO)...");
+            let report = driver.execute(&spec, target.as_deref()).await?;
+
+            println!("{}", "\n── Unified Autonomous Execution Report ──".green().bold());
+            println!("  Winning Strategy:    {} ({})", report.winning_strategy.name().yellow().bold(), report.winning_node_id.cyan());
+            println!("  Fitness Score:       {:.1}/100.0", report.fitness_score.composite_score);
+            println!("  Blast Radius Score:  {:.1}/100.0 (Lower is safer)", report.fitness_score.blast_score);
+            println!("  Test Pass Rate:      {:.0}%", report.fitness_score.test_pass_rate * 100.0);
+            println!("  Self-Healing Loops:  {} iteration(s)", report.healed_iterations);
+            println!("  BLAKE3 Certificate:  {}", report.certificate.blake3_signature.green());
+            println!("  Certificate Valid:   {}", if report.certificate.verify() { "VERIFIED (Cryptographically Authentic)".green().bold() } else { "FAILED".red().bold() });
+            println!("  Workspace Committed: {}", if report.committed { "YES (Propagated to disk)".green().bold() } else { "NO (Rolled back cleanly)".yellow() });
+            println!("  Duration:            {} ms", report.duration_ms);
+
+            if let Some(ref dpo_path) = report.dpo_pair_path {
+                println!("  DPO Distill Record:  {}", dpo_path.display().to_string().cyan());
+            }
+            Ok(())
+        }
+        Commands::Daemon { action } => {
+            println!("{}", "🪽 Hagibis Resident Microkernel Daemon & Ambient Sleep-Tuning".cyan().bold());
+            let cwd = std::env::current_dir()?;
+            let service = hgb_daemon::AmbientDaemonService::new(&cwd);
+
+            match action {
+                DaemonCliSubcommand::Status => {
+                    let installed = hgb_daemon::AmbientDaemonService::check_systemd_service_installed();
+                    let journal = service.journal();
+                    let headroom = hgb_core::SystemHeadroom::inspect_linux_system();
+
+                    println!("{}", "── System Daemon Status ──".yellow().bold());
+                    println!("  systemd Service:    {}", if installed { "INSTALLED (~/.config/systemd/user/hgbd.service)".green().bold() } else { "NOT INSTALLED (Run `hgb daemon install-service`)".yellow() });
+                    println!("  CPU Idle:           {:.1}%", headroom.cpu_idle_pct);
+                    println!("  Ambient Ready:      {}", if headroom.has_headroom { "YES (Ready to dream when idle)".green().bold() } else { "DEFERRED".yellow() });
+                    println!("  Total Dream Cycles: {}", journal.total_cycles);
+                    println!("  Total DPO Pairs:    {}", journal.total_dpo_pairs);
+                    if let Some(last) = journal.last_cycle_timestamp {
+                        println!("  Last Dream Cycle:   {}", last.to_rfc3339().cyan());
+                    }
+                }
+                DaemonCliSubcommand::Journal => {
+                    let journal = service.journal();
+                    println!("{}", "── Overnight Ambient Dream Journal ──".green().bold());
+                    println!("  {}\n", journal.morning_greeting());
+                    println!("  Total Recorded Cycles: {}", journal.entries.len());
+                    for (i, entry) in journal.entries.iter().rev().take(5).enumerate() {
+                        println!("    [{}] Cycle: {} | DPO Pairs: {} | Style Score: {:.1}% | Idle: {:.0}%",
+                            i + 1, entry.cycle_id.cyan(), entry.dpo_pairs_synthesized, entry.style_alignment_score, entry.cpu_idle_pct);
+                    }
+                }
+                DaemonCliSubcommand::InstallService => {
+                    println!("  Generating and installing Linux systemd user service...");
+                    let path = hgb_daemon::AmbientDaemonService::install_systemd_service(None)?;
+                    println!("  ✔ Installed unit: {}", path.display().to_string().green().bold());
+                    println!("  To enable and start now, run:");
+                    println!("    systemctl --user daemon-reload");
+                    println!("    systemctl --user enable --now hgbd");
+                }
+            }
+            Ok(())
+        }
+        Commands::Menu { query } => {
+            if let Some(ref q) = query {
+                println!("{}", format!("🪽 Hagibis Command Search: '{}'", q).cyan().bold());
+                let commands = menu::InteractiveCommandCatalog::all_commands();
+                let matches = menu::InteractiveCommandCatalog::filter_commands(&commands, q);
+
+                if matches.is_empty() {
+                    println!("  No commands found matching '{}'. Run `hgb menu` for full catalog.", q.yellow());
+                } else {
+                    println!("  Found {} matching command(s):\n", matches.len());
+                    for (cmd, score) in matches {
+                        println!("  {} [{}] (score: {})", cmd.name.green().bold(), cmd.category.cyan(), score);
+                        println!("    Syntax:  {}", cmd.syntax.yellow());
+                        if !cmd.aliases.is_empty() {
+                            println!("    Aliases: {}", cmd.aliases.join(", ").dimmed());
+                        }
+                        println!("    Info:    {}\n", cmd.description);
+                    }
+                }
+            } else {
+                let selected = menu::InteractiveCommandCatalog::run_interactive()?;
+                if let Some(cmd) = selected {
+                    println!("  Selected command: {}", cmd.green().bold());
+                    println!("  To run: {}", format!("hgb {} --help", cmd).cyan());
+                }
+            }
+            Ok(())
+        }
+        Commands::CiAction { task, diff, summary } => {
+            println!("{}", "🪽 Hagibis Official GitHub Action CI Runner".cyan().bold());
+            let cwd = std::env::current_dir()?;
+            let mut config = hgb_core::GitHubActionConfig::default();
+            config.task = task;
+
+            let runner = hgb_core::GitHubActionRunner::new(&cwd, Some(config));
+            let report = runner.run(diff.as_deref())?;
+
+            println!("  Verdict:           {}", if report.verification_passed { "PASSED (Clean)".green().bold() } else { "BLOCKED / FAILED".red().bold() });
+            println!("  Blast Radius:      {:.1}/100.0", report.blast_score);
+            println!("  Symbols Affected:  {}", report.symbols_affected);
+            println!("  Packages Audited:  {}", report.packages_scanned);
+            println!("  BLAKE3 Signature:  {}", report.blake3_cert.green());
+
+            if summary || std::env::var("GITHUB_STEP_SUMMARY").is_ok() {
+                println!("\n--- GITHUB FLAVORED MARKDOWN STEP SUMMARY ---\n{}", report.summary_markdown);
+            }
+            Ok(())
+        }
+        Commands::GpuBench { dim, iterations } => {
+            println!("{}", "🪽 Hagibis GPU / Tensor Compute Acceleration Benchmark".cyan().bold());
+            let engine = hgb_core::GpuComputeEngine::new();
+            println!("  Backend:    {}", engine.backend().name().green().bold());
+            println!("  Matrix Dim: {} x {} x {}", dim, dim, dim);
+            println!("  Iterations: {}", iterations);
+            println!("  Running parallel GEMM benchmark (F32 vs Q4_0 vs Q8_0)...");
+
+            let report = engine.benchmark_flops(dim, iterations);
+            println!("{}", "\n── Compute Throughput Telemetry ──".yellow().bold());
+            println!("  F32 GEMM:                {:.2} GFLOPS", report.f32_gflops);
+            println!("  Q8_0 Block Quantized:    {:.2} GFLOPS", report.q8_0_gflops);
+            println!("  Q4_0 Nibble Quantized:   {:.2} GFLOPS", report.q4_0_gflops);
+            println!("  Quantization Efficiency: {:.2}x speedup", report.quantization_speedup);
+            println!("  Elapsed Benchmark Time:  {} ms", report.elapsed_ms);
+            Ok(())
+        }
+        Commands::ModelPull { name } => {
+            println!("{}", format!("🪽 Hagibis Resident GGUF Model Manager: Pulling '{}'", name).cyan().bold());
+            let manager = hgb_core::GgufModelManager::new();
+            println!("  Storage Directory: {}", manager.models_dir().display().to_string().yellow());
+
+            let target_path = manager.pull_model(&name)?;
+            println!("  ✔ Model resident on disk: {}", target_path.display().to_string().green().bold());
+
+            let inspection = manager.inspect_model(&target_path)?;
+            println!("  Format:          {} v{}", inspection.magic.green(), inspection.version);
+            println!("  Size:            {:.2} MB", inspection.file_size_bytes as f64 / (1024.0 * 1024.0));
+            println!("  Tensors:         {}", inspection.tensor_count);
+            println!("  Metadata KV:     {}", inspection.kv_count);
+            println!("  BLAKE3 Checksum: {}", inspection.blake3_hash.cyan());
+            Ok(())
+        }
+        Commands::DesktopIde { port, browser } => {
+            println!("{}", "🪽 Hagibis Sovereign Desktop IDE Launcher".cyan().bold());
+            let mut cfg = desktop_ide::DesktopLaunchConfig::default();
+            cfg.port = port;
+            cfg.custom_browser = browser;
+
+            let launcher = desktop_ide::DesktopIdeLauncher::new(Some(cfg));
+            println!("  Port:      {}", port);
+            println!("  Spawning standalone borderless app window...");
+
+            let report = launcher.launch()?;
+            println!("  ✔ Target URL:      {}", report.url.cyan().bold());
+            println!("  ✔ Browser Binary:  {}", report.browser_binary.green());
+            println!("  ✔ Standalone Mode: {}", if report.is_app_mode { "TRUE (Borderless desktop application window)".green().bold() } else { "FALSE (System browser tab fallback)".yellow() });
+            if let Some(ref prof) = report.profile_dir {
+                println!("  ✔ Profile Root:    {}", prof.display().to_string().dimmed());
             }
             Ok(())
         }
