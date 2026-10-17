@@ -270,6 +270,18 @@ impl HagibisDaemon {
                     }
                 }
 
+                // Living Project Memory Auto-Injection:
+                // Inject architectural decisions and notes from .hgb/memory.json if present
+                let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                if let Ok(ledger) = hgb_core::ProjectMemoryLedger::load_or_init(&cwd) {
+                    let anchor = ledger.render_llm_anchor(400);
+                    if !anchor.is_empty() {
+                        final_prompt.push_str("\n\n--- LIVING PROJECT MEMORY ---\n");
+                        final_prompt.push_str(&anchor);
+                        final_prompt.push_str("\n");
+                    }
+                }
+
                 // If resolved model differs from active, heal state and persisted model
                 if req_model != active {
                     let mut w = state.active_model.write().await;

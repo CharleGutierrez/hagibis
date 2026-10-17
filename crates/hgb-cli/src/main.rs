@@ -614,6 +614,12 @@ enum Commands {
         /// Optional provider identifier
         #[arg(short, long)]
         provider: Option<String>,
+        /// Continue conversation from previous session or memory
+        #[arg(short = 'c', long = "continue")]
+        continue_session: bool,
+        /// Resume a specific past session by ID
+        #[arg(long)]
+        session: Option<String>,
     },
 
     /// Browse a live web URL, sanitize against SSRF and prompt injection, and render clean markdown
@@ -3938,7 +3944,10 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             server.run().await.map_err(|e| format!("Tunnel server stopped: {}", e))?;
             Ok(())
         }
-        Commands::Run { text, model, provider } => {
+        Commands::Run { text, model, provider, continue_session, session } => {
+            let ws = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let ws_str = ws.to_string_lossy().to_string();
+
             let raw_model = if let Some(ref m) = model {
                 m.clone()
             } else if let Some(persisted) = hgb_core::load_active_model() {
@@ -3954,6 +3963,37 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             };
             let active_model_str = hgb_core::validate_and_resolve_active_model(Some(&raw_model)).unwrap_or(raw_model);
             let active_model = active_model_str.as_str();
+
+            // Session Memory Loading:
+            let mut session_data = if let Some(ref sid) = session {
+                hgb_core::session::load(sid, Some(&ws))
+                    .unwrap_or_else(|_| hgb_core::CockpitSessionData::new(&ws_str, &active_model_str).with_id(sid.clone()))
+            } else if continue_session {
+                hgb_core::session::load_latest(Some(&ws))
+                    .unwrap_or_else(|_| hgb_core::CockpitSessionData::new(&ws_str, &active_model_str))
+            } else {
+                hgb_core::CockpitSessionData::new(&ws_str, &active_model_str)
+            };
+
+            let dispatch_prompt = if continue_session || session.is_some() {
+                if !session_data.messages.is_empty() {
+                    println!("{}", format!("  🧠 Memory Active: Continuing session '{}' ({} previous turn(s) in context)...", session_data.id, session_data.messages.len()).cyan().dimmed());
+                    let mut history_str = String::new();
+                    history_str.push_str("--- CONVERSATION HISTORY (PREVIOUS TURNS) ---\n");
+                    let start_idx = session_data.messages.len().saturating_sub(6);
+                    for m in &session_data.messages[start_idx..] {
+                        history_str.push_str(&format!("{}: {}\n\n", m.role.to_uppercase(), m.content));
+                    }
+                    history_str.push_str("--- CURRENT USER QUERY ---\n");
+                    history_str.push_str(&text);
+                    history_str
+                } else {
+                    text.clone()
+                }
+            } else {
+                text.clone()
+            };
+
             let is_local = hgb_core::OllamaProvider::is_ollama_model(active_model);
             if is_local {
                 println!("{}", format!("  🪽 Local Ollama Reasoning (model: {})...", active_model).magenta().bold());
@@ -3962,7 +4002,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             }
             let t0 = std::time::Instant::now();
             let req = HgbRequest::Prompt {
-                prompt: text,
+                prompt: dispatch_prompt,
                 model: Some(active_model_str.clone()),
                 provider,
                 stream: false,
@@ -3974,11 +4014,17 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
                     ChatCanvas::print_markdown(&output);
                     let wall_dur = t0.elapsed().as_millis() as u64;
                     let dur = if duration_ms > 0 { duration_ms } else { wall_dur.max(1) };
+
+                    // Save this turn to session ledger so future calls (-c) or `hgb resume` can pick it up
+                    session_data.add_user_message(&text);
+                    session_data.add_assistant_message(&output, Some(active_model_str.clone()), tokens_used);
+                    let _ = hgb_core::session::save(&session_data, Some(&ws));
+
                     if tokens_used > 0 {
                         let tps = (tokens_used as f64) / (dur as f64 / 1000.0).max(0.001);
                         println!(
                             "{}",
-                            format!("  ⏱️ {} tokens in {} ms ({:.1} tok/s) • Model: {}", tokens_used, dur, tps, active_model).dimmed()
+                            format!("  ⏱️ {} tokens in {} ms ({:.1} tok/s) • Model: {} • Session: {}", tokens_used, dur, tps, active_model, session_data.id).dimmed()
                         );
                     }
                 }
