@@ -112,6 +112,36 @@ impl InteractiveCommandCatalog {
                 description: "Launch standalone borderless desktop IDE window mode connected to local Axum PWA Studio.",
             },
 
+            // Free Claude Code Transcendence & Multi-Agent Compatibility
+            CommandEntry {
+                name: "proxy",
+                aliases: &["serve-anthropic", "dropin"],
+                category: "Proxy/Compatibility",
+                syntax: "hgb proxy [--port <port>] [--provider <name>] [--shred-tokens]",
+                description: "Axum proxy server implementing Anthropic /v1/messages and OpenAI /v1/chat/completions with TokenShredder.",
+            },
+            CommandEntry {
+                name: "auth copilot",
+                aliases: &["copilot-login"],
+                category: "Auth/Provider",
+                syntax: "hgb auth copilot",
+                description: "Real RFC 8628 OAuth Device Flow authentication for GitHub Copilot (Claude 3.5 Sonnet & GPT-4o).",
+            },
+            CommandEntry {
+                name: "cloud-fabric",
+                aliases: &["fabric", "cloud-bench"],
+                category: "Cloud/Fabric",
+                syntax: "hgb cloud-fabric [--ping]",
+                description: "Multi-provider catalog and instant sub-millisecond failover engine (NVIDIA NIM, Groq, OpenRouter, Gemini, Copilot, Ollama).",
+            },
+            CommandEntry {
+                name: "remote",
+                aliases: &["bot"],
+                category: "Remote/Gateway",
+                syntax: "hgb remote <telegram|discord>",
+                description: "Async Telegram and Discord bot gateway allowing mobile task dispatching and status inspection.",
+            },
+
             // Blast Radius & AST
             CommandEntry {
                 name: "blast",

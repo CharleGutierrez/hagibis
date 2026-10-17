@@ -1987,18 +1987,22 @@ dependencies = [
 name = "hgb-daemon"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "bincode",
  "chrono",
  "clap",
  "colored",
+ "futures-util",
  "hgb-core",
  "hgb-nextgen",
  "hgb-storage",
+ "reqwest",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
  "tokio",
  "unicode-width 0.2.0",
+ "uuid",
 ]
 
 [[package]]

@@ -192,6 +192,27 @@ pub enum SkillSubcommand {
     },
 }
 
+#[derive(Subcommand, Debug, Clone)]
+pub enum RemoteSubcommand {
+    /// Launch Telegram Bot long-polling daemon
+    Telegram {
+        /// Telegram Bot Token (or read from $TELEGRAM_BOT_TOKEN)
+        #[arg(long)]
+        token: Option<String>,
+        /// Allowed user ID whitelist (repeatable)
+        #[arg(long)]
+        allowed_user: Vec<String>,
+    },
+    /// Dispatch notification to Discord webhook
+    Discord {
+        /// Discord webhook URL (or read from $DISCORD_WEBHOOK_URL)
+        #[arg(long)]
+        webhook: Option<String>,
+        /// Message text to dispatch
+        message: String,
+    },
+}
+
 #[derive(Subcommand)]
 enum Commands {
     /// Native Editor Integration & LSP Predictions
@@ -476,6 +497,41 @@ enum Commands {
         /// Optional custom browser executable path
         #[arg(short, long)]
         browser: Option<String>,
+    },
+
+    /// High-concurrency Anthropic & OpenAI drop-in proxy server with TokenShredder
+    #[command(name = "proxy", alias = "serve-anthropic", alias = "dropin")]
+    ProxyBridge {
+        /// Port to bind proxy server (default: 8082)
+        #[arg(short, long, default_value_t = 8082)]
+        port: u16,
+
+        /// Target provider override (e.g. copilot, groq, nvidia, gemini, openrouter, ollama)
+        #[arg(long)]
+        provider: Option<String>,
+
+        /// Enable SIMD Token Shredder prompt optimization
+        #[arg(long, default_value_t = true)]
+        shred_tokens: bool,
+    },
+
+    /// Interactive Authentication & Device Flow (GitHub Copilot)
+    #[command(name = "auth-copilot", alias = "copilot-auth", alias = "copilot-login")]
+    AuthCopilot,
+
+    /// Universal Cloud Fabric: catalog inspection & multi-provider latency benchmark
+    #[command(alias = "fabric", alias = "cloud-bench")]
+    CloudFabric {
+        /// Ping all providers to measure live round-trip latency
+        #[arg(long, default_value_t = true)]
+        ping: bool,
+    },
+
+    /// Remote Mobile Gateway (Telegram & Discord task dispatcher)
+    #[command(name = "remote-bot", alias = "remote-gateway", alias = "bot")]
+    RemoteGateway {
+        #[command(subcommand)]
+        command: RemoteSubcommand,
     },
 
     /// Execute a prompt directly through the microkernel swarm
@@ -951,7 +1007,7 @@ enum Commands {
     },
 
     /// Ephemeral Proxy Fabric: launch dynamic in-memory CRUD REST server on localhost
-    #[command(alias = "proxy-server")]
+    #[command(name = "mock-proxy", alias = "proxy-server", alias = "ephemeral-proxy")]
     Proxy {
         /// Resource entity name (e.g. users, products, orders)
         #[arg(default_value = "items")]
@@ -3405,6 +3461,154 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             println!("  ✔ Standalone Mode: {}", if report.is_app_mode { "TRUE (Borderless desktop application window)".green().bold() } else { "FALSE (System browser tab fallback)".yellow() });
             if let Some(ref prof) = report.profile_dir {
                 println!("  ✔ Profile Root:    {}", prof.display().to_string().dimmed());
+            }
+            Ok(())
+        }
+        Commands::ProxyBridge { port, provider, shred_tokens } => {
+            println!("{}", "═══════════════════════════════════════════════════════════════".cyan());
+            println!("{}", "  🪽  HAGIBIS CLAUDE & OPENAI DROP-IN PROXY SERVER  🪽".cyan().bold());
+            println!("{}", "═══════════════════════════════════════════════════════════════".cyan());
+            println!("  ✔ Binding:           {}", format!("http://127.0.0.1:{}", port).green().bold());
+            println!("  ✔ Anthropic API:     {}", format!("http://127.0.0.1:{}/v1/messages", port).yellow());
+            println!("  ✔ OpenAI API:        {}", format!("http://127.0.0.1:{}/v1/chat/completions", port).yellow());
+            println!("  ✔ Token Shredder:    {}", if shred_tokens { "ENABLED (up to 90% savings)".green() } else { "DISABLED".dimmed() });
+            if let Some(ref p) = provider {
+                println!("  ✔ Upstream Override: {}", p.magenta().bold());
+            } else {
+                println!("  ✔ Upstream Failover: {}", "Copilot -> Groq -> NVIDIA -> Gemini -> OpenRouter -> Ollama".dimmed());
+            }
+            println!("\n  {} Set in Claude Code:", "💡 TIP:".bold().white());
+            println!("     export ANTHROPIC_BASE_URL={}", format!("http://127.0.0.1:{}", port).cyan());
+            println!("     export ANTHROPIC_API_KEY=hgb-local\n");
+
+            let cfg = hgb_daemon::ProxyServerConfig {
+                host: "127.0.0.1".to_string(),
+                port,
+                default_provider: provider,
+                shred_tokens,
+            };
+
+            hgb_daemon::start_proxy_server(cfg).await.map_err(|e| format!("Proxy server failure: {e}"))?;
+            Ok(())
+        }
+        Commands::AuthCopilot => {
+            println!("{}", "═══════════════════════════════════════════════════════════════".cyan());
+            println!("{}", "  🔑  GITHUB COPILOT RFC 8628 DEVICE AUTHORIZATION  🔑".cyan().bold());
+            println!("{}", "═══════════════════════════════════════════════════════════════".cyan());
+
+            let engine = hgb_core::CopilotAuthEngine::new();
+            let device_flow = engine.request_device_code().await?;
+
+            println!("  1. Open verification page: {}", device_flow.verification_uri.bold().green());
+            println!("  2. Enter user code:        {}\n", format!("[ {} ]", device_flow.user_code).bold().yellow());
+            println!("  ⏳ Waiting for browser authorization in GitHub (timeout: {}s)...", device_flow.expires_in);
+
+            let access_token = engine.poll_access_token(
+                &device_flow.device_code,
+                device_flow.interval,
+                device_flow.expires_in,
+            ).await?;
+
+            println!("  ✔ Access token granted by GitHub!");
+            println!("  🔄 Exchanging for Copilot internal session token...");
+
+            let session = engine.exchange_copilot_token(&access_token).await?;
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64;
+
+            let creds = hgb_core::CopilotCredentials {
+                github_token: access_token,
+                copilot_token: session.token,
+                expires_at: session.expires_at,
+                api_endpoint: session.endpoints.and_then(|e| e.api).unwrap_or_else(|| "https://api.individual.githubcopilot.com".to_string()),
+                updated_at: now,
+            };
+
+            engine.save_credentials(&creds)?;
+            println!("  ✔ Credentials saved to ~/.hgb/copilot_auth.json");
+            println!("  🎉 Successfully authenticated! Ready to power Claude 3.5 Sonnet & GPT-4o.\n");
+            Ok(())
+        }
+        Commands::CloudFabric { ping } => {
+            println!("{}", "═══════════════════════════════════════════════════════════════".cyan());
+            println!("{}", "  ☁️   UNIVERSAL CLOUD FABRIC & MULTI-PROVIDER CATALOG  ☁️".cyan().bold());
+            println!("{}", "═══════════════════════════════════════════════════════════════".cyan());
+
+            let fabric = hgb_core::UniversalCloudFabric::new();
+            let catalog = fabric.catalog();
+
+            for desc in &catalog {
+                let status_icon = if desc.is_local { "🏠" } else { "🌐" };
+                println!("  {} {} [{}]", status_icon, desc.display_name.bold().white(), desc.id.as_str().cyan());
+                println!("     • Base URL:      {}", desc.base_url.dimmed());
+                println!("     • Default Model: {}", desc.default_model.yellow());
+                if let Some(ref env_name) = desc.env_var {
+                    let has_key = std::env::var(env_name).is_ok();
+                    let key_status = if has_key { "CONFIGURED ✓".green() } else { "MISSING".red() };
+                    println!("     • Env Key (${}): {}", env_name, key_status);
+                }
+                println!();
+            }
+
+            if ping {
+                println!("{}", "  ⚡ Measuring live round-trip latency across all providers...".bold().cyan());
+                let reports = fabric.ping_all().await;
+                println!("\n  {:<15} {:<12} {:<12} {}", "PROVIDER".bold(), "STATUS".bold(), "LATENCY".bold(), "DIAGNOSTIC".bold());
+                println!("  {}", "─".repeat(60).dimmed());
+                for r in reports {
+                    let status_str = if r.is_available { "ONLINE".green().bold() } else { "OFFLINE".red() };
+                    let lat_str = match r.latency_ms {
+                        Some(ms) => format!("{} ms", ms).cyan(),
+                        None => "—".dimmed(),
+                    };
+                    let diag = r.error_message.unwrap_or_else(|| "Nominal".to_string());
+                    println!("  {:<15} {:<12} {:<12} {}", r.provider_id, status_str, lat_str, diag.dimmed());
+                }
+                println!();
+            }
+            Ok(())
+        }
+        Commands::RemoteGateway { command } => {
+            match command {
+                RemoteSubcommand::Telegram { token, allowed_user } => {
+                    println!("{}", "═══════════════════════════════════════════════════════════════".cyan());
+                    println!("{}", "  📱  HAGIBIS REMOTE MOBILE GATEWAY (TELEGRAM)  📱".cyan().bold());
+                    println!("{}", "═══════════════════════════════════════════════════════════════".cyan());
+
+                    let tok = token.clone().or_else(|| std::env::var("TELEGRAM_BOT_TOKEN").ok()).ok_or_else(|| {
+                        "Missing Telegram bot token. Pass --token or set $TELEGRAM_BOT_TOKEN."
+                    })?;
+
+                    let cfg = hgb_daemon::RemoteBotConfig {
+                        telegram_token: Some(tok),
+                        discord_webhook_url: None,
+                        allowed_user_ids: allowed_user.clone(),
+                        poll_interval_secs: 2,
+                    };
+
+                    println!("  ✔ Whitelisted Users: {:?}", allowed_user);
+                    println!("  ✔ Polling Telegram /getUpdates in background...");
+                    let gateway = hgb_daemon::RemoteMobileGateway::new(cfg);
+                    gateway.poll_telegram_loop().await.map_err(|e| format!("Telegram loop error: {e}"))?;
+                }
+                RemoteSubcommand::Discord { webhook, message } => {
+                    let hook = webhook.clone().or_else(|| std::env::var("DISCORD_WEBHOOK_URL").ok()).ok_or_else(|| {
+                        "Missing Discord webhook URL. Pass --webhook or set $DISCORD_WEBHOOK_URL."
+                    })?;
+
+                    let cfg = hgb_daemon::RemoteBotConfig {
+                        telegram_token: None,
+                        discord_webhook_url: Some(hook),
+                        allowed_user_ids: Vec::new(),
+                        poll_interval_secs: 2,
+                    };
+
+                    let gateway = hgb_daemon::RemoteMobileGateway::new(cfg);
+                    gateway.dispatch_discord_webhook(&message).await.map_err(|e| format!("Discord dispatch error: {e}"))?;
+                    println!("✔ Successfully dispatched message to Discord webhook.");
+                }
             }
             Ok(())
         }

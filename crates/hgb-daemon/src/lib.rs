@@ -1,7 +1,19 @@
 pub mod server;
 pub mod ambient_service;
+pub mod proxy_server;
+pub mod remote_bot;
 pub use server::{DaemonState, HagibisDaemon};
 pub use ambient_service::{AmbientDaemonService, DreamJournal, DreamJournalEntry};
+pub use proxy_server::{
+    build_proxy_router, start_proxy_server, AnthropicBlock, AnthropicContent,
+    AnthropicIncomingMessage, AnthropicMessagesRequest, AnthropicResponseMessage,
+    ModelItem, ModelListResponse, OpenAiChatRequest, OpenAiChatResponse,
+    ProxyServerConfig, ProxyState,
+};
+pub use remote_bot::{
+    BotCommand, IncomingBotMessage, OutgoingBotResponse, RemoteBotConfig,
+    RemoteMobileGateway,
+};
 
 use colored::Colorize;
 use std::path::Path;

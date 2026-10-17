@@ -751,5 +751,22 @@ pub use gpu_accelerate::{
     GpuComputeEngine,
 };
 
+// ---------------------------------------------------------------------------
+// FREE CLAUDE CODE (FCC) TRANSCENDENCE MODULES
+// ---------------------------------------------------------------------------
+pub mod token_shredder;
+pub mod copilot_oauth;
+pub mod cloud_fabric;
+
+pub use token_shredder::{ShredResult, TokenShredder};
+pub use copilot_oauth::{
+    CopilotAuthEngine, CopilotChatMessage, CopilotChatRequest, CopilotChatResponse,
+    CopilotCredentials, DeviceCodeResponse, GitHubTokenResponse,
+};
+pub use cloud_fabric::{
+    FabricChatRequest, FabricChatResponse, FabricMessage, FailoverEvent,
+    ProviderDescriptor, ProviderHealthReport, ProviderId, UniversalCloudFabric,
+};
+
 
 
