@@ -3891,6 +3891,18 @@ pub async fn execute_prompt_with_history(
         }
     }
 
+    // Ground prompt with live web link content if URLs are detected in prompt
+    let browser = hgb_core::WebBrowserEngine::default();
+    let prompt = if let Ok((augmented, fetched)) = browser.augment_prompt_with_urls(&prompt, 1500).await {
+        if !fetched.is_empty() {
+            augmented
+        } else {
+            prompt
+        }
+    } else {
+        prompt
+    };
+
     // Common system instructions enabling autonomous ReAct tools across all models
     let system_instructions = "\
 You are Hagibis (hgb), an elite Systems Rust & Autonomous AI Agent runtime.

@@ -246,6 +246,21 @@ impl HagibisDaemon {
                     .unwrap_or_else(|| raw_req_model.to_string());
 
                 let mut final_prompt = prompt.clone();
+
+                // Live Web Auto-Grounding:
+                // If user prompt contains web URLs, fetch live web page content and inject clean markdown
+                let browser = hgb_core::WebBrowserEngine::default();
+                if let Ok((augmented, fetched)) = browser.augment_prompt_with_urls(&final_prompt, 1500).await {
+                    if !fetched.is_empty() {
+                        eprintln!(
+                            "🌐 [Web Grounding] Injected {} live web source(s) into prompt: {}",
+                            fetched.len(),
+                            fetched.iter().map(|p| p.url.as_str()).collect::<Vec<_>>().join(", ")
+                        );
+                        final_prompt = augmented;
+                    }
+                }
+
                 if let Ok(matched) = state.skill_store.match_skills(&prompt).await {
                     if !matched.is_empty() {
                         final_prompt.push_str("\n\n--- AUTO-INJECTED SKILLS ---\n");

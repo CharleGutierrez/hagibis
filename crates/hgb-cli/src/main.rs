@@ -616,6 +616,26 @@ enum Commands {
         provider: Option<String>,
     },
 
+    /// Browse a live web URL, sanitize against SSRF and prompt injection, and render clean markdown
+    #[command(alias = "web", alias = "fetch-url")]
+    Browse {
+        /// Target HTTP or HTTPS URL to browse
+        url: String,
+        /// Maximum tokens to extract (default 1500)
+        #[arg(short, long, default_value_t = 1500)]
+        tokens: usize,
+    },
+
+    /// Search the live web via DuckDuckGo and return ranked organic results
+    #[command(alias = "web-search", alias = "ddg")]
+    SearchWeb {
+        /// Search query terms
+        query: String,
+        /// Maximum search results to return (default 5)
+        #[arg(short, long, default_value_t = 5)]
+        limit: usize,
+    },
+
     /// Ping the resident hgbd daemon and measure UDS roundtrip latency
     Ping,
 
@@ -3967,6 +3987,52 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
                     std::process::exit(1);
                 }
                 other => repl_helper.render_response(other),
+            }
+            Ok(())
+        }
+        Commands::Browse { url, tokens } => {
+            println!("{}", format!("🌐 Navigating to '{}' (SSRF-Hardened Web Engine)...", url).cyan().bold());
+            let t0 = std::time::Instant::now();
+            let engine = hgb_core::WebBrowserEngine::default();
+            match engine.browse_url(&url, tokens).await {
+                Ok(page) => {
+                    let dur_ms = t0.elapsed().as_millis() as u64;
+                    println!("{}", format!("  ✔ Fetched: {} (HTTP {}) in {}ms [{} tokens]", page.title, page.status_code, dur_ms, page.token_count).green());
+                    if page.truncated {
+                        println!("{}", "  ⚠️ Content was truncated to fit token budget envelope.".yellow());
+                    }
+                    println!("\n{}\n", "─".repeat(70).dimmed());
+                    ChatCanvas::print_markdown(&page.markdown);
+                    println!("\n{}", "─".repeat(70).dimmed());
+                }
+                Err(e) => {
+                    eprintln!("{} Failed to browse '{}': {}", "✖".red().bold(), url, e);
+                    std::process::exit(1);
+                }
+            }
+            Ok(())
+        }
+        Commands::SearchWeb { query, limit } => {
+            println!("{}", format!("🔎 Searching live web for '{}' via DuckDuckGo...", query).cyan().bold());
+            let t0 = std::time::Instant::now();
+            let engine = hgb_core::WebBrowserEngine::default();
+            match engine.search_web(&query, limit).await {
+                Ok(results) => {
+                    let dur_ms = t0.elapsed().as_millis() as u64;
+                    println!("{}", format!("  ✔ Found {} organic results in {}ms:\n", results.len(), dur_ms).green());
+                    for (i, r) in results.iter().enumerate() {
+                        println!("  {}. {}", (i + 1).to_string().bold().yellow(), r.title.bold());
+                        println!("     {}", r.url.cyan().underline());
+                        if !r.snippet.is_empty() {
+                            println!("     {}", r.snippet.dimmed());
+                        }
+                        println!();
+                    }
+                }
+                Err(e) => {
+                    eprintln!("{} Search failed: {}", "✖".red().bold(), e);
+                    std::process::exit(1);
+                }
             }
             Ok(())
         }

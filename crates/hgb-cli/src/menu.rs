@@ -56,6 +56,20 @@ impl InteractiveCommandCatalog {
                 description: "Conversational AGY chat canvas, live multi-turn cockpit, and workspace scratchpad.",
             },
             CommandEntry {
+                name: "browse",
+                aliases: &["web", "fetch-url"],
+                category: "Core/Web",
+                syntax: "hgb browse <url> [--tokens <N>]",
+                description: "SSRF-hardened live web browsing and HTML-to-clean-Markdown extraction with prompt injection auditing.",
+            },
+            CommandEntry {
+                name: "search-web",
+                aliases: &["web-search", "ddg"],
+                category: "Core/Web",
+                syntax: "hgb search-web <query> [--limit <N>]",
+                description: "Live web search via DuckDuckGo returning ranked organic results with clickable URLs and snippets.",
+            },
+            CommandEntry {
                 name: "classic",
                 aliases: &["repl"],
                 category: "Core/Chat",

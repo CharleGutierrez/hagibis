@@ -110,6 +110,88 @@ impl WebBrowserEngine {
         .map_err(|_| HgbError::Execution("Worker thread panicked while browsing URL".to_string()))?
     }
 
+    /// Extract all valid HTTP/HTTPS URLs present in arbitrary text or prompt
+    pub fn extract_urls(text: &str) -> Vec<String> {
+        let mut urls = Vec::new();
+        if let Ok(re) = regex::Regex::new(r#"https?://[^\s<>"'"`\(\)]+"#) {
+            for m in re.find_iter(text) {
+                let mut url = m.as_str().to_string();
+                // Strip common trailing punctuation from natural language sentences
+                while url.ends_with('.')
+                    || url.ends_with(',')
+                    || url.ends_with('?')
+                    || url.ends_with('!')
+                    || url.ends_with(';')
+                    || url.ends_with(':')
+                    || url.ends_with(')')
+                    || url.ends_with(']')
+                {
+                    url.pop();
+                }
+                if (url.starts_with("http://") || url.starts_with("https://")) && !urls.contains(&url) {
+                    urls.push(url);
+                }
+            }
+        }
+        urls
+    }
+
+    /// Automatically ground a user prompt by detecting embedded URLs, fetching their live content,
+    /// and injecting clean, token-budgeted markdown into the prompt context.
+    pub async fn augment_prompt_with_urls(&self, prompt: &str, max_tokens_per_url: usize) -> Result<(String, Vec<WebPageContent>)> {
+        let urls = Self::extract_urls(prompt);
+        if urls.is_empty() {
+            return Ok((prompt.to_string(), Vec::new()));
+        }
+
+        // Limit to max 3 URLs per prompt to avoid excessive latency or context window bloat
+        let target_urls: Vec<String> = urls.into_iter().take(3).collect();
+        let mut fetched_pages = Vec::new();
+
+        for url in &target_urls {
+            // Safely fetch target URL with SSRF auditing and token limits
+            match self.browse_url(url, max_tokens_per_url).await {
+                Ok(page) => {
+                    fetched_pages.push(page);
+                }
+                Err(err) => {
+                    eprintln!("Warning: Auto-grounding failed for URL '{}': {}", url, err);
+                }
+            }
+        }
+
+        if fetched_pages.is_empty() {
+            return Ok((prompt.to_string(), Vec::new()));
+        }
+
+        let mut augmented = prompt.to_string();
+        augmented.push_str("\n\n--- LIVE WEB CONTEXT (GROUNDED BY HAGIBIS) ---\n");
+        for page in &fetched_pages {
+            augmented.push_str(&format!(
+                "Source: {}\nTitle: {}\nStatus: {}\nContent:\n{}\n\n",
+                page.url, page.title, page.status_code, page.markdown
+            ));
+        }
+        augmented.push_str("--- END LIVE WEB CONTEXT ---\n");
+
+        Ok((augmented, fetched_pages))
+    }
+
+    /// Synchronous wrapper for augment_prompt_with_urls
+    pub fn augment_prompt_with_urls_sync(&self, prompt: &str, max_tokens_per_url: usize) -> Result<(String, Vec<WebPageContent>)> {
+        let engine = self.clone();
+        let p = prompt.to_string();
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| HgbError::Execution(format!("Failed to build async runtime: {}", e)))?;
+            rt.block_on(engine.augment_prompt_with_urls(&p, max_tokens_per_url))
+        })
+        .join()
+        .map_err(|_| HgbError::Execution("Worker thread panicked during prompt URL augmentation".to_string()))?
+    }
+
     /// Execute live web search against DuckDuckGo or fallback search aggregator
     pub async fn search_web(&self, query: &str, max_results: usize) -> Result<Vec<WebSearchResult>> {
         let q = query.trim();
@@ -477,4 +559,18 @@ mod tests {
         assert!(tokens <= 5);
         assert!(res.contains("truncated"));
     }
+
+    #[test]
+    fn test_extract_urls() {
+        let prompt = "Please read https://doc.rust-lang.org/book/ and compare with https://crates.io? Also check (http://example.com/test). Thanks!";
+        let urls = WebBrowserEngine::extract_urls(prompt);
+        assert_eq!(urls.len(), 3);
+        assert_eq!(urls[0], "https://doc.rust-lang.org/book/");
+        assert_eq!(urls[1], "https://crates.io");
+        assert_eq!(urls[2], "http://example.com/test");
+
+        let empty_prompt = "No urls here at all!";
+        assert!(WebBrowserEngine::extract_urls(empty_prompt).is_empty());
+    }
 }
+
