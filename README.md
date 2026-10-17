@@ -15,7 +15,7 @@
   <a href="https://github.com/CharleGutierrez/hagibis"><img src="https://img.shields.io/badge/Zig%200.13%20SIMD-AVX2%20%40Vector(8%2C%20f32)-f5a97f?style=for-the-badge&logo=zig" alt="Zig SIMD" /></a>
   <a href="https://github.com/CharleGutierrez/hagibis"><img src="https://img.shields.io/badge/MCP%20Engine-8%2C036%20calls%2Fsec%20%E2%80%A2%20124%C2%B5s-blueviolet?style=for-the-badge" alt="MCP Engine" /></a>
   <a href="https://github.com/CharleGutierrez/hagibis"><img src="https://img.shields.io/badge/Daemon%20RSS-1.5MB%20idle%20%2F%206.2MB%20active-blue?style=for-the-badge" alt="Memory RSS" /></a>
-  <a href="https://github.com/CharleGutierrez/hagibis"><img src="https://img.shields.io/badge/Sovereign%20Superpowers-125%20Genuine-orange?style=for-the-badge&logo=feather" alt="125 Superpowers" /></a>
+  <a href="https://github.com/CharleGutierrez/hagibis"><img src="https://img.shields.io/badge/Sovereign%20Superpowers-135%2B%20Genuine-orange?style=for-the-badge&logo=feather" alt="135+ Superpowers" /></a>
   <a href="https://github.com/CharleGutierrez/hagibis"><img src="https://img.shields.io/badge/Linux%20Native-systemd%20%2B%20Landlock%20LSM-red?style=for-the-badge&logo=linux" alt="Linux Native" /></a>
   <a href="HAGIBIS_VIBE_CODING_MASTERCLASS.pdf"><img src="https://img.shields.io/badge/Masterclass%20PDF-84%20Pages-gold?style=for-the-badge&logo=adobeacrobatreader" alt="Masterclass PDF" /></a>
   <a href="https://github.com/CharleGutierrez/hagibis/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-lightgrey?style=for-the-badge" alt="License" /></a>
@@ -49,6 +49,71 @@ Hagibis is **not another sluggish browser wrapper or Python script**. It is a **
 | **Verification & Quality** | Blind acceptance of untested AI code | **Speculative TDD & Anti-Placebo Gates:** Code compiles & passes invariants before disk touch |
 | **OS & Kernel Security** | Unsandboxed child process execution | **Linux Landlock LSM Kernel Jail:** Syscalls 444–446 unprivileged rootless sandbox |
 | **Full Lifecycle Span** | Limited to code autocompletion | **All-Lifecycle:** Voice loop, Figma sync, Sentry auto-hotfixes, Stripe SaaS paywalls, Mobile QR |
+
+---
+
+## ⚡ FCC Transcendence: Zero-Cost Cloud Fabric & Drop-in Proxy
+
+Hagibis decisively transcends Free Claude Code (FCC) by integrating a native Axum HTTP proxy, RFC 8628 Copilot OAuth, Universal Cloud Fabric, and SIMD Token Shredder directly into its compiled Rust microkernel.
+
+### 1. Drop-in Proxy for Claude Code CLI & Cursor (`hgb proxy`)
+Launch the drop-in proxy with native **TokenShredder** (strips terminal ANSI noise, folds repetitive build frames, and condenses large tool outputs for **up to 90% token reduction**):
+```bash
+hgb proxy --port 8082 --shred-tokens
+```
+- **Use with Claude Code CLI (`claude`):**
+  ```bash
+  export ANTHROPIC_BASE_URL="http://127.0.0.1:8082"
+  export ANTHROPIC_API_KEY="hgb-token"
+  claude
+  ```
+- **Use with Cursor / Cline / Aider:**
+  Set OpenAI API Base URL to `http://127.0.0.1:8082/v1` with model `claude-3.5-sonnet` or `llama-3.3-70b-versatile`.
+
+### 2. Zero-Cost GitHub Copilot OAuth Flow (`hgb auth-copilot`)
+Authenticate directly with GitHub Copilot without third-party Node.js scripts:
+```bash
+hgb auth-copilot
+```
+Follow the one-time device code prompt at `github.com/login/device`. Credentials and tokens are securely managed at `~/.hgb/copilot_auth.json`.
+
+### 3. Universal Zero-Cost Cloud Fabric (`hgb cloud-fabric`)
+Inspect the 6-provider catalog and verify live round-trip latency with automated sub-millisecond failover chaining across:
+- **GitHub Copilot** (Claude 3.5 Sonnet & GPT-4o)
+- **Google AI Studio** (`gemini-2.5-flash`)
+- **Groq LPU** (`llama-3.3-70b-versatile`)
+- **NVIDIA NIM** (`meta/llama-3.3-70b-instruct` & `nemotron-3-super-120b`)
+- **OpenRouter Free** (`openrouter/free`)
+- **Local Ollama Microkernel** (`qwen2.5-coder:7b`)
+
+```bash
+hgb cloud-fabric
+```
+
+### 4. Speculative Autonomous Driver (`hgb do`)
+Execute complex software tasks with zero workspace risk. Hagibis branches speculative solutions in a Linux Copy-on-Write (CoW) OverlayFS RAM sandbox (`/dev/shm`), runs automated compiler self-healing, arbitrates via Graph-of-Thought (GoT), and generates a cryptographic BLAKE3 `ThoughtCertificate`:
+```bash
+hgb do "Optimize memory buffers and verify zero allocations" --target "src/buffer.rs"
+```
+
+### 5. Remote Mobile Gateway (`hgb remote-bot`)
+Control your workstation remotely from anywhere via encrypted Telegram bot or Discord webhooks with strict whitelist authorization:
+```bash
+# Telegram Bot long-polling daemon
+export TELEGRAM_BOT_TOKEN="your_token"
+export HGB_ALLOWED_TELEGRAM_USERS="12345678"
+hgb remote-bot telegram
+
+# Dispatch Discord webhook notification
+hgb remote-bot discord --url "https://discord.com/api/webhooks/..." --msg "Build green"
+```
+
+### 6. Interactive Fuzzy Command Catalog (`hgb menu`)
+Search and discover all 135+ subcommands with interactive arrow-key navigation or direct query matching:
+```bash
+hgb menu --query "proxy"
+hgb menu --query "copilot"
+```
 
 ---
 
