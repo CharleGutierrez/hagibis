@@ -146,6 +146,16 @@ impl HagibisDaemon {
                     active_models.push("gemini-2.5-flash".to_string());
                     active_models.push("gemini-2.5-pro".to_string());
                 }
+                if hgb_core::CodexAuthEngine::is_available() {
+                    active_models.push("gpt-6-astra".to_string());
+                    active_models.push("gpt-6.1-sol".to_string());
+                    active_models.push("gpt-5.6-sol".to_string());
+                }
+                if hgb_core::OpenAiCompatibleProvider::is_openai_available() || hgb_core::CodexAuthEngine::is_available() {
+                    active_models.push("gpt-4o".to_string());
+                    active_models.push("gpt-4o-mini".to_string());
+                    active_models.push("o3-mini".to_string());
+                }
                 active_models.dedup();
                 HgbResponse::Status(DaemonStatus {
                     version: env!("CARGO_PKG_VERSION").to_string(),
@@ -176,10 +186,18 @@ impl HagibisDaemon {
                     "Local Ollama offline (run 'ollama serve' to enable local models)".to_string()
                 };
 
+                let codex_status = if hgb_core::CodexAuthEngine::is_available() { "READY" } else { "OPTIONAL" };
+                let codex_msg = if let Some(creds) = hgb_core::CodexAuthEngine::load_credentials() {
+                    format!("Connected to ChatGPT Codex OAuth ({} • {})", creds.email.as_deref().unwrap_or("Authenticated"), creds.account_id.as_deref().unwrap_or("Personal"))
+                } else {
+                    "Codex CLI Web Auth not connected (run 'hgb auth-codex' to import)".to_string()
+                };
+
                 HgbResponse::DoctorReport(vec![
                     DoctorPillar { name: "Microkernel Tokio IPC".to_string(), status: "READY".to_string(), message: "Sub-500µs UDS socket connected".to_string() },
                     DoctorPillar { name: "Local LLM Engine (Ollama)".to_string(), status: ollama_status.to_string(), message: ollama_msg },
                     DoctorPillar { name: "Google Gemini Cloud Provider".to_string(), status: gemini_status.to_string(), message: gemini_msg },
+                    DoctorPillar { name: "OpenAI Codex Web Auth (ChatGPT)".to_string(), status: codex_status.to_string(), message: codex_msg },
                     DoctorPillar { name: "Blake3 Provenance Ledger".to_string(), status: "READY".to_string(), message: "SC A.M. 03-8-02-SC & Rule 141 evidentiary roots active".to_string() },
                     DoctorPillar { name: "Time-Travel Checkpoints".to_string(), status: "READY".to_string(), message: "Append-only WAL initialized".to_string() },
                     DoctorPillar { name: "Differential Fuzz Engine".to_string(), status: "READY".to_string(), message: "Boundary & Homoglyph mutation suite ready".to_string() },
@@ -253,7 +271,27 @@ impl HagibisDaemon {
                     || req_model.contains("openai");
 
                 if is_openai {
-                    // Try real OpenAI provider first
+                    let is_codex_native = req_model.starts_with("gpt-6") || req_model.starts_with("gpt-5.6");
+
+                    // 1. If it's a native ChatGPT Codex model, use Codex Web Auth engine directly
+                    if is_codex_native && hgb_core::CodexAuthEngine::is_available() {
+                        let codex = hgb_core::CodexAuthEngine::new();
+                        match codex.chat_completion(&req_model, &final_prompt).await {
+                            Ok(text) => {
+                                let duration_ms = start.elapsed().as_millis() as u64;
+                                return HgbResponse::Complete {
+                                    output: text,
+                                    tokens_used: final_prompt.len() / 4,
+                                    duration_ms,
+                                };
+                            }
+                            Err(e) => {
+                                eprintln!("Codex native execution error: {}", e);
+                            }
+                        }
+                    }
+
+                    // 2. Try real OpenAI API key provider
                     if let Some(openai_prov) = hgb_core::OpenAiCompatibleProvider::discover_openai() {
                         let msgs = vec![
                             hgb_core::ChatMessage::system("You are an expert AI software engineer in Hagibis."),
@@ -269,7 +307,19 @@ impl HagibisDaemon {
                                 };
                             }
                             Err(e) => {
-                                // If OpenAI returned an error (e.g. rate limit / network), failover to Gemini
+                                // If OpenAI returned an error (e.g. billing / rate limit / network), fallback to Codex Web Auth
+                                if hgb_core::CodexAuthEngine::is_available() {
+                                    let codex = hgb_core::CodexAuthEngine::new();
+                                    if let Ok(text) = codex.chat_completion(&req_model, &final_prompt).await {
+                                        let duration_ms = start.elapsed().as_millis() as u64;
+                                        return HgbResponse::Complete {
+                                            output: format!("⚡ [OpenAI API Notice: {} -> Auto-Routed via Connected Codex ChatGPT Web Auth]\n\n{}", e, text),
+                                            tokens_used: final_prompt.len() / 4,
+                                            duration_ms,
+                                        };
+                                    }
+                                }
+                                // Fallback to Gemini
                                 if hgb_core::GeminiProvider::is_available() {
                                     if let Some(gemini_prov) = hgb_core::GeminiProvider::auto_discover() {
                                         if let Ok(text) = gemini_prov.complete(&final_prompt, None).await {
@@ -287,7 +337,25 @@ impl HagibisDaemon {
                         }
                     }
 
-                    // Try GitHub Copilot (which provides gpt-4o natively)
+                    // 3. Try OpenAI Codex CLI Web Authentication (ChatGPT Web OAuth from ~/.codex/auth.json)
+                    if hgb_core::CodexAuthEngine::is_available() {
+                        let codex = hgb_core::CodexAuthEngine::new();
+                        match codex.chat_completion(&req_model, &final_prompt).await {
+                            Ok(text) => {
+                                let duration_ms = start.elapsed().as_millis() as u64;
+                                return HgbResponse::Complete {
+                                    output: text,
+                                    tokens_used: final_prompt.len() / 4,
+                                    duration_ms,
+                                };
+                            }
+                            Err(e) => {
+                                eprintln!("Codex web auth completion fallback notice: {}", e);
+                            }
+                        }
+                    }
+
+                    // 4. Try GitHub Copilot (which provides gpt-4o natively)
                     let copilot = hgb_core::copilot_oauth::CopilotAuthEngine::default();
                     if let Ok(Some(_)) = copilot.load_credentials() {
                         let copilot_req = hgb_core::copilot_oauth::CopilotChatRequest {
@@ -313,7 +381,7 @@ impl HagibisDaemon {
                         }
                     }
 
-                    // Dual-Brain Resilience Failover: No OpenAI key configured, but Gemini or Ollama is online!
+                    // 5. Dual-Brain Resilience Failover: No OpenAI key configured and no Codex/Copilot, but Gemini or Ollama is online!
                     if hgb_core::GeminiProvider::is_available() {
                         if let Some(gemini_prov) = hgb_core::GeminiProvider::auto_discover() {
                             if let Ok(text) = gemini_prov.complete(&final_prompt, None).await {
@@ -511,12 +579,18 @@ impl HagibisDaemon {
                 } else {
                     "Unconfigured (run 'hgb auth-openai <KEY>' or export OPENAI_API_KEY)"
                 };
+                let codex_status = if hgb_core::CodexAuthEngine::is_available() {
+                    "Connected (ChatGPT Web Auth)"
+                } else {
+                    "Not connected (run 'hgb auth-codex' or 'codex login')"
+                };
                 let output = format!(
-                    "🪽 Hagibis Microkernel: No active model connection for '{}'.\n• Google Gemini: {}\n• Local Ollama: {}\n• OpenAI: {}\n\nTo connect:\n  - OpenAI: run 'hgb auth-openai <KEY>' or export OPENAI_API_KEY=...\n  - Gemini: run 'hgb login' or export GEMINI_API_KEY=...\n  - Ollama: run 'ollama serve' and specify '-m qwen2.5-coder:1.5b' or any installed model.",
+                    "🪽 Hagibis Microkernel: No active model connection for '{}'.\n• Google Gemini: {}\n• Local Ollama: {}\n• OpenAI API: {}\n• Codex Web Auth: {}\n\nTo connect:\n  - OpenAI API: run 'hgb auth-openai <KEY>' or export OPENAI_API_KEY=...\n  - Codex Web: run 'hgb auth-codex' to import ChatGPT web authentication\n  - Gemini: run 'hgb login' or export GEMINI_API_KEY=...\n  - Ollama: run 'ollama serve' and specify '-m qwen2.5-coder:1.5b' or any installed model.",
                     req_model,
                     cred_status,
                     ollama_status,
-                    openai_status
+                    openai_status,
+                    codex_status
                 );
                 HgbResponse::Complete {
                     output,

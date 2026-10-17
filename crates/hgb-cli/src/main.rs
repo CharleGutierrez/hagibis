@@ -527,6 +527,10 @@ enum Commands {
         key: Option<String>,
     },
 
+    /// Import and verify OpenAI Codex CLI Web Authentication (~/.codex/auth.json)
+    #[command(name = "auth-codex", alias = "codex-auth", alias = "import-codex", alias = "auth-chatgpt")]
+    AuthCodex,
+
     /// Save provider API key permanently (~/.hgb/credentials.json)
     #[command(name = "key", alias = "set-key")]
     Key {
@@ -3627,15 +3631,40 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             println!("  🎉 Successfully configured! Ready to power gpt-4o, gpt-4o-mini, o1, and o3-mini in Cockpit and CLI.\n");
             Ok(())
         }
+        Commands::AuthCodex => {
+            println!("\n{}", "🪽 Hagibis OpenAI Codex Web Authentication Manager".bold().cyan());
+            println!("Detecting ~/.codex/auth.json and syncing ChatGPT credentials...\n");
+            match hgb_core::CodexAuthEngine::import_and_verify().await {
+                Ok(report) => {
+                    println!("{}", report.green().bold());
+                    println!("\n{}", "🎉 Ready! OpenAI Codex Models (gpt-6-astra, gpt-6.1-sol, gpt-4o) are active in Cockpit and CLI.".cyan());
+                }
+                Err(e) => {
+                    eprintln!("{} {}", "✖ Notice:".red().bold(), e);
+                    println!("\nTo connect with your ChatGPT account using Codex:");
+                    println!("  1. Run: {} or {}", "codex login".cyan(), "codex login --device-auth".cyan());
+                    println!("  2. Run: {}\n", "hgb auth-codex".cyan());
+                }
+            }
+            Ok(())
+        }
         Commands::Key { provider, key } => {
             let prov = provider.to_lowercase();
+            if prov == "codex" {
+                println!("\n{}", "🪽 Syncing OpenAI Codex Web Authentication...".cyan());
+                match hgb_core::CodexAuthEngine::import_and_verify().await {
+                    Ok(rep) => println!("  ✔ {}", rep.green()),
+                    Err(e) => eprintln!("  ✖ {}", e),
+                }
+                return Ok(());
+            }
             let field = match prov.as_str() {
                 "openai" => "openai_api_key",
                 "deepseek" => "deepseek_api_key",
                 "anthropic" => "anthropic_api_key",
                 "openrouter" => "openrouter_api_key",
                 other => {
-                    eprintln!("{}", format!("Unknown provider '{}'. Supported: openai, deepseek, anthropic, openrouter", other).red());
+                    eprintln!("{}", format!("Unknown provider '{}'. Supported: openai, anthropic, deepseek, openrouter, codex", other).red());
                     std::process::exit(1);
                 }
             };

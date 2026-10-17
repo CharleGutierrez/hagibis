@@ -756,12 +756,16 @@ pub use gpu_accelerate::{
 // ---------------------------------------------------------------------------
 pub mod token_shredder;
 pub mod copilot_oauth;
+pub mod codex_oauth;
 pub mod cloud_fabric;
 
 pub use token_shredder::{ShredResult, TokenShredder};
 pub use copilot_oauth::{
     CopilotAuthEngine, CopilotChatMessage, CopilotChatRequest, CopilotChatResponse,
     CopilotCredentials, DeviceCodeResponse, GitHubTokenResponse,
+};
+pub use codex_oauth::{
+    CodexAuthEngine, CodexCredentials, CodexModel,
 };
 pub use cloud_fabric::{
     FabricChatRequest, FabricChatResponse, FabricMessage, FailoverEvent,

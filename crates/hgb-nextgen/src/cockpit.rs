@@ -4080,7 +4080,29 @@ Otherwise, answer directly with high precision.";
         }
     }
 
-    // Copilot & Dual-Brain Failover for OpenAI models when API key is unconfigured
+    // Codex CLI Web Authentication (ChatGPT Web OAuth)
+    let is_codex_native = model_pill.starts_with("gpt-6") || model_pill.starts_with("gpt-5.6");
+    if (is_codex_native || is_openai_family) && hgb_core::CodexAuthEngine::is_available() {
+        let codex = hgb_core::CodexAuthEngine::new();
+        if let Ok(text) = codex.chat_completion(&model_pill, &prompt).await {
+            let elapsed = (Utc::now().timestamp_millis() - start_time).max(1) as u64;
+            let approx_tokens = (text.len() / 4 + prompt.len() / 4).max(1) as u64;
+            return PromptExecutionResult {
+                node_id,
+                model: model_pill.clone(),
+                prompt,
+                output: text,
+                tokens_used: approx_tokens,
+                duration_ms: elapsed,
+                tool_call: None,
+                is_error: false,
+                error_msg: None,
+                log_msg: format!("[CODEX/CHATGPT-WEB] Completed in {}ms (~{} tok)", elapsed, approx_tokens),
+            };
+        }
+    }
+
+    // Copilot & Dual-Brain Failover for OpenAI models when API key and Codex web auth are unconfigured
     if is_openai_family {
         let copilot = hgb_core::copilot_oauth::CopilotAuthEngine::default();
         if let Ok(Some(_)) = copilot.load_credentials() {
@@ -6521,9 +6543,22 @@ impl CockpitState {
             list.push(("claude-3-5-sonnet".to_string(), "Anthropic Claude 3.5 Sonnet (State-of-the-art coding)".to_string()));
         }
 
-        // OpenAI GPT Models (Always available & Dual-Brain failover protected)
+        // OpenAI GPT & Codex Models (Dual-Stack: API Key + ChatGPT Web Auth + Failover)
+        let codex_ready = hgb_core::CodexAuthEngine::is_available();
         let openai_ready = hgb_core::OpenAiCompatibleProvider::is_openai_available();
-        let openai_status_suffix = if openai_ready { " • Ready" } else { " • Auto-Failover" };
+        let openai_status_suffix = if openai_ready {
+            " • API Key Ready"
+        } else if codex_ready {
+            " • ChatGPT Web Auth"
+        } else {
+            " • Auto-Failover"
+        };
+
+        if codex_ready {
+            list.push(("gpt-6-astra".to_string(), "OpenAI Codex GPT-6 Astra (Flagship Coding Agent • ChatGPT Web Auth)".to_string()));
+            list.push(("gpt-6.1-sol".to_string(), "OpenAI Codex GPT-6.1 Sol (Frontier Reasoning • ChatGPT Web Auth)".to_string()));
+            list.push(("gpt-5.6-sol".to_string(), "OpenAI Codex GPT-5.6 Sol (High-Throughput • ChatGPT Web Auth)".to_string()));
+        }
 
         list.push(("gpt-4o".to_string(), format!("OpenAI GPT-4o (Omni multimodal flagship • High intelligence{})", openai_status_suffix)));
         list.push(("gpt-4o-mini".to_string(), format!("OpenAI GPT-4o-mini (High-speed, cost-efficient multimodal{})", openai_status_suffix)));
@@ -7526,9 +7561,22 @@ impl CockpitState {
                                                 } else if prov == "anthropic" {
                                                     let _ = hgb_core::OpenAiCompatibleProvider::save_stored_key("anthropic_api_key", key);
                                                     self.add_system_notice("🔑 Anthropic API key saved to ~/.hgb/credentials.json!".to_string());
+                                                } else if prov == "codex" {
+                                                    if let Some(creds) = hgb_core::CodexAuthEngine::load_credentials() {
+                                                        self.add_system_notice(format!("🪽 OpenAI Codex Web Auth connected!\n• Account: {}\n• Email: {}\n• Active Models: gpt-6-astra, gpt-6.1-sol, gpt-4o", creds.account_id.as_deref().unwrap_or("Personal"), creds.email.as_deref().unwrap_or("Authenticated")));
+                                                    } else {
+                                                        self.add_system_notice("No Codex authentication found. Run 'hgb auth-codex' in terminal to connect ChatGPT.".to_string());
+                                                    }
                                                 } else {
-                                                    self.add_system_notice("Unknown provider. Supported: openai, anthropic, deepseek".to_string());
+                                                    self.add_system_notice("Unknown provider. Supported: openai, anthropic, deepseek, codex".to_string());
                                                 }
+                                            }
+                                        }
+                                        "/codex" => {
+                                            if let Some(creds) = hgb_core::CodexAuthEngine::load_credentials() {
+                                                self.add_system_notice(format!("🪽 Codex Web Auth Connected!\n• Account: {}\n• Email: {}\n• Primary Model: gpt-6-astra", creds.account_id.as_deref().unwrap_or("Personal"), creds.email.as_deref().unwrap_or("Authenticated")));
+                                            } else {
+                                                self.add_system_notice("No Codex authentication found. Run 'hgb auth-codex' or 'codex login'.".to_string());
                                             }
                                         }
                                         "/cockpit" => {

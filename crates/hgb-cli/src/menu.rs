@@ -135,6 +135,13 @@ impl InteractiveCommandCatalog {
                 description: "Save OpenAI API key to ~/.hgb/credentials.json for GPT-4o, GPT-4o-mini, o1, and o3-mini.",
             },
             CommandEntry {
+                name: "auth-codex",
+                aliases: &["codex-auth", "import-codex", "auth-chatgpt"],
+                category: "Auth/Codex",
+                syntax: "hgb auth-codex",
+                description: "Import & verify OpenAI Codex CLI Web Authentication (~/.codex/auth.json) to power ChatGPT frontier models.",
+            },
+            CommandEntry {
                 name: "auth-copilot",
                 aliases: &["copilot-auth", "copilot-login"],
                 category: "Auth/Copilot",
