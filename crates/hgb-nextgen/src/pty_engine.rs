@@ -41,7 +41,7 @@ impl PtyManager {
     pub async fn list_sessions(&self) -> Vec<PtySessionMeta> {
         let lock = self.sessions.read().await;
         let mut list: Vec<PtySessionMeta> = lock.values().cloned().collect();
-        list.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+        list.sort_by(|a, b| a.created_at.cmp(&b.created_at).then_with(|| a.id.cmp(&b.id)));
         list
     }
 

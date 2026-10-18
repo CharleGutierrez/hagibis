@@ -32,32 +32,48 @@ impl ClipboardHelper {
     pub fn copy(text: &str) -> std::result::Result<(), String> {
         let mut native_success = false;
 
-        // 1. Try xsel (Standard X11 - widely available on Linux)
-        if Self::pipe_to_command("xsel", &["-b", "-i"], text) {
+        let is_wayland = std::env::var_os("WAYLAND_DISPLAY").is_some()
+            || std::env::var("XDG_SESSION_TYPE")
+                .map(|s| s.to_lowercase() == "wayland")
+                .unwrap_or(false);
+
+        // 1. On Wayland, prioritize wl-copy for zero-latency direct compositor sync
+        if is_wayland && Self::pipe_to_command("wl-copy", &[], text) {
             native_success = true;
         }
 
-        // 2. Try wl-copy (Wayland compositors)
-        if !native_success && Self::pipe_to_command("wl-copy", &[], text) {
-            native_success = true;
-        }
-
-        // 3. Try xclip (Alternative X11)
+        // 2. Try xclip (Standard X11 - widely installed on Linux)
         if !native_success && Self::pipe_to_command("xclip", &["-selection", "clipboard"], text) {
             native_success = true;
         }
 
-        // 4. Try pbcopy (macOS)
+        // 3. Try xsel (Alternative X11)
+        if !native_success && Self::pipe_to_command("xsel", &["-b", "-i"], text) {
+            native_success = true;
+        }
+
+        // 4. Try wl-copy fallback if not already tried
+        if !native_success && !is_wayland && Self::pipe_to_command("wl-copy", &[], text) {
+            native_success = true;
+        }
+
+        // 5. Try pbcopy (macOS)
         if !native_success {
             let _ = Self::pipe_to_command("pbcopy", &[], text);
         }
 
-        // 5. Always emit OSC 52 escape sequence to stdout/terminal backend
-        // This ensures compatibility with terminal emulators regardless of desktop environment.
+        // 6. Always emit OSC 52 escape sequence directly to /dev/tty or stdout.
+        // This ensures universal terminal emulator clipboard synchronization across SSH,
+        // containers, and minimal display servers without external binaries.
         let osc52 = Self::format_osc52_sequence(text);
-        let mut stdout = std::io::stdout();
-        let _ = stdout.write_all(osc52.as_bytes());
-        let _ = stdout.flush();
+        if let Ok(mut tty) = std::fs::OpenOptions::new().write(true).open("/dev/tty") {
+            let _ = tty.write_all(osc52.as_bytes());
+            let _ = tty.flush();
+        } else {
+            let mut stdout = std::io::stdout();
+            let _ = stdout.write_all(osc52.as_bytes());
+            let _ = stdout.flush();
+        }
 
         Ok(())
     }

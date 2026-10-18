@@ -2655,6 +2655,12 @@ impl CockpitState {
 
     /// Copy content to system clipboard and trigger visual feedback
     pub fn copy_to_clipboard(&mut self, content: &str, card_id: &str, label: &str) {
+        // Prevent rapid duplicate copy triggers within 250ms (e.g. from Down + Up event pair)
+        if let Some(t) = self.last_copied_time {
+            if t.elapsed().as_millis() < 250 && self.last_copied_id.as_deref() == Some(card_id) {
+                return;
+            }
+        }
         let _ = hgb_core::clipboard::ClipboardHelper::copy(content);
         self.last_copied_id = Some(card_id.to_string());
         self.last_copied_time = Some(Instant::now());
@@ -2709,12 +2715,20 @@ impl CockpitState {
 
     /// Handle mouse click in the terminal for copy icons, diff actions, and heal banners
     pub fn handle_mouse_click(&mut self, col: u16, row: u16) -> bool {
-        // 1. Check diff action hitboxes (Accept / Reject)
+        // 1. Check diff action hitboxes (Accept / Reject) with exact row first, then +/- 1 row tolerance
         let diff_hit = if let Ok(hitboxes) = self.diff_hitboxes.lock() {
-            hitboxes
+            let exact = hitboxes
                 .iter()
                 .find(|hb| hb.screen_y == row && col >= hb.x_start && col <= hb.x_end)
-                .cloned()
+                .cloned();
+            if exact.is_some() {
+                exact
+            } else {
+                hitboxes
+                    .iter()
+                    .find(|hb| row.abs_diff(hb.screen_y) <= 1 && col >= hb.x_start && col <= hb.x_end)
+                    .cloned()
+            }
         } else {
             None
         };
@@ -2731,12 +2745,20 @@ impl CockpitState {
             return true;
         }
 
-        // 2. Check 1-Click Heal hitboxes
+        // 2. Check 1-Click Heal hitboxes with exact row first, then +/- 1 row tolerance
         let heal_hit = if let Ok(hitboxes) = self.heal_hitboxes.lock() {
-            hitboxes
+            let exact = hitboxes
                 .iter()
                 .find(|hb| hb.screen_y == row && col >= hb.x_start && col <= hb.x_end)
-                .cloned()
+                .cloned();
+            if exact.is_some() {
+                exact
+            } else {
+                hitboxes
+                    .iter()
+                    .find(|hb| row.abs_diff(hb.screen_y) <= 1 && col >= hb.x_start && col <= hb.x_end)
+                    .cloned()
+            }
         } else {
             None
         };
@@ -2746,12 +2768,20 @@ impl CockpitState {
             return true;
         }
 
-        // 3. Check copy hitboxes
+        // 3. Check copy hitboxes with exact row first, then +/- 1 row tolerance
         let hit = if let Ok(hitboxes) = self.copy_hitboxes.lock() {
-            hitboxes
+            let exact = hitboxes
                 .iter()
                 .find(|hb| hb.screen_y == row && col >= hb.x_start && col <= hb.x_end)
-                .cloned()
+                .cloned();
+            if exact.is_some() {
+                exact
+            } else {
+                hitboxes
+                    .iter()
+                    .find(|hb| row.abs_diff(hb.screen_y) <= 1 && col >= hb.x_start && col <= hb.x_end)
+                    .cloned()
+            }
         } else {
             None
         };
@@ -6187,7 +6217,7 @@ impl CockpitState {
         // Populate clickable hitboxes for copy icons
         if let Ok(mut hitboxes) = self.copy_hitboxes.lock() {
             hitboxes.clear();
-            for target in pending_copy_targets {
+            for target in &pending_copy_targets {
                 if target.line_idx < line_row_offsets.len() {
                     let visual_row = line_row_offsets[target.line_idx];
                     if visual_row >= scroll_y as usize && visual_row < (scroll_y as usize + viewport_height) {
@@ -6198,9 +6228,9 @@ impl CockpitState {
                             screen_y,
                             x_start,
                             x_end,
-                            content: target.content,
-                            card_id: target.card_id,
-                            label: target.label,
+                            content: target.content.clone(),
+                            card_id: target.card_id.clone(),
+                            label: target.label.clone(),
                         });
                     }
                 }
@@ -6259,6 +6289,99 @@ impl CockpitState {
             .wrap(Wrap { trim: false })
             .scroll((scroll_y, 0));
         frame.render_widget(chat_paragraph, chunks[2]);
+
+        // Reconcile hitboxes directly against the rendered terminal buffer for 100% ground-truth accuracy.
+        // This eliminates any coordinate drift between Ratatui's internal word-wrapping engine and
+        // theoretical line_row_offsets calculations.
+        {
+            let buf = frame.buffer_mut();
+            let y_start = chunks[2].y;
+            let y_end = chunks[2].y + chunks[2].height;
+            let x_start_area = chunks[2].x;
+            let x_end_area = chunks[2].x + chunks[2].width;
+
+            let mut reconciled_copy_hitboxes: Vec<CopyHitbox> = Vec::new();
+            let mut used_targets = std::collections::HashSet::new();
+
+            for y in y_start..y_end {
+                let mut row_has_copy = false;
+                let mut copy_bracket_start = None;
+                let mut copy_bracket_end = None;
+                let mut corner_col = None;
+                let mut tag_on_row = String::new();
+                let mut in_left_tag = false;
+
+                for x in x_start_area..x_end_area {
+                    let sym = buf[(x, y)].symbol();
+                    if sym == "╭" {
+                        in_left_tag = true;
+                    } else if in_left_tag && sym == "[" {
+                        tag_on_row.clear();
+                    } else if in_left_tag && sym == "]" {
+                        in_left_tag = false;
+                    } else if in_left_tag && !sym.is_empty() && sym != "─" && sym != " " {
+                        tag_on_row.push_str(sym);
+                    }
+
+                    if sym == "[" {
+                        copy_bracket_start = Some(x);
+                    } else if sym == "📋" || sym == "✓" {
+                        if copy_bracket_start.is_some() {
+                            row_has_copy = true;
+                        }
+                    } else if sym == "]" && row_has_copy && copy_bracket_end.is_none() {
+                        copy_bracket_end = Some(x);
+                    } else if sym == "╮" && row_has_copy {
+                        corner_col = Some(x);
+                    }
+                }
+
+                if row_has_copy {
+                    if let (Some(b_start), Some(b_end)) = (copy_bracket_start, copy_bracket_end) {
+                        let expected_visual_row = scroll_y as usize + (y.saturating_sub(chunks[2].y)) as usize;
+                        let matched_idx = pending_copy_targets
+                            .iter()
+                            .enumerate()
+                            .filter(|(idx, _)| !used_targets.contains(idx))
+                            .min_by_key(|(_, t)| {
+                                let tag_match_bonus = if !tag_on_row.is_empty() && (t.label.contains(&tag_on_row) || tag_on_row.contains(&t.label)) {
+                                    0
+                                } else {
+                                    100
+                                };
+                                let v_row = if t.line_idx < line_row_offsets.len() {
+                                    line_row_offsets[t.line_idx]
+                                } else {
+                                    0
+                                };
+                                tag_match_bonus + v_row.abs_diff(expected_visual_row)
+                            })
+                            .map(|(idx, _)| idx);
+
+                        if let Some(target_idx) = matched_idx {
+                            used_targets.insert(target_idx);
+                            let target = &pending_copy_targets[target_idx];
+                            let right_edge = corner_col.unwrap_or(b_end).saturating_add(2).min(x_end_area.saturating_sub(1));
+                            let left_edge = b_start.saturating_sub(2).max(x_start_area);
+                            reconciled_copy_hitboxes.push(CopyHitbox {
+                                screen_y: y,
+                                x_start: left_edge,
+                                x_end: right_edge,
+                                content: target.content.clone(),
+                                card_id: target.card_id.clone(),
+                                label: target.label.clone(),
+                            });
+                        }
+                    }
+                }
+            }
+
+            if !reconciled_copy_hitboxes.is_empty() {
+                if let Ok(mut hitboxes) = self.copy_hitboxes.lock() {
+                    *hitboxes = reconciled_copy_hitboxes;
+                }
+            }
+        }
 
         // If content overflows the viewport, render scrollbar on right
         if total_lines > viewport_height {
@@ -6911,7 +7034,7 @@ impl CockpitState {
                             MouseEventKind::ScrollDown => {
                                 self.scroll_chat_down(3);
                             }
-                            MouseEventKind::Down(MouseButton::Left) => {
+                            MouseEventKind::Down(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left) => {
                                 self.handle_mouse_click(mouse_event.column, mouse_event.row);
                             }
                             MouseEventKind::Drag(MouseButton::Left) => {
@@ -8080,6 +8203,91 @@ async fn test_scroll_pill_click_to_bottom() {
         state.last_copied_id = None;
         state.copy_latest_response();
         assert!(state.last_copied_id.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_latest_session_copy_hitbox() {
+        let sess_path = std::path::Path::new("/home/toshiba/.hgb/sessions/latest.json");
+        if !sess_path.exists() {
+            return;
+        }
+        let sess_content = std::fs::read_to_string(sess_path).unwrap();
+        let sess: hgb_core::CockpitSessionData = serde_json::from_str(&sess_content).unwrap();
+        let mut state = CockpitState::from_session(sess);
+
+        let w = 120;
+        let h = 30;
+        let backend = ratatui::backend::TestBackend::new(w, h);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| state.render_ui(f)).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        println!("\n=== TERMINAL BUFFER SCAN ===");
+        let mut found_copy_cells = Vec::new();
+        for y in 0..h {
+            let mut line_str = String::new();
+            for x in 0..w {
+                line_str.push_str(buffer[(x, y)].symbol());
+            }
+            if line_str.contains("Copy") || line_str.contains("📋") {
+                println!("BUFFER ROW {}: {}", y, line_str);
+                found_copy_cells.push(y);
+            }
+        }
+
+        let hitboxes = state.copy_hitboxes.lock().unwrap().clone();
+        println!("HITBOXES COUNT: {}", hitboxes.len());
+        for hb in &hitboxes {
+            println!("HITBOX: label='{}', screen_y={}, x_start={}, x_end={}", hb.label, hb.screen_y, hb.x_start, hb.x_end);
+        }
+
+        if let Some(&actual_y) = found_copy_cells.first() {
+            if let Some(hb) = hitboxes.first() {
+                println!("ACTUAL ROW IN BUFFER: {}, HITBOX screen_y: {}", actual_y, hb.screen_y);
+                assert_eq!(actual_y, hb.screen_y, "Ground-truth screen_y must exactly match buffer row!");
+            }
+            // Scan columns for '[' and ']' around Copy
+            for x in 0..w {
+                let sym = buffer[(x, actual_y)].symbol();
+                if sym == "[" || sym == "]" || sym == "📋" || sym == "C" || sym == "╮" {
+                    println!("  COL {}: '{}'", x, sym);
+                }
+            }
+
+            // Test 1: Click directly in center of [📋 Copy]
+            let code_hb = &hitboxes[0];
+            let click_x = (code_hb.x_start + code_hb.x_end) / 2;
+            let handled = state.handle_mouse_click(click_x, actual_y);
+            assert!(handled, "Click on copy button center failed at col {}, row {}", click_x, actual_y);
+            assert!(state.last_copied_id.is_some(), "Expected last_copied_id to be set!");
+            assert!(code_hb.content.contains("Pillar 3"), "Expected copied content to contain Pillar 3!");
+
+            // Test 2: Click on left bracket '['
+            state.last_copied_time = None;
+            let handled_left = state.handle_mouse_click(104, actual_y);
+            assert!(handled_left, "Click on left bracket '[' failed!");
+
+            // Test 3: Click on corner '╮'
+            state.last_copied_time = None;
+            let handled_right = state.handle_mouse_click(115, actual_y);
+            assert!(handled_right, "Click on corner '╮' failed!");
+
+            // Test 4: Forgiving +/- 1 row tolerance
+            state.last_copied_time = None;
+            let handled_above = state.handle_mouse_click(click_x, actual_y.saturating_sub(1));
+            assert!(handled_above, "Click with -1 row tolerance failed!");
+
+            state.last_copied_time = None;
+            let handled_below = state.handle_mouse_click(click_x, actual_y.saturating_add(1));
+            assert!(handled_below, "Click with +1 row tolerance failed!");
+
+            // Render again to verify [✓ Copied] visual feedback
+            terminal.draw(|f| state.render_ui(f)).unwrap();
+            let new_buf = terminal.backend().buffer();
+            let line_after = (0..w).map(|x| new_buf[(x, actual_y)].symbol()).collect::<String>();
+            println!("BUFFER AFTER COPY: {}", line_after);
+            assert!(line_after.contains("✓") || line_after.contains("Copied"), "Expected visual feedback '✓' or 'Copied' on row {}", actual_y);
+        }
     }
 
     #[test]
