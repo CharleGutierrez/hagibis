@@ -444,6 +444,41 @@ impl InteractiveCommandCatalog {
                 syntax: "hgb budget [--set-limit <usd>] [--record <model,in_tok,out_tok>]",
                 description: "Smart FinOps & Token Budget Envelope: .hgb/budget.json ledger, pricing tables, daily USD cap enforcement, and dynamic routing to Local Ollama.",
             },
+            CommandEntry {
+                name: "mcp",
+                aliases: &["mcp-server", "model-context-protocol"],
+                category: "MCP/Integration",
+                syntax: "hgb mcp [serve|list|call]",
+                description: "Native Model Context Protocol Server: exposes SQLite, CoW sandboxes, AST queries, hardware sentry, and living memory directly to LLMs.",
+            },
+            CommandEntry {
+                name: "dynatune",
+                aliases: &["hardware-sentry", "thermal"],
+                category: "Hardware/Kernel",
+                syntax: "hgb dynatune [--json]",
+                description: "Dynatune Hardware Sentry & Kernel Synergy: real-time Linux thermal zones, CPU governor scaling, and PSI pressure throttling.",
+            },
+            CommandEntry {
+                name: "masterclass",
+                aliases: &["docs-gen", "build-pdf"],
+                category: "Docs/CI",
+                syntax: "hgb masterclass [--force]",
+                description: "Automated Masterclass Pipeline: compiles 85-page definitive architectural PDF book via uv/python3.",
+            },
+            CommandEntry {
+                name: "wasm-plugin",
+                aliases: &["plugin-kernel", "wasm-exec"],
+                category: "Plugins/Sandbox",
+                syntax: "hgb wasm-plugin <file.wasm> [json_input]",
+                description: "WebAssembly (hgb-wasm-kernel) Plugin Engine: run user-defined agent tools securely in Wasmtime with fuel metering.",
+            },
+            CommandEntry {
+                name: "ollama-route",
+                aliases: &["local-infer", "infer-route"],
+                category: "Inference/Dual-Brain",
+                syntax: "hgb ollama-route <prompt> [--force-local] [--force-remote]",
+                description: "Local Ollama Inference Router: heuristic offloading of routine tasks to local models with zero API cost and instant fallback.",
+            },
         ]
     }
 

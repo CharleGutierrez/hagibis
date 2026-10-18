@@ -1125,6 +1125,23 @@ pub enum HgbRequest {
         consent_given: bool,
     },
     HybridScorecard,
+    // 127. Local Ollama Inference Routing Pipeline
+    OllamaRoute {
+        prompt: String,
+        #[serde(default)]
+        force_local: bool,
+        #[serde(default)]
+        force_remote: bool,
+    },
+    // 128. Dynatune Hardware Sentry & Kernel Synergy
+    DynatuneMetrics,
+    // 129. Automated Masterclass CI Pipeline
+    MasterclassGen,
+    // 130. Wasm-Kernel Plugin System
+    WasmPluginRun {
+        wasm_path: String,
+        input: serde_json::Value,
+    },
 }
 
 fn default_two() -> usize {
@@ -1605,6 +1622,14 @@ pub enum HgbResponse {
     // 126. Hybrid Dual-Brain Orchestration Engine
     HybridExecuteResult(crate::hybrid_orchestrator::HybridExecutionReport),
     HybridScorecardResult(crate::hybrid_orchestrator::PerformanceScorecard),
+    // 127. Local Ollama Inference Routing Pipeline
+    OllamaRouteResult(crate::ollama_inference_router::OllamaRouteExecutionReport),
+    // 128. Dynatune Hardware Sentry & Kernel Synergy
+    DynatuneMetricsResult(crate::dynatune_synergy::HardwareSafeguardReport),
+    // 129. Automated Masterclass CI Pipeline
+    MasterclassGenResult(crate::masterclass_pipeline::MasterclassGenerationReport),
+    // 130. Wasm-Kernel Plugin System
+    WasmPluginResult(serde_json::Value),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

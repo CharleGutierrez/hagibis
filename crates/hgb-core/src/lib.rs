@@ -846,6 +846,34 @@ pub use hybrid_orchestrator::{
     PrivacyFirewallEngine, SharedProjectContext, TaskRoutingDecision, TaskRoutingTier,
 };
 
+// Native Model Context Protocol (MCP) Server exports
+pub mod mcp_server;
+pub use mcp_server::HagibisMcpServer;
+
+// Lightweight Local Ollama Inference Routing Pipeline exports
+pub mod ollama_inference_router;
+pub use ollama_inference_router::{
+    InferenceTaskKind, OllamaInferenceRouter, OllamaRouteExecutionReport, RoutingDestination,
+};
+
+// Dynatune & Linux Kernel Synergy exports
+pub mod dynatune_synergy;
+pub use dynatune_synergy::{
+    DynatuneSynergyEngine, HardwareSafeguardReport, ThermalSeverity, ThermalZoneMetric,
+};
+
+// Masterclass & Documentation Pipeline exports
+pub mod masterclass_pipeline;
+pub use masterclass_pipeline::{
+    MasterclassGenerationReport, MasterclassPipeline,
+};
+
+// WebAssembly (`hgb-wasm-kernel`) Plugin System exports
+pub mod wasm_plugin_kernel;
+pub use wasm_plugin_kernel::{
+    WasmPluginHostState, WasmPluginInstance, WasmPluginManager, WasmPluginManifest, WasmToolAdapter,
+};
+
 /// Enterprise high-capacity implementation
 pub fn enterprise_architecture_dispatch() -> bool {
     true

@@ -2831,6 +2831,49 @@ impl HagibisDaemon {
                     Err(e) => HgbResponse::Error(e.to_string()),
                 }
             }
+            // 127. Local Ollama Inference Routing Pipeline
+            HgbRequest::OllamaRoute {
+                prompt,
+                force_local,
+                force_remote,
+            } => {
+                let router = hgb_core::OllamaInferenceRouter::default();
+                match router.execute_routed(&prompt, force_local, force_remote).await {
+                    Ok(rep) => HgbResponse::OllamaRouteResult(rep),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            // 128. Dynatune Hardware Sentry & Kernel Synergy
+            HgbRequest::DynatuneMetrics => {
+                let sentry = hgb_core::DynatuneSynergyEngine::new();
+                let report = sentry.evaluate_hardware_telemetry();
+                HgbResponse::DynatuneMetricsResult(report)
+            }
+            // 129. Automated Masterclass CI Pipeline
+            HgbRequest::MasterclassGen => {
+                let ws_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                let pipeline = hgb_core::MasterclassPipeline::new(ws_dir);
+                match pipeline.generate_pdf() {
+                    Ok(rep) => HgbResponse::MasterclassGenResult(rep),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            // 130. Wasm-Kernel Plugin System
+            HgbRequest::WasmPluginRun { wasm_path, input } => {
+                let ws_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                let plugin_path = if Path::new(&wasm_path).is_absolute() {
+                    PathBuf::from(&wasm_path)
+                } else {
+                    ws_dir.join(&wasm_path)
+                };
+                match hgb_core::WasmPluginInstance::load(&plugin_path) {
+                    Ok(mut instance) => match instance.execute(&input) {
+                        Ok(res) => HgbResponse::WasmPluginResult(res),
+                        Err(e) => HgbResponse::Error(format!("WASM Execution Error: {}", e)),
+                    },
+                    Err(e) => HgbResponse::Error(format!("WASM Load Error: {}", e)),
+                }
+            }
         }
     }
 }

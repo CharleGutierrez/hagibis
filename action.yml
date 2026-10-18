@@ -26,6 +26,10 @@ inputs:
     description: 'Post or update the GitHub Flavored Markdown status comment on the active PR'
     required: false
     default: 'true'
+  regenerate-docs:
+    description: 'Automatically regenerate masterclass chapters and PDF via docs/masterclass/generate_pdf.py'
+    required: false
+    default: 'true'
   github-token:
     description: 'GitHub token for PR comment authoring'
     required: false
@@ -80,3 +84,16 @@ runs:
         hgb ci-action \
           --task "$INPUT_TASK" \
           --summary
+
+    - name: Automate Masterclass & Documentation Pipeline
+      if: inputs.regenerate-docs == 'true'
+      shell: bash
+      run: |
+        if command -v uv &> /dev/null; then
+          uv run --with reportlab python docs/masterclass/generate_pdf.py
+        elif [ -f "$HOME/.local/bin/uv" ]; then
+          "$HOME/.local/bin/uv" run --with reportlab python docs/masterclass/generate_pdf.py
+        else
+          python3 docs/masterclass/generate_pdf.py || true
+        fi
+

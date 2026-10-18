@@ -1,5 +1,12 @@
 {
   "mcpServers": {
+    "hagibis": {
+      "command": "hgb",
+      "args": ["mcp"],
+      "env": {
+        "HGB_WORKSPACE": "."
+      }
+    },
     "duckduckgo": {
       "command": "duckduckgo-mcp-server",
       "args": [],

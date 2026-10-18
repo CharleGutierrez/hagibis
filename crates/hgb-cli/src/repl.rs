@@ -4810,6 +4810,27 @@ impl HagibisRepl {
             HgbResponse::HybridScorecardResult(s) => {
                 println!("{}", s.render_terminal_table());
             }
+            HgbResponse::OllamaRouteResult(r) => {
+                println!("{}", "⚡ LOCAL OLLAMA INFERENCE ROUTER ⚡".bold().cyan());
+                println!("  Task Kind:        {}", r.task_kind);
+                println!("  Model Used:       {}", r.model_used.green().bold());
+                println!("  Local Tier:       {}", if r.is_local { "YES ($0.00 Cost)".green() } else { "NO (Cloud Frontier)".yellow() });
+                println!("  Latency:          {} ms", r.latency_ms);
+                println!("  Output:           {}", r.output_text);
+            }
+            HgbResponse::DynatuneMetricsResult(r) => {
+                println!("{}", r.render_terminal_table());
+            }
+            HgbResponse::MasterclassGenResult(r) => {
+                println!("{}", "📘 MASTERCLASS DOCUMENTATION 📘".bold().cyan());
+                println!("  Success:          {}", if r.success { "YES".green().bold() } else { "NO".red() });
+                println!("  PDF Path:         {}", r.pdf_path);
+                println!("  Duration:         {:.2}s", r.compilation_duration_secs);
+            }
+            HgbResponse::WasmPluginResult(v) => {
+                println!("{}", "🧩 WASM PLUGIN EXECUTION 🧩".bold().cyan());
+                println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+            }
         }
     }
 
