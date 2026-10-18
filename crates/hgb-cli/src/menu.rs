@@ -73,8 +73,8 @@ impl InteractiveCommandCatalog {
                 name: "inspect-folder",
                 aliases: &["folder", "inspect-dir", "ls-net"],
                 category: "Core/Filesystem",
-                syntax: "hgb inspect-folder [path] [--storage] [--network] [--xdg] [--depth <N>]",
-                description: "Inspect local folders (POSIX ASCII tree, file classification), storage partitions, CIFS/NFS shares, and LAN computers.",
+                syntax: "hgb inspect-folder [path] [--storage] [--network] [--xdg] [-a/--analyze] [--depth <N>]",
+                description: "Deep architectural analysis & inspection of local folders, storage partitions, CIFS/NFS shares, and LAN computers.",
             },
             CommandEntry {
                 name: "classic",

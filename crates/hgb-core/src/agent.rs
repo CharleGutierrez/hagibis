@@ -181,13 +181,14 @@ impl ReActAgentEngine {
             9. search_web(query: string, max_results?: number)\n\
             10. record_memory(title: string, decision: string, context?: string, is_technical_debt?: boolean, severity?: string)\n\
             11. search_memory(query: string, max_results?: number)\n\
-            12. record_style_feedback(snippet: string, accepted: boolean)\n\n"
+            12. record_style_feedback(snippet: string, accepted: boolean)\n\
+            13. inspect_filesystem_and_network(path?: string, scan_storage?: boolean, scan_network?: boolean, analyze?: boolean)\n\n"
         );
 
         if !self.custom_tools.is_empty() {
             prompt.push_str("## Extended MCP & Registered Dynamic Tools:\n");
             for (idx, (name, tool)) in self.custom_tools.iter().enumerate() {
-                prompt.push_str(&format!("{}. {}: {}\n", 13 + idx, name, tool.description()));
+                prompt.push_str(&format!("{}. {}: {}\n", 14 + idx, name, tool.description()));
             }
             prompt.push('\n');
         }
@@ -712,6 +713,35 @@ impl ReActAgentEngine {
                     "Successfully recorded style feedback [{}]:\n'{}'\nPersisted to: {}",
                     category, snippet, vault_path.display()
                 ))
+            }
+            "inspect_filesystem_and_network" | "inspect_folder" | "analyze_network" | "analyze_system" => {
+                let path_str = args.get("path")
+                    .or_else(|| args.get("SearchPath"))
+                    .or_else(|| args.get("dir"))
+                    .and_then(|v| v.as_str());
+                let scan_network = args.get("scan_network")
+                    .or_else(|| args.get("network"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
+                let analyze = args.get("analyze")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
+
+                let target_path = path_str
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| self.config.workspace_root.clone());
+
+                let report = crate::folder_inspector::FolderInspectorEngine::run_comprehensive_analysis(
+                    Some(&target_path),
+                    scan_network,
+                    350,
+                )?;
+
+                if analyze {
+                    Ok(crate::folder_inspector::FolderInspectorEngine::format_analysis_markdown(&report))
+                } else {
+                    Ok(serde_json::to_string_pretty(&report).unwrap_or_default())
+                }
             }
             _ => {
                 if let Some(tool) = self.custom_tools.get(name) {

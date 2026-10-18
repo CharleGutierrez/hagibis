@@ -6,7 +6,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read};
-use std::net::{SocketAddr, TcpStream};
+use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -149,6 +149,116 @@ pub struct InspectedTargetReport {
     pub network_shares: Vec<NetworkShareInfo>,
     pub network_computers: Vec<NetworkComputerInfo>,
     pub estimated_tokens: usize,
+}
+
+/// Metric details for a file or directory node in size profiling
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileEntryMetric {
+    pub path: PathBuf,
+    pub name: String,
+    pub size_bytes: u64,
+    pub is_dir: bool,
+}
+
+/// Detected build artifact or cache bloat
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BuildBloatItem {
+    pub path: PathBuf,
+    pub name: String,
+    pub size_bytes: u64,
+    pub recommendation: String,
+}
+
+/// Security vulnerability or permission hygiene flaw detected in files
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SecurityWarning {
+    pub path: PathBuf,
+    pub issue: String,
+    pub severity: String,
+    pub recommendation: String,
+}
+
+/// Deep architectural analysis report for a directory or codebase
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FolderAnalysisReport {
+    pub path: PathBuf,
+    pub archetype: String,
+    pub archetype_traits: Vec<String>,
+    pub total_files: usize,
+    pub total_dirs: usize,
+    pub total_bytes: u64,
+    pub largest_items: Vec<FileEntryMetric>,
+    pub bloat_items: Vec<BuildBloatItem>,
+    pub total_bloat_bytes: u64,
+    pub hygiene_score: u32,
+    pub hygiene_findings: Vec<String>,
+    pub security_warnings: Vec<SecurityWarning>,
+}
+
+/// Deep analysis of a mounted storage partition
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StorageDriveAnalysis {
+    pub device: String,
+    pub mount_point: PathBuf,
+    pub fstype: String,
+    pub options: String,
+    pub total_bytes: Option<u64>,
+    pub available_bytes: Option<u64>,
+    pub used_bytes: Option<u64>,
+    pub usage_percent: Option<f64>,
+    pub is_critical: bool,
+    pub warning: Option<String>,
+    pub filesystem_reliability: String,
+    pub mount_flags: Vec<String>,
+    pub security_audit: Vec<String>,
+}
+
+/// Deep storage saturation, reliability, and security report
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StorageAnalysisReport {
+    pub drives: Vec<StorageDriveAnalysis>,
+    pub total_capacity_bytes: u64,
+    pub total_available_bytes: u64,
+    pub overall_usage_percent: f64,
+    pub critical_partitions: Vec<String>,
+    pub system_warnings: Vec<String>,
+    pub recommendations: Vec<String>,
+}
+
+/// Deep analysis of an active network host
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkHostAnalysis {
+    pub ip_address: String,
+    pub hostname: Option<String>,
+    pub mac_address: Option<String>,
+    pub interface: Option<String>,
+    pub category: String,
+    pub is_gateway: bool,
+    pub smb_open: Option<bool>,
+    pub nfs_open: Option<bool>,
+    pub notes: Vec<String>,
+}
+
+/// Deep network infrastructure and subnet topology report
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkAnalysisReport {
+    pub detected_gateways: Vec<String>,
+    pub active_hosts: Vec<NetworkHostAnalysis>,
+    pub host_classification_summary: HashMap<String, usize>,
+    pub mounted_shares: Vec<NetworkShareInfo>,
+    pub reachability_assessment: Vec<String>,
+    pub security_considerations: Vec<String>,
+}
+
+/// Comprehensive executive diagnosis report wrapping folder, storage, and network
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ComprehensiveSystemAnalysisReport {
+    pub folder_analysis: Option<FolderAnalysisReport>,
+    pub storage_analysis: Option<StorageAnalysisReport>,
+    pub network_analysis: Option<NetworkAnalysisReport>,
+    pub executive_diagnosis: String,
+    pub health_verdict: String,
+    pub actionable_recommendations: Vec<String>,
 }
 
 /// Configuration settings
@@ -778,7 +888,7 @@ impl FolderInspectorEngine {
         let mut reports = Vec::new();
         let mut context_blocks = Vec::new();
 
-        for target in targets {
+        for target in &targets {
             match target {
                 TargetKind::LocalDirectory(ref p) => {
                     if let Ok((tree, summary)) = Self::inspect_directory(p, &config) {
@@ -933,13 +1043,892 @@ impl FolderInspectorEngine {
             combined_context.push_str("\n... [Truncated to stay within token budget]\n");
         }
 
+        // Run deep comprehensive analysis
+        let target_dir = targets.iter().find_map(|t| match t {
+            TargetKind::LocalDirectory(p) => Some(p.as_path()),
+            _ => None,
+        }).unwrap_or(workspace_root);
+
+        let analysis_block = match Self::run_comprehensive_analysis(
+            Some(target_dir),
+            config.probe_network_ports,
+            config.probe_timeout_ms,
+        ) {
+            Ok(report) => Self::format_analysis_markdown(&report),
+            Err(e) => format!("⚠️ Comprehensive Analysis error: {e}"),
+        };
+
         let augmented_prompt = format!(
-            "{}\n\n--- AUTO-INSPECTED LOCAL & NETWORK FOLDER CONTEXT ---\n{}\n----------------------------------------------------",
+            "{}\n\n--- AUTO-INSPECTED LOCAL & NETWORK FOLDER CONTEXT ---\n{}\n\n--- LIVE SYSTEM & NETWORK ARCHITECTURAL ANALYSIS ---\n{}\n\n[ANALYTICAL DIRECTIVE FOR THE MODEL: The above is real, live inspected infrastructure from the user's computer and network. You MUST directly evaluate and analyze these findings, assess health/hygiene/security, answer the user's prompt using this ground truth, and avoid generic tutorials or hypothetical placeholders.]\n----------------------------------------------------",
             prompt.trim(),
-            combined_context.trim()
+            combined_context.trim(),
+            analysis_block.trim()
         );
 
         Ok((augmented_prompt, reports))
+    }
+
+    /// Parse IPv4 address from kernel little-endian hex string representation (e.g. "0101A8C0" -> 192.168.1.1)
+    pub fn parse_ipv4_from_hex_le(hex_str: &str) -> Option<Ipv4Addr> {
+        if hex_str.len() != 8 {
+            return None;
+        }
+        let val = u32::from_str_radix(hex_str, 16).ok()?;
+        let b = val.to_le_bytes();
+        Some(Ipv4Addr::new(b[0], b[1], b[2], b[3]))
+    }
+
+    /// Parse /proc/net/route to detect active default network gateways
+    pub fn detect_default_gateways() -> Vec<String> {
+        let mut gateways = Vec::new();
+        let mut seen = HashSet::new();
+
+        if let Ok(file) = File::open("/proc/net/route") {
+            let reader = BufReader::new(file);
+            for (idx, line) in reader.lines().flatten().enumerate() {
+                if idx == 0 {
+                    continue; // Skip header: Iface Destination Gateway Flags ...
+                }
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 3 {
+                    let destination = parts[1];
+                    let gateway_hex = parts[2];
+                    if destination == "00000000" && gateway_hex != "00000000" {
+                        if let Some(ip) = Self::parse_ipv4_from_hex_le(gateway_hex) {
+                            let ip_str = ip.to_string();
+                            if seen.insert(ip_str.clone()) {
+                                gateways.push(ip_str);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if gateways.is_empty() {
+            if let Ok(file) = File::open("/etc/resolv.conf") {
+                let reader = BufReader::new(file);
+                for line in reader.lines().flatten() {
+                    let trimmed = line.trim();
+                    if trimmed.starts_with("nameserver ") {
+                        let ns = trimmed.trim_start_matches("nameserver ").trim();
+                        if (ns.starts_with("192.168.") || ns.starts_with("10.") || ns.starts_with("172.16."))
+                            && seen.insert(ns.to_string())
+                        {
+                            gateways.push(ns.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        gateways
+    }
+
+    /// Calculate directory disk footprint without following symlinks and bounded by max_entries
+    pub fn calculate_directory_size(dir: &Path, max_entries: usize) -> u64 {
+        let mut total = 0u64;
+        let mut entries_count = 0;
+        let mut stack = vec![dir.to_path_buf()];
+        let mut visited_inodes = HashSet::new();
+
+        while let Some(current) = stack.pop() {
+            if entries_count >= max_entries {
+                break;
+            }
+            #[cfg(unix)]
+            {
+                if let Ok(meta) = fs::metadata(&current) {
+                    if !visited_inodes.insert((meta.dev(), meta.ino())) {
+                        continue;
+                    }
+                }
+            }
+            if let Ok(rd) = fs::read_dir(&current) {
+                for entry in rd.flatten() {
+                    entries_count += 1;
+                    if entries_count >= max_entries {
+                        break;
+                    }
+                    let path = entry.path();
+                    let sym_meta = fs::symlink_metadata(&path);
+                    let is_symlink = sym_meta.as_ref().map(|m| m.file_type().is_symlink()).unwrap_or(false);
+                    if is_symlink {
+                        continue;
+                    }
+                    if let Ok(meta) = fs::metadata(&path) {
+                        if meta.is_dir() {
+                            stack.push(path);
+                        } else {
+                            total += meta.len();
+                        }
+                    }
+                }
+            }
+        }
+        total
+    }
+
+    /// Deep analysis of a directory structure, archetype, bloat, hygiene score, and security checks
+    pub fn analyze_directory_structure(
+        dir_path: &Path,
+        config: Option<&FolderInspectionConfig>,
+    ) -> Result<FolderAnalysisReport> {
+        if Self::is_sensitive_target(dir_path) {
+            return Err(HgbError::Security(format!(
+                "Access to sensitive target blocked: {}",
+                dir_path.display()
+            )));
+        }
+
+        let mut archetype_traits = Vec::new();
+        let mut primary_archetype = String::from("Generic Filesystem Directory");
+
+        // 1. Archetype detection
+        let cargo_toml = dir_path.join("Cargo.toml");
+        if cargo_toml.exists() {
+            let content = fs::read_to_string(&cargo_toml).unwrap_or_default();
+            if content.contains("[workspace]") {
+                primary_archetype = "Rust Cargo Workspace".to_string();
+                archetype_traits.push("Rust Cargo Workspace".to_string());
+            } else {
+                primary_archetype = "Rust Cargo Package".to_string();
+                archetype_traits.push("Rust Cargo Crate".to_string());
+            }
+        }
+
+        let package_json = dir_path.join("package.json");
+        if package_json.exists() {
+            if dir_path.join("tsconfig.json").exists() {
+                archetype_traits.push("TypeScript / Node.js".to_string());
+                if primary_archetype.starts_with("Generic") {
+                    primary_archetype = "TypeScript / Node.js Project".to_string();
+                }
+            } else {
+                archetype_traits.push("JavaScript / Node.js".to_string());
+                if primary_archetype.starts_with("Generic") {
+                    primary_archetype = "JavaScript / Node.js Project".to_string();
+                }
+            }
+        }
+
+        if dir_path.join("pyproject.toml").exists()
+            || dir_path.join("requirements.txt").exists()
+            || dir_path.join("setup.py").exists()
+            || dir_path.join("Pipfile").exists()
+        {
+            archetype_traits.push("Python Ecosystem".to_string());
+            if primary_archetype.starts_with("Generic") {
+                primary_archetype = "Python Project".to_string();
+            }
+        }
+
+        if dir_path.join("go.mod").exists() {
+            archetype_traits.push("Go Module".to_string());
+            if primary_archetype.starts_with("Generic") {
+                primary_archetype = "Go Project".to_string();
+            }
+        }
+
+        if dir_path.join("CMakeLists.txt").exists() || dir_path.join("Makefile").exists() {
+            archetype_traits.push("C/C++ Build Environment".to_string());
+            if primary_archetype.starts_with("Generic") {
+                primary_archetype = "C/C++ Project".to_string();
+            }
+        }
+
+        if dir_path.join("Dockerfile").exists()
+            || dir_path.join("docker-compose.yml").exists()
+            || dir_path.join("compose.yaml").exists()
+        {
+            archetype_traits.push("Docker Containerized".to_string());
+        }
+
+        let is_git = dir_path.join(".git").exists();
+        if is_git {
+            archetype_traits.push("Git Version Controlled".to_string());
+        }
+
+        // 2. Build bloat detection
+        let mut bloat_items = Vec::new();
+        let bloat_candidates = [
+            ("target", "target/ (Cargo Build Artifacts)", "Run `cargo clean` to prune debug and release build artifacts"),
+            ("node_modules", "node_modules/ (Node.js Dependencies)", "Prune unneeded modules with `npm prune` or delete directory before distribution"),
+            (".next", ".next/ (Next.js Application Cache)", "Clean compiler cache with `rm -rf .next` before deploying"),
+            ("dist", "dist/ (Bundler Distribution Artifacts)", "Prune compiled output bundles before source packaging"),
+            ("build", "build/ (Compiler Output Directory)", "Clean build directory via build system clean targets"),
+            ("__pycache__", "__pycache__/ (Python Bytecode Cache)", "Remove Python bytecode cache via `find . -name '__pycache__' -exec rm -rf {} +`"),
+            (".pytest_cache", ".pytest_cache/ (Test Suite Cache)", "Clear pytest cache before source packaging"),
+            ("venv", "venv/ (Python Virtual Environment)", "Exclude virtualenv from version control and archives"),
+            (".venv", ".venv/ (Python Virtual Environment)", "Exclude virtualenv from version control and archives"),
+        ];
+
+        for (dirname, label, rec) in &bloat_candidates {
+            let candidate_path = dir_path.join(dirname);
+            if candidate_path.is_dir() {
+                let size = Self::calculate_directory_size(&candidate_path, 8_000);
+                if size > 0 {
+                    bloat_items.push(BuildBloatItem {
+                        path: candidate_path,
+                        name: label.to_string(),
+                        size_bytes: size,
+                        recommendation: rec.to_string(),
+                    });
+                }
+            }
+        }
+
+        let total_bloat_bytes: u64 = bloat_items.iter().map(|b| b.size_bytes).sum();
+
+        let default_cfg = FolderInspectionConfig::default();
+        let cfg = config.unwrap_or(&default_cfg);
+
+        let mut all_metrics = Vec::new();
+        let mut security_warnings = Vec::new();
+        let mut total_files = 0usize;
+        let mut total_dirs = 0usize;
+        let mut total_bytes = 0u64;
+
+        let mut stack = vec![(dir_path.to_path_buf(), 0usize)];
+        let mut visited_inodes = HashSet::new();
+
+        while let Some((curr, depth)) = stack.pop() {
+            if depth > cfg.max_depth || total_files + total_dirs >= cfg.max_total_entries {
+                break;
+            }
+
+            #[cfg(unix)]
+            {
+                if let Ok(meta) = fs::metadata(&curr) {
+                    if !visited_inodes.insert((meta.dev(), meta.ino())) {
+                        continue;
+                    }
+                }
+            }
+
+            if let Ok(rd) = fs::read_dir(&curr) {
+                for entry in rd.flatten() {
+                    let p = entry.path();
+                    let name = entry.file_name().to_string_lossy().to_string();
+
+                    if !cfg.show_hidden && name.starts_with('.') && name != ".git" {
+                        continue;
+                    }
+                    if Self::is_sensitive_target(&p) {
+                        continue;
+                    }
+
+                    let sym_meta = fs::symlink_metadata(&p);
+                    let is_symlink = sym_meta.as_ref().map(|m| m.file_type().is_symlink()).unwrap_or(false);
+                    let meta = fs::metadata(&p).ok().or_else(|| sym_meta.ok());
+
+                    let is_dir = meta.as_ref().map(|m| m.is_dir()).unwrap_or(false);
+                    let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+
+                    #[cfg(unix)]
+                    let mode = meta.as_ref().map(|m| m.mode()).unwrap_or(0);
+                    #[cfg(not(unix))]
+                    let mode = 0u32;
+
+                    #[cfg(unix)]
+                    {
+                        if mode & 0o002 != 0 {
+                            security_warnings.push(SecurityWarning {
+                                path: p.clone(),
+                                issue: format!("World-writable permissions (mode: {:o})", mode & 0o777),
+                                severity: "High".to_string(),
+                                recommendation: format!("Restrict world write permissions: `chmod o-w \"{}\"`", p.display()),
+                            });
+                        }
+                        if mode & 0o6000 != 0 {
+                            security_warnings.push(SecurityWarning {
+                                path: p.clone(),
+                                issue: format!("Elevated setuid/setgid bits detected (mode: {:o})", mode),
+                                severity: "High".to_string(),
+                                recommendation: format!("Verify if setuid/setgid is strictly required: `chmod u-s,g-s \"{}\"`", p.display()),
+                            });
+                        }
+                        let lower_name = name.to_lowercase();
+                        if lower_name.starts_with(".env")
+                            || lower_name.ends_with(".key")
+                            || lower_name.ends_with(".pem")
+                            || lower_name.contains("id_rsa")
+                            || lower_name.contains("id_ed25519")
+                        {
+                            if mode & 0o077 != 0 {
+                                security_warnings.push(SecurityWarning {
+                                    path: p.clone(),
+                                    issue: format!("Sensitive credential/key file has permissive group/other access (mode: {:o})", mode & 0o777),
+                                    severity: "Critical".to_string(),
+                                    recommendation: format!("Tighten secret file permissions immediately: `chmod 600 \"{}\"`", p.display()),
+                                });
+                            }
+                        }
+                    }
+
+                    if is_dir {
+                        total_dirs += 1;
+                        all_metrics.push(FileEntryMetric {
+                            path: p.clone(),
+                            name: format!("{name}/"),
+                            size_bytes: size,
+                            is_dir: true,
+                        });
+                        if name != "target" && name != "node_modules" && name != ".git" && !is_symlink {
+                            stack.push((p, depth + 1));
+                        }
+                    } else {
+                        total_files += 1;
+                        total_bytes += size;
+                        all_metrics.push(FileEntryMetric {
+                            path: p,
+                            name,
+                            size_bytes: size,
+                            is_dir: false,
+                        });
+                    }
+                }
+            }
+        }
+
+        all_metrics.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes));
+        let largest_items = all_metrics.into_iter().take(10).collect();
+
+        let mut hygiene_score = 100i32;
+        let mut hygiene_findings = Vec::new();
+
+        hygiene_findings.push(format!("Primary Archetype: {primary_archetype}"));
+        if !archetype_traits.is_empty() {
+            hygiene_findings.push(format!("Detected Archetype Traits: {}", archetype_traits.join(", ")));
+        }
+
+        if total_bloat_bytes >= 5 * 1024 * 1024 * 1024 {
+            hygiene_score -= 30;
+            hygiene_findings.push(format!("Severe build artifact bloat: {} in cache directories", Self::format_bytes(total_bloat_bytes)));
+        } else if total_bloat_bytes >= 1024 * 1024 * 1024 {
+            hygiene_score -= 20;
+            hygiene_findings.push(format!("Substantial build artifact bloat: {} in cache directories", Self::format_bytes(total_bloat_bytes)));
+        } else if total_bloat_bytes >= 200 * 1024 * 1024 {
+            hygiene_score -= 10;
+            hygiene_findings.push(format!("Moderate build artifact footprint: {} in cache directories", Self::format_bytes(total_bloat_bytes)));
+        } else {
+            hygiene_findings.push("Build artifact bloat: Minimal / Pristine".to_string());
+        }
+
+        let mut crit_count = 0;
+        let mut high_count = 0;
+        for w in &security_warnings {
+            if w.severity == "Critical" {
+                crit_count += 1;
+                hygiene_score -= 25;
+            } else if w.severity == "High" {
+                high_count += 1;
+                hygiene_score -= 15;
+            } else {
+                hygiene_score -= 5;
+            }
+        }
+
+        if crit_count > 0 || high_count > 0 {
+            hygiene_findings.push(format!("Security posture alert: {crit_count} Critical, {high_count} High permission warnings detected"));
+        } else {
+            hygiene_findings.push("Security posture: Clean (no world-writable or exposed secret files found)".to_string());
+        }
+
+        if is_git && !dir_path.join(".gitignore").exists() {
+            hygiene_score -= 10;
+            hygiene_findings.push("Notice: Git repository lacks a `.gitignore` file".to_string());
+        }
+
+        let final_score = hygiene_score.clamp(0, 100) as u32;
+
+        Ok(FolderAnalysisReport {
+            path: dir_path.to_path_buf(),
+            archetype: primary_archetype,
+            archetype_traits,
+            total_files,
+            total_dirs,
+            total_bytes,
+            largest_items,
+            bloat_items,
+            total_bloat_bytes,
+            hygiene_score: final_score,
+            hygiene_findings,
+            security_warnings,
+        })
+    }
+
+    /// Deep storage drive saturation, reliability, and security analysis
+    pub fn analyze_storage_drives() -> StorageAnalysisReport {
+        let raw_drives = Self::discover_storage_drives();
+        let mut analyzed_drives = Vec::new();
+        let mut critical_partitions = Vec::new();
+        let mut system_warnings = Vec::new();
+        let mut recommendations = Vec::new();
+
+        let mut total_cap = 0u64;
+        let mut total_avail = 0u64;
+
+        for d in raw_drives {
+            let used_bytes = match (d.total_bytes, d.available_bytes) {
+                (Some(tot), Some(avail)) => {
+                    total_cap += tot;
+                    total_avail += avail;
+                    Some(tot.saturating_sub(avail))
+                }
+                _ => None,
+            };
+
+            let usage_percent = match (d.total_bytes, used_bytes) {
+                (Some(tot), Some(used)) if tot > 0 => Some((used as f64 / tot as f64) * 100.0),
+                _ => None,
+            };
+
+            let free_percent = usage_percent.map(|u| 100.0 - u);
+
+            let is_root = d.mount_point == Path::new("/");
+            let low_free_bytes = d.available_bytes.map(|a| a < 5 * 1024 * 1024 * 1024).unwrap_or(false);
+            let is_critical = usage_percent.map(|u| u >= 85.0).unwrap_or(false)
+                || free_percent.map(|f| f < 15.0).unwrap_or(false)
+                || (is_root && low_free_bytes);
+
+            let warning = if is_critical {
+                let avail_str = d.available_bytes.map(Self::format_bytes).unwrap_or_else(|| "unknown".to_string());
+                let pct_str = usage_percent.map(|u| format!("{:.1}%", u)).unwrap_or_default();
+                let msg = format!("Partition {} is critically saturated ({} utilized, only {} free space remaining)", d.mount_point.display(), pct_str, avail_str);
+                critical_partitions.push(d.mount_point.display().to_string());
+                Some(msg)
+            } else {
+                None
+            };
+
+            let reliability = match d.fstype.as_str() {
+                "ext4" | "xfs" | "btrfs" | "zfs" => "High (Journaled / Copy-on-Write Enterprise)".to_string(),
+                "f2fs" => "High (Flash-Friendly Filesystem)".to_string(),
+                "vfat" | "fat" | "exfat" => "Basic (FAT non-POSIX, no UNIX file ownership guarantees)".to_string(),
+                "ntfs" => "Compatibility (NTFS via FUSE)".to_string(),
+                _ => "Standard POSIX".to_string(),
+            };
+
+            let mount_flags: Vec<String> = d.options.split(',').map(|s| s.trim().to_string()).collect();
+            let mut security_audit = Vec::new();
+
+            if mount_flags.iter().any(|f| f == "ro") {
+                security_audit.push("Mounted Read-Only (ro)".to_string());
+            } else if mount_flags.iter().any(|f| f == "rw") {
+                security_audit.push("Mounted Read-Write (rw)".to_string());
+            }
+
+            if !is_root && d.mount_point != Path::new("/usr") {
+                if !mount_flags.iter().any(|f| f == "nosuid") {
+                    security_audit.push("Notice: Missing 'nosuid' option on non-root volume".to_string());
+                }
+                if !mount_flags.iter().any(|f| f == "nodev") {
+                    security_audit.push("Notice: Missing 'nodev' option on non-root volume".to_string());
+                }
+            }
+
+            if mount_flags.iter().any(|f| f == "noexec") {
+                security_audit.push("Security hardened: Execution disabled ('noexec')".to_string());
+            }
+
+            analyzed_drives.push(StorageDriveAnalysis {
+                device: d.device,
+                mount_point: d.mount_point,
+                fstype: d.fstype,
+                options: d.options,
+                total_bytes: d.total_bytes,
+                available_bytes: d.available_bytes,
+                used_bytes,
+                usage_percent,
+                is_critical,
+                warning,
+                filesystem_reliability: reliability,
+                mount_flags,
+                security_audit,
+            });
+        }
+
+        let overall_usage_percent = if total_cap > 0 {
+            let used = total_cap.saturating_sub(total_avail);
+            (used as f64 / total_cap as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        if !critical_partitions.is_empty() {
+            system_warnings.push(format!(
+                "CRITICAL: {} partition(s) exceed 85% capacity threshold: {}",
+                critical_partitions.len(),
+                critical_partitions.join(", ")
+            ));
+            recommendations.push(
+                "Immediate storage remediation: Clean package caches (`apt clean` / `dnf clean all`), prune old Docker images (`docker system prune`), or truncate application logs under `/var/log`."
+                    .to_string(),
+            );
+        } else {
+            recommendations.push(
+                "Storage headroom is nominal across all mounted drives (> 15% available free space)."
+                    .to_string(),
+            );
+        }
+
+        StorageAnalysisReport {
+            drives: analyzed_drives,
+            total_capacity_bytes: total_cap,
+            total_available_bytes: total_avail,
+            overall_usage_percent,
+            critical_partitions,
+            system_warnings,
+            recommendations,
+        }
+    }
+
+    /// Deep network infrastructure, gateway detection, and active host classification analysis
+    pub fn analyze_network_infrastructure(probe_ports: bool, timeout_ms: u64) -> NetworkAnalysisReport {
+        let detected_gateways = Self::detect_default_gateways();
+        let raw_computers = Self::discover_network_computers(probe_ports, timeout_ms);
+        let raw_shares = Self::discover_network_shares();
+
+        let mut active_hosts = Vec::new();
+        let mut classification_summary: HashMap<String, usize> = HashMap::new();
+        let mut reachability = Vec::new();
+        let mut security_considerations = Vec::new();
+
+        for comp in raw_computers {
+            let is_gateway = detected_gateways.contains(&comp.ip_address) || comp.ip_address.ends_with(".1") || comp.ip_address.ends_with(".254");
+            let is_multicast = comp.ip_address.starts_with("224.")
+                || comp.ip_address.starts_with("239.")
+                || comp.ip_address == "255.255.255.255"
+                || comp.ip_address.starts_with("ff0");
+
+            let category = if is_gateway {
+                "Gateway/Router".to_string()
+            } else if comp.smb_open == Some(true) || comp.nfs_open == Some(true) {
+                "NAS/File Server".to_string()
+            } else if is_multicast {
+                "IPv6 Multicast/Broadcast".to_string()
+            } else {
+                "Workstations".to_string()
+            };
+
+            let mut notes = Vec::new();
+            if is_gateway {
+                notes.push("Default Subnet Gateway & Internet Uplink".to_string());
+            }
+            if comp.smb_open == Some(true) {
+                notes.push("Open SMB (port 445) File Sharing Active".to_string());
+                security_considerations.push(format!(
+                    "Notice: Host {} has port 445 (SMB) exposed on local network",
+                    comp.ip_address
+                ));
+            }
+            if comp.nfs_open == Some(true) {
+                notes.push("Open NFS (port 2049) Network Export Active".to_string());
+            }
+            if comp.hostname.is_some() {
+                notes.push(format!("Resolved Hostname: {}", comp.hostname.as_ref().unwrap()));
+            }
+
+            *classification_summary.entry(category.clone()).or_insert(0) += 1;
+
+            active_hosts.push(NetworkHostAnalysis {
+                ip_address: comp.ip_address,
+                hostname: comp.hostname,
+                mac_address: comp.mac_address,
+                interface: comp.interface,
+                category,
+                is_gateway,
+                smb_open: comp.smb_open,
+                nfs_open: comp.nfs_open,
+                notes,
+            });
+        }
+
+        for share in &raw_shares {
+            let opts = &share.options;
+            if opts.contains("vers=1.0") {
+                security_considerations.push(format!(
+                    "CRITICAL: Share `{}` uses deprecated and vulnerable SMBv1 (vers=1.0) protocol!",
+                    share.device_or_remote
+                ));
+            }
+            if opts.contains("guest") || opts.contains("sec=none") {
+                security_considerations.push(format!(
+                    "WARNING: Share `{}` is mounted with unauthenticated guest access",
+                    share.device_or_remote
+                ));
+            }
+        }
+
+        if !detected_gateways.is_empty() {
+            reachability.push(format!(
+                "Default Gateway Router(s) identified: {}. Routing uplink active.",
+                detected_gateways.join(", ")
+            ));
+        } else {
+            reachability.push("Default Gateway Router: Not explicitly identified in routing table".to_string());
+        }
+
+        reachability.push(format!(
+            "LAN Active Computer Inventory: {} live hosts discovered via kernel ARP cache.",
+            active_hosts.len()
+        ));
+
+        let nas_count = classification_summary.get("NAS/File Server").copied().unwrap_or(0);
+        if nas_count > 0 {
+            reachability.push(format!("{nas_count} NAS/File Server(s) detected with active SMB/NFS storage ports."));
+        }
+
+        NetworkAnalysisReport {
+            detected_gateways,
+            active_hosts,
+            host_classification_summary: classification_summary,
+            mounted_shares: raw_shares,
+            reachability_assessment: reachability,
+            security_considerations,
+        }
+    }
+
+    /// Comprehensive system, storage, and network analysis synthesizing an executive diagnosis
+    pub fn run_comprehensive_analysis(
+        dir_path: Option<&Path>,
+        probe_network_ports: bool,
+        timeout_ms: u64,
+    ) -> Result<ComprehensiveSystemAnalysisReport> {
+        let folder_rep = match dir_path {
+            Some(p) => Some(Self::analyze_directory_structure(p, None)?),
+            None => {
+                let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                Self::analyze_directory_structure(&cwd, None).ok()
+            }
+        };
+
+        let storage_rep = Self::analyze_storage_drives();
+        let network_rep = Self::analyze_network_infrastructure(probe_network_ports, timeout_ms);
+
+        let mut diagnosis_parts = Vec::new();
+
+        if !storage_rep.critical_partitions.is_empty() {
+            diagnosis_parts.push(format!(
+                "CRITICAL STORAGE DEFICIT: Partitions {} exceed 85% saturation threshold.",
+                storage_rep.critical_partitions.join(", ")
+            ));
+        } else {
+            diagnosis_parts.push(format!(
+                "Storage saturation is nominal ({:.1}% capacity utilized across {} volumes).",
+                storage_rep.overall_usage_percent,
+                storage_rep.drives.len()
+            ));
+        }
+
+        if let Some(ref f) = folder_rep {
+            diagnosis_parts.push(format!(
+                "Workspace archetype identified as {} (Hygiene Score: {}/100).",
+                f.archetype, f.hygiene_score
+            ));
+            if f.total_bloat_bytes > 500 * 1024 * 1024 {
+                diagnosis_parts.push(format!(
+                    "Cache bloat of {} detected across build directories.",
+                    Self::format_bytes(f.total_bloat_bytes)
+                ));
+            }
+        }
+
+        let gw_str = if !network_rep.detected_gateways.is_empty() {
+            format!("Default Gateway ({}) active", network_rep.detected_gateways.join(", "))
+        } else {
+            "No default gateway detected".to_string()
+        };
+        diagnosis_parts.push(format!(
+            "Local subnet topology: {}, {} active host(s) discovered, {} mounted network share(s).",
+            gw_str,
+            network_rep.active_hosts.len(),
+            network_rep.mounted_shares.len()
+        ));
+
+        let executive_diagnosis = diagnosis_parts.join(" ");
+
+        let has_crit_storage = !storage_rep.critical_partitions.is_empty();
+        let has_crit_security = folder_rep.as_ref().map(|f| f.security_warnings.iter().any(|w| w.severity == "Critical")).unwrap_or(false);
+        let has_crit_network = network_rep.security_considerations.iter().any(|s| s.starts_with("CRITICAL"));
+
+        let has_warning_storage = storage_rep.drives.iter().any(|d| d.usage_percent.map(|u| u >= 80.0).unwrap_or(false));
+        let has_warning_folder = folder_rep.as_ref().map(|f| f.hygiene_score < 80 || f.total_bloat_bytes > 1024 * 1024 * 1024).unwrap_or(false);
+
+        let health_verdict = if has_crit_storage || has_crit_security || has_crit_network {
+            "CRITICAL ATTENTION REQUIRED".to_string()
+        } else if has_warning_storage || has_warning_folder {
+            "WARNING / SUB-OPTIMAL".to_string()
+        } else {
+            "HEALTHY & NOMINAL".to_string()
+        };
+
+        let mut actionable_recommendations = Vec::new();
+        actionable_recommendations.extend(storage_rep.recommendations.clone());
+        if let Some(ref f) = folder_rep {
+            for b in &f.bloat_items {
+                actionable_recommendations.push(format!("{}: {}", b.name, b.recommendation));
+            }
+            for w in &f.security_warnings {
+                actionable_recommendations.push(format!("[{}] {}", w.severity, w.recommendation));
+            }
+        }
+        for sec in &network_rep.security_considerations {
+            actionable_recommendations.push(sec.clone());
+        }
+
+        Ok(ComprehensiveSystemAnalysisReport {
+            folder_analysis: folder_rep,
+            storage_analysis: Some(storage_rep),
+            network_analysis: Some(network_rep),
+            executive_diagnosis,
+            health_verdict,
+            actionable_recommendations,
+        })
+    }
+
+    /// Format comprehensive architectural analysis into high-signal Markdown
+    pub fn format_analysis_markdown(report: &ComprehensiveSystemAnalysisReport) -> String {
+        let mut out = String::new();
+        out.push_str("# 🏢 Comprehensive System & Network Architectural Report\n");
+        out.push_str(&format!("**System Health Verdict:** `[ {} ]`\n", report.health_verdict));
+        out.push_str(&format!("**Executive Diagnosis:** {}\n\n", report.executive_diagnosis));
+
+        if let Some(ref st) = report.storage_analysis {
+            out.push_str("### 💾 Storage Capacity & Partition Saturation Assessment\n");
+            out.push_str(&format!(
+                "- **Overall Storage Utilized:** {:.1}% ({} available / {} total capacity)\n",
+                st.overall_usage_percent,
+                Self::format_bytes(st.total_available_bytes),
+                Self::format_bytes(st.total_capacity_bytes)
+            ));
+            if !st.critical_partitions.is_empty() {
+                out.push_str(&format!("- ⚠️ **Critical Partitions (>85% full):** {}\n", st.critical_partitions.join(", ")));
+            }
+            out.push_str("\n| Device | Mount Point | Filesystem | Used / Total | Usage % | Reliability | Flags |\n");
+            out.push_str("| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n");
+            for d in &st.drives {
+                let usage_str = d.usage_percent.map(|u| format!("{:.1}%", u)).unwrap_or_else(|| "N/A".to_string());
+                let space_str = match (d.used_bytes, d.total_bytes) {
+                    (Some(u), Some(t)) => format!("{} / {}", Self::format_bytes(u), Self::format_bytes(t)),
+                    _ => "N/A".to_string(),
+                };
+                let status_icon = if d.is_critical { "🔴 CRITICAL" } else { "🟢 Nominal" };
+                let short_flags = if d.mount_flags.len() > 3 {
+                    format!("{}, ...", d.mount_flags[..2].join(","))
+                } else {
+                    d.mount_flags.join(",")
+                };
+                out.push_str(&format!(
+                    "| `{}` | `{}` | `{}` | {} | {} [{status_icon}] | {} | `{}` |\n",
+                    d.device, d.mount_point.display(), d.fstype, space_str, usage_str, d.filesystem_reliability, short_flags
+                ));
+            }
+            out.push('\n');
+            for w in &st.system_warnings {
+                out.push_str(&format!("- ⚠️ {w}\n"));
+            }
+            out.push('\n');
+        }
+
+        if let Some(ref net) = report.network_analysis {
+            out.push_str("### 🌐 Network Subnet Topology & Host Classification\n");
+            if !net.detected_gateways.is_empty() {
+                out.push_str(&format!("- **Identified Gateway Router(s):** `{}`\n", net.detected_gateways.join("`, `")));
+            }
+            let summary_str: Vec<String> = net.host_classification_summary.iter()
+                .map(|(k, v)| format!("{k}: {v}"))
+                .collect();
+            if !summary_str.is_empty() {
+                out.push_str(&format!("- **Host Inventory:** {}\n", summary_str.join(" | ")));
+            }
+
+            if !net.active_hosts.is_empty() {
+                out.push_str("\n| IP Address | Hostname | MAC Address | Category | SMB (445) | NFS (2049) | Notes |\n");
+                out.push_str("| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n");
+                for h in &net.active_hosts {
+                    let host_name = h.hostname.as_deref().unwrap_or("-");
+                    let mac_str = h.mac_address.as_deref().unwrap_or("-");
+                    let smb_str = match h.smb_open {
+                        Some(true) => "🟢 Open",
+                        Some(false) => "⚪ Closed",
+                        None => "❓ Unprobed",
+                    };
+                    let nfs_str = match h.nfs_open {
+                        Some(true) => "🟢 Open",
+                        Some(false) => "⚪ Closed",
+                        None => "❓ Unprobed",
+                    };
+                    let notes_str = if h.notes.is_empty() { "-".to_string() } else { h.notes.join("; ") };
+                    out.push_str(&format!(
+                        "| `{}` | {} | `{}` | **{}** | {} | {} | {} |\n",
+                        h.ip_address, host_name, mac_str, h.category, smb_str, nfs_str, notes_str
+                    ));
+                }
+                out.push('\n');
+            }
+
+            if !net.mounted_shares.is_empty() {
+                out.push_str("#### Mounted Network Shares:\n");
+                for s in &net.mounted_shares {
+                    out.push_str(&format!("- Remote: `{}` mounted on `{}` [{}]\n", s.device_or_remote, s.mount_point.display(), s.fstype));
+                }
+                out.push('\n');
+            }
+
+            for sec in &net.security_considerations {
+                out.push_str(&format!("- 🛡️ {sec}\n"));
+            }
+            out.push('\n');
+        }
+
+        if let Some(ref f) = report.folder_analysis {
+            out.push_str("### 📁 Filesystem Architecture & Workspace Profile\n");
+            out.push_str(&format!("- **Target Path:** `{}`\n", f.path.display()));
+            out.push_str(&format!("- **Project Archetype:** **{}**\n", f.archetype));
+            if !f.archetype_traits.is_empty() {
+                out.push_str(&format!("- **Archetype Traits:** {}\n", f.archetype_traits.join(", ")));
+            }
+            out.push_str(&format!("- **Hygiene Score:** `{}/100`\n", f.hygiene_score));
+            out.push_str(&format!(
+                "- **Total Entries:** {} files, {} directories ({})\n",
+                f.total_files, f.total_dirs, Self::format_bytes(f.total_bytes)
+            ));
+
+            if !f.bloat_items.is_empty() {
+                out.push_str(&format!("\n#### Build Bloat & Cache Artifacts (Total: {}):\n", Self::format_bytes(f.total_bloat_bytes)));
+                for b in &f.bloat_items {
+                    out.push_str(&format!("- **{}** ({}): {}\n", b.name, Self::format_bytes(b.size_bytes), b.recommendation));
+                }
+            }
+
+            if !f.security_warnings.is_empty() {
+                out.push_str("\n#### Security & Permission Warnings:\n");
+                for w in &f.security_warnings {
+                    out.push_str(&format!("- ⚠️ **[{}]** `{}`: {} => {}\n", w.severity, w.path.display(), w.issue, w.recommendation));
+                }
+            }
+
+            if !f.largest_items.is_empty() {
+                out.push_str("\n#### Largest File/Directory Entries:\n");
+                for item in &f.largest_items {
+                    let kind_indicator = if item.is_dir { "📁" } else { "📄" };
+                    out.push_str(&format!("- {} `{}` ({})\n", kind_indicator, item.path.display(), Self::format_bytes(item.size_bytes)));
+                }
+            }
+            out.push('\n');
+        }
+
+        if !report.actionable_recommendations.is_empty() {
+            out.push_str("### 🛠️ Actionable Architectural Recommendations\n");
+            for rec in &report.actionable_recommendations {
+                out.push_str(&format!("- [ ] {}\n", rec));
+            }
+            out.push('\n');
+        }
+
+        out
     }
 
     /// Convenience wrapper using current directory as workspace root
@@ -1116,6 +2105,49 @@ mod tests {
 
         assert!(!reports.is_empty());
         assert!(augmented.contains("--- AUTO-INSPECTED LOCAL & NETWORK FOLDER CONTEXT ---"));
+        assert!(augmented.contains("--- LIVE SYSTEM & NETWORK ARCHITECTURAL ANALYSIS ---"));
+        assert!(augmented.contains("[ANALYTICAL DIRECTIVE FOR THE MODEL:"));
         assert!(augmented.contains("----------------------------------------------------"));
     }
+
+    #[test]
+    fn test_deep_directory_analysis_and_bloat() {
+        let base = std::env::temp_dir().join("hgb_test_deep_analysis");
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(base.join("target/debug")).unwrap();
+        fs::create_dir_all(base.join("src")).unwrap();
+
+        let mut cargo_file = File::create(base.join("Cargo.toml")).unwrap();
+        writeln!(cargo_file, "[package]\nname = \"test_crate\"\nversion = \"0.1.0\"\n").unwrap();
+
+        let mut dummy_bin = File::create(base.join("target/debug/dummy")).unwrap();
+        dummy_bin.write_all(&vec![0u8; 1024 * 50]).unwrap(); // 50 KB dummy artifact
+
+        let report = FolderInspectorEngine::analyze_directory_structure(&base, None).unwrap();
+        assert_eq!(report.archetype, "Rust Cargo Package");
+        assert!(!report.bloat_items.is_empty());
+        assert!(report.total_bloat_bytes >= 1024 * 50);
+        assert!(report.hygiene_score > 0);
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn test_deep_storage_and_network_analysis() {
+        let storage_rep = FolderInspectorEngine::analyze_storage_drives();
+        assert!(!storage_rep.drives.is_empty());
+        assert!(storage_rep.total_capacity_bytes > 0);
+
+        let net_rep = FolderInspectorEngine::analyze_network_infrastructure(false, 100);
+        assert!(!net_rep.reachability_assessment.is_empty());
+
+        let comp_rep = FolderInspectorEngine::run_comprehensive_analysis(None, false, 100).unwrap();
+        assert!(!comp_rep.executive_diagnosis.is_empty());
+        assert!(!comp_rep.health_verdict.is_empty());
+
+        let md = FolderInspectorEngine::format_analysis_markdown(&comp_rep);
+        assert!(md.contains("# 🏢 Comprehensive System & Network Architectural Report"));
+        assert!(md.contains("System Health Verdict"));
+    }
 }
+

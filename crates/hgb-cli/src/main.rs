@@ -659,6 +659,9 @@ enum Commands {
         /// Maximum directory recursion depth (default 3)
         #[arg(short, long, default_value_t = 3)]
         depth: usize,
+        /// Perform deep architectural analysis (archetype, storage saturation, network topology, hygiene audit)
+        #[arg(short = 'a', long = "analyze")]
+        analyze: bool,
     },
 
     /// Ping the resident hgbd daemon and measure UDS roundtrip latency
@@ -4101,7 +4104,28 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             }
             Ok(())
         }
-        Commands::InspectFolder { path, storage, network, xdg, depth } => {
+        Commands::InspectFolder { path, storage, network, xdg, depth, analyze } => {
+            if analyze {
+                let target_dir = path.as_deref().map(std::path::Path::new);
+                match hgb_core::FolderInspectorEngine::run_comprehensive_analysis(target_dir, true, 350) {
+                    Ok(report) => {
+                        println!("{}", "🏢 LIVE SYSTEM & NETWORK ARCHITECTURAL ANALYSIS REPORT".cyan().bold());
+                        let (badge, color) = match report.health_verdict.as_str() {
+                            "HEALTHY & NOMINAL" => ("[ HEALTHY & NOMINAL ]", colored::Color::Green),
+                            "WARNING / SUB-OPTIMAL" => ("[ WARNING / SUB-OPTIMAL ]", colored::Color::Yellow),
+                            _ => ("[ CRITICAL ATTENTION REQUIRED ]", colored::Color::Red),
+                        };
+                        println!("{} {}\n", "Verdict:".bold(), badge.color(color).bold());
+                        println!("{} {}\n", "Executive Diagnosis:".magenta().bold(), report.executive_diagnosis);
+
+                        let md = hgb_core::FolderInspectorEngine::format_analysis_markdown(&report);
+                        println!("{md}");
+                        return Ok(());
+                    }
+                    Err(e) => eprintln!("{} Analysis error: {e}", "✖".red().bold()),
+                }
+            }
+
             println!("{}", "📁 Inspecting Local & Network Filesystem Infrastructure...".cyan().bold());
             let format_bytes = |bytes: u64| -> String {
                 const KB: u64 = 1024;

@@ -821,8 +821,10 @@ pub use finops_budget::{
 // Folder & Network Share Inspection and Auto-Grounding exports
 pub mod folder_inspector;
 pub use folder_inspector::{
-    DirectoryTreeSummary, FileNodeInfo, FileTypeKind, FolderInspectionConfig,
-    FolderInspectorEngine, InspectedTargetReport, NetworkComputerInfo, NetworkShareInfo,
-    StorageDriveInfo, TargetKind,
+    BuildBloatItem, ComprehensiveSystemAnalysisReport, DirectoryTreeSummary, FileEntryMetric,
+    FileNodeInfo, FileTypeKind, FolderAnalysisReport, FolderInspectionConfig,
+    FolderInspectorEngine, InspectedTargetReport, NetworkAnalysisReport, NetworkComputerInfo,
+    NetworkHostAnalysis, NetworkShareInfo, SecurityWarning, StorageAnalysisReport,
+    StorageDriveAnalysis, StorageDriveInfo, TargetKind,
 };
 
