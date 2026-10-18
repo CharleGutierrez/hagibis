@@ -359,9 +359,13 @@ impl AgyCrud {
                 let stderr_raw = String::from_utf8_lossy(&output.stderr);
 
                 let stdout = if stdout_raw.len() > max_bytes {
+                    let mut b = max_bytes;
+                    while b > 0 && !stdout_raw.is_char_boundary(b) {
+                        b -= 1;
+                    }
                     format!(
                         "{}\n[...stdout truncated at {} bytes...]",
-                        &stdout_raw[..max_bytes],
+                        &stdout_raw[..b],
                         max_bytes
                     )
                 } else {
@@ -369,9 +373,13 @@ impl AgyCrud {
                 };
 
                 let stderr = if stderr_raw.len() > max_bytes {
+                    let mut b = max_bytes;
+                    while b > 0 && !stderr_raw.is_char_boundary(b) {
+                        b -= 1;
+                    }
                     format!(
                         "{}\n[...stderr truncated at {} bytes...]",
-                        &stderr_raw[..max_bytes],
+                        &stderr_raw[..b],
                         max_bytes
                     )
                 } else {

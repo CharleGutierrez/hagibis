@@ -106,6 +106,10 @@ pub struct DaemonCli {
     /// Run daemon in quiet mode without terminal startup card
     #[arg(short, long)]
     pub quiet: bool,
+
+    /// Start ambient sleep-tuning & dream distillation background service
+    #[arg(long)]
+    pub ambient: bool,
 }
 
 #[tokio::main]
@@ -123,6 +127,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !cli.quiet {
         print_daemon_card(&socket_path);
     }
+
+    if cli.ambient {
+        let ws = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let ambient = hgb_daemon::AmbientDaemonService::new(&ws);
+        let stop_sig = ambient.stop_handle();
+        tokio::spawn(async move {
+            let mut consecutive_idle = 0;
+            while stop_sig.load(std::sync::atomic::Ordering::Relaxed) {
+                tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+                ambient.tick(&mut consecutive_idle);
+            }
+        });
+        if !cli.quiet {
+            println!("🌙 Ambient background sleep-distillation service active.");
+        }
+    }
+
     let daemon = HagibisDaemon::new(socket_path);
     daemon.run().await?;
     Ok(())

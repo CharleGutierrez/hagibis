@@ -348,7 +348,11 @@ impl ReActAgentEngine {
                 };
 
                 let snippet = if output.len() > 300 {
-                    format!("{}...", &output[..300])
+                    let mut b = 300;
+                    while b > 0 && !output.is_char_boundary(b) {
+                        b -= 1;
+                    }
+                    format!("{}...", &output[..b])
                 } else {
                     output.clone()
                 };

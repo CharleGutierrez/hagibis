@@ -303,9 +303,21 @@ impl TokenShredder {
             (step2, false)
         };
 
-        // Phase 4: Enforce max byte limit safeguard
+/// Truncate string slice at or before `max_bytes` without splitting a multi-byte UTF-8 code point
+pub fn safe_truncate_str(s: &str, max_bytes: usize) -> &str {
+    if max_bytes >= s.len() {
+        return s;
+    }
+    let mut boundary = max_bytes;
+    while boundary > 0 && !s.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    &s[..boundary]
+}
+
+        // Phase 4: Enforce max byte limit safeguard (Unicode-boundary safe)
         let final_content = if step3.len() > self.max_bytes {
-            let mut truncated = step3[..self.max_bytes].to_string();
+            let mut truncated = safe_truncate_str(&step3, self.max_bytes).to_string();
             truncated.push_str("\n[... Truncated by Hagibis Token Shredder max byte ceiling ...]");
             truncated
         } else {

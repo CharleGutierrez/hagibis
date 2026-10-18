@@ -208,10 +208,18 @@ impl TimeMachineEngine {
 
         // Fallback: Parse unified diff content and reconstruct files if no raw backup
         if restored_files.is_empty() && !snapshot.diff_content.is_empty() {
-            // Apply git diff reverse if diff is valid
-            for file_rel in &snapshot.modified_files {
-                restored_files.push(file_rel.clone());
+            match Self::apply_reverse_unified_diff(&snapshot.diff_content, workspace_root, &snapshot.modified_files) {
+                Ok(files) => {
+                    restored_files.extend(files);
+                }
+                Err(e) => {
+                    return Err(format!("Failed to reverse diff for snapshot {}: {}", id, e));
+                }
             }
+        }
+
+        if restored_files.is_empty() {
+            return Err(format!("No files could be restored for snapshot {}: diff could not be applied and no raw backup exists", id));
         }
 
         // Record a rollback snapshot to preserve undo capability
@@ -226,6 +234,163 @@ impl TimeMachineEngine {
         let _ = self.record_snapshot(&rollback_snap);
 
         Ok(restored_files)
+    }
+
+    /// Parse and apply reverse diff to files in workspace_root
+    pub fn apply_reverse_unified_diff(
+        diff: &str,
+        workspace_root: &Path,
+        modified_files: &[String],
+    ) -> Result<Vec<String>, String> {
+        let mut restored = Vec::new();
+
+        if diff.trim().is_empty() {
+            return Ok(restored);
+        }
+
+        for file_rel in modified_files {
+            let target_file = workspace_root.join(file_rel);
+            let current_content = if target_file.exists() {
+                fs::read_to_string(&target_file).map_err(|e| format!("Failed to read {}: {}", target_file.display(), e))?
+            } else {
+                String::new()
+            };
+
+            let diff_lines = Self::extract_file_diff_lines(diff, file_rel, modified_files.len() == 1);
+            if diff_lines.is_empty() {
+                continue;
+            }
+
+            let hunks = Self::extract_hunks(&diff_lines);
+            let mut new_content = current_content.clone();
+            let mut applied = false;
+
+            for (post_img, pre_img) in hunks {
+                if !post_img.is_empty() && new_content.contains(&post_img) {
+                    new_content = new_content.replacen(&post_img, &pre_img, 1);
+                    applied = true;
+                } else if !target_file.exists() && !pre_img.is_empty() {
+                    new_content = pre_img;
+                    applied = true;
+                }
+            }
+
+            if applied {
+                if let Some(parent) = target_file.parent() {
+                    let _ = fs::create_dir_all(parent);
+                }
+                fs::write(&target_file, &new_content)
+                    .map_err(|e| format!("Failed to write {}: {}", target_file.display(), e))?;
+                restored.push(file_rel.clone());
+            } else if target_file.exists() && !diff_lines.is_empty() {
+                let pre_lines: Vec<String> = diff_lines
+                    .iter()
+                    .filter_map(|l| {
+                        if l.starts_with('-') && !l.starts_with("---") {
+                            Some(l[1..].to_string())
+                        } else if l.starts_with(' ') {
+                            Some(l[1..].to_string())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                if !pre_lines.is_empty() {
+                    let candidate = pre_lines.join("\n") + "\n";
+                    if candidate.trim() != current_content.trim() {
+                        if let Some(parent) = target_file.parent() {
+                            let _ = fs::create_dir_all(parent);
+                        }
+                        fs::write(&target_file, &candidate)
+                            .map_err(|e| format!("Failed to write {}: {}", target_file.display(), e))?;
+                        restored.push(file_rel.clone());
+                    }
+                }
+            }
+        }
+
+        if restored.is_empty() && !modified_files.is_empty() {
+            return Err("Diff could not be reversed against workspace files".to_string());
+        }
+
+        Ok(restored)
+    }
+
+    fn extract_file_diff_lines(diff: &str, file_rel: &str, is_only_file: bool) -> Vec<String> {
+        let lines: Vec<&str> = diff.lines().collect();
+        if is_only_file {
+            return lines.iter().map(|s| s.to_string()).collect();
+        }
+
+        let mut in_file = false;
+        let mut file_lines = Vec::new();
+        let target_marker = format!("b/{}", file_rel);
+
+        for line in lines {
+            if line.starts_with("--- ") || line.starts_with("+++ ") || line.starts_with("diff ") {
+                if line.contains(file_rel) || line.contains(&target_marker) {
+                    in_file = true;
+                } else if in_file && (line.starts_with("diff ") || (line.starts_with("--- ") && !line.contains(file_rel))) {
+                    in_file = false;
+                }
+            }
+            if in_file {
+                file_lines.push(line.to_string());
+            }
+        }
+
+        if file_lines.is_empty() {
+            diff.lines().map(|s| s.to_string()).collect()
+        } else {
+            file_lines
+        }
+    }
+
+    fn extract_hunks(lines: &[String]) -> Vec<(String, String)> {
+        let mut hunks = Vec::new();
+        let mut cur_post: Vec<String> = Vec::new();
+        let mut cur_pre: Vec<String> = Vec::new();
+        let mut in_hunk = false;
+
+        for line in lines {
+            if line.starts_with("@@") {
+                if in_hunk && (!cur_post.is_empty() || !cur_pre.is_empty()) {
+                    hunks.push((cur_post.join("\n"), cur_pre.join("\n")));
+                    cur_post.clear();
+                    cur_pre.clear();
+                }
+                in_hunk = true;
+                continue;
+            }
+
+            if line.starts_with("---") || line.starts_with("+++") || line.starts_with("diff") {
+                continue;
+            }
+
+            if in_hunk {
+                if line.starts_with('+') {
+                    cur_post.push(line[1..].to_string());
+                } else if line.starts_with('-') {
+                    cur_pre.push(line[1..].to_string());
+                } else if line.starts_with(' ') {
+                    cur_post.push(line[1..].to_string());
+                    cur_pre.push(line[1..].to_string());
+                }
+            } else if line.starts_with('+') || line.starts_with('-') {
+                in_hunk = true;
+                if line.starts_with('+') {
+                    cur_post.push(line[1..].to_string());
+                } else if line.starts_with('-') {
+                    cur_pre.push(line[1..].to_string());
+                }
+            }
+        }
+
+        if !cur_post.is_empty() || !cur_pre.is_empty() {
+            hunks.push((cur_post.join("\n"), cur_pre.join("\n")));
+        }
+
+        hunks
     }
 
     /// Render interactive / terminal timeline scrubber graph
