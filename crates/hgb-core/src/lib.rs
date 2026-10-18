@@ -817,3 +817,12 @@ pub use finops_budget::{
     BudgetEnvelope, FinOpsEngine, ModelPricing, ModelPricingCatalog, RoutingDecision,
     UsageRecord,
 };
+
+// Folder & Network Share Inspection and Auto-Grounding exports
+pub mod folder_inspector;
+pub use folder_inspector::{
+    DirectoryTreeSummary, FileNodeInfo, FileTypeKind, FolderInspectionConfig,
+    FolderInspectorEngine, InspectedTargetReport, NetworkComputerInfo, NetworkShareInfo,
+    StorageDriveInfo, TargetKind,
+};
+

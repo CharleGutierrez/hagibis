@@ -261,6 +261,19 @@ impl HagibisDaemon {
                     }
                 }
 
+                // Local & Network Folder Auto-Grounding:
+                // If user prompt references local directories, network shares, storage drives, or ARP hosts
+                if let Ok((augmented, reports)) = hgb_core::FolderInspectorEngine::augment_prompt_with_folders(&final_prompt, 2000) {
+                    if !reports.is_empty() {
+                        eprintln!(
+                            "📁 [Folder Grounding] Injected {} inspected target(s) into prompt: {}",
+                            reports.len(),
+                            reports.iter().map(|r| r.display_title.as_str()).collect::<Vec<_>>().join(", ")
+                        );
+                        final_prompt = augmented;
+                    }
+                }
+
                 if let Ok(matched) = state.skill_store.match_skills(&prompt).await {
                     if !matched.is_empty() {
                         final_prompt.push_str("\n\n--- AUTO-INJECTED SKILLS ---\n");

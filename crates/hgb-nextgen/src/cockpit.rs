@@ -3903,6 +3903,17 @@ pub async fn execute_prompt_with_history(
         prompt
     };
 
+    // Ground prompt with local and network folder context if directories, storage drives, or network computers are referenced
+    let prompt = if let Ok((augmented, reports)) = hgb_core::FolderInspectorEngine::augment_prompt_with_folders(&prompt, 2000) {
+        if !reports.is_empty() {
+            augmented
+        } else {
+            prompt
+        }
+    } else {
+        prompt
+    };
+
     // Common system instructions enabling autonomous ReAct tools across all models
     let system_instructions = "\
 You are Hagibis (hgb), an elite Systems Rust & Autonomous AI Agent runtime.

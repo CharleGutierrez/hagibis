@@ -22,6 +22,7 @@ sha2 = { workspace = true }
 rusqlite = { workspace = true }
 ratatui.workspace = true
 crossterm.workspace = true
+libc = "0.2"
 axum = "0.7"
 hyper = { version = "1.0", features = ["full"] }
 mlua = { version = "0.9", features = ["lua54", "vendored"] }

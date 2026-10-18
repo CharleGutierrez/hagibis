@@ -70,6 +70,13 @@ impl InteractiveCommandCatalog {
                 description: "Live web search via DuckDuckGo returning ranked organic results with clickable URLs and snippets.",
             },
             CommandEntry {
+                name: "inspect-folder",
+                aliases: &["folder", "inspect-dir", "ls-net"],
+                category: "Core/Filesystem",
+                syntax: "hgb inspect-folder [path] [--storage] [--network] [--xdg] [--depth <N>]",
+                description: "Inspect local folders (POSIX ASCII tree, file classification), storage partitions, CIFS/NFS shares, and LAN computers.",
+            },
+            CommandEntry {
                 name: "classic",
                 aliases: &["repl"],
                 category: "Core/Chat",

@@ -642,6 +642,25 @@ enum Commands {
         limit: usize,
     },
 
+    /// Inspect local folder, storage partitions, or network shares & ARP neighbors
+    #[command(name = "inspect-folder", alias = "folder", alias = "inspect-dir", alias = "ls-net")]
+    InspectFolder {
+        /// Target folder path or URI to inspect (defaults to current directory)
+        path: Option<String>,
+        /// Discover mounted storage drives and partitions
+        #[arg(long)]
+        storage: bool,
+        /// Discover network shares and active local network computers via ARP
+        #[arg(long)]
+        network: bool,
+        /// Discover standard user XDG directories
+        #[arg(long)]
+        xdg: bool,
+        /// Maximum directory recursion depth (default 3)
+        #[arg(short, long, default_value_t = 3)]
+        depth: usize,
+    },
+
     /// Ping the resident hgbd daemon and measure UDS roundtrip latency
     Ping,
 
@@ -4078,6 +4097,92 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
                 Err(e) => {
                     eprintln!("{} Search failed: {}", "✖".red().bold(), e);
                     std::process::exit(1);
+                }
+            }
+            Ok(())
+        }
+        Commands::InspectFolder { path, storage, network, xdg, depth } => {
+            println!("{}", "📁 Inspecting Local & Network Filesystem Infrastructure...".cyan().bold());
+            let format_bytes = |bytes: u64| -> String {
+                const KB: u64 = 1024;
+                const MB: u64 = KB * 1024;
+                const GB: u64 = MB * 1024;
+                if bytes >= GB {
+                    format!("{:.1} GB", bytes as f64 / GB as f64)
+                } else if bytes >= MB {
+                    format!("{:.1} MB", bytes as f64 / MB as f64)
+                } else if bytes >= KB {
+                    format!("{:.1} KB", bytes as f64 / KB as f64)
+                } else {
+                    format!("{bytes} B")
+                }
+            };
+
+            let show_all = !storage && !network && !xdg && path.is_none();
+
+            if storage || show_all {
+                let drives = hgb_core::FolderInspectorEngine::discover_storage_drives();
+                println!("{}", format!("\n💾 Discovered Storage Partitions ({}):", drives.len()).magenta().bold());
+                for d in &drives {
+                    let space = match (d.total_bytes, d.available_bytes) {
+                        (Some(tot), Some(avail)) => format!(" (Avail: {} / Total: {})", format_bytes(avail), format_bytes(tot)),
+                        _ => String::new(),
+                    };
+                    println!("  • {} on {} [{}] {}", d.device.cyan(), d.mount_point.display().to_string().yellow(), d.fstype, space);
+                }
+            }
+
+            if network || show_all {
+                let shares = hgb_core::FolderInspectorEngine::discover_network_shares();
+                println!("{}", format!("\n🌐 Mounted Network Shares ({}):", shares.len()).blue().bold());
+                if shares.is_empty() {
+                    println!("  (No active CIFS/NFS/SSHFS shares mounted)");
+                } else {
+                    for s in &shares {
+                        println!("  • {} -> {} [{}]", s.device_or_remote.cyan(), s.mount_point.display().to_string().yellow(), s.fstype);
+                    }
+                }
+
+                let comps = hgb_core::FolderInspectorEngine::discover_network_computers(true, 350);
+                println!("{}", format!("\n🖥️  Discovered Network Computers ({}):", comps.len()).blue().bold());
+                if comps.is_empty() {
+                    println!("  (No active ARP neighbor computers detected)");
+                } else {
+                    for c in &comps {
+                        let smb = match c.smb_open {
+                            Some(true) => "SMB: Open".green(),
+                            Some(false) => "SMB: Closed".dimmed(),
+                            None => "SMB: ?".normal(),
+                        };
+                        let host = c.hostname.as_deref().unwrap_or("Unknown Host");
+                        let mac = c.mac_address.as_deref().unwrap_or("");
+                        println!("  • IP: {:<16} Host: {:<20} MAC: {:<18} [{}]", c.ip_address.green(), host, mac.dimmed(), smb);
+                    }
+                }
+            }
+
+            if xdg || show_all {
+                let dirs = hgb_core::FolderInspectorEngine::discover_xdg_directories();
+                println!("{}", format!("\n📂 Standard User Directories ({}):", dirs.len()).green().bold());
+                for (lbl, p) in &dirs {
+                    println!("  • {:<12}: {}", lbl.green(), p.display());
+                }
+            }
+
+            let target_path = path.unwrap_or_else(|| ".".to_string());
+            let p = std::path::PathBuf::from(&target_path);
+            if p.is_dir() {
+                let config = hgb_core::FolderInspectionConfig {
+                    max_depth: depth,
+                    ..Default::default()
+                };
+                println!("{}", format!("\n🌳 Directory Tree: {}", p.display()).cyan().bold());
+                match hgb_core::FolderInspectorEngine::inspect_directory(&p, &config) {
+                    Ok((tree, summary)) => {
+                        println!("{tree}");
+                        println!("\n{}", format!("Summary: {} files, {} directories, {}", summary.total_files, summary.total_dirs, format_bytes(summary.total_bytes)).green());
+                    }
+                    Err(e) => eprintln!("  ✖ Error inspecting directory: {e}"),
                 }
             }
             Ok(())
