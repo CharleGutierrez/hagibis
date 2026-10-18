@@ -2800,6 +2800,37 @@ impl HagibisDaemon {
                     Err(e) => HgbResponse::Error(e.to_string()),
                 }
             }
+            // 126. Hybrid Dual-Brain Orchestration Engine
+            HgbRequest::HybridExecute {
+                task,
+                target_path,
+                verification_command,
+                force_local,
+                force_codex,
+                consent_given,
+            } => {
+                let ws_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                let mut engine = hgb_core::HybridOrchestrationEngine::new(ws_dir);
+                match engine.execute_hybrid_task(
+                    &task,
+                    target_path.as_deref(),
+                    verification_command.as_deref(),
+                    force_local,
+                    force_codex,
+                    consent_given,
+                ).await {
+                    Ok(rep) => HgbResponse::HybridExecuteResult(rep),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            HgbRequest::HybridScorecard => {
+                let ws_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                let engine = hgb_core::HybridOrchestrationEngine::new(ws_dir);
+                match engine.get_scorecard() {
+                    Ok(scorecard) => HgbResponse::HybridScorecardResult(scorecard),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
         }
     }
 }

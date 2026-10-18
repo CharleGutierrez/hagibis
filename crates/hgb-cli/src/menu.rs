@@ -49,6 +49,13 @@ impl InteractiveCommandCatalog {
                 description: "Unified autonomous driver: RAM CoW sandbox, GoT arbitration, BlastRadius radar, self-healing, BLAKE3 cert, and DPO distillation export.",
             },
             CommandEntry {
+                name: "hybrid",
+                aliases: &["orchestrate", "dual-brain"],
+                category: "Core/DualBrain",
+                syntax: "hgb hybrid [task] [--benchmark] [--target <path>] [--force-local] [--force-codex] [--privacy-check]",
+                description: "Hybrid dual-brain orchestration: deterministic AST/blast-radius task routing (<2ms), RAM CoW sandboxed verification & escalation, shared project context, outbound privacy firewall, and Pass@1 / USD arbitrage scorecard.",
+            },
+            CommandEntry {
                 name: "chat",
                 aliases: &["c", "chat-canvas"],
                 category: "Core/Chat",

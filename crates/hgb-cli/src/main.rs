@@ -2646,6 +2646,41 @@ enum Commands {
         #[arg(long)]
         generate_token: bool,
     },
+
+    /// Hybrid Dual-Brain Orchestration Engine (Clear Routing, Sandboxed Quality Verification, Escalation, Shared Context, Privacy Firewall & Scorecards)
+    #[command(alias = "orchestrate", alias = "dual-brain")]
+    Hybrid {
+        /// Task specification or prompt to execute
+        task: Option<String>,
+
+        /// Display the performance and cost-arbitrage scorecard
+        #[arg(long, alias = "scorecard")]
+        benchmark: bool,
+
+        /// Specific target file path to inspect, modify, or verify
+        #[arg(short, long)]
+        target: Option<String>,
+
+        /// Force execution on Local Edge tier (Ollama / GGUF)
+        #[arg(long)]
+        force_local: bool,
+
+        /// Force execution on Frontier Codex tier
+        #[arg(long)]
+        force_codex: bool,
+
+        /// Run privacy firewall and outbound data sovereignty audit only
+        #[arg(long)]
+        privacy_check: bool,
+
+        /// Custom deterministic compiler or verification command (e.g. "cargo check", "cargo test")
+        #[arg(long)]
+        check_command: Option<String>,
+
+        /// Grant explicit consent to outbound remote API transmission of sensitive code
+        #[arg(long)]
+        consent: bool,
+    },
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -7607,6 +7642,105 @@ async fn test_calc() { assert!(calculate(5)); }".to_string()
             handle_diff_ui(original, modified, side_by_side, interactive).await?;
             Ok(())
         },
+        Commands::Hybrid {
+            task,
+            benchmark,
+            target,
+            force_local,
+            force_codex,
+            privacy_check,
+            check_command,
+            consent,
+        } => {
+            let ws_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let mut engine = hgb_core::HybridOrchestrationEngine::new(&ws_dir);
+
+            if benchmark {
+                let scorecard = engine.get_scorecard()?;
+                println!("{}", scorecard.render_terminal_table());
+                return Ok(());
+            }
+
+            let task_str = task.unwrap_or_else(|| {
+                eprintln!("{}", "Error: Task prompt is required. Use --benchmark to view scorecards or specify a task.".red());
+                std::process::exit(1);
+            });
+
+            if privacy_check {
+                println!("{}", "🛡️  Running Outbound Privacy Firewall & Data Sovereignty Audit...".cyan().bold());
+                let target_files = target.clone().map(|t| vec![t]).unwrap_or_default();
+                let outcome = engine.firewall.audit_outbound(&task_str, &target_files, consent);
+                match outcome {
+                    hgb_core::PrivacyAuditOutcome::Clean => {
+                        println!("  {} Egress payload is 100% clean of sensitive keys and credentials.", "✔ PASS:".green().bold());
+                    }
+                    hgb_core::PrivacyAuditOutcome::Redacted { findings_count, redacted_categories, sanitized_payload } => {
+                        println!("  {} Redacted {} secret(s): {:?}", "⚠ SANITIZED:".yellow().bold(), findings_count, redacted_categories);
+                        println!("  Sanitized preview:\n{}", sanitized_payload);
+                    }
+                    hgb_core::PrivacyAuditOutcome::ConsentRequired { reason, sensitive_files } => {
+                        println!("  {} {}", "✋ CONSENT REQUIRED:".yellow().bold(), reason);
+                        println!("  Sensitive targets: {:?}", sensitive_files);
+                        println!("  Rerun with `--consent` to authorize outbound transmission.");
+                    }
+                    hgb_core::PrivacyAuditOutcome::Blocked { reason, violations } => {
+                        println!("  {} {}", "⛔ BLOCKED:".red().bold(), reason);
+                        for v in violations {
+                            println!("    - {}", v.red());
+                        }
+                    }
+                }
+                return Ok(());
+            }
+
+            println!("{}", "⚡ Hagibis Hybrid Dual-Brain Orchestrator".cyan().bold());
+            println!("  Task: {}", task_str.bold());
+            if let Some(ref t) = target {
+                println!("  Target: {}", t.yellow());
+            }
+
+            // 1. Task Routing Step
+            let target_path = target.as_ref().map(std::path::Path::new);
+            let routing = engine.route_task(&task_str, target_path, force_local, force_codex);
+            let tier_colored = match routing.tier {
+                hgb_core::TaskRoutingTier::LocalEdge => "LOCAL_EDGE (Ollama/GGUF)".green().bold(),
+                hgb_core::TaskRoutingTier::FrontierCodex => "FRONTIER_CODEX (High Capacity)".blue().bold(),
+            };
+            println!("  🎯 Route Tier: {} (decision latency: {}µs)", tier_colored, routing.latency_us);
+            println!("  📋 Routing Logic: {}", routing.reason.dimmed());
+
+            // 2. Execution Step (Isolated RAM CoW Sandbox + Escalation)
+            println!("  🔄 Executing in RAM CoW overlay sandbox...");
+            let report = engine
+                .execute_hybrid_task(
+                    &task_str,
+                    target.as_deref(),
+                    check_command.as_deref(),
+                    force_local,
+                    force_codex,
+                    consent,
+                )
+                .await?;
+
+            let res_colored = match report.verification_result {
+                hgb_core::HybridVerificationResult::PassedFirstTry => "PASSED_FIRST_TRY (Local Edge)".green().bold(),
+                hgb_core::HybridVerificationResult::PassedAfterEscalation => "PASSED_AFTER_ESCALATION (Frontier Codex Self-Healed)".yellow().bold(),
+                hgb_core::HybridVerificationResult::Failed => "FAILED".red().bold(),
+                hgb_core::HybridVerificationResult::Skipped => "SKIPPED".dimmed(),
+            };
+
+            println!("\n{}", "─── Execution Telemetry & Outcome ───".dimmed());
+            println!("  Verification: {}", res_colored);
+            println!("  Summary: {}", report.output_summary);
+            if !report.files_modified.is_empty() {
+                println!("  Files Modified (Committed): {:?}", report.files_modified);
+            }
+            println!("  Duration: Local: {}ms | Remote: {}ms | Total: {}ms", report.local_duration_ms, report.remote_duration_ms, report.total_duration_ms);
+            println!("  Cost Arbitrage: Spent: ${:.4} | Cloud Hypothetical: ${:.4} | Net Saved: ${:.4}",
+                report.actual_cost_usd, report.hypothetical_cloud_cost_usd, report.usd_saved);
+
+            Ok(())
+        }
         Commands::Ide { .. } => unreachable!(),
     }
 }

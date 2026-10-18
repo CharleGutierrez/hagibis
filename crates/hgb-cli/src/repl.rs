@@ -4799,6 +4799,17 @@ impl HagibisRepl {
                 println!("{}", "🎨 STUDIO VISUAL PATCH 🎨".bold().magenta());
                 println!("  Result:           {}", msg.green());
             }
+            HgbResponse::HybridExecuteResult(r) => {
+                println!("{}", "⚡ HYBRID DUAL-BRAIN ORCHESTRATOR ⚡".bold().cyan());
+                println!("  Task:             {}", r.task);
+                println!("  Tier:             {}", r.routing_decision.tier);
+                println!("  Verification:     {}", r.verification_result);
+                println!("  Summary:          {}", r.output_summary);
+                println!("  USD Saved:        ${:.4}", r.usd_saved);
+            }
+            HgbResponse::HybridScorecardResult(s) => {
+                println!("{}", s.render_terminal_table());
+            }
         }
     }
 

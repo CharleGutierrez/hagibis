@@ -1115,6 +1115,16 @@ pub enum HgbRequest {
     StudioApplyPatch {
         patch: crate::visual_canvas_studio::VisualStudioSyncPatch,
     },
+    // 126. Hybrid Dual-Brain Orchestration Engine
+    HybridExecute {
+        task: String,
+        target_path: Option<String>,
+        verification_command: Option<String>,
+        force_local: bool,
+        force_codex: bool,
+        consent_given: bool,
+    },
+    HybridScorecard,
 }
 
 fn default_two() -> usize {
@@ -1592,6 +1602,9 @@ pub enum HgbResponse {
     // 125. Interactive Visual WYSIWYG Web Canvas Studio
     StudioStartResult(crate::visual_canvas_studio::VisualStudioSessionReport),
     StudioApplyPatchResult(String),
+    // 126. Hybrid Dual-Brain Orchestration Engine
+    HybridExecuteResult(crate::hybrid_orchestrator::HybridExecutionReport),
+    HybridScorecardResult(crate::hybrid_orchestrator::PerformanceScorecard),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
