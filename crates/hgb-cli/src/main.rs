@@ -4105,8 +4105,38 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(())
         }
         Commands::InspectFolder { path, storage, network, xdg, depth, analyze } => {
+            let target_path = path.clone().unwrap_or_else(|| ".".to_string());
+            let home_dir = std::env::var("HOME").ok().map(std::path::PathBuf::from);
+            let raw_p = std::path::PathBuf::from(&target_path);
+
+            // Smart resolution: direct path, home-relative path, or ancestor directory
+            let resolved_p = if raw_p.is_dir() {
+                Some(raw_p)
+            } else if let Some(ref h) = home_dir {
+                let cand = h.join(&target_path);
+                if cand.is_dir() {
+                    Some(cand)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+            .or_else(|| {
+                if let Ok(cwd) = std::env::current_dir() {
+                    for anc in cwd.ancestors() {
+                        if let Some(name) = anc.file_name() {
+                            if name.to_string_lossy().eq_ignore_ascii_case(&target_path) {
+                                return Some(anc.to_path_buf());
+                            }
+                        }
+                    }
+                }
+                None
+            });
+
             if analyze {
-                let target_dir = path.as_deref().map(std::path::Path::new);
+                let target_dir = resolved_p.as_deref();
                 match hgb_core::FolderInspectorEngine::run_comprehensive_analysis(target_dir, true, 350) {
                     Ok(report) => {
                         println!("{}", "🏢 LIVE SYSTEM & NETWORK ARCHITECTURAL ANALYSIS REPORT".cyan().bold());
@@ -4193,9 +4223,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
-            let target_path = path.unwrap_or_else(|| ".".to_string());
-            let p = std::path::PathBuf::from(&target_path);
-            if p.is_dir() {
+            if let Some(ref p) = resolved_p {
                 let config = hgb_core::FolderInspectionConfig {
                     max_depth: depth,
                     ..Default::default()
@@ -4208,6 +4236,8 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     Err(e) => eprintln!("  ✖ Error inspecting directory: {e}"),
                 }
+            } else {
+                eprintln!("  ✖ Path '{}' was not found or is not a directory.", target_path);
             }
             Ok(())
         }

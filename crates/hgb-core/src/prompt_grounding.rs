@@ -234,7 +234,48 @@ Analyze the live data provided above immediately and thoroughly without hesitati
 
         let home_dir = std::env::var("HOME").ok().map(PathBuf::from);
 
-        // Word tokens splitting on whitespace, quotes, parentheses, brackets, or @
+        // 1. Quoted file paths: "...", '...', `...` (supports file paths with spaces)
+        let quoted_re = regex::Regex::new(r#"["'`]{1}([^"'`\r\n]+)["'`]{1}"#).unwrap();
+        for caps in quoted_re.captures_iter(prompt) {
+            let raw = caps[1].trim();
+            if raw.is_empty() {
+                continue;
+            }
+            let p_raw = Path::new(raw);
+            let resolved = if p_raw.is_absolute() && p_raw.is_file() {
+                Some(p_raw.to_path_buf())
+            } else if let Some(stripped) = raw.strip_prefix("~/") {
+                home_dir.as_ref().map(|h| h.join(stripped)).filter(|p| p.is_file())
+            } else {
+                let ws_p = workspace_root.join(raw);
+                if ws_p.is_file() {
+                    Some(ws_p)
+                } else if let Some(ref h) = home_dir {
+                    let home_p = h.join(raw);
+                    if home_p.is_file() {
+                        Some(home_p)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            };
+
+            if let Some(p) = resolved {
+                if !FolderInspectorEngine::is_sensitive_target(&p) {
+                    if let Ok(canon) = p.canonicalize() {
+                        if seen.insert(canon) {
+                            candidates.push(p);
+                        }
+                    } else if seen.insert(p.clone()) {
+                        candidates.push(p);
+                    }
+                }
+            }
+        }
+
+        // 2. Word tokens splitting on whitespace, quotes, parentheses, brackets, or @
         let tokens: Vec<&str> = prompt
             .split(|c: char| c.is_whitespace() || c == '\'' || c == '"' || c == '`' || c == '(' || c == ')' || c == '[' || c == ']' || c == '<' || c == '>')
             .map(|s| s.trim_matches(|c: char| c == ',' || c == ';' || c == ':' || c == '?' || c == '!' || c == '.' || c == '@'))
@@ -735,7 +776,11 @@ Analyze the live data provided above immediately and thoroughly without hesitati
         let mut combined = context_blocks.join("\n\n");
         let budget_chars = max_tokens * 4;
         if combined.len() > budget_chars {
-            combined.truncate(budget_chars);
+            let mut cut = budget_chars;
+            while cut > 0 && !combined.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            combined.truncate(cut);
             combined.push_str("\n... [Truncated to stay within token budget]\n");
         }
 
@@ -823,7 +868,11 @@ Analyze the live data provided above immediately and thoroughly without hesitati
 
         let budget_chars = max_tokens * 4;
         if output.len() > budget_chars {
-            output.truncate(budget_chars);
+            let mut cut = budget_chars;
+            while cut > 0 && !output.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            output.truncate(cut);
             output.push_str("\n... [Truncated to stay within token budget]\n\n");
             output.push_str(Self::AUTHORITATIVE_DIRECTIVE);
         }

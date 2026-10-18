@@ -288,10 +288,13 @@ impl Default for FolderInspectionConfig {
 pub struct FolderInspectorEngine;
 
 impl FolderInspectorEngine {
-    /// Detect target paths and implicit intent from natural language prompts
+    /// Detect target paths and implicit intent from natural language prompts,
+    /// supporting folder names and paths with spaces (quoted or unquoted, e.g. "My AI Project").
     pub fn detect_targets(workspace_root: &Path, prompt: &str) -> Vec<TargetKind> {
         let mut targets = Vec::new();
         let mut seen = HashSet::new();
+        let home_dir = std::env::var("HOME").ok().map(PathBuf::from);
+        let cwd_opt = std::env::current_dir().ok();
 
         // 1. Network URIs (smb://, nfs://, cifs://, file://, \\server\share)
         let net_uri_re = Regex::new(r#"(?i)\b(smb|cifs|nfs|nfs4|file)://[^\s"'<>]+"#).unwrap();
@@ -310,39 +313,172 @@ impl FolderInspectorEngine {
             }
         }
 
-        // 2. Tilde paths (~/...)
-        let tilde_re = Regex::new(r#"(?:^|[\s"'`\(\[\{])(~[a-zA-Z0-9_\.\-/]*)"#).unwrap();
-        let home_dir = std::env::var("HOME").ok().map(PathBuf::from);
-        for caps in tilde_re.captures_iter(prompt) {
-            let raw = caps[1].to_string();
-            if let Some(ref home) = home_dir {
-                let expanded = if raw == "~" {
-                    home.clone()
-                } else if let Some(stripped) = raw.strip_prefix("~/") {
-                    home.join(stripped)
-                } else {
+        // 2. Explicit Quoted Strings (supports folders and paths with spaces like "My AI Project" or '~/My AI Project')
+        let quoted_re = Regex::new(r#"["'`]{1}([^"'`\r\n]+)["'`]{1}"#).unwrap();
+        for caps in quoted_re.captures_iter(prompt) {
+            let raw = caps[1].trim();
+            if raw.is_empty() {
+                continue;
+            }
+
+            // Check if quoted string is an absolute path or tilde path
+            let expanded_path = if let Some(stripped) = raw.strip_prefix("~/") {
+                home_dir.as_ref().map(|h| h.join(stripped))
+            } else if raw == "~" {
+                home_dir.clone()
+            } else if raw.starts_with('/') {
+                Some(PathBuf::from(raw))
+            } else {
+                None
+            };
+
+            if let Some(ref p) = expanded_path {
+                if (p.is_dir() || Self::is_standard_system_dir(p)) && seen.insert(p.to_string_lossy().to_string()) {
+                    targets.push(TargetKind::LocalDirectory(p.clone()));
                     continue;
-                };
-                if expanded.exists() && seen.insert(expanded.to_string_lossy().to_string()) {
-                    targets.push(TargetKind::LocalDirectory(expanded));
+                }
+            }
+
+            // Check relative to workspace root
+            let ws_cand = workspace_root.join(raw);
+            if ws_cand.is_dir() && seen.insert(ws_cand.to_string_lossy().to_string()) {
+                targets.push(TargetKind::LocalDirectory(ws_cand));
+                continue;
+            }
+
+            // Check relative to home directory
+            if let Some(ref h) = home_dir {
+                let home_cand = h.join(raw);
+                if home_cand.is_dir() && seen.insert(home_cand.to_string_lossy().to_string()) {
+                    targets.push(TargetKind::LocalDirectory(home_cand));
+                    continue;
+                }
+            }
+
+            // Check relative to current working directory
+            if let Some(ref cwd) = cwd_opt {
+                let cwd_cand = cwd.join(raw);
+                if cwd_cand.is_dir() && seen.insert(cwd_cand.to_string_lossy().to_string()) {
+                    targets.push(TargetKind::LocalDirectory(cwd_cand));
+                    continue;
                 }
             }
         }
 
-        // 3. Absolute POSIX paths (/...)
-        let abs_re = Regex::new(r#"(?:^|[\s"'`\(\[\{])(/([a-zA-Z0-9_\.\-]+/)*[a-zA-Z0-9_\.\-]+/?)"#).unwrap();
-        for caps in abs_re.captures_iter(prompt) {
-            let p_str = caps[1].to_string();
-            let p = PathBuf::from(&p_str);
-            // Ignore single slash or common division artifacts
-            if p_str.len() > 1 && (p.is_dir() || Self::is_standard_system_dir(&p)) {
-                if seen.insert(p.to_string_lossy().to_string()) {
-                    targets.push(TargetKind::LocalDirectory(p));
+        // 3. Absolute POSIX paths (/...) with greedy lookahead for spaces (e.g. /home/toshiba/My AI Project)
+        let abs_start_re = Regex::new(r#"(?:^|[\s"'`\(\[\{])(/[^"'`\(\[\{\r\n]+)"#).unwrap();
+        for caps in abs_start_re.captures_iter(prompt) {
+            let raw_segment = caps[1].trim();
+            let words: Vec<&str> = raw_segment.split_whitespace().collect();
+            for k in (1..=words.len().min(8)).rev() {
+                let candidate_str = words[..k].join(" ");
+                let clean_cand = candidate_str.trim_matches(|c| c == ',' || c == ';' || c == ':' || c == '.' || c == '"' || c == '\'' || c == '`' || c == ')' || c == ']');
+                let p = PathBuf::from(clean_cand);
+                let is_valid = p.is_dir() || (k == 1 && clean_cand.len() > 1 && Self::is_standard_system_dir(&p));
+                if is_valid {
+                    if seen.insert(p.to_string_lossy().to_string()) {
+                        targets.push(TargetKind::LocalDirectory(p));
+                        break;
+                    }
                 }
             }
         }
 
-        // 4. Relative paths (./..., ../..., or relative to workspace)
+        // 4. Tilde paths (~/...) with greedy lookahead for spaces (e.g. ~/My AI Project)
+        let tilde_start_re = Regex::new(r#"(?:^|[\s"'`\(\[\{])(~[^"'`\(\[\{\r\n]*)"#).unwrap();
+        if let Some(ref home) = home_dir {
+            for caps in tilde_start_re.captures_iter(prompt) {
+                let raw_segment = caps[1].trim();
+                let words: Vec<&str> = raw_segment.split_whitespace().collect();
+                for k in (1..=words.len().min(8)).rev() {
+                    let candidate_str = words[..k].join(" ");
+                    let clean_cand = candidate_str.trim_matches(|c| c == ',' || c == ';' || c == ':' || c == '.' || c == '"' || c == '\'' || c == '`' || c == ')' || c == ']');
+                    let expanded = if clean_cand == "~" {
+                        home.clone()
+                    } else if let Some(stripped) = clean_cand.strip_prefix("~/") {
+                        home.join(stripped)
+                    } else {
+                        continue;
+                    };
+                    if expanded.is_dir() && seen.insert(expanded.to_string_lossy().to_string()) {
+                        targets.push(TargetKind::LocalDirectory(expanded));
+                        break;
+                    }
+                }
+            }
+        }
+
+        // 5. Natural language trigger words: "folder <name>", "directory <name>", "dir <name>", "path <name>", "in <name>"
+        let trigger_re = Regex::new(r#"(?i)\b(?:folder|directory|dir|path|under|in)\s+([^,\r\n\.;\?!]+)"#).unwrap();
+        for caps in trigger_re.captures_iter(prompt) {
+            let after_trigger = caps[1].trim();
+            let words: Vec<&str> = after_trigger.split_whitespace().collect();
+            for k in (1..=words.len().min(6)).rev() {
+                let raw_cand = words[..k].join(" ");
+                let clean_cand = raw_cand.trim_matches(|c| c == '"' || c == '\'' || c == '`' || c == '(' || c == ')' || c == '[' || c == ']');
+                if clean_cand.is_empty() {
+                    continue;
+                }
+
+                let ws_cand = workspace_root.join(clean_cand);
+                if ws_cand.is_dir() && seen.insert(ws_cand.to_string_lossy().to_string()) {
+                    targets.push(TargetKind::LocalDirectory(ws_cand));
+                    break;
+                }
+
+                if let Some(ref h) = home_dir {
+                    let home_cand = h.join(clean_cand);
+                    if home_cand.is_dir() && seen.insert(home_cand.to_string_lossy().to_string()) {
+                        targets.push(TargetKind::LocalDirectory(home_cand));
+                        break;
+                    }
+                }
+
+                if let Some(ref cwd) = cwd_opt {
+                    let cwd_cand = cwd.join(clean_cand);
+                    if cwd_cand.is_dir() && seen.insert(cwd_cand.to_string_lossy().to_string()) {
+                        targets.push(TargetKind::LocalDirectory(cwd_cand));
+                        break;
+                    }
+                }
+            }
+        }
+
+        // 6. Direct scan for existing directories with spaces in workspace root, home dir, and cwd
+        // If a directory contains spaces (e.g. "My AI Project") and the prompt mentions its name,
+        // automatically inspect it!
+        let mut scan_parents = vec![workspace_root.to_path_buf()];
+        if let Some(ref h) = home_dir {
+            if h != workspace_root {
+                scan_parents.push(h.clone());
+            }
+        }
+        if let Some(ref cwd) = cwd_opt {
+            if cwd != workspace_root && Some(cwd) != home_dir.as_ref() {
+                scan_parents.push(cwd.clone());
+            }
+        }
+
+        let prompt_lower = prompt.to_lowercase();
+        for parent in scan_parents {
+            if let Ok(entries) = fs::read_dir(&parent) {
+                for entry in entries.flatten() {
+                    if let Ok(ft) = entry.file_type() {
+                        if ft.is_dir() {
+                            let name = entry.file_name().to_string_lossy().to_string();
+                            if name.contains(' ') && prompt_lower.contains(&name.to_lowercase()) {
+                                let dir_path = entry.path();
+                                if seen.insert(dir_path.to_string_lossy().to_string()) {
+                                    targets.push(TargetKind::LocalDirectory(dir_path));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 7. Relative paths (./..., ../..., or relative to workspace)
         let rel_re = Regex::new(r#"(?:^|[\s"'`\(\[\{])((\.{1,2}/|[a-zA-Z0-9_\-]+/)[a-zA-Z0-9_\.\-/]*)"#).unwrap();
         for caps in rel_re.captures_iter(prompt) {
             let raw = caps[1].trim_matches(|c| c == '\'' || c == '"' || c == '`');
@@ -1039,7 +1175,11 @@ impl FolderInspectorEngine {
         let mut combined_context = context_blocks.join("\n");
         let budget_chars = max_tokens * 4;
         if combined_context.len() > budget_chars {
-            combined_context.truncate(budget_chars);
+            let mut cut = budget_chars;
+            while cut > 0 && !combined_context.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            combined_context.truncate(cut);
             combined_context.push_str("\n... [Truncated to stay within token budget]\n");
         }
 
@@ -2148,6 +2288,59 @@ mod tests {
         let md = FolderInspectorEngine::format_analysis_markdown(&comp_rep);
         assert!(md.contains("# 🏢 Comprehensive System & Network Architectural Report"));
         assert!(md.contains("System Health Verdict"));
+    }
+
+    #[test]
+    fn test_detect_folder_with_spaces() {
+        let temp_base = std::env::temp_dir().join("hgb_spaces_test");
+        let spaced_folder = temp_base.join("My AI Project");
+        let _ = fs::create_dir_all(&spaced_folder);
+
+        // 1. Quoted folder name
+        let prompt_quoted = format!("inspect \"{}\" and storage", spaced_folder.display());
+        let targets1 = FolderInspectorEngine::detect_targets(&temp_base, &prompt_quoted);
+        assert!(
+            targets1.iter().any(|t| match t {
+                TargetKind::LocalDirectory(p) => p == &spaced_folder,
+                _ => false,
+            }),
+            "Expected quoted folder with spaces to be detected"
+        );
+
+        // 2. Unquoted path with spaces
+        let prompt_unquoted = format!("check path {} now", spaced_folder.display());
+        let targets2 = FolderInspectorEngine::detect_targets(&temp_base, &prompt_unquoted);
+        assert!(
+            targets2.iter().any(|t| match t {
+                TargetKind::LocalDirectory(p) => p == &spaced_folder,
+                _ => false,
+            }),
+            "Expected unquoted path with spaces to be detected"
+        );
+
+        // 3. Trigger word with relative folder name with spaces
+        let prompt_trigger = "please inspect folder My AI Project and check health";
+        let targets3 = FolderInspectorEngine::detect_targets(&temp_base, prompt_trigger);
+        assert!(
+            targets3.iter().any(|t| match t {
+                TargetKind::LocalDirectory(p) => p == &spaced_folder,
+                _ => false,
+            }),
+            "Expected folder with spaces via trigger to be detected"
+        );
+
+        // 4. Subdirectory scan with spaces
+        let prompt_sub = "what is going on in My AI Project today?";
+        let targets4 = FolderInspectorEngine::detect_targets(&temp_base, prompt_sub);
+        assert!(
+            targets4.iter().any(|t| match t {
+                TargetKind::LocalDirectory(p) => p == &spaced_folder,
+                _ => false,
+            }),
+            "Expected directory with spaces via direct name to be detected"
+        );
+
+        let _ = fs::remove_dir_all(&temp_base);
     }
 }
 
