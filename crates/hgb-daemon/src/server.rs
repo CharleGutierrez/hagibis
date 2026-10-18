@@ -247,28 +247,18 @@ impl HagibisDaemon {
 
                 let mut final_prompt = prompt.clone();
 
-                // Live Web Auto-Grounding:
-                // If user prompt contains web URLs, fetch live web page content and inject clean markdown
-                let browser = hgb_core::WebBrowserEngine::default();
-                if let Ok((augmented, fetched)) = browser.augment_prompt_with_urls(&final_prompt, 1500).await {
-                    if !fetched.is_empty() {
+                // Universal Prompt Auto-Grounding:
+                // Concurrently inspects web URLs, folders, storage partitions, LAN hosts, local files, and host system specs
+                let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                if let Ok((augmented, report)) = hgb_core::UniversalPromptGrounder::ground_prompt(&final_prompt, &cwd, 3500).await {
+                    if report.estimated_total_tokens > 0 {
                         eprintln!(
-                            "🌐 [Web Grounding] Injected {} live web source(s) into prompt: {}",
-                            fetched.len(),
-                            fetched.iter().map(|p| p.url.as_str()).collect::<Vec<_>>().join(", ")
-                        );
-                        final_prompt = augmented;
-                    }
-                }
-
-                // Local & Network Folder Auto-Grounding:
-                // If user prompt references local directories, network shares, storage drives, or ARP hosts
-                if let Ok((augmented, reports)) = hgb_core::FolderInspectorEngine::augment_prompt_with_folders(&final_prompt, 2000) {
-                    if !reports.is_empty() {
-                        eprintln!(
-                            "📁 [Folder Grounding] Injected {} inspected target(s) into prompt: {}",
-                            reports.len(),
-                            reports.iter().map(|r| r.display_title.as_str()).collect::<Vec<_>>().join(", ")
+                            "⚡ [Universal Grounding] Injected {} web source(s), {} inspected target(s), {} file preview(s), specs: {} (est. {} tokens)",
+                            report.web_sources.len(),
+                            report.inspected_targets.len(),
+                            report.file_previews.len(),
+                            report.system_spec.is_some(),
+                            report.estimated_total_tokens
                         );
                         final_prompt = augmented;
                     }

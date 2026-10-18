@@ -828,3 +828,10 @@ pub use folder_inspector::{
     StorageDriveAnalysis, StorageDriveInfo, TargetKind,
 };
 
+// Universal Prompt Auto-Grounding & Analytical Context Engine exports
+pub mod prompt_grounding;
+pub use prompt_grounding::{
+    GroundingContextReport, InspectedFileTarget, SystemSpecsSummary, UniversalPromptGrounder,
+};
+
+

@@ -3829,6 +3829,18 @@ pub async fn execute_prompt_with_history(
         model_pill
     };
 
+    // Universal Prompt Auto-Grounding: concurrently inspect web links, computer folders, storage, hardware specs, and local files
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let prompt = if let Ok((augmented, report)) = hgb_core::UniversalPromptGrounder::ground_prompt(&prompt, &cwd, 3500).await {
+        if report.estimated_total_tokens > 0 {
+            augmented
+        } else {
+            prompt
+        }
+    } else {
+        prompt
+    };
+
     // 1. Try Unix Domain Socket IPC to resident hgbd daemon
     let socket_path = std::env::var("HGB_SOCKET")
         .map(std::path::PathBuf::from)
@@ -3891,33 +3903,11 @@ pub async fn execute_prompt_with_history(
         }
     }
 
-    // Ground prompt with live web link content if URLs are detected in prompt
-    let browser = hgb_core::WebBrowserEngine::default();
-    let prompt = if let Ok((augmented, fetched)) = browser.augment_prompt_with_urls(&prompt, 1500).await {
-        if !fetched.is_empty() {
-            augmented
-        } else {
-            prompt
-        }
-    } else {
-        prompt
-    };
-
-    // Ground prompt with local and network folder context if directories, storage drives, or network computers are referenced
-    let prompt = if let Ok((augmented, reports)) = hgb_core::FolderInspectorEngine::augment_prompt_with_folders(&prompt, 2000) {
-        if !reports.is_empty() {
-            augmented
-        } else {
-            prompt
-        }
-    } else {
-        prompt
-    };
-
     // Common system instructions enabling autonomous ReAct tools across all models
     let system_instructions = "\
 You are Hagibis (hgb), an elite Systems Rust & Autonomous AI Agent runtime.
-You have access to live tools: run_command, view_file, write_to_file, replace_file_content, grep_search, find_by_name, list_dir, browse_web, search_web, record_memory, search_memory.
+You have access to live tools: run_command, view_file, write_to_file, replace_file_content, grep_search, find_by_name, list_dir, browse_web, search_web, record_memory, search_memory, inspect_filesystem_and_network.
+You are strictly prohibited from stating that you cannot access external links, view local files, or inspect computer folders and network devices.
 When you need to execute an action or gather info, emit:
 ```tool_call
 {
