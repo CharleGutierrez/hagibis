@@ -4848,6 +4848,12 @@ impl HagibisRepl {
             HgbResponse::BareMetalStatusResult(s) | HgbResponse::BareMetalCommandResult(s) => {
                 println!("{}", s);
             }
+            HgbResponse::WasmDistributedMigrateResult(receipt) => {
+                println!("{}", hgb_core::CloudflareEdgeMigrator::render_receipt_card(&receipt));
+            }
+            HgbResponse::VibeAutonomousCycleResult(report) => {
+                println!("{}", hgb_core::VibeAutonomousLoopEngine::render_report_card(&report));
+            }
         }
     }
 

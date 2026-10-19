@@ -1156,6 +1156,16 @@ pub enum HgbRequest {
     BareMetalCommand {
         profile: String,
     },
+    // 134. Stateful WebAssembly Distributed Sync
+    WasmDistributedMigrate {
+        target_node: String,
+        package_bundle: bool,
+    },
+    // 135. Autonomous Vibe Coding Agent Loop
+    VibeAutonomousCycle {
+        auto_patch: bool,
+        run_tests: bool,
+    },
 }
 
 fn default_two() -> usize {
@@ -1651,6 +1661,10 @@ pub enum HgbResponse {
     // 133. Bare-Metal Kernel & Dynatune Performance Bridge
     BareMetalStatusResult(String),
     BareMetalCommandResult(String),
+    // 134. Stateful WebAssembly Distributed Sync
+    WasmDistributedMigrateResult(crate::wasm_distributed_sync::WasmMigrationReceipt),
+    // 135. Autonomous Vibe Coding Agent Loop
+    VibeAutonomousCycleResult(crate::vibe_autonomous_loop::VibeCycleReport),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

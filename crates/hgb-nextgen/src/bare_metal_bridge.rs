@@ -277,6 +277,15 @@ pub struct GovernorGuard {
     bridge: std::sync::Arc<BareMetalPerformanceBridge>,
 }
 
+impl GovernorGuard {
+    /// Acquire performance mode guard immediately
+    pub fn acquire() -> Self {
+        let bridge = std::sync::Arc::new(BareMetalPerformanceBridge::new());
+        let _ = bridge.command_governor_profile(KernelProfile::Performance);
+        Self { bridge }
+    }
+}
+
 impl Drop for GovernorGuard {
     fn drop(&mut self) {
         let _ = self.bridge.command_governor_profile(KernelProfile::Balanced);

@@ -834,8 +834,79 @@ export fn wasm_ping() callconv(.C) u32 {
 }
 
 // ============================================================================
-// 6. UNIT TESTS (RUNNABLE VIA `zig test`)
+// 6. STATEFUL WASM COMPONENT DISTRIBUTED SYNC (WIT BINDINGS)
 // ============================================================================
+
+pub const WasmSyncState = extern struct {
+    magic: u32,             // 0x53594E43 ('SYNC')
+    revision: u64,
+    sequence: u64,
+    instruction_count: u64,
+    status: u32,            // 0: Synchronized, 1: Diverging, 2: Migrating, 3: Halted
+    active_tier: u32,       // 0: LocalDesktop, 1: EdgeWorker, 2: CloudFirecracker
+    dirty_pages: u32,
+    memory_pages: u32,
+};
+
+var global_sync_state = WasmSyncState{
+    .magic = 0x53594E43,
+    .revision = 1,
+    .sequence = 0,
+    .instruction_count = 0,
+    .status = 0,
+    .active_tier = 0,
+    .dirty_pages = 0,
+    .memory_pages = 4,
+};
+
+export fn wasm_checkpoint(out_ptr: [*]u8, max_len: u32) callconv(.C) u32 {
+    const state_size = @sizeOf(WasmSyncState);
+    if (max_len < state_size) return 0;
+
+    global_sync_state.sequence += 1;
+    const dest: *WasmSyncState = @ptrCast(@alignCast(out_ptr));
+    dest.* = global_sync_state;
+    return @as(u32, @intCast(state_size));
+}
+
+export fn wasm_restore_snapshot(in_ptr: [*]const u8, in_len: u32) callconv(.C) u32 {
+    const state_size = @sizeOf(WasmSyncState);
+    if (in_len < state_size) return 0;
+
+    const src: *const WasmSyncState = @ptrCast(@alignCast(in_ptr));
+    if (src.magic != 0x53594E43) return 0;
+
+    global_sync_state = src.*;
+    global_sync_state.revision += 1;
+    global_sync_state.status = 0; // Synchronized
+    return 1;
+}
+
+export fn wasm_sync_status() callconv(.C) u32 {
+    return global_sync_state.status;
+}
+
+export fn wasm_execute_step(instructions: u64) callconv(.C) u64 {
+    global_sync_state.instruction_count += instructions;
+    global_sync_state.sequence += 1;
+    global_sync_state.status = 1; // Diverging
+    return global_sync_state.instruction_count;
+}
+
+// ============================================================================
+// 7. UNIT TESTS (RUNNABLE VIA `zig test`)
+// ============================================================================
+
+test "stateful wasm component checkpoint and restore" {
+    var snap_buf: [128]u8 = undefined;
+    _ = wasm_execute_step(500);
+    const written = wasm_checkpoint(&snap_buf, 128);
+    try std.testing.expect(written > 0);
+
+    const restored = wasm_restore_snapshot(&snap_buf, written);
+    try std.testing.expectEqual(@as(u32, 1), restored);
+    try std.testing.expectEqual(@as(u32, 0), wasm_sync_status());
+}
 
 test "wasm kernel health and version check" {
     try std.testing.expectEqual(@as(u32, 0x00010000), wasm_get_version());
