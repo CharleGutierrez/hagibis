@@ -30,6 +30,7 @@ pub struct DaemonState {
     pub variant_race: hgb_nextgen::VariantRaceEngine,
     pub mcp_orchestrator: Arc<hgb_core::McpHostOrchestrator>,
     pub skill_store: Arc<hgb_storage::SkillStore>,
+    pub semantic_cache: Arc<tokio::sync::RwLock<hgb_storage::SemanticQueryCache>>,
 }
 
 impl DaemonState {
@@ -59,6 +60,13 @@ impl DaemonState {
         let skill_db_path = socket_path.parent().unwrap_or_else(|| Path::new(".")).join("skills.db");
         let skill_store = Arc::new(hgb_storage::SkillStore::new(&skill_db_path).unwrap_or_else(|_| hgb_storage::SkillStore::new(std::env::temp_dir().join("hgb_skills_fallback.db")).expect("fallback skill store")));
 
+        let cache_dir = socket_path.parent().unwrap_or_else(|| Path::new(".")).join("cache");
+        let _ = std::fs::create_dir_all(&cache_dir);
+        let cache_path = cache_dir.join("semantic_cache.json");
+        let semantic_cache = Arc::new(tokio::sync::RwLock::new(
+            hgb_storage::SemanticQueryCache::with_storage(cache_path),
+        ));
+
         Self {
             start_time: std::time::Instant::now(),
             socket_path,
@@ -72,6 +80,7 @@ impl DaemonState {
             variant_race: hgb_nextgen::VariantRaceEngine::new(),
             mcp_orchestrator,
             skill_store,
+            semantic_cache,
         }
     }
 }
@@ -292,6 +301,26 @@ impl HagibisDaemon {
                     let _ = hgb_core::persist_active_model(&req_model);
                 }
 
+                // 3. Pillar 3: Semantic Cache Fast-Path (< 1.5ms)
+                {
+                    let mut sem = state.semantic_cache.write().await;
+                    if let Some(hit) = sem.check_semantic_hit(&final_prompt, &req_model, None) {
+                        let duration_ms = (hit.lookup_latency_us / 1000).max(1);
+                        return HgbResponse::Complete {
+                            output: format!(
+                                "⚡ [SEMANTIC CACHE HIT: {:.1}% similarity | Model: {} | Saved: {}ms]\n\n{}",
+                                hit.similarity_score * 100.0,
+                                hit.entry.model_id,
+                                hit.entry.latency_saved_ms,
+                                hit.entry.response_text
+                            ),
+                            tokens_used: final_prompt.len() / 4,
+                            duration_ms,
+                        };
+                    }
+                }
+
+                let prompt_res: HgbResponse = async {
                 // Dual-Brain Check:
                 // 1. OpenAI Routing (gpt-4o, gpt-4o-mini, o3-mini, o1, etc.)
                 let is_openai = req_model.starts_with("gpt-")
@@ -627,6 +656,16 @@ impl HagibisDaemon {
                     tokens_used: 0,
                     duration_ms: start.elapsed().as_millis() as u64,
                 }
+                }.await;
+
+                if let HgbResponse::Complete { ref output, duration_ms, .. } = prompt_res {
+                    if !output.starts_with("🪽 Hagibis Microkernel: No active model") {
+                        let mut sem = state.semantic_cache.write().await;
+                        sem.record_entry(&final_prompt, &req_model, output, duration_ms);
+                    }
+                }
+
+                prompt_res
             }
             HgbRequest::Verify { target, invariant } => {
                 HgbResponse::Complete {
@@ -2873,6 +2912,35 @@ impl HagibisDaemon {
                     },
                     Err(e) => HgbResponse::Error(format!("WASM Load Error: {}", e)),
                 }
+            }
+            // 131. Dual-Layer Sandbox Execution
+            HgbRequest::DualLayerSandboxRun { workload, shell_command } => {
+                let ws_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                let engine = hgb_core::DualLayerSandboxEngine::new(&ws_dir);
+                match engine.execute_workload_auto(&workload, None, shell_command.as_deref(), None) {
+                    Ok(rep) => HgbResponse::DualLayerSandboxResult(rep),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
+            }
+            // 132. Semantic Query Cache
+            HgbRequest::SemanticCacheStatus => {
+                let sem = state.semantic_cache.read().await;
+                let stats = sem.stats();
+                let output = format!(
+                    "🧠 [Hagibis Semantic Cache Stats]\n• Total Cached Queries: {}\n• Total Cache Hits: {}\n• Cumulative Latency Saved: {}ms ({:.2}s)\n• Cosine Similarity Threshold: {:.2}\n• Storage: {}",
+                    stats.total_entries,
+                    stats.total_hits,
+                    stats.total_latency_saved_ms,
+                    (stats.total_latency_saved_ms as f64) / 1000.0,
+                    stats.similarity_threshold,
+                    stats.cache_file_path.unwrap_or_else(|| "In-Memory Volatile".to_string())
+                );
+                HgbResponse::SemanticCacheStatusResult(output)
+            }
+            HgbRequest::SemanticCacheClear => {
+                let mut sem = state.semantic_cache.write().await;
+                sem.clear();
+                HgbResponse::SemanticCacheStatusResult("✨ Semantic cache cleared successfully.".to_string())
             }
         }
     }

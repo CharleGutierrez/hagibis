@@ -1142,6 +1142,15 @@ pub enum HgbRequest {
         wasm_path: String,
         input: serde_json::Value,
     },
+    // 131. Dual-Layer Sandbox Execution (Wasm + Firecracker MicroVM)
+    DualLayerSandboxRun {
+        workload: String,
+        #[serde(default)]
+        shell_command: Option<String>,
+    },
+    // 132. Semantic Query Cache
+    SemanticCacheStatus,
+    SemanticCacheClear,
 }
 
 fn default_two() -> usize {
@@ -1630,6 +1639,10 @@ pub enum HgbResponse {
     MasterclassGenResult(crate::masterclass_pipeline::MasterclassGenerationReport),
     // 130. Wasm-Kernel Plugin System
     WasmPluginResult(serde_json::Value),
+    // 131. Dual-Layer Sandbox Execution
+    DualLayerSandboxResult(crate::dual_layer_sandbox::DualLayerExecutionReport),
+    // 132. Semantic Query Cache
+    SemanticCacheStatusResult(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

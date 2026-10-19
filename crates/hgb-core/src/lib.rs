@@ -859,7 +859,14 @@ pub use ollama_inference_router::{
 // Dynatune & Linux Kernel Synergy exports
 pub mod dynatune_synergy;
 pub use dynatune_synergy::{
-    DynatuneSynergyEngine, HardwareSafeguardReport, ThermalSeverity, ThermalZoneMetric,
+    DynatuneSynergyEngine, HardwareInferencePolicy, HardwareSafeguardReport, ThermalSeverity,
+    ThermalZoneMetric,
+};
+
+// Dual-Layer Secure Execution Engine (Wasm + Firecracker MicroVM)
+pub mod dual_layer_sandbox;
+pub use dual_layer_sandbox::{
+    DualLayerExecutionReport, DualLayerSandboxEngine, ExecutionTier,
 };
 
 // Masterclass & Documentation Pipeline exports
@@ -873,6 +880,7 @@ pub mod wasm_plugin_kernel;
 pub use wasm_plugin_kernel::{
     WasmPluginHostState, WasmPluginInstance, WasmPluginManager, WasmPluginManifest, WasmToolAdapter,
 };
+
 
 /// Enterprise high-capacity implementation
 pub fn enterprise_architecture_dispatch() -> bool {

@@ -479,6 +479,20 @@ impl InteractiveCommandCatalog {
                 syntax: "hgb ollama-route <prompt> [--force-local] [--force-remote]",
                 description: "Local Ollama Inference Router: heuristic offloading of routine tasks to local models with zero API cost and instant fallback.",
             },
+            CommandEntry {
+                name: "dual-sandbox",
+                aliases: &["microvm", "dual-layer"],
+                category: "Sandbox/Virtualization",
+                syntax: "hgb dual-sandbox <workload> [--command <cmd>]",
+                description: "Dual-Layer Secure Execution Engine: fast Wasm path (<2ms) and heavy Firecracker microVM path (<150ms).",
+            },
+            CommandEntry {
+                name: "semantic-cache",
+                aliases: &["cache-stats"],
+                category: "Storage/Performance",
+                syntax: "hgb semantic-cache [--clear]",
+                description: "In-Process Semantic Query Cache: inspect sub-millisecond cached prompt embeddings, hit rates, and latency savings.",
+            },
         ]
     }
 

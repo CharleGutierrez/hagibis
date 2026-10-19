@@ -4831,6 +4831,20 @@ impl HagibisRepl {
                 println!("{}", "🧩 WASM PLUGIN EXECUTION 🧩".bold().cyan());
                 println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
             }
+            HgbResponse::DualLayerSandboxResult(r) => {
+                println!("{}", "🛡️ DUAL-LAYER SANDBOX EXECUTION 🛡️".bold().cyan());
+                println!("  Selected Tier:      {}", r.tier.to_string().cyan().bold());
+                println!("  Security Boundary:  {}", r.security_boundary);
+                println!("  Startup Latency:    {} ms", r.startup_latency_ms);
+                println!("  Execution Duration: {} ms", r.execution_duration_ms);
+                println!("  Exit Code:          {}", r.exit_code);
+                if !r.stdout.is_empty() {
+                    println!("  Output:\n{}", r.stdout.trim());
+                }
+            }
+            HgbResponse::SemanticCacheStatusResult(s) => {
+                println!("{}", s);
+            }
         }
     }
 

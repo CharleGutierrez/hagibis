@@ -286,9 +286,28 @@ impl OllamaInferenceRouter {
 
         match dest {
             RoutingDestination::LocalOllama { ref model, ref endpoint, .. } => {
-                let model_name = model.clone();
+                // Query live Dynatune hardware telemetry and apply hardware inference safeguards
+                let dynatune = crate::dynatune_synergy::DynatuneSynergyEngine::new();
+                let policy = dynatune.evaluate_inference_policy();
+                let model_name = if let Some(ref fallback) = policy.fallback_lightweight_model {
+                    fallback.clone()
+                } else {
+                    model.clone()
+                };
+
+                if policy.throttle_delay_ms > 0 {
+                    tokio::time::sleep(std::time::Duration::from_millis(policy.throttle_delay_ms)).await;
+                }
+
+                let max_chars = policy.max_context_window_tokens * 4;
+                let effective_prompt = if prompt.len() > max_chars {
+                    &prompt[..max_chars]
+                } else {
+                    prompt
+                };
+
                 let prov = OllamaProvider::new(Some(endpoint.clone()), Some(model_name.clone()));
-                let text = match prov.complete(prompt, None).await {
+                let text = match prov.complete(effective_prompt, None).await {
                     Ok(t) => t,
                     Err(e) => {
                         format!("Local Ollama generation notice: {}. Ensure 'ollama serve' is active.", e)

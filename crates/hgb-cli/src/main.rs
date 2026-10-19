@@ -2720,6 +2720,24 @@ enum Commands {
         #[arg(long)]
         force_remote: bool,
     },
+
+    /// Dual-Layer Secure Execution Engine (Fast Wasm Sandbox + Heavy Firecracker MicroVM)
+    #[command(alias = "dual-layer", alias = "microvm")]
+    DualSandbox {
+        /// Workload name, file, or command
+        workload: String,
+        /// Optional explicit shell command to run in microVM
+        #[arg(long, short)]
+        command: Option<String>,
+    },
+
+    /// Semantic Query Cache: inspect cached prompt embeddings, hit rates, and latency savings
+    #[command(alias = "cache-stats", alias = "sem-cache")]
+    SemanticCache {
+        /// Clear all cached entries
+        #[arg(long)]
+        clear: bool,
+    },
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -7855,6 +7873,55 @@ async fn test_calc() { assert!(calculate(5)); }".to_string()
             println!("\n{}", "── Output ───────────────────────────────────────────────────".dimmed());
             println!("{}", report.output_text);
             println!("{}", "─────────────────────────────────────────────────────────────".dimmed());
+            Ok(())
+        }
+        Commands::DualSandbox { workload, command } => {
+            println!("{}", "🛡️  Hagibis Dual-Layer Secure Execution Engine".cyan().bold());
+            println!("  Workload Spec:  {}", workload.bold());
+            let ws_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let engine = hgb_core::DualLayerSandboxEngine::new(&ws_dir);
+            println!("  Autonomous Arbiter evaluating workload safety boundary...");
+            let start = std::time::Instant::now();
+            let report = engine.execute_workload_auto(&workload, None, command.as_deref(), None)?;
+            let total_ms = start.elapsed().as_millis();
+            println!("{} Execution completed in {} ms!", "✔".green().bold(), total_ms);
+            println!("  Selected Tier:      {}", report.tier.to_string().cyan().bold());
+            println!("  Security Boundary:  {}", report.security_boundary);
+            println!("  Startup Latency:    {} ms", report.startup_latency_ms);
+            println!("  Execution Duration: {} ms", report.execution_duration_ms);
+            println!("  Memory Allocated:   {} MiB", report.memory_allocated_mib);
+            println!("  vCPUs Assigned:     {}", report.vcpu_count);
+            println!("  Exit Code:          {}", report.exit_code);
+            if !report.stdout.is_empty() {
+                println!("\n{}", "── Standard Output ──────────────────────────────────────────".dimmed());
+                println!("{}", report.stdout.trim());
+            }
+            if !report.stderr.is_empty() {
+                println!("\n{}", "── Standard Error ───────────────────────────────────────────".red().dimmed());
+                println!("{}", report.stderr.trim());
+            }
+            println!("{}", "─────────────────────────────────────────────────────────────".dimmed());
+            Ok(())
+        }
+        Commands::SemanticCache { clear } => {
+            println!("{}", "🧠 Hagibis In-Process Semantic Query Cache".cyan().bold());
+            if clear {
+                let res = client.send(hgb_core::protocol::HgbRequest::SemanticCacheClear).await?;
+                match res {
+                    hgb_core::protocol::HgbResponse::SemanticCacheStatusResult(msg) => {
+                        println!("{} {}", "✔".green().bold(), msg);
+                    }
+                    other => println!("{:?}", other),
+                }
+            } else {
+                let res = client.send(hgb_core::protocol::HgbRequest::SemanticCacheStatus).await?;
+                match res {
+                    hgb_core::protocol::HgbResponse::SemanticCacheStatusResult(msg) => {
+                        println!("{}", msg);
+                    }
+                    other => println!("{:?}", other),
+                }
+            }
             Ok(())
         }
         Commands::Ide { .. } => unreachable!(),

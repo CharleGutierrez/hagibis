@@ -306,6 +306,77 @@ impl DynatuneSynergyEngine {
             None
         }
     }
+
+    /// Evaluate dynamic inference policy to autonomously adjust context window, concurrency,
+    /// and model precision based on live hardware temperature and power source.
+    pub fn evaluate_inference_policy(&self) -> HardwareInferencePolicy {
+        let telemetry = self.evaluate_hardware_telemetry();
+        let num_cpus = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+
+        if telemetry.severity == ThermalSeverity::Critical {
+            HardwareInferencePolicy {
+                max_parallel_tasks: 1,
+                max_context_window_tokens: 4096,
+                recommended_precision: "q4_0".to_string(),
+                fallback_lightweight_model: Some("qwen2.5-coder:0.5b".to_string()),
+                throttle_delay_ms: 150,
+                policy_rationale: format!(
+                    "CRITICAL THERMAL STATE ({:.1}°C >= 85°C): Context window clamped to 4096 tokens, precision shifted to q4_0, and tasks capped to 1 to preserve Toshiba hardware.",
+                    telemetry.cpu_pkg_temp_c
+                ),
+            }
+        } else if telemetry.severity == ThermalSeverity::Warm {
+            HardwareInferencePolicy {
+                max_parallel_tasks: 2.min(num_cpus),
+                max_context_window_tokens: 8192,
+                recommended_precision: "q4_k_m".to_string(),
+                fallback_lightweight_model: Some("qwen2.5-coder:1.5b".to_string()),
+                throttle_delay_ms: 50,
+                policy_rationale: format!(
+                    "ELEVATED TEMPERATURE ({:.1}°C): Context window scaled to 8192 tokens and precision set to q4_k_m to halt heat buildup.",
+                    telemetry.cpu_pkg_temp_c
+                ),
+            }
+        } else if !telemetry.ac_connected {
+            HardwareInferencePolicy {
+                max_parallel_tasks: 2.min(num_cpus),
+                max_context_window_tokens: 16384,
+                recommended_precision: "q4_k_m".to_string(),
+                fallback_lightweight_model: Some("qwen2.5-coder:1.5b".to_string()),
+                throttle_delay_ms: 0,
+                policy_rationale: "BATTERY PRESERVATION MODE: Capping concurrency to 2 and selecting energy-efficient q4_k_m precision.".to_string(),
+            }
+        } else {
+            HardwareInferencePolicy {
+                max_parallel_tasks: num_cpus,
+                max_context_window_tokens: 32768,
+                recommended_precision: "q8_0 / fp16".to_string(),
+                fallback_lightweight_model: None,
+                throttle_delay_ms: 0,
+                policy_rationale: format!(
+                    "OPTIMAL HEADROOM ON AC MAINS ({:.1}°C): Full 32k context, {} concurrent tasks, and unconstrained precision unlocked.",
+                    telemetry.cpu_pkg_temp_c, num_cpus
+                ),
+            }
+        }
+    }
+}
+
+/// Dynamic inference policy tailored to live hardware thermal and power constraints
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HardwareInferencePolicy {
+    /// Maximum parallel agent execution tasks allowed
+    pub max_parallel_tasks: usize,
+    /// Maximum context window allowed for prompt/inference (clamped to prevent memory/thermal thrashing)
+    pub max_context_window_tokens: usize,
+    /// Recommended quantization precision level (e.g. "q8_0", "q4_k_m", "q4_0")
+    pub recommended_precision: String,
+    /// Lightweight fallback model if hardware is thermally constrained or on battery
+    pub fallback_lightweight_model: Option<String>,
+    /// Cooling throttle delay in ms to insert between rapid local inference passes
+    pub throttle_delay_ms: u64,
+    /// Human-readable explanation of the current hardware policy
+    pub policy_rationale: String,
 }
 
 #[cfg(test)]
@@ -335,5 +406,15 @@ mod tests {
             if 78.0f32 >= 75.0 && 78.0f32 < 85.0 { ThermalSeverity::Warm } else { ThermalSeverity::Normal },
             ThermalSeverity::Warm
         );
+    }
+
+    #[test]
+    fn test_hardware_inference_policy() {
+        let engine = DynatuneSynergyEngine::new();
+        let policy = engine.evaluate_inference_policy();
+        assert!(policy.max_parallel_tasks >= 1);
+        assert!(policy.max_context_window_tokens >= 2048);
+        assert!(!policy.recommended_precision.is_empty());
+        assert!(!policy.policy_rationale.is_empty());
     }
 }

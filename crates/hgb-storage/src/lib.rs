@@ -8,6 +8,7 @@ pub mod spec_store;
 pub mod style;
 pub mod vector;
 pub mod simd_vector_index;
+pub mod semantic_cache;
 
 pub use db_sentinel::DbSentinel;
 pub use db_time_machine::{DbSandbox, DbSnapshot, DbTimeMachine};
@@ -25,3 +26,7 @@ pub use spec_store::SpecStore;
 pub use style::{StyleFeedbackRecord, StyleMemoryVault};
 pub use vector::{cosine_similarity, VectorEntry, VectorIndex};
 pub use simd_vector_index::{SimdSearchMatch, SimdVectorIndex, SimdVectorRecord};
+pub use semantic_cache::{
+    SemanticCacheEntry, SemanticCacheHit, SemanticCacheStats, SemanticQueryCache,
+};
+
