@@ -65,6 +65,8 @@ pub mod fs_watcher;
 pub mod cloud_settings;
 pub mod agent_loop;
 pub mod tui_syntax;
+pub mod bare_metal_bridge;
+
 
 pub use visual_ide::VisualIdeServer;
 pub use inline_diff_engine::{
@@ -151,6 +153,11 @@ pub use tui_syntax::{
     highlight_code_line, parse_markdown, score_code_line, tokenize_code_line,
     wrap_tokens_to_width, CodeToken, MarkdownItem,
 };
+pub use bare_metal_bridge::{
+    BareMetalPerformanceBridge, BareMetalTelemetry, GovernorGuard, GovernorShiftReport,
+    KernelProfile,
+};
+
 
 
 

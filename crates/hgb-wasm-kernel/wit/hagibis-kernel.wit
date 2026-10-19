@@ -1,0 +1,74 @@
+// Hagibis Stateful WebAssembly Distributed Component Interface (WIT)
+// Specification for multi-tier state migration across Local Engine and Edge Workers
+package hagibis:kernel@0.2.0;
+
+interface types {
+    enum node-tier {
+        local-desktop,
+        edge-worker,
+        cloud-firecracker,
+    }
+
+    enum sync-status {
+        synchronized,
+        diverging,
+        migrating,
+        halted,
+    }
+
+    record memory-page {
+        offset: u32,
+        size: u32,
+        blake3-checksum: string,
+        dirty: bool,
+    }
+
+    record execution-state {
+        revision: u64,
+        sequence: u64,
+        node-id: string,
+        active-tier: node-tier,
+        status: sync-status,
+        dirty-pages: list<memory-page>,
+    }
+
+    record migration-envelope {
+        source-node: string,
+        target-node: string,
+        timestamp: u64,
+        blake3-hash: string,
+        compressed-payload: list<u8>,
+        state: execution-state,
+    }
+}
+
+interface state-sync {
+    use types.{node-tier, sync-status, execution-state, migration-envelope};
+
+    /// Checkpoint running Wasm linear memory & execution context
+    checkpoint: func() -> result<execution-state, string>;
+
+    /// Generate cryptographic state migration envelope for network transit
+    serialize-snapshot: func() -> result<migration-envelope, string>;
+
+    /// Ingest state migration envelope and resume execution seamlessly
+    restore-snapshot: func(envelope: migration-envelope) -> result<execution-state, string>;
+
+    /// Command live migration to target runtime tier (local <-> Cloudflare Workers)
+    hot-swap-tier: func(target: node-tier) -> result<sync-status, string>;
+}
+
+interface executor {
+    use types.{execution-state};
+
+    /// Execute bytecode bounded by instruction step budget
+    execute-step: func(instruction-budget: u64) -> result<u64, string>;
+
+    /// Query JSON telemetry for telemetry monitoring
+    query-telemetry: func() -> string;
+}
+
+world hagibis-wasm-engine {
+    export state-sync;
+    export executor;
+}

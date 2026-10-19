@@ -493,6 +493,27 @@ impl InteractiveCommandCatalog {
                 syntax: "hgb semantic-cache [--clear]",
                 description: "In-Process Semantic Query Cache: inspect sub-millisecond cached prompt embeddings, hit rates, and latency savings.",
             },
+            CommandEntry {
+                name: "bare-metal",
+                aliases: &["kernel", "governor"],
+                category: "Hardware/Performance",
+                syntax: "hgb bare-metal [--boost] [--relax] [--profile <name>]",
+                description: "Bare-Metal Telemetry & Kernel Bridge: dynamically command intel_pstate governor, EPP, MGLRU, and dynatune thermal profiles.",
+            },
+            CommandEntry {
+                name: "wasm-sync",
+                aliases: &["wasm-migrate", "edge-sync"],
+                category: "Wasm/Edge",
+                syntax: "hgb wasm-sync [--target <edge|local>] [--bundle] [--pages <N>] [--step <N>] [--status]",
+                description: "Stateful WebAssembly Distributed Sync: WIT component models, cryptographic BLAKE3 snapshots, and Cloudflare Workers edge packaging.",
+            },
+            CommandEntry {
+                name: "vibe",
+                aliases: &["vibe-loop", "autonomous-loop"],
+                category: "Autopilot/Vibe",
+                syntax: "hgb vibe [--once] [--watch] [--auto-patch] [--no-tests] [--debounce <ms>]",
+                description: "Autonomous Vibe Coding Agent Loop: watches filesystem events, runs speculative First-Green sandbox checks, and self-optimizes codebases.",
+            },
         ]
     }
 

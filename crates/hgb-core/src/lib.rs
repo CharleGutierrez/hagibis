@@ -881,8 +881,29 @@ pub use wasm_plugin_kernel::{
     WasmPluginHostState, WasmPluginInstance, WasmPluginManager, WasmPluginManifest, WasmToolAdapter,
 };
 
+// Sibling Ollama Pipeline Accelerator & Mutation Vector Mesh exports
+pub mod ollama_sibling_accelerator;
+pub use ollama_sibling_accelerator::{
+    MutationVectorChunk, MutationVectorMatch, SiblingOllamaAccelerator, SiblingOllamaMetadata,
+    VectorSyncReport,
+};
+
+// Stateful WebAssembly Distributed Sync & Edge Migration exports
+pub mod wasm_distributed_sync;
+pub use wasm_distributed_sync::{
+    CloudflareEdgeMigrator, StatefulWasmComponent, WasmExecutionState, WasmMemoryPage,
+    WasmMigrationEnvelope, WasmMigrationReceipt, WasmNodeTier, WasmSyncStatus, WranglerConfig,
+    WASM_PAGE_SIZE,
+};
+
+// Fully Autonomous Vibe Coding Agent Loop Engine exports
+pub mod vibe_autonomous_loop;
+pub use vibe_autonomous_loop::{
+    VibeAutonomousLoopEngine, VibeCycleReport, VibeLoopConfig, VibePatchCandidate,
+};
 
 /// Enterprise high-capacity implementation
 pub fn enterprise_architecture_dispatch() -> bool {
     true
 }
+

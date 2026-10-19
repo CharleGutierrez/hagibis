@@ -189,6 +189,37 @@ impl HagibisMcpServer {
                 "inputSchema": {
                     "type": "object"
                 }
+            },
+            {
+                "name": "hgb_ollama_sibling_status",
+                "description": "Inspect direct sibling Ollama engine state (/home/toshiba/My AI Project/ollama), active models, and Dynabook acceleration status",
+                "inputSchema": {
+                    "type": "object"
+                }
+            },
+            {
+                "name": "hgb_ollama_vector_sync",
+                "description": "Vectorize and index local file mutations into SQLite mesh (.hgb/mutation_vectors.db) without network roundtrips",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "file_path": { "type": "string", "description": "Relative file path of mutated source code" },
+                        "content": { "type": "string", "description": "Current file content" }
+                    },
+                    "required": ["file_path", "content"]
+                }
+            },
+            {
+                "name": "hgb_ollama_vector_query",
+                "description": "Search semantically nearest code chunks from local SQLite mutation vector mesh",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string", "description": "Natural language or code query" },
+                        "top_k": { "type": "number", "description": "Number of nearest results to retrieve", "default": 3 }
+                    },
+                    "required": ["query"]
+                }
             }
         ])
     }
@@ -549,6 +580,36 @@ impl HagibisMcpServer {
             "hgb_sandbox_check" => {
                 let dev_shm_ok = Path::new("/dev/shm").is_dir();
                 Ok(format!("Linux Sandboxing: /dev/shm CoW overlay supported: {}", dev_shm_ok))
+            }
+
+            "hgb_ollama_sibling_status" => {
+                let acc = crate::ollama_sibling_accelerator::SiblingOllamaAccelerator::new(&self.workspace_root);
+                let meta = acc.inspect_sibling_engine().await;
+                Ok(serde_json::to_string_pretty(&meta).unwrap_or_default())
+            }
+
+            "hgb_ollama_vector_sync" => {
+                let file_path = args.get("file_path").and_then(|f| f.as_str()).ok_or_else(|| {
+                    HgbError::Execution("Missing 'file_path'".into())
+                })?;
+                let content = args.get("content").and_then(|c| c.as_str()).ok_or_else(|| {
+                    HgbError::Execution("Missing 'content'".into())
+                })?;
+
+                let acc = crate::ollama_sibling_accelerator::SiblingOllamaAccelerator::new(&self.workspace_root);
+                let report = acc.sync_file_mutation(file_path, content).await?;
+                Ok(serde_json::to_string_pretty(&report).unwrap_or_default())
+            }
+
+            "hgb_ollama_vector_query" => {
+                let query = args.get("query").and_then(|q| q.as_str()).ok_or_else(|| {
+                    HgbError::Execution("Missing 'query'".into())
+                })?;
+                let top_k = args.get("top_k").and_then(|k| k.as_u64()).unwrap_or(3) as usize;
+
+                let acc = crate::ollama_sibling_accelerator::SiblingOllamaAccelerator::new(&self.workspace_root);
+                let matches = acc.query_mutation_vectors(query, top_k)?;
+                Ok(serde_json::to_string_pretty(&matches).unwrap_or_default())
             }
 
             other => Ok(format!("Tool '{}' recognized by Hagibis MCP dispatcher.", other)),

@@ -2942,6 +2942,52 @@ impl HagibisDaemon {
                 sem.clear();
                 HgbResponse::SemanticCacheStatusResult("✨ Semantic cache cleared successfully.".to_string())
             }
+            // 133. Bare-Metal Kernel & Dynatune Performance Bridge
+            HgbRequest::BareMetalStatus => {
+                let bridge = hgb_nextgen::BareMetalPerformanceBridge::new();
+                let telem = bridge.read_bare_metal_telemetry();
+                let output = format!(
+                    "⚡ [Hagibis Bare-Metal Kernel & Dynatune Telemetry]\n\
+                     • CPU Scaling Governor: {}\n\
+                     • Energy Preference (EPP): {}\n\
+                     • Intel Turbo Boost:    {}\n\
+                     • Multi-Gen LRU (MGLRU): {}\n\
+                     • ZRAM Compression:     {:.2}:1 (zstd)\n\
+                     • CPU Package Temp:     {:.1}°C [{}]\n\
+                     • Battery Capacity:     {}% ({:.2}W, {})\n\
+                     • Optimizer Suite:      /home/toshiba/My AI Project/kernel-optimizer\n\
+                     • Dynatune Synergy:     /home/toshiba/My AI Project/dynatune",
+                    telem.active_governor,
+                    telem.energy_perf_preference,
+                    if telem.turbo_boost_enabled { "Enabled" } else { "Disabled" },
+                    telem.mglru_status,
+                    telem.zram_compression_ratio,
+                    telem.cpu_pkg_temp_c,
+                    telem.thermal_severity,
+                    telem.battery_capacity_pct.map(|c| c.to_string()).unwrap_or_else(|| "N/A".to_string()),
+                    telem.power_draw_watts.unwrap_or(0.0),
+                    if telem.is_charging { "Charging / AC" } else { "Discharging / Battery" }
+                );
+                HgbResponse::BareMetalStatusResult(output)
+            }
+            HgbRequest::BareMetalCommand { profile } => {
+                let bridge = hgb_nextgen::BareMetalPerformanceBridge::new();
+                let target = match profile.to_lowercase().as_str() {
+                    "performance" | "perf" | "boost" | "turbo" => hgb_nextgen::KernelProfile::Performance,
+                    "powersave" | "power" | "battery" | "idle" => hgb_nextgen::KernelProfile::PowerSave,
+                    _ => hgb_nextgen::KernelProfile::Balanced,
+                };
+                let rep = bridge.command_governor_profile(target);
+                let output = format!(
+                    "🚀 [Bare-Metal Profile Shift]\n• Target Profile:   {}\n• EPP Applied:      {}\n• MGLRU State:      {}\n• Result:           {}\n• Details:          {}",
+                    rep.target_profile,
+                    rep.epp_applied,
+                    if rep.mglru_active { "Active (0x0007)" } else { "Standard" },
+                    if rep.success { "SUCCESS" } else { "DRY-RUN / PLANNED" },
+                    rep.message
+                );
+                HgbResponse::BareMetalCommandResult(output)
+            }
         }
     }
 }

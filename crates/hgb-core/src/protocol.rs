@@ -1151,6 +1151,11 @@ pub enum HgbRequest {
     // 132. Semantic Query Cache
     SemanticCacheStatus,
     SemanticCacheClear,
+    // 133. Bare-Metal Kernel & Dynatune Performance Bridge
+    BareMetalStatus,
+    BareMetalCommand {
+        profile: String,
+    },
 }
 
 fn default_two() -> usize {
@@ -1643,6 +1648,9 @@ pub enum HgbResponse {
     DualLayerSandboxResult(crate::dual_layer_sandbox::DualLayerExecutionReport),
     // 132. Semantic Query Cache
     SemanticCacheStatusResult(String),
+    // 133. Bare-Metal Kernel & Dynatune Performance Bridge
+    BareMetalStatusResult(String),
+    BareMetalCommandResult(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

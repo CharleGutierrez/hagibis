@@ -4845,6 +4845,9 @@ impl HagibisRepl {
             HgbResponse::SemanticCacheStatusResult(s) => {
                 println!("{}", s);
             }
+            HgbResponse::BareMetalStatusResult(s) | HgbResponse::BareMetalCommandResult(s) => {
+                println!("{}", s);
+            }
         }
     }
 

@@ -4,7 +4,18 @@
       "command": "hgb",
       "args": ["mcp"],
       "env": {
-        "HGB_WORKSPACE": "."
+        "HGB_WORKSPACE": ".",
+        "OLLAMA_SIBLING_DIR": "/home/toshiba/My AI Project/ollama",
+        "OLLAMA_HOST": "http://127.0.0.1:11434"
+      }
+    },
+    "ollama_sibling": {
+      "command": "hgb",
+      "args": ["mcp"],
+      "env": {
+        "HGB_WORKSPACE": ".",
+        "OLLAMA_SIBLING_DIR": "/home/toshiba/My AI Project/ollama",
+        "OLLAMA_HOST": "http://127.0.0.1:11434"
       }
     },
     "duckduckgo": {

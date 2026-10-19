@@ -693,7 +693,8 @@ enum Commands {
         action: SkillSubcommand,
     },
 
-    /// Speculative dual-draft racing & Ambient Watch-and-Vibe Autonomous Loop
+    /// Speculative dual-draft racing & Masterclass Autonomous Vibe Coding Agent Loop
+    #[command(alias = "vibe-loop", alias = "autonomous-loop")]
     Vibe {
         /// Prompt or task description to race
         #[arg(default_value = "")]
@@ -707,6 +708,18 @@ enum Commands {
         /// Run continuous ambient watcher loop
         #[arg(short, long)]
         watch: bool,
+        /// Execute single autonomous vibe cycle and output detailed diagnostic scorecard
+        #[arg(long)]
+        once: bool,
+        /// Automatically apply verified green patches to workspace
+        #[arg(long)]
+        auto_patch: bool,
+        /// Skip running compiler and test suite
+        #[arg(long)]
+        no_tests: bool,
+        /// Debounce interval in milliseconds
+        #[arg(long, default_value_t = 500)]
+        debounce: u64,
     },
 
     /// Style Memory & Reject-Learner Vault
@@ -2738,6 +2751,40 @@ enum Commands {
         #[arg(long)]
         clear: bool,
     },
+
+    /// Bare-Metal Telemetry & Kernel Optimizer Bridge (intel_pstate, MGLRU, EPP, dynatune)
+    #[command(alias = "kernel", alias = "governor")]
+    BareMetal {
+        /// Switch to performance boost mode
+        #[arg(long)]
+        boost: bool,
+        /// Switch to power-saving / relax mode
+        #[arg(long)]
+        relax: bool,
+        /// Set specific kernel profile (performance, balanced, powersave)
+        #[arg(long, short)]
+        profile: Option<String>,
+    },
+
+    /// Stateful WebAssembly Edge Sync & Cloudflare Workers Migration (WIT bindings)
+    #[command(alias = "wasm-migrate", alias = "edge-sync")]
+    WasmSync {
+        /// Target node or tier (edge, worker, local, firecracker)
+        #[arg(long, short, default_value = "edge")]
+        target: String,
+        /// Package deployment bundle for Cloudflare Workers (wrangler.toml)
+        #[arg(long)]
+        bundle: bool,
+        /// Initial memory pages count (64KB each)
+        #[arg(long, default_value_t = 4)]
+        pages: usize,
+        /// Step instruction count
+        #[arg(long, default_value_t = 1000)]
+        step: u64,
+        /// Show status of Wasm distributed state
+        #[arg(long)]
+        status: bool,
+    },
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -4684,7 +4731,21 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             }
             Ok(())
         }
-        Commands::Vibe { prompt, target_dir, race: _, watch } => {
+        Commands::Vibe { prompt, target_dir, race: _, watch, once, auto_patch, no_tests, debounce } => {
+            if once || auto_patch || no_tests {
+                println!("{}", "🪽 Hagibis Fully Autonomous Vibe Coding Agent Loop".bright_purple().bold());
+                let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                let mut config = hgb_core::VibeLoopConfig::default();
+                config.workspace_root = cwd;
+                config.auto_patch = auto_patch;
+                config.run_tests = !no_tests;
+                config.debounce_ms = debounce;
+
+                let engine = hgb_core::VibeAutonomousLoopEngine::new(config);
+                let report = engine.execute_single_cycle()?;
+                println!("\n{}", hgb_core::VibeAutonomousLoopEngine::render_report_card(&report));
+                return Ok(());
+            }
             if watch {
                 println!("{}", "⚡ Ambient Watch-and-Vibe Autonomous Loop starting... (Ctrl+C to stop)".magenta().bold());
                 let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(100);
@@ -7921,6 +7982,67 @@ async fn test_calc() { assert!(calculate(5)); }".to_string()
                     }
                     other => println!("{:?}", other),
                 }
+            }
+            Ok(())
+        }
+        Commands::BareMetal { boost, relax, profile } => {
+            println!("{}", "⚡ Hagibis Bare-Metal Kernel & Dynatune Bridge".cyan().bold());
+            if boost {
+                let res = client.send(hgb_core::protocol::HgbRequest::BareMetalCommand { profile: "performance".to_string() }).await?;
+                match res {
+                    hgb_core::protocol::HgbResponse::BareMetalCommandResult(s) => println!("{}", s),
+                    other => println!("{:?}", other),
+                }
+            } else if relax {
+                let res = client.send(hgb_core::protocol::HgbRequest::BareMetalCommand { profile: "powersave".to_string() }).await?;
+                match res {
+                    hgb_core::protocol::HgbResponse::BareMetalCommandResult(s) => println!("{}", s),
+                    other => println!("{:?}", other),
+                }
+            } else if let Some(p) = profile {
+                let res = client.send(hgb_core::protocol::HgbRequest::BareMetalCommand { profile: p }).await?;
+                match res {
+                    hgb_core::protocol::HgbResponse::BareMetalCommandResult(s) => println!("{}", s),
+                    other => println!("{:?}", other),
+                }
+            } else {
+                let res = client.send(hgb_core::protocol::HgbRequest::BareMetalStatus).await?;
+                match res {
+                    hgb_core::protocol::HgbResponse::BareMetalStatusResult(s) => println!("{}", s),
+                    other => println!("{:?}", other),
+                }
+            }
+            Ok(())
+        }
+        Commands::WasmSync { target, bundle, pages, step, status } => {
+            println!("{}", "🌐 Stateful WebAssembly Distributed Sync & Edge Migrator".cyan().bold());
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let mut component = hgb_core::StatefulWasmComponent::new("local-desktop-node", pages);
+            component.set_env("ENGINE", "hagibis-edge-deployer");
+            component.set_env("DEPLOYMENT_ENV", "production");
+            let _ = component.write_memory(0, b"hagibis-wasm-kernel:stateful-context-payload");
+            let _ = component.execute_step(step);
+
+            let envelope = component.serialize_snapshot(&target)?;
+            println!("{} Snapshot Envelope: {} ({} dirty pages, {} instructions, BLAKE3: {})",
+                "•".cyan(),
+                envelope.envelope_id.yellow().bold(),
+                envelope.state_metadata.dirty_pages_count,
+                envelope.state_metadata.instruction_counter,
+                &envelope.blake3_hash[..16]
+            );
+
+            if bundle {
+                let migrator = hgb_core::CloudflareEdgeMigrator::new(&cwd);
+                let receipt = migrator.package_edge_bundle(&envelope)?;
+                println!("\n{}", hgb_core::CloudflareEdgeMigrator::render_receipt_card(&receipt));
+            } else if status {
+                println!("{} Active Tier: {:?}", "•".cyan(), component.active_tier());
+                println!("{} Sync Status: {:?}", "•".cyan(), component.status());
+                println!("{} Total Pages: {} ({} KB)", "•".cyan(), component.page_count(), component.page_count() * 64);
+            } else {
+                println!("{} Verified cryptographic snapshot seal: {}", "✔".green().bold(), envelope.blake3_hash);
+                println!("{} Ready for distributed hot-swap migration across edge worker fleet.", "➔".white().bold());
             }
             Ok(())
         }
