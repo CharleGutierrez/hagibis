@@ -1191,6 +1191,32 @@ pub enum HgbRequest {
         #[serde(default)]
         topic_filter: Option<String>,
     },
+    // Superpower 1: Native Ollama Integration & Hardware-Aware Routing
+    HardwareRouterStatus,
+    HardwareRouterSelect {
+        complexity: String,
+    },
+    // Superpower 2: Distributed MicroVM Swarms via Firecracker & WASM
+    MicroVmSwarmExec {
+        code: String,
+        language: String,
+        use_microvm: bool,
+    },
+    MicroVmSwarmStatus,
+    // Superpower 3: Unified MCP Mesh Network
+    McpMeshStatus,
+    McpMeshSync,
+    McpMeshCall {
+        node_id: String,
+        tool_name: String,
+        arguments: String,
+    },
+    // Superpower 4: Autonomous Self-Patching & Continuous Learning Loop
+    SelfPatchStatus,
+    SelfPatchTrigger {
+        #[serde(default)]
+        context_log: Option<String>,
+    },
 }
 
 fn default_two() -> usize {
@@ -1700,6 +1726,19 @@ pub enum HgbResponse {
     // 138. Unified Distributed Event Bus
     EventBusStatusResult(crate::event_bus::EventBusStatus),
     PublishEventResult { receivers: usize },
+    // Superpower 1: Native Ollama Integration & Hardware-Aware Routing
+    HardwareRouterStatusResult(crate::hardware_aware_router::HardwareRouterStatus),
+    HardwareRouterDecisionResult(crate::hardware_aware_router::HardwareRoutingDecision),
+    // Superpower 2: Distributed MicroVM Swarms via Firecracker & WASM
+    MicroVmSwarmExecResult(crate::microvm_swarm::IsolatedExecutionReport),
+    MicroVmSwarmStatusResult(crate::microvm_swarm::MicroVmSwarmStatus),
+    // Superpower 3: Unified MCP Mesh Network
+    McpMeshStatusResult(String),
+    McpMeshSyncResult(String),
+    McpMeshCallResult(String),
+    // Superpower 4: Autonomous Self-Patching & Continuous Learning Loop
+    SelfPatchStatusResult(crate::autonomous_self_patcher::SelfPatchStatusReport),
+    SelfPatchTriggerResult(crate::autonomous_self_patcher::SelfPatchRecord),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

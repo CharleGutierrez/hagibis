@@ -1500,8 +1500,48 @@ impl HagibisRepl {
                 let resp = self.dispatch(HgbRequest::Verify { target, invariant: "division".to_string() }).await;
                 self.render_response(resp);
             }
+            "/hwroute" | "/model-route" => {
+                let resp = if args.trim().is_empty() || args.trim() == "status" {
+                    self.dispatch(HgbRequest::HardwareRouterStatus).await
+                } else {
+                    self.dispatch(HgbRequest::HardwareRouterSelect { complexity: args.trim().to_string() }).await
+                };
+                self.render_response(resp);
+            }
+            "/microvm" | "/microvm-swarm" => {
+                let resp = if args.trim().is_empty() || args.trim() == "status" {
+                    self.dispatch(HgbRequest::MicroVmSwarmStatus).await
+                } else {
+                    self.dispatch(HgbRequest::MicroVmSwarmExec {
+                        code: args.trim().to_string(),
+                        language: "rust".to_string(),
+                        use_microvm: true,
+                    }).await
+                };
+                self.render_response(resp);
+            }
             "/mesh" => {
-                let resp = self.dispatch(HgbRequest::MeshStatus).await;
+                let parts: Vec<&str> = args.split_whitespace().collect();
+                let sub = parts.first().copied().unwrap_or("status");
+                let resp = match sub {
+                    "sync" => self.dispatch(HgbRequest::McpMeshSync).await,
+                    "call" if parts.len() >= 3 => {
+                        let node_id = parts[1].to_string();
+                        let tool_name = parts[2].to_string();
+                        let arg_str = if parts.len() > 3 { parts[3..].join(" ") } else { "{}".to_string() };
+                        self.dispatch(HgbRequest::McpMeshCall { node_id, tool_name, arguments: arg_str }).await
+                    }
+                    _ => self.dispatch(HgbRequest::McpMeshStatus).await,
+                };
+                self.render_response(resp);
+            }
+            "/selfpatch" | "/self-patch" | "/patch" => {
+                let resp = if args.trim().starts_with("trigger") {
+                    let log = args.trim().strip_prefix("trigger").map(|s| s.trim().to_string());
+                    self.dispatch(HgbRequest::SelfPatchTrigger { context_log: log }).await
+                } else {
+                    self.dispatch(HgbRequest::SelfPatchStatus).await
+                };
                 self.render_response(resp);
             }
             "/cockpit" => {
@@ -4901,6 +4941,73 @@ impl HagibisRepl {
             }
             HgbResponse::PublishEventResult { receivers } => {
                 println!("  {} Published event to {} active subscriber(s)", "✔".green().bold(), receivers);
+            }
+            HgbResponse::HardwareRouterStatusResult(s) => {
+                println!("{}", "⚡ Native Ollama Integration & Hardware-Aware Router Status".cyan().bold());
+                println!("  CPU Package Temp:   {:.1}°C [{}]", s.current_temp_c, if s.ac_connected { "AC Mains" } else { "Battery" });
+                println!("  Thermal Headroom:   {:.1}°C", s.thermal_headroom_c);
+                println!("  Ollama Endpoint:    {}", s.ollama_endpoint.green());
+                println!("  Installed Models:   {} model(s)", s.installed_models.len());
+                for m in &s.installed_models {
+                    println!("    • {}", m.yellow());
+                }
+                println!("  Recommended Heavy:  {}", s.recommended_heavy_model.cyan().bold());
+                println!("  Recommended Light:  {}", s.recommended_light_model.green().bold());
+                println!("  Total Tasks Routed: {}", s.total_routed_tasks);
+            }
+            HgbResponse::HardwareRouterDecisionResult(d) => {
+                println!("{}", "⚡ Hardware-Aware Routing Decision".cyan().bold());
+                println!("  Selected Model:     {}", d.selected_model.green().bold());
+                println!("  Complexity Tier:    {:?}", d.complexity);
+                println!("  Thermal Headroom:   {:.1}°C", d.thermal_headroom_c);
+                println!("  Power Source:       {}", if d.ac_connected { "AC Mains [Optimal]" } else { "Battery [Eco-scaled]" });
+                println!("  WASM Offload:       {}", if d.is_wasm_offload { "YES (Conserving cycles)".yellow() } else { "NO (Native GGUF/Ollama)".green() });
+                println!("  Reasoning:          {}", d.reasoning.cyan());
+            }
+            HgbResponse::MicroVmSwarmExecResult(rep) => {
+                println!("{}", "🛡️ Distributed MicroVM Swarm Execution Report".cyan().bold());
+                println!("  Sandbox ID:         {}", rep.sandbox_id.yellow());
+                println!("  Execution Tier:     {}", rep.tier_used.cyan().bold());
+                println!("  Status:             {}", if rep.success { "PASSED (Clean)".green().bold() } else { "FAILED".red().bold() });
+                println!("  Exit Code:          {}", rep.exit_code);
+                println!("  Startup Latency:    {} µs", rep.startup_latency_us);
+                println!("  Run Duration:       {} µs", rep.execution_duration_us);
+                println!("  Blast Radius:       {} bytes ({} file(s) mutated)", rep.blast_radius_bytes, rep.files_mutated);
+                println!("  Security Boundary:  {}", rep.security_boundary.dimmed());
+                if !rep.stdout.is_empty() {
+                    println!("\n  ── stdout ──\n{}", rep.stdout.trim());
+                }
+                if !rep.stderr.is_empty() {
+                    println!("\n  ── stderr ──\n{}", rep.stderr.trim().red());
+                }
+            }
+            HgbResponse::MicroVmSwarmStatusResult(s) => {
+                println!("{}", "🛡️ MicroVM Swarm Virtualization Status".cyan().bold());
+                println!("  KVM Accessible:     {}", if s.kvm_accessible { "YES (/dev/kvm ready)".green().bold() } else { "NO (Rootless CoW fallback active)".yellow() });
+                println!("  Firecracker VM:     {}", if s.firecracker_installed { "INSTALLED".green() } else { "COW FALLBACK".yellow() });
+                println!("  OverlayFS CoW:      {}", if s.overlay_cow_available { "READY (Sub-millisecond)".green().bold() } else { "NOT READY".red() });
+                println!("  WASM Hot Slots:     {} slots available", s.wasm_hot_slots);
+                println!("  Total Executions:   {}", s.total_executions);
+            }
+            HgbResponse::McpMeshStatusResult(s) | HgbResponse::McpMeshSyncResult(s) | HgbResponse::McpMeshCallResult(s) => {
+                println!("{}", s);
+            }
+            HgbResponse::SelfPatchStatusResult(s) => {
+                println!("{}", "🧬 Autonomous Self-Patching Status".cyan().bold());
+                println!("  Monitored Log:      {}", s.monitored_log_path.dimmed());
+                println!("  Patches Dir:        {}", s.patches_dir.dimmed());
+                println!("  Distillation Dir:   {}", s.distillation_dir.dimmed());
+                println!("  Total Patches:      {} generated, {} applied", s.total_patches, s.applied_patches);
+                println!("  DPO Pairs Count:    {} preference pairs", s.dpo_pairs_count);
+            }
+            HgbResponse::SelfPatchTriggerResult(rec) => {
+                println!("{}", "🧬 Autonomous Self-Patch Trigger Report".cyan().bold());
+                println!("  Patch ID:           {}", rec.patch_id.yellow().bold());
+                println!("  Target File:        {}", rec.target_file.cyan());
+                println!("  First-Green Verify: {}", if rec.verified_green { "PASSED [Sandbox Isolation]".green().bold() } else { "FAILED".red() });
+                println!("  Applied to Disk:    {}", if rec.applied { "YES [git apply / atomic update]".green().bold() } else { "NO".yellow() });
+                println!("  DPO Pair Saved:     {}", if rec.dpo_recorded { "YES [.hgb/distillation/]".green() } else { "NO".yellow() });
+                println!("  Summary:            {}", rec.summary.cyan());
             }
         }
     }

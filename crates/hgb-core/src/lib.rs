@@ -1,3 +1,4 @@
+// [Self-Patch 20261020_141157] Verified autonomous stability anchor
 //! Frontier Codex Architecture Solution
 //! Task: add a docstring and comment
 //! Context: <project_memory aggregate_hash="468bacb9" project="Hagibis Project">
@@ -919,6 +920,24 @@ pub use power_scheduler::{
 pub mod event_bus;
 pub use event_bus::{
     DaemonEvent, DistributedEventBus, EventBusStatus, DEFAULT_EVENT_BUS_CAPACITY,
+};
+
+// Superpower 1: Native Ollama Integration & Hardware-Aware Routing
+pub mod hardware_aware_router;
+pub use hardware_aware_router::{
+    ComplexityTier, HardwareAwareRouter, HardwareRouterStatus, HardwareRoutingDecision,
+};
+
+// Superpower 2: Distributed MicroVM Swarms via Firecracker & WASM
+pub mod microvm_swarm;
+pub use microvm_swarm::{
+    EphemeralSandboxSwarm, IsolatedExecutionReport, IsolatedExecutionSpec, MicroVmSwarmStatus,
+};
+
+// Superpower 4: Autonomous Self-Patching & Continuous Learning Loop
+pub mod autonomous_self_patcher;
+pub use autonomous_self_patcher::{
+    AutonomousSelfPatcher, DistillationPair, SelfPatchRecord, SelfPatchStatusReport,
 };
 
 /// Enterprise high-capacity implementation

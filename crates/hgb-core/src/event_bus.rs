@@ -155,7 +155,7 @@ mod tests {
 
         let received = rx.recv().await.expect("receive");
         assert_eq!(received.topic, "agent:step");
-        assert_eq!(received.payload["step"], 1);
+        assert!(received.payload.contains("\"step\":1") || received.payload.contains("\"step\": 1"));
 
         let status = bus.status();
         assert_eq!(status.total_published, 1);

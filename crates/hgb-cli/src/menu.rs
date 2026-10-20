@@ -535,6 +535,34 @@ impl InteractiveCommandCatalog {
                 syntax: "hgb bus [--status] [--follow] [--topic <filter>] [--publish <topic> <payload>]",
                 description: "Unified Distributed Event Bus: Tokio broadcast channel streaming real-time agent, wasm, and power events over local UDS socket.",
             },
+            CommandEntry {
+                name: "hw-route",
+                aliases: &["model-route"],
+                category: "Hardware/Routing",
+                syntax: "hgb hw-route [--complexity <heavy|standard|lint|deterministic>] [--status]",
+                description: "Native Ollama Integration & Hardware-Aware Router: dynamically selects heavy vs light models or WASM offload based on thermal headroom and power state.",
+            },
+            CommandEntry {
+                name: "microvm-swarm",
+                aliases: &["swarm-sandbox"],
+                category: "Sandbox/Virtualization",
+                syntax: "hgb microvm-swarm [--code <string>] [--language <lang>] [--heavy] [--status]",
+                description: "Distributed MicroVM Swarms: fast WasmHotPool (<2ms) and heavy Linux Firecracker KVM microVMs with automatic zero-failure fallback to rootless CoW.",
+            },
+            CommandEntry {
+                name: "mcp-mesh",
+                aliases: &["mesh"],
+                category: "MCP/Mesh",
+                syntax: "hgb mcp-mesh [--sync] [--call <tool>] [--node <id>] [--args <json>] [--status]",
+                description: "Unified MCP Mesh Network: distributed peer discovery via BLAKE3 IDs, mutual auth handshakes, tool aggregation, and mutation vector sync.",
+            },
+            CommandEntry {
+                name: "self-patch",
+                aliases: &["auto-patch"],
+                category: "Autopilot/Learning",
+                syntax: "hgb self-patch [--trigger] [--log <context>] [--status]",
+                description: "Autonomous Self-Patching & Continuous Learning Loop: synthesizes unified diffs, verifies First-Green in sandbox, applies patches, and records DPO pairs.",
+            },
         ]
     }
 

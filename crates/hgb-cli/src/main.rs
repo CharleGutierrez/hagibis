@@ -781,8 +781,25 @@ enum Commands {
         iterations: usize,
     },
 
-    /// Check ZeroConf P2P Swarm Mesh status
-    Mesh,
+    /// Superpower 3: Unified MCP Mesh Network (Distributed tools, node discovery, mutation vectors)
+    #[command(name = "mcp-mesh", alias = "mesh")]
+    McpMesh {
+        /// Synchronize tools and discovery across all peers
+        #[arg(long)]
+        sync: bool,
+        /// Call a specific tool on a node
+        #[arg(long)]
+        call: Option<String>,
+        /// Target node ID for tool call
+        #[arg(long)]
+        node: Option<String>,
+        /// Arguments JSON for tool call
+        #[arg(long, default_value = "{}")]
+        args: String,
+        /// Display mesh status
+        #[arg(long)]
+        status: bool,
+    },
 
     /// Interactive Cockpit TUI Engine & Mid-Flight Steering
     #[command(alias = "tui")]
@@ -2832,6 +2849,48 @@ enum Commands {
         /// Publish a discrete event: --publish <topic> <payload_json>
         #[arg(long, num_args = 2)]
         publish: Vec<String>,
+    },
+
+    /// Superpower 1: Native Ollama Integration & Hardware-Aware Routing
+    #[command(name = "hw-route", alias = "model-route")]
+    HwRoute {
+        /// Task complexity: heavy, standard, lint, deterministic
+        #[arg(short, long)]
+        complexity: Option<String>,
+        /// Show live hardware telemetry and router status
+        #[arg(long)]
+        status: bool,
+    },
+
+    /// Superpower 2: Distributed MicroVM Swarms via Firecracker & WASM
+    #[command(name = "microvm-swarm", alias = "swarm-sandbox")]
+    MicroVmSwarm {
+        /// Code string or file to execute in isolated sandbox
+        #[arg(short, long)]
+        code: Option<String>,
+        /// Language / runtime: rust, wasm, bash, python
+        #[arg(short, long, default_value = "rust")]
+        language: String,
+        /// Force heavy microVM / CoW isolation tier
+        #[arg(long)]
+        heavy: bool,
+        /// Show swarm virtualization status
+        #[arg(long)]
+        status: bool,
+    },
+
+    /// Superpower 4: Autonomous Self-Patching & Continuous Learning Loop
+    #[command(name = "self-patch", alias = "auto-patch")]
+    SelfPatch {
+        /// Trigger autonomous self-patching and learning cycle
+        #[arg(long)]
+        trigger: bool,
+        /// Optional context log or error message to triage
+        #[arg(short, long)]
+        log: Option<String>,
+        /// Show status of synthesized patches and DPO dataset
+        #[arg(long)]
+        status: bool,
     },
 }
 
@@ -5020,10 +5079,38 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             repl_helper.render_response(resp);
             Ok(())
         }
-        Commands::Mesh => {
-            let repl_helper = HagibisRepl::new(client);
-            let resp = repl_helper.dispatch(HgbRequest::MeshStatus).await;
-            repl_helper.render_response(resp);
+        Commands::McpMesh { sync, call, node, args, status: _status } => {
+            println!("{}", "🌐 Unified MCP Mesh Network (Distributed Agent Mesh)".cyan().bold());
+            let client = HgbClient::new();
+            if sync {
+                let res = client.send(hgb_core::protocol::HgbRequest::McpMeshSync).await?;
+                match res {
+                    hgb_core::protocol::HgbResponse::McpMeshSyncResult(s) => {
+                        println!("{}", s);
+                    }
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ {}", e.red()),
+                    other => println!("{:?}", other),
+                }
+            } else if let Some(tool_name) = call {
+                let node_id = node.unwrap_or_default();
+                let res = client.send(hgb_core::protocol::HgbRequest::McpMeshCall { node_id, tool_name, arguments: args }).await?;
+                match res {
+                    hgb_core::protocol::HgbResponse::McpMeshCallResult(s) => {
+                        println!("{}", s);
+                    }
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ {}", e.red()),
+                    other => println!("{:?}", other),
+                }
+            } else {
+                let res = client.send(hgb_core::protocol::HgbRequest::McpMeshStatus).await?;
+                match res {
+                    hgb_core::protocol::HgbResponse::McpMeshStatusResult(s) => {
+                        println!("{}", s);
+                    }
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ {}", e.red()),
+                    other => println!("{:?}", other),
+                }
+            }
             Ok(())
         }
         Commands::Seed { entity, count, sql, json } => {
@@ -8203,6 +8290,122 @@ async fn test_calc() { assert!(calculate(5)); }".to_string()
                     for ev in &st.latest_events {
                         println!("    [{}] {} -> {}", ev.id.dimmed(), ev.topic.cyan().bold(), ev.payload);
                     }
+                }
+            }
+            Ok(())
+        }
+        Commands::HwRoute { complexity, status: _status } => {
+            println!("{}", "⚡ Native Ollama Integration & Hardware-Aware Router".cyan().bold());
+            let client = HgbClient::new();
+            if let Some(c) = complexity {
+                let res = client.send(hgb_core::protocol::HgbRequest::HardwareRouterSelect { complexity: c }).await?;
+                if let hgb_core::protocol::HgbResponse::HardwareRouterDecisionResult(d) = res {
+                    println!("  Selected Model:    {}", d.selected_model.green().bold());
+                    println!("  Complexity Tier:   {:?}", d.complexity);
+                    println!("  Thermal Headroom:  {:.1}°C", d.thermal_headroom_c);
+                    println!("  Power Source:      {}", if d.ac_connected { "AC Mains [Optimal]" } else { "Battery [Eco-scaled]" });
+                    println!("  WASM Offload:      {}", if d.is_wasm_offload { "YES (Conserving cycles)".yellow() } else { "NO (Native GGUF/Ollama)".green() });
+                    println!("  Ollama Endpoint:   {}", d.endpoint.dimmed());
+                    println!("  Reasoning:         {}", d.reasoning.cyan());
+                } else if let hgb_core::protocol::HgbResponse::Error(e) = res {
+                    eprintln!("  ✖ Router error: {}", e.red());
+                }
+            } else {
+                let res = client.send(hgb_core::protocol::HgbRequest::HardwareRouterStatus).await?;
+                if let hgb_core::protocol::HgbResponse::HardwareRouterStatusResult(s) = res {
+                    println!("  CPU Package Temp:  {:.1}°C (Thermal Headroom: {:.1}°C)", s.current_temp_c, s.thermal_headroom_c);
+                    println!("  Power Source:      {}", if s.ac_connected { "AC Mains [Wall Power]" } else { "Battery Power" });
+                    println!("  Ollama Endpoint:   {}", s.ollama_endpoint.green());
+                    println!("  Sibling Directory: {} (exists: {})", s.sibling_ollama_path.dimmed(), s.sibling_ollama_exists);
+                    println!("  Installed Models:  {} model(s)", s.installed_models.len());
+                    for m in &s.installed_models {
+                        println!("    • {}", m.yellow());
+                    }
+                    println!("  Recommended Heavy: {}", s.recommended_heavy_model.cyan().bold());
+                    println!("  Recommended Light: {}", s.recommended_light_model.green().bold());
+                    println!("  Total Tasks Routed:{}", s.total_routed_tasks);
+                } else if let hgb_core::protocol::HgbResponse::Error(e) = res {
+                    eprintln!("  ✖ Router error: {}", e.red());
+                }
+            }
+            Ok(())
+        }
+        Commands::MicroVmSwarm { code, language, heavy, status: _status } => {
+            println!("{}", "🛡️ Distributed MicroVM Swarms (Firecracker + WASM Hot-Pool)".cyan().bold());
+            let client = HgbClient::new();
+            if let Some(c) = code {
+                let res = client.send(hgb_core::protocol::HgbRequest::MicroVmSwarmExec {
+                    code: c,
+                    language,
+                    use_microvm: heavy,
+                }).await?;
+                if let hgb_core::protocol::HgbResponse::MicroVmSwarmExecResult(rep) = res {
+                    println!("  Sandbox ID:        {}", rep.sandbox_id.yellow());
+                    println!("  Execution Tier:    {}", rep.tier_used.cyan().bold());
+                    println!("  Status:            {}", if rep.success { "PASSED (Clean)".green().bold() } else { "FAILED".red().bold() });
+                    println!("  Exit Code:         {}", rep.exit_code);
+                    println!("  Startup Latency:   {} µs", rep.startup_latency_us);
+                    println!("  Run Duration:      {} µs", rep.execution_duration_us);
+                    println!("  Blast Radius:      {} bytes ({} file(s) mutated)", rep.blast_radius_bytes, rep.files_mutated);
+                    println!("  Security Boundary: {}", rep.security_boundary.dimmed());
+                    if !rep.stdout.is_empty() {
+                        println!("\n  ── stdout ──\n{}", rep.stdout.trim());
+                    }
+                    if !rep.stderr.is_empty() {
+                        println!("\n  ── stderr ──\n{}", rep.stderr.trim().red());
+                    }
+                } else if let hgb_core::protocol::HgbResponse::Error(e) = res {
+                    eprintln!("  ✖ Execution error: {}", e.red());
+                }
+            } else {
+                let res = client.send(hgb_core::protocol::HgbRequest::MicroVmSwarmStatus).await?;
+                if let hgb_core::protocol::HgbResponse::MicroVmSwarmStatusResult(s) = res {
+                    println!("  KVM Accessible:    {}", if s.kvm_accessible { "YES (/dev/kvm ready)".green().bold() } else { "NO (Rootless CoW fallback active)".yellow() });
+                    println!("  Firecracker VM:    {}", if s.firecracker_installed { "INSTALLED".green() } else { "COW FALLBACK".yellow() });
+                    println!("  OverlayFS CoW:     {}", if s.overlay_cow_available { "READY (Sub-millisecond)".green().bold() } else { "NOT READY".red() });
+                    println!("  WASM Hot Slots:    {} slots available", s.wasm_hot_slots);
+                    println!("  Total Executions:  {}", s.total_executions);
+                    println!("  Active Sandboxes:  {}", s.active_sandboxes);
+                } else if let hgb_core::protocol::HgbResponse::Error(e) = res {
+                    eprintln!("  ✖ Status error: {}", e.red());
+                }
+            }
+            Ok(())
+        }
+        Commands::SelfPatch { trigger, log, status: _status } => {
+            println!("{}", "🧬 Autonomous Self-Patching & Continuous Learning Loop".cyan().bold());
+            let client = HgbClient::new();
+            if trigger {
+                let res = client.send(hgb_core::protocol::HgbRequest::SelfPatchTrigger { context_log: log }).await?;
+                if let hgb_core::protocol::HgbResponse::SelfPatchTriggerResult(rec) = res {
+                    println!("  Patch ID:          {}", rec.patch_id.yellow().bold());
+                    println!("  Timestamp:         {}", rec.timestamp.dimmed());
+                    println!("  Target File:       {}", rec.target_file.cyan());
+                    println!("  First-Green Verify:{}", if rec.verified_green { "PASSED [Sandbox Isolation]".green().bold() } else { "FAILED".red() });
+                    println!("  Applied to Disk:   {}", if rec.applied { "YES [git apply / atomic update]".green().bold() } else { "NO".yellow() });
+                    println!("  DPO Pair Saved:    {}", if rec.dpo_recorded { "YES [.hgb/distillation/]".green() } else { "NO".yellow() });
+                    println!("  Patch Path:        {}", rec.patch_file.dimmed());
+                    println!("  DPO Path:          {}", rec.dpo_file.dimmed());
+                    println!("  Summary:           {}", rec.summary.cyan());
+                } else if let hgb_core::protocol::HgbResponse::Error(e) = res {
+                    eprintln!("  ✖ Self-patch error: {}", e.red());
+                }
+            } else {
+                let res = client.send(hgb_core::protocol::HgbRequest::SelfPatchStatus).await?;
+                if let hgb_core::protocol::HgbResponse::SelfPatchStatusResult(s) = res {
+                    println!("  Monitored Log:     {}", s.monitored_log_path.dimmed());
+                    println!("  Patches Dir:       {}", s.patches_dir.dimmed());
+                    println!("  Distillation Dir:  {}", s.distillation_dir.dimmed());
+                    println!("  Total Patches:     {} generated, {} applied", s.total_patches, s.applied_patches);
+                    println!("  DPO Pairs Count:   {} preference pairs", s.dpo_pairs_count);
+                    if !s.recent_patches.is_empty() {
+                        println!("\n  Recent Verified Patches:");
+                        for p in &s.recent_patches {
+                            println!("    • [{}] {} -> {}", p.patch_id.yellow(), p.target_file.cyan(), p.summary.dimmed());
+                        }
+                    }
+                } else if let hgb_core::protocol::HgbResponse::Error(e) = res {
+                    eprintln!("  ✖ Status error: {}", e.red());
                 }
             }
             Ok(())

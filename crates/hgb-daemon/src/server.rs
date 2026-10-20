@@ -35,6 +35,10 @@ pub struct DaemonState {
     pub power_scheduler: Arc<hgb_core::AdaptivePowerScheduler>,
     pub event_bus: Arc<hgb_core::DistributedEventBus>,
     pub mcp_sse_port: u16,
+    pub hardware_router: Arc<hgb_core::HardwareAwareRouter>,
+    pub microvm_swarm: Arc<hgb_core::EphemeralSandboxSwarm>,
+    pub mcp_mesh: Arc<crate::mcp_mesh_network::McpMeshNetwork>,
+    pub self_patcher: Arc<hgb_core::AutonomousSelfPatcher>,
 }
 
 impl DaemonState {
@@ -79,6 +83,11 @@ impl DaemonState {
             .and_then(|p| p.parse().ok())
             .unwrap_or(crate::mcp_sse_server::DEFAULT_MCP_SSE_PORT);
 
+        let hardware_router = Arc::new(hgb_core::HardwareAwareRouter::new());
+        let microvm_swarm = Arc::new(hgb_core::EphemeralSandboxSwarm::new(&ws_dir).expect("init microvm swarm"));
+        let mcp_mesh = Arc::new(crate::mcp_mesh_network::McpMeshNetwork::new(&ws_dir));
+        let self_patcher = Arc::new(hgb_core::AutonomousSelfPatcher::new(&ws_dir));
+
         Self {
             start_time: std::time::Instant::now(),
             socket_path,
@@ -97,6 +106,10 @@ impl DaemonState {
             power_scheduler,
             event_bus,
             mcp_sse_port,
+            hardware_router,
+            microvm_swarm,
+            mcp_mesh,
+            self_patcher,
         }
     }
 }
@@ -3149,6 +3162,55 @@ impl HagibisDaemon {
             }
             HgbRequest::SubscribeEvents { .. } => {
                 HgbResponse::EventBusStatusResult(state.event_bus.status())
+            }
+            HgbRequest::HardwareRouterStatus => {
+                HgbResponse::HardwareRouterStatusResult(state.hardware_router.status())
+            }
+            HgbRequest::HardwareRouterSelect { complexity } => {
+                let tier: hgb_core::ComplexityTier = complexity.parse().unwrap_or(hgb_core::ComplexityTier::StandardCode);
+                let decision = state.hardware_router.route(tier);
+                HgbResponse::HardwareRouterDecisionResult(decision)
+            }
+            HgbRequest::MicroVmSwarmExec { code, language, use_microvm } => {
+                let spec = hgb_core::IsolatedExecutionSpec {
+                    code,
+                    language,
+                    use_microvm,
+                    timeout_ms: 5000,
+                    memory_mb: 128,
+                };
+                match state.microvm_swarm.execute_isolated(&spec) {
+                    Ok(rep) => HgbResponse::MicroVmSwarmExecResult(rep),
+                    Err(e) => HgbResponse::Error(format!("MicroVM Swarm execution failed: {}", e)),
+                }
+            }
+            HgbRequest::MicroVmSwarmStatus => {
+                HgbResponse::MicroVmSwarmStatusResult(state.microvm_swarm.status())
+            }
+            HgbRequest::McpMeshStatus => {
+                let rep = state.mcp_mesh.status().await;
+                HgbResponse::McpMeshStatusResult(serde_json::to_string_pretty(&rep).unwrap_or_default())
+            }
+            HgbRequest::McpMeshSync => {
+                match state.mcp_mesh.sync_mesh().await {
+                    Ok(rep) => HgbResponse::McpMeshSyncResult(serde_json::to_string_pretty(&rep).unwrap_or_default()),
+                    Err(e) => HgbResponse::Error(format!("MCP mesh sync failed: {}", e)),
+                }
+            }
+            HgbRequest::McpMeshCall { node_id, tool_name, arguments } => {
+                match state.mcp_mesh.call_mesh_tool(&node_id, &tool_name, &arguments).await {
+                    Ok(res) => HgbResponse::McpMeshCallResult(res),
+                    Err(e) => HgbResponse::Error(format!("MCP mesh call failed: {}", e)),
+                }
+            }
+            HgbRequest::SelfPatchStatus => {
+                HgbResponse::SelfPatchStatusResult(state.self_patcher.status())
+            }
+            HgbRequest::SelfPatchTrigger { context_log } => {
+                match state.self_patcher.trigger_cycle(context_log.as_deref()) {
+                    Ok(rec) => HgbResponse::SelfPatchTriggerResult(rec),
+                    Err(e) => HgbResponse::Error(format!("Autonomous self-patch failed: {}", e)),
+                }
             }
         }
     }

@@ -141,3 +141,9 @@ pub use p2p_tunnel::{
     build_tunnel_router, P2pAuthToken, P2pClientMetrics, P2pSessionManager,
     P2pTunnelServer, TerminalQrRasterizer, TunnelState,
 };
+
+// Superpower 3: Unified MCP Mesh Network
+pub mod mcp_mesh_network;
+pub use mcp_mesh_network::{
+    McpMeshNetwork, MeshMutationVector, MeshPeer, MeshStatusReport, MeshSyncReport, MeshTool,
+};
