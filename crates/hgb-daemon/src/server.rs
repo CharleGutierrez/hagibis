@@ -31,6 +31,10 @@ pub struct DaemonState {
     pub mcp_orchestrator: Arc<hgb_core::McpHostOrchestrator>,
     pub skill_store: Arc<hgb_storage::SkillStore>,
     pub semantic_cache: Arc<tokio::sync::RwLock<hgb_storage::SemanticQueryCache>>,
+    pub wasm_hot_pool: Arc<hgb_core::WasmHotPool>,
+    pub power_scheduler: Arc<hgb_core::AdaptivePowerScheduler>,
+    pub event_bus: Arc<hgb_core::DistributedEventBus>,
+    pub mcp_sse_port: u16,
 }
 
 impl DaemonState {
@@ -67,6 +71,14 @@ impl DaemonState {
             hgb_storage::SemanticQueryCache::with_storage(cache_path),
         ));
 
+        let wasm_hot_pool = Arc::new(hgb_core::WasmHotPool::new(8).unwrap_or_default());
+        let power_scheduler = Arc::new(hgb_core::AdaptivePowerScheduler::new());
+        let event_bus = Arc::new(hgb_core::DistributedEventBus::new(hgb_core::DEFAULT_EVENT_BUS_CAPACITY));
+        let mcp_sse_port = std::env::var("HGB_MCP_SSE_PORT")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(crate::mcp_sse_server::DEFAULT_MCP_SSE_PORT);
+
         Self {
             start_time: std::time::Instant::now(),
             socket_path,
@@ -81,6 +93,10 @@ impl DaemonState {
             mcp_orchestrator,
             skill_store,
             semantic_cache,
+            wasm_hot_pool,
+            power_scheduler,
+            event_bus,
+            mcp_sse_port,
         }
     }
 }
@@ -107,6 +123,11 @@ impl HagibisDaemon {
         let listener = UnixListener::bind(socket_path)?;
         println!("🚀 Hagibis Daemon (hgbd) listening on {:?}", socket_path);
 
+        // Spawn Native MCP Server-Sent Events (SSE) server
+        let ws_dir = self.state.socket_path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+        crate::mcp_sse_server::McpSseServer::spawn_background(ws_dir, self.state.mcp_sse_port).await;
+        println!("⚡ Native MCP SSE Streaming server active on http://127.0.0.1:{}", self.state.mcp_sse_port);
+
         loop {
             match listener.accept().await {
                 Ok((mut stream, _)) => {
@@ -116,6 +137,27 @@ impl HagibisDaemon {
                         if let Ok(n) = stream.read(&mut buf).await {
                             if n > 0 {
                                 if let Ok(req) = bincode::deserialize::<HgbRequest>(&buf[..n]) {
+                                    if let HgbRequest::SubscribeEvents { topic_filter } = req {
+                                        // Streaming mode over UDS socket
+                                        let ack = HgbResponse::EventBusStatusResult(state.event_bus.status());
+                                        if let Ok(encoded) = bincode::serialize(&ack) {
+                                            let _ = stream.write_all(&encoded).await;
+                                        }
+                                        let mut rx = state.event_bus.subscribe();
+                                        while let Ok(event) = rx.recv().await {
+                                            if let Some(ref filter) = topic_filter {
+                                                if !event.topic.contains(filter) {
+                                                    continue;
+                                                }
+                                            }
+                                            let line = serde_json::to_string(&event).unwrap_or_default() + "\n";
+                                            if stream.write_all(line.as_bytes()).await.is_err() {
+                                                break;
+                                            }
+                                        }
+                                        return;
+                                    }
+
                                     let resp = Self::handle_request(&state, req).await;
                                     if let Ok(encoded) = bincode::serialize(&resp) {
                                         let _ = stream.write_all(&encoded).await;
@@ -3056,6 +3098,57 @@ impl HagibisDaemon {
                     Ok(report) => HgbResponse::VibeAutonomousCycleResult(report),
                     Err(e) => HgbResponse::Error(e),
                 }
+            }
+            HgbRequest::WasmPoolStatus => {
+                HgbResponse::WasmPoolStatusResult(state.wasm_hot_pool.status())
+            }
+            HgbRequest::WasmPoolExec { wasm_path, input } => {
+                let _ = state.event_bus.publish("wasm:pool", serde_json::json!({
+                    "action": "checkout_and_exec",
+                    "wasm_path": wasm_path,
+                }));
+                match state.wasm_hot_pool.execute(&wasm_path, &input) {
+                    Ok(rep) => {
+                        let _ = state.event_bus.publish("wasm:pool", serde_json::json!({
+                            "action": "exec_completed",
+                            "wasm_path": wasm_path,
+                            "latency_us": rep.total_latency_us,
+                            "cache_hit": rep.cache_hit,
+                        }));
+                        HgbResponse::WasmPoolExecResult(rep)
+                    }
+                    Err(e) => HgbResponse::Error(format!("WASM pool execution error: {}", e)),
+                }
+            }
+            HgbRequest::WasmPoolPrewarm { wasm_paths } => {
+                match state.wasm_hot_pool.prewarm(&wasm_paths) {
+                    Ok(reps) => HgbResponse::WasmPoolPrewarmResult(reps),
+                    Err(e) => HgbResponse::Error(format!("WASM pool prewarm error: {}", e)),
+                }
+            }
+            HgbRequest::PowerSchedulerStatus => {
+                HgbResponse::PowerSchedulerStatusResult(state.power_scheduler.status())
+            }
+            HgbRequest::PowerScheduleTask { requested_threads } => {
+                let cfg = state.power_scheduler.schedule_inference(requested_threads);
+                let _ = state.event_bus.publish("power:telemetry", serde_json::json!({
+                    "action": "scheduled",
+                    "num_thread": cfg.num_thread,
+                    "num_ctx": cfg.num_ctx,
+                    "cooldown_ms": cfg.cooldown_ms,
+                    "governor": cfg.governor_used,
+                }));
+                HgbResponse::PowerScheduleTaskResult(cfg)
+            }
+            HgbRequest::EventBusStatus => {
+                HgbResponse::EventBusStatusResult(state.event_bus.status())
+            }
+            HgbRequest::PublishEvent { topic, payload } => {
+                let count = state.event_bus.publish(&topic, payload).unwrap_or(0);
+                HgbResponse::PublishEventResult { receivers: count }
+            }
+            HgbRequest::SubscribeEvents { .. } => {
+                HgbResponse::EventBusStatusResult(state.event_bus.status())
             }
         }
     }

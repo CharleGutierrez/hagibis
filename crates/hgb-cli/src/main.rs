@@ -2421,7 +2421,7 @@ enum Commands {
     },
 
     /// Superpower 116: Unified Observation Bus
-    #[command(alias = "bus")]
+    #[command(alias = "observe-bus", alias = "obs")]
     Observe {
         /// Number of recent observation events to inspect
         #[arg(short, long, default_value_t = 50)]
@@ -2784,6 +2784,54 @@ enum Commands {
         /// Show status of Wasm distributed state
         #[arg(long)]
         status: bool,
+    },
+
+    /// Zero-Copy WebAssembly Execution Hot-Pool
+    #[command(alias = "hot-pool", alias = "pool")]
+    WasmPool {
+        /// Show status of the Wasm hot pool
+        #[arg(long)]
+        status: bool,
+        /// Pre-warm specific WASM modules
+        #[arg(long, num_args = 1..)]
+        prewarm: Vec<String>,
+        /// Path to WASM module to execute
+        #[arg(long)]
+        exec: Option<String>,
+        /// Input JSON or string
+        #[arg(long, default_value = "{}")]
+        input: String,
+    },
+
+    /// Adaptive Power-Aware Scheduler (Ollama + Dynatune)
+    #[command(alias = "power-tune", alias = "adaptive-tune")]
+    PowerScheduler {
+        /// Show status and live thermal profile
+        #[arg(long)]
+        status: bool,
+        /// Schedule an inference task
+        #[arg(long)]
+        schedule: bool,
+        /// Requested hardware execution threads
+        #[arg(long)]
+        threads: Option<usize>,
+    },
+
+    /// Unified Distributed Event Bus (Tokio Broadcast Streamer)
+    #[command(alias = "events", alias = "event-bus")]
+    Bus {
+        /// Show status of the event bus
+        #[arg(long)]
+        status: bool,
+        /// Live follow stream of events in real time
+        #[arg(long, short)]
+        follow: bool,
+        /// Filter events by topic
+        #[arg(long, short)]
+        topic: Option<String>,
+        /// Publish a discrete event: --publish <topic> <payload_json>
+        #[arg(long, num_args = 2)]
+        publish: Vec<String>,
     },
 }
 
@@ -8043,6 +8091,119 @@ async fn test_calc() { assert!(calculate(5)); }".to_string()
             } else {
                 println!("{} Verified cryptographic snapshot seal: {}", "✔".green().bold(), envelope.blake3_hash);
                 println!("{} Ready for distributed hot-swap migration across edge worker fleet.", "➔".white().bold());
+            }
+            Ok(())
+        }
+        Commands::WasmPool { status: _status, prewarm, exec, input } => {
+            println!("{}", "🚀 Zero-Copy WebAssembly Execution Hot-Pool".cyan().bold());
+            let client = HgbClient::new();
+            if !prewarm.is_empty() {
+                let res = client.send(hgb_core::protocol::HgbRequest::WasmPoolPrewarm { wasm_paths: prewarm }).await?;
+                if let hgb_core::protocol::HgbResponse::WasmPoolPrewarmResult(reports) = res {
+                    for r in reports {
+                        println!("  {} {} (compiled in {} µs) - {}", "•".cyan(), r.name.bold(), r.compile_duration_us, r.status);
+                    }
+                }
+            } else if let Some(wasm_file) = exec {
+                let parsed_input: serde_json::Value = serde_json::from_str(&input).unwrap_or(serde_json::json!({}));
+                let res = client.send(hgb_core::protocol::HgbRequest::WasmPoolExec { wasm_path: wasm_file, input: parsed_input }).await?;
+                if let hgb_core::protocol::HgbResponse::WasmPoolExecResult(rep) = res {
+                    println!("  Plugin:       {}", rep.plugin_name.green().bold());
+                    println!("  Cache Hit:    {}", if rep.cache_hit { "YES (Instant)".green() } else { "NO (Fresh JIT)".yellow() });
+                    println!("  Checkout:     {} µs", rep.checkout_duration_us);
+                    println!("  Execution:    {} µs", rep.execution_duration_us);
+                    println!("  Total:        {} µs", rep.total_latency_us.to_string().yellow().bold());
+                    println!("  Output:       {}", rep.output);
+                }
+            } else {
+                let res = client.send(hgb_core::protocol::HgbRequest::WasmPoolStatus).await?;
+                if let hgb_core::protocol::HgbResponse::WasmPoolStatusResult(st) = res {
+                    println!("  Pool Capacity:    {} slots ({} available hot slots)", st.pool_capacity, st.available_hot_slots);
+                    println!("  Cached Modules:   {}", st.cached_modules_count);
+                    for m in &st.cached_modules {
+                        println!("    - {} ({} bytes, {} hits, compile: {} µs)", m.name.bold(), m.size_bytes, m.hit_count, m.compile_duration_us);
+                    }
+                    println!("  Total Executions: {}", st.total_executions);
+                    println!("  Avg Latency:      {:.1} µs", st.avg_latency_us);
+                    println!("  Cache Hit Ratio:  {:.1}%", st.hit_ratio_pct);
+                }
+            }
+            Ok(())
+        }
+        Commands::PowerScheduler { status: _status, schedule, threads } => {
+            println!("{}", "🧠 Adaptive Power-Aware Scheduler (Ollama + Dynatune)".cyan().bold());
+            let client = HgbClient::new();
+            if schedule {
+                let res = client.send(hgb_core::protocol::HgbRequest::PowerScheduleTask { requested_threads: threads }).await?;
+                if let hgb_core::protocol::HgbResponse::PowerScheduleTaskResult(cfg) = res {
+                    println!("  Scheduled Threads:  {} execution threads", cfg.num_thread.to_string().green().bold());
+                    println!("  Context Budget:     {} tokens", cfg.num_ctx);
+                    println!("  Cooldown Buffer:    {} ms", cfg.cooldown_ms);
+                    println!("  Governor Profile:   {}", cfg.governor_used);
+                    println!("  Thermal Headroom:   {:.1}°C", cfg.thermal_headroom_c);
+                }
+            } else {
+                let res = client.send(hgb_core::protocol::HgbRequest::PowerSchedulerStatus).await?;
+                if let hgb_core::protocol::HgbResponse::PowerSchedulerStatusResult(st) = res {
+                    let p = &st.profile;
+                    println!("  CPU Package Temp:   {:.1}°C [{:?}]", p.current_temp_c, p.severity);
+                    println!("  Power Source:       {}", if p.ac_connected { "AC Mains" } else { "Battery" });
+                    println!("  Cores Topology:     {} physical / {} logical", p.physical_cores, p.logical_cpus);
+                    println!("  Optimal Threads:    {} threads", p.optimal_threads.to_string().green().bold());
+                    println!("  Context Budget:     {} tokens", p.context_length_budget);
+                    println!("  Recommended Gov:    {}", p.recommended_governor);
+                    println!("  Action:             {}", p.action_summary);
+                    println!("  Total Scheduled:    {} tasks ({} throttled)", st.total_scheduled_tasks, st.total_throttled_tasks);
+                }
+            }
+            Ok(())
+        }
+        Commands::Bus { status: _status, follow, topic, publish } => {
+            println!("{}", "📈 Unified Distributed Event Bus (Tokio Broadcast Streamer)".cyan().bold());
+            let client = HgbClient::new();
+            if !publish.is_empty() {
+                let top = publish[0].clone();
+                let payload = publish[1].clone();
+                let res = client.send(hgb_core::protocol::HgbRequest::PublishEvent { topic: top, payload }).await?;
+                if let hgb_core::protocol::HgbResponse::PublishEventResult { receivers } = res {
+                    println!("  {} Published event to {} active subscriber(s)", "✔".green().bold(), receivers);
+                }
+            } else if follow {
+                println!("  Connecting to daemon event stream (UDS: /run/user/1000/hgb.sock)...");
+                let stream_res = tokio::net::UnixStream::connect("/run/user/1000/hgb.sock").await;
+                match stream_res {
+                    Ok(mut stream) => {
+                        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                        let req = hgb_core::protocol::HgbRequest::SubscribeEvents { topic_filter: topic };
+                        let encoded = bincode::serialize(&req)?;
+                        stream.write_all(&encoded).await?;
+
+                        let mut buf = vec![0u8; 4096];
+                        while let Ok(n) = stream.read(&mut buf).await {
+                            if n == 0 { break; }
+                            let text = String::from_utf8_lossy(&buf[..n]);
+                            for line in text.lines() {
+                                if line.starts_with('{') {
+                                    println!("  {}", line);
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("  {} Failed to connect to event stream: {}", "✖".red(), e);
+                    }
+                }
+            } else {
+                let res = client.send(hgb_core::protocol::HgbRequest::EventBusStatus).await?;
+                if let hgb_core::protocol::HgbResponse::EventBusStatusResult(st) = res {
+                    println!("  Ring Capacity:      {} events", st.capacity);
+                    println!("  Active Subscribers: {}", st.active_subscribers.to_string().green().bold());
+                    println!("  Total Published:    {}", st.total_published);
+                    println!("  Recent History:     {} events stored", st.history_len);
+                    for ev in &st.latest_events {
+                        println!("    [{}] {} -> {}", ev.id.dimmed(), ev.topic.cyan().bold(), ev.payload);
+                    }
+                }
             }
             Ok(())
         }

@@ -902,6 +902,25 @@ pub use vibe_autonomous_loop::{
     VibeAutonomousLoopEngine, VibeCycleReport, VibeLoopConfig, VibePatchCandidate,
 };
 
+// Zero-Copy WASM Execution Hot-Pool exports
+pub mod wasm_hot_pool;
+pub use wasm_hot_pool::{
+    CachedModuleInfo, ModulePrewarmReport, WasmHotExecReport, WasmHotPool, WasmHotPoolStatus,
+    DEFAULT_WASM_FUEL,
+};
+
+// Adaptive Power-Aware Scheduler (Ollama + Dynatune) exports
+pub mod power_scheduler;
+pub use power_scheduler::{
+    AdaptivePowerScheduler, OllamaPowerProfile, PowerSchedulerStatus, ScheduledInferenceConfig,
+};
+
+// High-Performance Unified Distributed Event Bus exports
+pub mod event_bus;
+pub use event_bus::{
+    DaemonEvent, DistributedEventBus, EventBusStatus, DEFAULT_EVENT_BUS_CAPACITY,
+};
+
 /// Enterprise high-capacity implementation
 pub fn enterprise_architecture_dispatch() -> bool {
     true

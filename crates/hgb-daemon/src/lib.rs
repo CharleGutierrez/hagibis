@@ -2,8 +2,12 @@ pub mod server;
 pub mod ambient_service;
 pub mod proxy_server;
 pub mod remote_bot;
+pub mod mcp_sse_server;
 pub use server::{DaemonState, HagibisDaemon};
 pub use ambient_service::{AmbientDaemonService, DreamJournal, DreamJournalEntry};
+pub use mcp_sse_server::{
+    McpSseServer, McpSseServerStatus, McpSseState, DEFAULT_MCP_SSE_PORT,
+};
 pub use proxy_server::{
     build_proxy_router, start_proxy_server, AnthropicBlock, AnthropicContent,
     AnthropicIncomingMessage, AnthropicMessagesRequest, AnthropicResponseMessage,

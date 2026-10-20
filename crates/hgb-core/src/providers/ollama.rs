@@ -569,23 +569,23 @@ impl OllamaProvider {
     pub fn build_inference_options() -> Option<Value> {
         let mut opts = serde_json::Map::new();
 
-        // 1. Threading: Auto-detect CPU cores if not explicitly set
+        // Adaptive power-aware scheduling based on host Dynatune & thermal telemetry
+        let power_sched = crate::power_scheduler::AdaptivePowerScheduler::new();
+        let scheduled = power_sched.schedule_inference(None);
+
+        // 1. Threading: Auto-detect CPU cores and adapt to live thermal/battery telemetry
         let threads = std::env::var("OLLAMA_NUM_THREAD")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or_else(|| {
-                std::thread::available_parallelism()
-                    .map(|n| n.get() as u64)
-                    .unwrap_or(4)
-            });
+            .unwrap_or(scheduled.num_thread as u64);
         opts.insert("num_thread".to_string(), serde_json::json!(threads));
 
-        // 2. Context Window: override via OLLAMA_NUM_CTX
-        if let Ok(ctx) = std::env::var("OLLAMA_NUM_CTX") {
-            if let Ok(v) = ctx.parse::<u64>() {
-                opts.insert("num_ctx".to_string(), serde_json::json!(v));
-            }
-        }
+        // 2. Context Window: override via OLLAMA_NUM_CTX or adapt via power scheduler budget
+        let ctx = std::env::var("OLLAMA_NUM_CTX")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(scheduled.num_ctx as u64);
+        opts.insert("num_ctx".to_string(), serde_json::json!(ctx));
 
         // 3. Temperature: override via OLLAMA_TEMPERATURE
         if let Ok(temp) = std::env::var("OLLAMA_TEMPERATURE") {

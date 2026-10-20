@@ -188,51 +188,91 @@ impl SiblingOllamaAccelerator {
         let start = Instant::now();
         let chunks = self.chunk_file_content(content);
         let total_chunks = chunks.len();
-        let mut new_chunks_embedded = 0;
         let mut cached_chunks_reused = 0;
 
-        let conn = Connection::open(&self.db_path)
-            .map_err(|e| HgbError::Storage(format!("SQLite connection error: {}", e)))?;
+        // Step 1: Pre-filter chunks against SQLite cache
+        struct PendingChunk {
+            idx: usize,
+            start_l: usize,
+            end_l: usize,
+            symbol: Option<String>,
+            chunk_text: String,
+            chunk_hash: String,
+            entry_id: String,
+        }
 
-        let now = chrono::Utc::now().timestamp() as u64;
+        let mut pending: Vec<PendingChunk> = Vec::new();
+        {
+            let conn = Connection::open(&self.db_path)
+                .map_err(|e| HgbError::Storage(format!("SQLite connection error: {}", e)))?;
 
-        for (idx, (start_l, end_l, symbol, chunk_text)) in chunks.into_iter().enumerate() {
-            let chunk_hash = blake3::hash(chunk_text.as_bytes()).to_hex().to_string();
-            let entry_id = format!("{}:{}:{}", file_path, idx, chunk_hash);
+            for (idx, (start_l, end_l, symbol, chunk_text)) in chunks.into_iter().enumerate() {
+                let chunk_hash = blake3::hash(chunk_text.as_bytes()).to_hex().to_string();
+                let entry_id = format!("{}:{}:{}", file_path, idx, chunk_hash);
 
-            // Check if chunk with identical hash is already in DB
-            let mut check_stmt = conn.prepare("SELECT COUNT(*) FROM file_mutation_vectors WHERE blake3_hash = ?1")
-                .map_err(|e| HgbError::Storage(e.to_string()))?;
-            let exists: i64 = check_stmt.query_row(params![&chunk_hash], |row| row.get(0)).unwrap_or(0);
+                let exists: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM file_mutation_vectors WHERE blake3_hash = ?1",
+                    params![&chunk_hash],
+                    |row| row.get(0),
+                ).unwrap_or(0);
 
-            if exists > 0 {
-                cached_chunks_reused += 1;
-                continue;
+                if exists > 0 {
+                    cached_chunks_reused += 1;
+                } else {
+                    pending.push(PendingChunk {
+                        idx,
+                        start_l,
+                        end_l,
+                        symbol,
+                        chunk_text,
+                        chunk_hash,
+                        entry_id,
+                    });
+                }
             }
+        } // conn and statements completely dropped here
 
-            // Generate embedding (using Ollama /api/embeddings or fast deterministic SIMD fallback)
-            let emb = self.generate_embedding_vector(&chunk_text).await;
+        // Step 2: Asynchronously generate embeddings for pending chunks
+        let mut embedded_items: Vec<(PendingChunk, Vec<u8>)> = Vec::with_capacity(pending.len());
+        for item in pending {
+            let emb = self.generate_embedding_vector(&item.chunk_text).await;
             let blob = serialize_f32_blob(&emb);
+            embedded_items.push((item, blob));
+        }
 
-            conn.execute(
-                "INSERT OR REPLACE INTO file_mutation_vectors (
-                    id, file_path, chunk_idx, blake3_hash, symbol_name, start_line, end_line, content_text, embedding_blob, updated_at_epoch
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-                params![
-                    entry_id,
-                    file_path,
-                    idx as i64,
-                    chunk_hash,
-                    symbol,
-                    start_l as i64,
-                    end_l as i64,
-                    chunk_text,
-                    blob,
-                    now as i64
-                ],
-            ).map_err(|e| HgbError::Storage(format!("Failed to insert mutation vector: {}", e)))?;
+        // Step 3: Insert new embeddings into SQLite in a single transaction
+        let new_chunks_embedded = embedded_items.len();
+        if !embedded_items.is_empty() {
+            let mut conn = Connection::open(&self.db_path)
+                .map_err(|e| HgbError::Storage(format!("SQLite connection error: {}", e)))?;
+            let tx = conn.transaction()
+                .map_err(|e| HgbError::Storage(format!("SQLite transaction error: {}", e)))?;
 
-            new_chunks_embedded += 1;
+            let now = chrono::Utc::now().timestamp() as u64;
+            {
+                let mut stmt = tx.prepare(
+                    "INSERT OR REPLACE INTO file_mutation_vectors (
+                        id, file_path, chunk_idx, blake3_hash, symbol_name, start_line, end_line, content_text, embedding_blob, updated_at_epoch
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"
+                ).map_err(|e| HgbError::Storage(e.to_string()))?;
+
+                for (item, blob) in embedded_items {
+                    stmt.execute(params![
+                        item.entry_id,
+                        file_path,
+                        item.idx as i64,
+                        item.chunk_hash,
+                        item.symbol,
+                        item.start_l as i64,
+                        item.end_l as i64,
+                        item.chunk_text,
+                        blob,
+                        now as i64,
+                    ]).map_err(|e| HgbError::Storage(format!("Failed to insert mutation vector: {}", e)))?;
+                }
+            }
+            tx.commit()
+                .map_err(|e| HgbError::Storage(format!("Failed to commit mutation vectors: {}", e)))?;
         }
 
         Ok(VectorSyncReport {

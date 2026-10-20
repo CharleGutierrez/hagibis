@@ -4854,6 +4854,54 @@ impl HagibisRepl {
             HgbResponse::VibeAutonomousCycleResult(report) => {
                 println!("{}", hgb_core::VibeAutonomousLoopEngine::render_report_card(&report));
             }
+            HgbResponse::WasmPoolStatusResult(st) => {
+                println!("{}", "🚀 WASM Execution Hot-Pool Status".cyan().bold());
+                println!("  Pool Capacity:    {} slots ({} available hot slots)", st.pool_capacity, st.available_hot_slots);
+                println!("  Cached Modules:   {}", st.cached_modules_count);
+                println!("  Total Executions: {}", st.total_executions);
+                println!("  Avg Latency:      {:.1} µs", st.avg_latency_us);
+                println!("  Cache Hit Ratio:  {:.1}%", st.hit_ratio_pct);
+            }
+            HgbResponse::WasmPoolExecResult(rep) => {
+                println!("{}", "🚀 WASM Hot-Pool Execution Report".cyan().bold());
+                println!("  Plugin:       {}", rep.plugin_name.green().bold());
+                println!("  Cache Hit:    {}", if rep.cache_hit { "YES (Instant)".green() } else { "NO (Fresh JIT)".yellow() });
+                println!("  Total:        {} µs", rep.total_latency_us.to_string().yellow().bold());
+                println!("  Output:       {}", rep.output);
+            }
+            HgbResponse::WasmPoolPrewarmResult(reports) => {
+                println!("{}", "🚀 WASM Hot-Pool Prewarm Results".cyan().bold());
+                for r in reports {
+                    println!("  {} {} (compiled in {} µs) - {}", "•".cyan(), r.name.bold(), r.compile_duration_us, r.status);
+                }
+            }
+            HgbResponse::PowerSchedulerStatusResult(st) => {
+                println!("{}", "🧠 Adaptive Power-Aware Scheduler Status".cyan().bold());
+                let p = &st.profile;
+                println!("  CPU Package Temp:   {:.1}°C [{:?}]", p.current_temp_c, p.severity);
+                println!("  Power Source:       {}", if p.ac_connected { "AC Mains" } else { "Battery" });
+                println!("  Optimal Threads:    {} threads", p.optimal_threads.to_string().green().bold());
+                println!("  Context Budget:     {} tokens", p.context_length_budget);
+                println!("  Action:             {}", p.action_summary);
+            }
+            HgbResponse::PowerScheduleTaskResult(cfg) => {
+                println!("{}", "🧠 Scheduled Inference Profile".cyan().bold());
+                println!("  Scheduled Threads:  {} execution threads", cfg.num_thread.to_string().green().bold());
+                println!("  Context Budget:     {} tokens", cfg.num_ctx);
+                println!("  Cooldown Buffer:    {} ms", cfg.cooldown_ms);
+                println!("  Governor Profile:   {}", cfg.governor_used);
+                println!("  Thermal Headroom:   {:.1}°C", cfg.thermal_headroom_c);
+            }
+            HgbResponse::EventBusStatusResult(st) => {
+                println!("{}", "📈 Unified Distributed Event Bus Status".cyan().bold());
+                println!("  Active Subscribers: {}", st.active_subscribers);
+                println!("  Total Published:    {}", st.total_published);
+                println!("  Ring Capacity:      {}", st.capacity);
+                println!("  Recent History:     {} events stored", st.history_len);
+            }
+            HgbResponse::PublishEventResult { receivers } => {
+                println!("  {} Published event to {} active subscriber(s)", "✔".green().bold(), receivers);
+            }
         }
     }
 

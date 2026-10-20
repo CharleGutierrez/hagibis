@@ -9,6 +9,9 @@
         "OLLAMA_HOST": "http://127.0.0.1:11434"
       }
     },
+    "hagibis_sse": {
+      "url": "http://127.0.0.1:8083/sse"
+    },
     "ollama_sibling": {
       "command": "hgb",
       "args": ["mcp"],

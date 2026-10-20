@@ -514,6 +514,27 @@ impl InteractiveCommandCatalog {
                 syntax: "hgb vibe [--once] [--watch] [--auto-patch] [--no-tests] [--debounce <ms>]",
                 description: "Autonomous Vibe Coding Agent Loop: watches filesystem events, runs speculative First-Green sandbox checks, and self-optimizes codebases.",
             },
+            CommandEntry {
+                name: "wasm-pool",
+                aliases: &["hot-pool", "wasm-hot"],
+                category: "Wasm/Runtime",
+                syntax: "hgb wasm-pool [--status] [--prewarm <paths...>] [--exec <path> [json]]",
+                description: "Zero-Copy WebAssembly Hot-Pool: pre-warmed Wasmtime instances with JIT cache for microsecond sub-task execution.",
+            },
+            CommandEntry {
+                name: "power-scheduler",
+                aliases: &["power-tune", "adaptive-tune"],
+                category: "Hardware/Scheduler",
+                syntax: "hgb power-scheduler [--status] [--schedule] [--threads <N>]",
+                description: "Adaptive Power-Aware Scheduler: dynamically modulates Ollama thread counts and CPU governors via live Dynatune thermal telemetry.",
+            },
+            CommandEntry {
+                name: "bus",
+                aliases: &["events", "event-bus"],
+                category: "IPC/Stream",
+                syntax: "hgb bus [--status] [--follow] [--topic <filter>] [--publish <topic> <payload>]",
+                description: "Unified Distributed Event Bus: Tokio broadcast channel streaming real-time agent, wasm, and power events over local UDS socket.",
+            },
         ]
     }
 

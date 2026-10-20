@@ -1166,6 +1166,31 @@ pub enum HgbRequest {
         auto_patch: bool,
         run_tests: bool,
     },
+    // 136. Zero-Copy WASM Execution Hot-Pool
+    WasmPoolStatus,
+    WasmPoolExec {
+        wasm_path: String,
+        input: serde_json::Value,
+    },
+    WasmPoolPrewarm {
+        wasm_paths: Vec<String>,
+    },
+    // 137. Adaptive Power-Aware Scheduler (Ollama + Dynatune)
+    PowerSchedulerStatus,
+    PowerScheduleTask {
+        #[serde(default)]
+        requested_threads: Option<usize>,
+    },
+    // 138. Unified Distributed Event Bus
+    EventBusStatus,
+    PublishEvent {
+        topic: String,
+        payload: String,
+    },
+    SubscribeEvents {
+        #[serde(default)]
+        topic_filter: Option<String>,
+    },
 }
 
 fn default_two() -> usize {
@@ -1665,6 +1690,16 @@ pub enum HgbResponse {
     WasmDistributedMigrateResult(crate::wasm_distributed_sync::WasmMigrationReceipt),
     // 135. Autonomous Vibe Coding Agent Loop
     VibeAutonomousCycleResult(crate::vibe_autonomous_loop::VibeCycleReport),
+    // 136. Zero-Copy WASM Execution Hot-Pool
+    WasmPoolStatusResult(crate::wasm_hot_pool::WasmHotPoolStatus),
+    WasmPoolExecResult(crate::wasm_hot_pool::WasmHotExecReport),
+    WasmPoolPrewarmResult(Vec<crate::wasm_hot_pool::ModulePrewarmReport>),
+    // 137. Adaptive Power-Aware Scheduler (Ollama + Dynatune)
+    PowerSchedulerStatusResult(crate::power_scheduler::PowerSchedulerStatus),
+    PowerScheduleTaskResult(crate::power_scheduler::ScheduledInferenceConfig),
+    // 138. Unified Distributed Event Bus
+    EventBusStatusResult(crate::event_bus::EventBusStatus),
+    PublishEventResult { receivers: usize },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
