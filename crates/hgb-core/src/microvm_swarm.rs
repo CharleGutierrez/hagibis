@@ -199,6 +199,26 @@ impl EphemeralSandboxSwarm {
             let _ = fs::create_dir_all(&fc_dir);
             let fc_config_path = fc_dir.join("firecracker.json");
 
+            // Dynamic Dynatune scaling: modulate Firecracker vCPU and memory based on thermal & battery telemetry
+            let (vcpu_count, mem_size_mib) = {
+                let temp = fs::read_to_string("/sys/class/thermal/thermal_zone0/temp")
+                    .ok()
+                    .and_then(|s| s.trim().parse::<f32>().ok())
+                    .map(|m| m / 1000.0)
+                    .unwrap_or(45.0);
+                let on_ac = fs::read_to_string("/sys/class/power_supply/AC/online")
+                    .ok()
+                    .map(|s| s.trim() == "1")
+                    .unwrap_or(true);
+                let headroom = (85.0 - temp).max(0.0);
+
+                if !on_ac || headroom < 15.0 {
+                    (1, spec.memory_mb.min(128))
+                } else {
+                    (2, spec.memory_mb)
+                }
+            };
+
             let fc_config = serde_json::json!({
                 "boot-source": {
                     "kernel_image_path": "/var/lib/firecracker/vmlinux.bin",
@@ -213,8 +233,8 @@ impl EphemeralSandboxSwarm {
                     }
                 ],
                 "machine-config": {
-                    "vcpu_count": 2,
-                    "mem_size_mib": spec.memory_mb,
+                    "vcpu_count": vcpu_count,
+                    "mem_size_mib": mem_size_mib,
                     "smt": false
                 }
             });

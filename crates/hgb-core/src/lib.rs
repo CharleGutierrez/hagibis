@@ -958,6 +958,13 @@ pub use wasm_shared_memory::{
     WasmSharedMemoryPipeline, WasmShmBenchReport, WasmShmStatus, DEFAULT_SHM_PAGES,
 };
 
+// Pillar 1: Neural Coprocessor & Local Model Hot-Swapping
+pub mod neural_coprocessor;
+pub use neural_coprocessor::{
+    CoprocessorRouter, CoprocessorStatus, CoprocessorTelemetry, ExecutionTarget,
+    NeuralCoprocessor, PromptComplexityTier, RoutingDecision as CoprocessorRoutingDecision,
+};
+
 /// Enterprise high-capacity implementation
 pub fn enterprise_architecture_dispatch() -> bool {
     true

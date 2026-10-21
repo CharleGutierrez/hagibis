@@ -591,6 +591,34 @@ impl InteractiveCommandCatalog {
                 syntax: "hgb wasm-shm [--bench] [--chunk-kb <N>] [--iterations <N>] [--status]",
                 description: "Zero-Copy WebAssembly Shared Memory Pipeline: direct host-to-guest linear memory slicing, ring-buffer streams, and sub-microsecond invocation latency.",
             },
+            CommandEntry {
+                name: "neural-coprocessor",
+                aliases: &["coproc", "smart-router"],
+                category: "Core/Neural",
+                syntax: "hgb neural-coprocessor [--prompt <text>] [--status]",
+                description: "Neural Coprocessor & Model Hot-Swapping: prompt complexity inspector routing across Local WASM kernel, Local Ollama models, and Frontier MCP models with Dynatune thermal awareness.",
+            },
+            CommandEntry {
+                name: "shm-ring",
+                aliases: &["ring-buffer", "shm-pipe"],
+                category: "Storage/ZeroCopy",
+                syntax: "hgb shm-ring [--push <data>] [--pop <bytes>] [--bench] [--chunk-size <N>] [--iterations <N>] [--status]",
+                description: "Zero-Copy POSIX Shared Memory Ring Buffer: /dev/shm lock-free circular ring buffer with 64-byte aligned atomic heads delivering nanosecond IPC latency without disk I/O.",
+            },
+            CommandEntry {
+                name: "self-healing-daemon",
+                aliases: &["daemon-heal", "heal-loop"],
+                category: "Daemon/Autopilot",
+                syntax: "hgb self-healing-daemon [--trigger] [--command <cmd>] [--file <target>] [--status]",
+                description: "Self-Healing Autonomous Daemon Loops: background supervisor intercepting WASM/MicroVM/compiler failures, synthesizing diagnostic prompts, and applying verified CoW memory patches autonomously.",
+            },
+            CommandEntry {
+                name: "swarm-mesh",
+                aliases: &["p2p-mesh", "swarm"],
+                category: "NextGen/P2P",
+                syntax: "hgb swarm-mesh [--delegate <payload>] [--kind <compile|wasm>] [--sync-dht <key=val>] [--status]",
+                description: "Distributed P2P Swarm Mesh: sovereign peer discovery, BLAKE3 authentication, load-balanced task delegation to idle peer nodes, and encrypted distributed hash table (DHT) caching.",
+            },
         ]
     }
 

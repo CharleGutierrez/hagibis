@@ -1262,6 +1262,60 @@ pub enum HgbRequest {
         iterations: Option<usize>,
     },
     WasmShmStatus,
+    // --- Pillar 1: Neural Coprocessor & Local Model Hot-Swapping ---
+    CoprocessorRoute {
+        prompt: String,
+    },
+    CoprocessorStatus,
+    // --- Pillar 2: Zero-Copy POSIX Shared Memory Ring Buffer ---
+    ShmRingPush {
+        ring_name: String,
+        data_b64: String,
+    },
+    ShmRingPop {
+        ring_name: String,
+        max_bytes: usize,
+    },
+    ShmRingBench {
+        #[serde(default)]
+        ring_name: Option<String>,
+        #[serde(default)]
+        chunk_size: Option<usize>,
+        #[serde(default)]
+        iterations: Option<usize>,
+    },
+    ShmRingStatus {
+        #[serde(default)]
+        ring_name: Option<String>,
+    },
+    // --- Pillar 3: Self-Healing Autonomous Daemon Loops ---
+    DaemonSelfHealTrigger {
+        #[serde(default)]
+        command: Option<String>,
+        #[serde(default)]
+        target_file: Option<String>,
+    },
+    DaemonSelfHealStatus,
+    // --- Pillar 4: Distributed P2P Swarm Mesh ---
+    SwarmMeshDelegate {
+        task_id: String,
+        kind: String,
+        payload: String,
+        #[serde(default = "default_five")]
+        timeout_secs: usize,
+    },
+    SwarmMeshSync {
+        key: String,
+        value: String,
+        entry_type: String,
+        #[serde(default = "default_twenty_u64")]
+        ttl_secs: u64,
+    },
+    SwarmMeshStatus,
+}
+
+fn default_twenty_u64() -> u64 {
+    20
 }
 
 fn default_two() -> usize {
@@ -1798,6 +1852,21 @@ pub enum HgbResponse {
     // Elite Superpower 4: Zero-Copy WASM Shared Memory Pipelines
     WasmShmBenchResult(crate::wasm_shared_memory::WasmShmBenchReport),
     WasmShmStatusResult(crate::wasm_shared_memory::WasmShmStatus),
+    // Pillar 1: Neural Coprocessor & Local Model Hot-Swapping
+    CoprocessorRouteResult(crate::neural_coprocessor::RoutingDecision),
+    CoprocessorStatusResult(crate::neural_coprocessor::CoprocessorStatus),
+    // Pillar 2: Zero-Copy POSIX Shared Memory Ring Buffer
+    ShmRingPushResult(usize),
+    ShmRingPopResult(String),
+    ShmRingBenchResult(String),
+    ShmRingStatusResult(String),
+    // Pillar 3: Self-Healing Autonomous Daemon Loops
+    DaemonSelfHealResult(String),
+    DaemonSelfHealStatusResult(String),
+    // Pillar 4: Distributed P2P Swarm Mesh
+    SwarmMeshDelegateResult(String),
+    SwarmMeshSyncResult(String),
+    SwarmMeshStatusResult(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -21,6 +21,7 @@ from ch3_cockpit import build_cockpit_chapter
 from ch4_superpowers import build_superpowers_chapter
 from ch5_tutorials import build_tutorials_chapter
 from ch6_scenarios import build_scenarios_chapter
+from ch8_autonomous_loops import build_autonomous_loops_chapter
 from ch7_appendix import build_appendix_chapter
 
 def assemble_masterclass_pdf():
@@ -61,11 +62,15 @@ def assemble_masterclass_pdf():
     story.extend(build_tutorials_chapter())
     story.append(PageBreak())
 
-    print("[6/7] Building Chapter 6: The 500 Real-World Scenarios Masterclass...")
+    print("[6/8] Building Chapter 6: The 500 Real-World Scenarios Masterclass...")
     story.extend(build_scenarios_chapter())
     story.append(PageBreak())
 
-    print("[7/7] Building Chapter 7: Appendix, CLI Manual & The Vibe Coder's Oath...")
+    print("[7/8] Building Chapter 8: Autonomous Hyper-Executor Feedback Loops...")
+    story.extend(build_autonomous_loops_chapter())
+    story.append(PageBreak())
+
+    print("[8/8] Building Chapter 7: Appendix, CLI Manual & The Vibe Coder's Oath...")
     story.extend(build_appendix_chapter())
 
     print(f"Total Flowable Story Elements: {len(story)}")

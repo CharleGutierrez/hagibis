@@ -42,6 +42,10 @@ pub struct DaemonState {
     pub vector_engine: Arc<hgb_storage::DistributedVectorEngine>,
     pub jit_allocator: Arc<hgb_core::JitResourceAllocator>,
     pub wasm_shm_pipeline: Arc<tokio::sync::Mutex<hgb_core::WasmSharedMemoryPipeline>>,
+    pub neural_coproc: Arc<hgb_core::NeuralCoprocessor>,
+    pub shm_ring: Arc<tokio::sync::Mutex<hgb_storage::ShmRingBuffer>>,
+    pub self_healing_daemon: Arc<crate::self_healing_daemon::SelfHealingDaemonLoop>,
+    pub p2p_mesh: Arc<hgb_nextgen::P2pSwarmMesh>,
 }
 
 impl DaemonState {
@@ -99,6 +103,17 @@ impl DaemonState {
             hgb_core::WasmSharedMemoryPipeline::new().expect("init wasm shm pipeline"),
         ));
 
+        let neural_coproc = Arc::new(hgb_core::NeuralCoprocessor::new());
+        let shm_ring = Arc::new(tokio::sync::Mutex::new(
+            hgb_storage::ShmRingBuffer::new("daemon_shared_ring", 16 * 1024 * 1024)
+                .expect("init daemon shm ring"),
+        ));
+        let self_healing_daemon = Arc::new(
+            crate::self_healing_daemon::SelfHealingDaemonLoop::new(&ws_dir)
+                .with_event_bus(event_bus.clone()),
+        );
+        let p2p_mesh = Arc::new(hgb_nextgen::P2pSwarmMesh::new("local_hgbd_node", "mesh_auth_secret_2026"));
+
         Self {
             start_time: std::time::Instant::now(),
             socket_path,
@@ -124,6 +139,10 @@ impl DaemonState {
             vector_engine,
             jit_allocator,
             wasm_shm_pipeline,
+            neural_coproc,
+            shm_ring,
+            self_healing_daemon,
+            p2p_mesh,
         }
     }
 }
@@ -3311,6 +3330,100 @@ impl HagibisDaemon {
             HgbRequest::WasmShmStatus => {
                 let pipeline = state.wasm_shm_pipeline.lock().await;
                 HgbResponse::WasmShmStatusResult(pipeline.status())
+            }
+
+            // Pillar 1: Neural Coprocessor & Local Model Hot-Swapping
+            HgbRequest::CoprocessorRoute { prompt } => {
+                let decision = state.neural_coproc.route(&prompt);
+                HgbResponse::CoprocessorRouteResult(decision)
+            }
+            HgbRequest::CoprocessorStatus => {
+                let status = state.neural_coproc.status();
+                HgbResponse::CoprocessorStatusResult(status)
+            }
+
+            // Pillar 2: Zero-Copy POSIX Shared Memory Ring Buffer
+            HgbRequest::ShmRingPush { ring_name: _, data_b64 } => {
+                let bytes = base64::Engine::decode(
+                    &base64::engine::general_purpose::STANDARD,
+                    &data_b64,
+                ).unwrap_or_else(|_| data_b64.as_bytes().to_vec());
+                let mut ring = state.shm_ring.lock().await;
+                match ring.push(&bytes) {
+                    Ok(n) => HgbResponse::ShmRingPushResult(n),
+                    Err(e) => HgbResponse::Error(format!("SHM Ring push failed: {}", e)),
+                }
+            }
+            HgbRequest::ShmRingPop { ring_name: _, max_bytes } => {
+                let mut buf = vec![0u8; max_bytes];
+                let mut ring = state.shm_ring.lock().await;
+                match ring.pop(&mut buf) {
+                    Ok(n) => {
+                        let payload_b64 = base64::Engine::encode(
+                            &base64::engine::general_purpose::STANDARD,
+                            &buf[0..n],
+                        );
+                        HgbResponse::ShmRingPopResult(payload_b64)
+                    }
+                    Err(e) => HgbResponse::Error(format!("SHM Ring pop failed: {}", e)),
+                }
+            }
+            HgbRequest::ShmRingBench { ring_name: _, chunk_size, iterations } => {
+                let c_size = chunk_size.unwrap_or(4096);
+                let iters = iterations.unwrap_or(50);
+                let mut ring = state.shm_ring.lock().await;
+                match ring.benchmark(c_size, iters) {
+                    Ok(rep) => HgbResponse::ShmRingBenchResult(serde_json::to_string_pretty(&rep).unwrap_or_default()),
+                    Err(e) => HgbResponse::Error(format!("SHM Ring benchmark failed: {}", e)),
+                }
+            }
+            HgbRequest::ShmRingStatus { ring_name: _ } => {
+                let ring = state.shm_ring.lock().await;
+                let status = ring.status();
+                HgbResponse::ShmRingStatusResult(serde_json::to_string_pretty(&status).unwrap_or_default())
+            }
+
+            // Pillar 3: Self-Healing Autonomous Daemon Loops
+            HgbRequest::DaemonSelfHealTrigger { command, target_file } => {
+                match state.self_healing_daemon.trigger_heal(command.as_deref(), target_file.as_deref()) {
+                    Ok(rep) => HgbResponse::DaemonSelfHealResult(serde_json::to_string_pretty(&rep).unwrap_or_default()),
+                    Err(e) => HgbResponse::Error(format!("Daemon self-healing trigger failed: {}", e)),
+                }
+            }
+            HgbRequest::DaemonSelfHealStatus => {
+                let status = state.self_healing_daemon.status();
+                HgbResponse::DaemonSelfHealStatusResult(serde_json::to_string_pretty(&status).unwrap_or_default())
+            }
+
+            // Pillar 4: Distributed P2P Swarm Mesh
+            HgbRequest::SwarmMeshDelegate { task_id, kind, payload, timeout_secs } => {
+                let workload_kind = match kind.as_str() {
+                    "compile" | "CompileRust" => hgb_nextgen::WorkloadKind::CompileRust,
+                    "wasm" | "ExecuteWasm" => hgb_nextgen::WorkloadKind::ExecuteWasm,
+                    "embed" | "VectorEmbedding" => hgb_nextgen::WorkloadKind::VectorEmbedding,
+                    _ => hgb_nextgen::WorkloadKind::McpToolCall,
+                };
+                let spec = hgb_nextgen::DelegatedWorkloadSpec {
+                    task_id,
+                    kind: workload_kind,
+                    payload,
+                    timeout_ms: (timeout_secs as u64) * 1000,
+                    originator_id: "hgb_cli_user".to_string(),
+                };
+                match state.p2p_mesh.delegate_task(spec) {
+                    Ok(receipt) => HgbResponse::SwarmMeshDelegateResult(serde_json::to_string_pretty(&receipt).unwrap_or_default()),
+                    Err(e) => HgbResponse::Error(format!("Swarm mesh delegation failed: {}", e)),
+                }
+            }
+            HgbRequest::SwarmMeshSync { key, value, entry_type, ttl_secs } => {
+                match state.p2p_mesh.sync_dht_cache(&key, &value, &entry_type, ttl_secs) {
+                    Ok(entry) => HgbResponse::SwarmMeshSyncResult(serde_json::to_string_pretty(&entry).unwrap_or_default()),
+                    Err(e) => HgbResponse::Error(format!("Swarm mesh DHT sync failed: {}", e)),
+                }
+            }
+            HgbRequest::SwarmMeshStatus => {
+                let status = state.p2p_mesh.status();
+                HgbResponse::SwarmMeshStatusResult(serde_json::to_string_pretty(&status).unwrap_or_default())
             }
         }
     }

@@ -1606,6 +1606,40 @@ impl HagibisRepl {
                 };
                 self.render_response(resp);
             }
+            "/coproc" | "/neural-router" => {
+                let trimmed = args.trim();
+                let resp = if trimmed.is_empty() || trimmed == "status" {
+                    self.dispatch(HgbRequest::CoprocessorStatus).await
+                } else {
+                    self.dispatch(HgbRequest::CoprocessorRoute { prompt: trimmed.to_string() }).await
+                };
+                self.render_response(resp);
+            }
+            "/shm-ring" | "/ring" => {
+                let trimmed = args.trim();
+                let resp = if trimmed == "bench" {
+                    self.dispatch(HgbRequest::ShmRingBench { ring_name: None, chunk_size: Some(4096), iterations: Some(50) }).await
+                } else {
+                    self.dispatch(HgbRequest::ShmRingStatus { ring_name: None }).await
+                };
+                self.render_response(resp);
+            }
+            "/daemon-heal" | "/heal-loop" => {
+                let trimmed = args.trim();
+                let resp = if trimmed == "status" {
+                    self.dispatch(HgbRequest::DaemonSelfHealStatus).await
+                } else {
+                    self.dispatch(HgbRequest::DaemonSelfHealTrigger {
+                        command: Some("cargo check".to_string()),
+                        target_file: if !trimmed.is_empty() { Some(trimmed.to_string()) } else { None },
+                    }).await
+                };
+                self.render_response(resp);
+            }
+            "/swarm-mesh" | "/mesh-status" => {
+                let resp = self.dispatch(HgbRequest::SwarmMeshStatus).await;
+                self.render_response(resp);
+            }
             "/cockpit" => {
                 let mut state = hgb_nextgen::CockpitState::new();
                 if let Some(ref m) = self.model {
@@ -5126,6 +5160,40 @@ impl HagibisRepl {
                 println!("  Output Slice:      Offset {} (Cap: {} KB)", st.output_slice_offset, st.output_slice_capacity / 1024);
                 println!("  Total Invocations: {}", st.total_invocations);
                 println!("  Avg Latency:       {:.2} µs", st.avg_invocation_latency_us);
+            }
+            HgbResponse::CoprocessorRouteResult(dec) => {
+                println!("{}", "🧠 NEURAL COPROCESSOR ROUTING DECISION 🧠".bold().cyan());
+                println!("  Complexity Tier:   {}", dec.complexity.to_string().cyan().bold());
+                println!("  Selected Model:    {}", dec.selected_model.green().bold());
+                println!("  Quantization:      {}", dec.quantization.yellow());
+                println!("  Headroom:          {:.1}°C (AC: {})", dec.thermal_headroom_c, dec.ac_connected);
+                println!("  Rationale:         {}", dec.rationale);
+            }
+            HgbResponse::CoprocessorStatusResult(st) => {
+                println!("{}", "🧠 NEURAL COPROCESSOR STATUS 🧠".bold().cyan());
+                println!("  Ollama Endpoint:   {}", st.ollama_endpoint);
+                println!("  Installed Models:  {} model(s)", st.installed_models.len());
+                println!("  Active Quant:      {}", st.active_quantization_tier.green().bold());
+                println!("  Headroom:          {:.1}°C", st.thermal_headroom_c);
+                println!("  Total Routes:      {}", st.telemetry.total_routes);
+            }
+            HgbResponse::ShmRingPushResult(n) => {
+                println!("  ✔ Pushed {} bytes directly into /dev/shm ring buffer", n.to_string().green().bold());
+            }
+            HgbResponse::ShmRingPopResult(payload_b64) => {
+                println!("  ✔ Popped payload (base64): {}", payload_b64.cyan());
+            }
+            HgbResponse::ShmRingBenchResult(json) | HgbResponse::ShmRingStatusResult(json) => {
+                println!("{}", "⚡ POSIX SHARED MEMORY RING BUFFER ⚡".bold().cyan());
+                println!("{}", json);
+            }
+            HgbResponse::DaemonSelfHealResult(json) | HgbResponse::DaemonSelfHealStatusResult(json) => {
+                println!("{}", "🩺 AUTONOMOUS SELF-HEALING DAEMON LOOP 🩺".bold().cyan());
+                println!("{}", json);
+            }
+            HgbResponse::SwarmMeshDelegateResult(json) | HgbResponse::SwarmMeshSyncResult(json) | HgbResponse::SwarmMeshStatusResult(json) => {
+                println!("{}", "🌐 DISTRIBUTED P2P SWARM MESH 🌐".bold().cyan());
+                println!("{}", json);
             }
         }
     }

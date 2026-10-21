@@ -26,3 +26,5 @@ axum = { version = "0.7", features = ["ws"] }
 reqwest = { workspace = true }
 futures-util = "0.3"
 uuid = { version = "1.27.0", features = ["v4"] }
+base64 = { workspace = true }
+blake3 = { workspace = true }

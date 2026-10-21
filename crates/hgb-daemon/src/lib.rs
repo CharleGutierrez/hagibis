@@ -147,3 +147,10 @@ pub mod mcp_mesh_network;
 pub use mcp_mesh_network::{
     McpMeshNetwork, MeshMutationVector, MeshPeer, MeshStatusReport, MeshSyncReport, MeshTool,
 };
+
+// Pillar 3: Self-Healing Autonomous Daemon Loops
+pub mod self_healing_daemon;
+pub use self_healing_daemon::{
+    DiagnosticPackage, ExecutionFailureEvent, FailureSource, HealingAttemptReport,
+    SelfHealingDaemonLoop, SelfHealingDaemonStatus,
+};

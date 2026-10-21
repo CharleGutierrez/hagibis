@@ -108,7 +108,7 @@ pub use green_light::{GreenLightEngine, GreenLightReport, SpecRequirement};
 pub use guardian::{GhostFix, GhostFixStatus, GuardianConfig, GuardianEngine, GuardianEvent};
 pub use heal::{CompilerDiagnostic, HealAttempt, HealEngine, HealReport};
 pub use hybrid::{CandidateToken, DraftDistribution, LakandiwaVerdict, SpeculativeHybridEngine};
-pub use mesh::{MeshNode, P2pSwarmMesh};
+pub use mesh::{MeshNode, P2pSwarmMesh as LegacyP2pSwarmMesh};
 pub use local_proxy_fabric::{LocalProxyFabric, LocalProxyFabricConfig, LocalProxyFabricServer};
 pub use phantom_swarm::{LatencyPercentiles, PhantomSwarmConfig, PhantomSwarmEngine, PhantomSwarmReport};
 pub use pixel_radar::{CssOverflowDefect, DomSnapshot, PixelDiffRadar, PixelDiffReport};
@@ -156,6 +156,13 @@ pub use tui_syntax::{
 pub use bare_metal_bridge::{
     BareMetalPerformanceBridge, BareMetalTelemetry, GovernorGuard, GovernorShiftReport,
     KernelProfile,
+};
+
+// Pillar 4: Distributed P2P Swarm Mesh
+pub mod p2p_swarm_mesh;
+pub use p2p_swarm_mesh::{
+    DelegatedTaskReceipt, DelegatedWorkloadSpec, EncryptedDhtEntry, MeshPeerNode,
+    P2pSwarmMesh, P2pSwarmStatus, WorkloadKind,
 };
 
 

@@ -33,4 +33,8 @@ pub use semantic_cache::{
 pub use distributed_vector_engine::{
     DistributedVectorEngine, VectorEngineStatus, VectorSearchResult, VectorStreamEvent,
 };
+pub mod shm_ring_buffer;
+pub use shm_ring_buffer::{
+    DEFAULT_RING_CAPACITY, ShmBenchReport, ShmRingBuffer, ShmRingBufferStatus,
+};
 

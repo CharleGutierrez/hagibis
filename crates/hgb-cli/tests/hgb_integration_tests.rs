@@ -1,7 +1,7 @@
 use hgb_core::AgentShieldLight;
 use hgb_nextgen::{
     AgenticFuzzEngine, CandidateToken, DraftDistribution, MerkleTree,
-    MeshNode, P2pSwarmMesh, ProvenanceLedger, SpeculativeHybridEngine, SwarmCheckpointManager,
+    MeshNode, LegacyP2pSwarmMesh as P2pSwarmMesh, ProvenanceLedger, SpeculativeHybridEngine, SwarmCheckpointManager,
 };
 use hgb_storage::{SkillRecord, SkillStore, VectorEntry, VectorIndex};
 use std::collections::HashMap;

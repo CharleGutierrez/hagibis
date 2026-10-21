@@ -2975,6 +2975,74 @@ enum Commands {
         #[arg(long)]
         status: bool,
     },
+
+    /// Pillar 1: Neural Coprocessor & Local Model Hot-Swapping
+    #[command(alias = "coproc", alias = "smart-router")]
+    NeuralCoprocessor {
+        /// Developer prompt to inspect and route
+        #[arg(short, long)]
+        prompt: Option<String>,
+        /// Show neural coprocessor hardware and inventory status
+        #[arg(long)]
+        status: bool,
+    },
+
+    /// Pillar 2: Zero-Copy POSIX Shared Memory Ring Buffer
+    #[command(alias = "ring-buffer", alias = "shm-pipe")]
+    ShmRing {
+        /// Push string data into shared memory ring buffer
+        #[arg(long)]
+        push: Option<String>,
+        /// Pop bytes from shared memory ring buffer
+        #[arg(long)]
+        pop: Option<usize>,
+        /// Run nanosecond throughput benchmark
+        #[arg(long)]
+        bench: bool,
+        /// Benchmark chunk size in bytes (default 4096)
+        #[arg(long, default_value_t = 4096)]
+        chunk_size: usize,
+        /// Benchmark iterations count (default 50)
+        #[arg(short, long, default_value_t = 50)]
+        iterations: usize,
+        /// Show shared memory ring buffer status
+        #[arg(long)]
+        status: bool,
+    },
+
+    /// Pillar 3: Self-Healing Autonomous Daemon Loops
+    #[command(alias = "daemon-heal", alias = "heal-loop")]
+    SelfHealingDaemon {
+        /// Trigger autonomous self-healing loop
+        #[arg(long)]
+        trigger: bool,
+        /// Verification command to execute (e.g. cargo check, zig test)
+        #[arg(short, long)]
+        command: Option<String>,
+        /// Target file path to diagnose and repair
+        #[arg(short, long)]
+        file: Option<String>,
+        /// Show self-healing daemon status and recent reports
+        #[arg(long)]
+        status: bool,
+    },
+
+    /// Pillar 4: Distributed P2P Swarm Mesh
+    #[command(alias = "p2p-mesh", alias = "swarm")]
+    SwarmMesh {
+        /// Delegate workload payload to best idle peer node
+        #[arg(long)]
+        delegate: Option<String>,
+        /// Workload kind (compile, wasm, embed, tool)
+        #[arg(short, long, default_value = "compile")]
+        kind: String,
+        /// Sync key-value pair to encrypted distributed DHT
+        #[arg(long)]
+        sync_dht: Option<String>,
+        /// Show swarm mesh active peers and DHT status
+        #[arg(long)]
+        status: bool,
+    },
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -8711,6 +8779,165 @@ async fn test_calc() { assert!(calculate(5)); }".to_string()
                         println!("  Status:            {}", rep.status.cyan());
                     }
                     hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Benchmark error: {}", e.red()),
+                    _ => {}
+                }
+            }
+            Ok(())
+        }
+        Commands::NeuralCoprocessor { prompt, status } => {
+            println!("{}", "🧠 Neural Coprocessor & Local Model Hot-Swapping".cyan().bold());
+            let client = HgbClient::new();
+
+            if let Some(p) = prompt {
+                println!("  Evaluating Prompt: \"{}\"", p.yellow());
+                let res = client.send(hgb_core::protocol::HgbRequest::CoprocessorRoute { prompt: p }).await?;
+                match res {
+                    hgb_core::protocol::HgbResponse::CoprocessorRouteResult(dec) => {
+                        println!("  Complexity Tier:   {}", dec.complexity.to_string().cyan().bold());
+                        println!("  Selected Model:    {}", dec.selected_model.green().bold());
+                        println!("  Quantization Tier: {}", dec.quantization.yellow());
+                        println!("  Thermal Headroom:  {:.1}°C (AC: {})", dec.thermal_headroom_c, dec.ac_connected);
+                        println!("  WASM Offload:      {}", if dec.is_wasm_offload { "YES (Sub-millisecond)".green().bold() } else { "NO (LLM Inference)".white() });
+                        println!("  Fallback Engaged:  {}", if dec.fallback_engaged { "YES (Thermal Safeguard)".red().bold() } else { "NO".green() });
+                        println!("  Confidence Score:  {:.2}", dec.confidence_score);
+                        println!("  Rationale:         {}", dec.rationale);
+                    }
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Route error: {}", e.red()),
+                    _ => {}
+                }
+            } else if status || prompt.is_none() {
+                let res = client.send(hgb_core::protocol::HgbRequest::CoprocessorStatus).await?;
+                match res {
+                    hgb_core::protocol::HgbResponse::CoprocessorStatusResult(st) => {
+                        println!("  Ollama Endpoint:   {}", st.ollama_endpoint);
+                        println!("  Sibling Ollama:    {} (found: {})", st.sibling_ollama_path, st.sibling_models_detected.len());
+                        println!("  Installed Models:  {} model(s)", st.installed_models.len());
+                        for m in st.installed_models.iter().take(5) {
+                            println!("    • {}", m);
+                        }
+                        println!("  Active Quant:      {}", st.active_quantization_tier.green().bold());
+                        println!("  CPU Temp:          {:.1}°C (Headroom: {:.1}°C)", st.current_temp_c, st.thermal_headroom_c);
+                        println!("  WASM Hot Pool:     {}", if st.wasm_hot_pool_available { "READY".green().bold() } else { "DISABLED".red() });
+                        println!("  Telemetry Stats:");
+                        println!("    • Total Routes:       {}", st.telemetry.total_routes);
+                        println!("    • WASM Offloads:      {}", st.telemetry.wasm_kernel_offloads);
+                        println!("    • Local Ollama Runs:  {}", st.telemetry.local_ollama_routes);
+                        println!("    • Frontier MCP Runs:  {}", st.telemetry.frontier_mcp_routes);
+                        println!("    • Avg Latency:        {:.2} µs", st.telemetry.avg_latency_us);
+                    }
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Status error: {}", e.red()),
+                    _ => {}
+                }
+            }
+            Ok(())
+        }
+        Commands::ShmRing { push, pop, bench, chunk_size, iterations, status } => {
+            println!("{}", "⚡ Zero-Copy POSIX Shared Memory (shm) Ring Buffer".cyan().bold());
+            let client = HgbClient::new();
+
+            if let Some(data) = push {
+                let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, data.as_bytes());
+                let res = client.send(hgb_core::protocol::HgbRequest::ShmRingPush { ring_name: "default".to_string(), data_b64: b64 }).await?;
+                match res {
+                    hgb_core::protocol::HgbResponse::ShmRingPushResult(n) => println!("  ✔ Pushed {} bytes directly into /dev/shm ring buffer", n.to_string().green().bold()),
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Push error: {}", e.red()),
+                    _ => {}
+                }
+            } else if let Some(max_b) = pop {
+                let res = client.send(hgb_core::protocol::HgbRequest::ShmRingPop { ring_name: "default".to_string(), max_bytes: max_b }).await?;
+                match res {
+                    hgb_core::protocol::HgbResponse::ShmRingPopResult(b64) => {
+                        let decoded = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &b64).unwrap_or_default();
+                        println!("  ✔ Popped {} bytes from /dev/shm ring buffer: \"{}\"", decoded.len().to_string().green().bold(), String::from_utf8_lossy(&decoded).cyan());
+                    }
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Pop error: {}", e.red()),
+                    _ => {}
+                }
+            } else if bench {
+                println!("  Running benchmark: {} iterations × {} bytes...", iterations, chunk_size);
+                let res = client.send(hgb_core::protocol::HgbRequest::ShmRingBench {
+                    ring_name: Some("bench_ring".to_string()),
+                    chunk_size: Some(chunk_size),
+                    iterations: Some(iterations),
+                }).await?;
+                match res {
+                    hgb_core::protocol::HgbResponse::ShmRingBenchResult(json) => println!("{}", json),
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Benchmark error: {}", e.red()),
+                    _ => {}
+                }
+            } else if status || (!bench && push.is_none() && pop.is_none()) {
+                let res = client.send(hgb_core::protocol::HgbRequest::ShmRingStatus { ring_name: Some("default".to_string()) }).await?;
+                match res {
+                    hgb_core::protocol::HgbResponse::ShmRingStatusResult(json) => println!("{}", json),
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Status error: {}", e.red()),
+                    _ => {}
+                }
+            }
+            Ok(())
+        }
+        Commands::SelfHealingDaemon { trigger, command, file, status } => {
+            println!("{}", "🩺 Self-Healing Autonomous Daemon Loops".cyan().bold());
+            let client = HgbClient::new();
+
+            if trigger || command.is_some() || file.is_some() {
+                println!("  Triggering autonomous failure triage and CoW sandbox healing...");
+                let res = client.send(hgb_core::protocol::HgbRequest::DaemonSelfHealTrigger {
+                    command,
+                    target_file: file,
+                }).await?;
+                match res {
+                    hgb_core::protocol::HgbResponse::DaemonSelfHealResult(json) => println!("{}", json),
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Trigger error: {}", e.red()),
+                    _ => {}
+                }
+            } else if status || !trigger {
+                let res = client.send(hgb_core::protocol::HgbRequest::DaemonSelfHealStatus).await?;
+                match res {
+                    hgb_core::protocol::HgbResponse::DaemonSelfHealStatusResult(json) => println!("{}", json),
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Status error: {}", e.red()),
+                    _ => {}
+                }
+            }
+            Ok(())
+        }
+        Commands::SwarmMesh { delegate, kind, sync_dht, status } => {
+            println!("{}", "🌐 Distributed P2P Swarm Mesh".cyan().bold());
+            let client = HgbClient::new();
+
+            if let Some(payload) = delegate {
+                let task_id = format!("task_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis());
+                println!("  Delegating {} workload to optimal idle peer: \"{}\"...", kind.yellow(), payload.cyan());
+                let res = client.send(hgb_core::protocol::HgbRequest::SwarmMeshDelegate {
+                    task_id,
+                    kind,
+                    payload,
+                    timeout_secs: 10,
+                }).await?;
+                match res {
+                    hgb_core::protocol::HgbResponse::SwarmMeshDelegateResult(json) => println!("{}", json),
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Delegation error: {}", e.red()),
+                    _ => {}
+                }
+            } else if let Some(pair) = sync_dht {
+                let parts: Vec<&str> = pair.splitn(2, '=').collect();
+                let key = parts[0];
+                let val = if parts.len() > 1 { parts[1] } else { "" };
+                let res = client.send(hgb_core::protocol::HgbRequest::SwarmMeshSync {
+                    key: key.to_string(),
+                    value: val.to_string(),
+                    entry_type: "cli_cache".to_string(),
+                    ttl_secs: 3600,
+                }).await?;
+                match res {
+                    hgb_core::protocol::HgbResponse::SwarmMeshSyncResult(json) => println!("  ✔ Encrypted DHT Cache Synchronized:\n{}", json),
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ DHT sync error: {}", e.red()),
+                    _ => {}
+                }
+            } else if status || (delegate.is_none() && sync_dht.is_none()) {
+                let res = client.send(hgb_core::protocol::HgbRequest::SwarmMeshStatus).await?;
+                match res {
+                    hgb_core::protocol::HgbResponse::SwarmMeshStatusResult(json) => println!("{}", json),
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Status error: {}", e.red()),
                     _ => {}
                 }
             }
