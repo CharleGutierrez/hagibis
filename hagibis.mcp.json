@@ -8,6 +8,20 @@
         "command": { "type": "string", "description": "Compiler check command (e.g. cargo check, zig test, python3 -m py_compile)" },
         "max_retries": { "type": "integer", "description": "Maximum autonomous repair iterations", "default": 3 }
       }
+    },
+    "ollama_speculative_generate": {
+      "description": "Speculative Decoding LLM inference using fast draft model (qwen2.5-coder:1.5b) validated by sovereign target model (phi3:3.8b) with zero-failure fallback",
+      "parameters": {
+        "prompt": { "type": "string", "description": "Prompt or instruction for speculative synthesis", "required": true },
+        "draft_model": { "type": "string", "description": "Optional fast draft model (default: qwen2.5-coder:1.5b)" },
+        "target_model": { "type": "string", "description": "Optional heavy target model (default: phi3:3.8b)" }
+      }
+    },
+    "ollama_task_split": {
+      "description": "Autonomous task complexity evaluator routing prompts between sub-second draft models (1.5B) and deep reasoning models (3.8B/7B)",
+      "parameters": {
+        "prompt": { "type": "string", "description": "Prompt or code task to evaluate", "required": true }
+      }
     }
   },
   "mcpServers": {
@@ -34,7 +48,9 @@
         "hgb_sandbox_check",
         "hgb_ollama_sibling_status",
         "hgb_ollama_vector_sync",
-        "hgb_ollama_vector_query"
+        "hgb_ollama_vector_query",
+        "ollama_speculative_generate",
+        "ollama_task_split"
       ]
     },
     "hagibis_sse": {

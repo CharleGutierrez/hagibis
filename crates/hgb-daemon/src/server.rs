@@ -50,6 +50,10 @@ pub struct DaemonState {
     pub actor_swarm_coordinator: Arc<hgb_core::actor_swarm::SwarmCoordinator>,
     pub crdt_sync_document: Arc<tokio::sync::RwLock<hgb_core::crdt_edge_sync::CrdtSyncDocument>>,
     pub governor_watchdog: Arc<crate::governor_watchdog::GovernorWatchdog>,
+    pub hw_optimizer: Arc<hgb_core::hardware_telemetry_optimizer::HardwareTelemetryOptimizer>,
+    pub ollama_orchestrator: Arc<hgb_core::ollama_speculative_orchestrator::OllamaSpeculativeOrchestrator>,
+    pub wasm_marketplace: Arc<tokio::sync::RwLock<hgb_core::wasm_skill_marketplace::WasmSkillMarketplace>>,
+    pub microvm_sandbox: Arc<hgb_core::microvm_sandbox_executor::FirecrackerEphemeralSandbox>,
 }
 
 impl DaemonState {
@@ -132,6 +136,12 @@ impl DaemonState {
             hgb_core::crdt_edge_sync::CrdtSyncDocument::new("resident_hgbd_node")
         ));
         let governor_watchdog = Arc::new(crate::governor_watchdog::GovernorWatchdog::new());
+        let hw_optimizer = Arc::new(hgb_core::hardware_telemetry_optimizer::HardwareTelemetryOptimizer::new());
+        let ollama_orchestrator = Arc::new(hgb_core::ollama_speculative_orchestrator::OllamaSpeculativeOrchestrator::default());
+        let wasm_marketplace = Arc::new(tokio::sync::RwLock::new(
+            hgb_core::wasm_skill_marketplace::WasmSkillMarketplace::new(&ws_dir).unwrap_or_else(|_| hgb_core::wasm_skill_marketplace::WasmSkillMarketplace::in_memory().expect("in-memory wasm marketplace"))
+        ));
+        let microvm_sandbox = Arc::new(hgb_core::microvm_sandbox_executor::FirecrackerEphemeralSandbox::new(&ws_dir));
 
         Self {
             start_time: std::time::Instant::now(),
@@ -166,6 +176,10 @@ impl DaemonState {
             actor_swarm_coordinator,
             crdt_sync_document,
             governor_watchdog,
+            hw_optimizer,
+            ollama_orchestrator,
+            wasm_marketplace,
+            microvm_sandbox,
         }
     }
 }
@@ -360,6 +374,7 @@ impl HagibisDaemon {
                 }
             }
             HgbRequest::Prompt { prompt, model, .. } => {
+                let _hw_guard = state.hw_optimizer.optimize_for_workload(hgb_core::dynamic_governor::WorkloadKind::LocalLlmInference).ok();
                 use hgb_core::HgbProvider;
                 let start = std::time::Instant::now();
                 let active = state.active_model.read().await.clone();
@@ -3592,6 +3607,89 @@ impl HagibisDaemon {
             HgbRequest::GovernorStatus => {
                 let status = state.governor_watchdog.status().await;
                 HgbResponse::GovernorStatusResult(serde_json::to_string_pretty(&status).unwrap_or_default())
+            }
+
+            // Powerhouse Pillar 1: Hardware Telemetry Optimizer
+            HgbRequest::HardwareOptimizeStatus => {
+                let telem = state.hw_optimizer.telemetry();
+                HgbResponse::HardwareOptimizeStatusResult(telem)
+            }
+            HgbRequest::HardwareOptimizeBoost { workload } => {
+                let kind = match workload.to_lowercase().as_str() {
+                    "compile" | "heavycompile" | "heavy_compile" => hgb_core::dynamic_governor::WorkloadKind::HeavyCompile,
+                    "test" | "testexecution" | "test_execution" => hgb_core::dynamic_governor::WorkloadKind::TestExecution,
+                    "llm" | "localllm" | "localllminference" | "inference" => hgb_core::dynamic_governor::WorkloadKind::LocalLlmInference,
+                    "wasm" | "wasmexecution" | "wasm_execution" => hgb_core::dynamic_governor::WorkloadKind::WasmExecution,
+                    _ => hgb_core::dynamic_governor::WorkloadKind::HeavyCompile,
+                };
+                match state.hw_optimizer.optimize_for_workload(kind) {
+                    Ok(_guard) => {
+                        let telem = state.hw_optimizer.telemetry();
+                        HgbResponse::HardwareOptimizeBoostResult(serde_json::to_string_pretty(&telem).unwrap_or_default())
+                    }
+                    Err(e) => HgbResponse::Error(format!("Hardware optimization boost failed: {}", e)),
+                }
+            }
+            HgbRequest::HardwareOptimizeRelax => {
+                let telem = state.hw_optimizer.telemetry();
+                HgbResponse::HardwareOptimizeRelaxResult(serde_json::to_string_pretty(&telem).unwrap_or_default())
+            }
+
+            // Powerhouse Pillar 2: Ollama Speculative Orchestrator
+            HgbRequest::OllamaSpeculativeExec { prompt, draft_model, target_model } => {
+                let _hw_guard = state.hw_optimizer.optimize_for_workload(hgb_core::dynamic_governor::WorkloadKind::LocalLlmInference).ok();
+                match state.ollama_orchestrator.speculative_generate(&prompt, draft_model.as_deref(), target_model.as_deref()).await {
+                    Ok(telem) => HgbResponse::OllamaSpeculativeResult(telem),
+                    Err(e) => HgbResponse::Error(format!("Ollama speculative execution failed: {}", e)),
+                }
+            }
+            HgbRequest::OllamaTaskSplit { prompt } => {
+                let decision = state.ollama_orchestrator.task_split(&prompt);
+                HgbResponse::OllamaTaskSplitResult(decision)
+            }
+
+            // Powerhouse Pillar 3: WebAssembly Plugin Marketplace
+            HgbRequest::WasmSkillList => {
+                let market = state.wasm_marketplace.read().await;
+                HgbResponse::WasmSkillListResult(market.list_skills())
+            }
+            HgbRequest::WasmSkillHotLoad { name, wasm_path } => {
+                let _hw_guard = state.hw_optimizer.optimize_for_workload(hgb_core::dynamic_governor::WorkloadKind::WasmExecution).ok();
+                match std::fs::read(&wasm_path) {
+                    Ok(bytes) => {
+                        let mut market = state.wasm_marketplace.write().await;
+                        match market.hot_load_skill(&name, &bytes) {
+                            Ok(info) => HgbResponse::WasmSkillHotLoadResult(serde_json::to_string_pretty(&info).unwrap_or_default()),
+                            Err(e) => HgbResponse::Error(format!("Failed to hot load WASM skill '{}': {}", name, e)),
+                        }
+                    }
+                    Err(e) => HgbResponse::Error(format!("Failed to read WASM file at '{}': {}", wasm_path, e)),
+                }
+            }
+            HgbRequest::WasmSkillExec { name, payload } => {
+                let _hw_guard = state.hw_optimizer.optimize_for_workload(hgb_core::dynamic_governor::WorkloadKind::WasmExecution).ok();
+                let market = state.wasm_marketplace.read().await;
+                match market.execute_skill(&name, &payload) {
+                    Ok(res) => HgbResponse::WasmSkillExecResult(serde_json::to_string_pretty(&res).unwrap_or_default()),
+                    Err(e) => HgbResponse::Error(format!("Failed to execute skill '{}': {}", name, e)),
+                }
+            }
+
+            // Powerhouse Pillar 4: Ephemeral Code Execution Sandboxes
+            HgbRequest::MicrovmEphemeralExec { code, language, patch_content } => {
+                let _hw_guard = state.hw_optimizer.optimize_for_workload(hgb_core::dynamic_governor::WorkloadKind::TestExecution).ok();
+                let spec = hgb_core::microvm_sandbox_executor::EphemeralExecSpec {
+                    code,
+                    language,
+                    patch_content,
+                    timeout_ms: 5000,
+                    memory_mb: 128,
+                    vcpu: 2,
+                };
+                match state.microvm_sandbox.execute(&spec) {
+                    Ok(res) => HgbResponse::MicrovmEphemeralResult(res),
+                    Err(e) => HgbResponse::Error(format!("MicroVM ephemeral execution error: {}", e)),
+                }
             }
         }
     }

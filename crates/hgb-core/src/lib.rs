@@ -995,6 +995,33 @@ pub use dynamic_governor::{
     THERMAL_RELAX_THRESHOLD_C, THERMAL_THROTTLE_THRESHOLD_C,
 };
 
+// Powerhouse Pillar 1: Hardware Telemetry Optimizer
+pub mod hardware_telemetry_optimizer;
+pub use hardware_telemetry_optimizer::{
+    BaselineHardwareProfile, HardwareOptimizationGuard, HardwareOptimizationTelemetry,
+    HardwareTelemetryOptimizer, PSI_SOME_WARN_THRESHOLD, THERMAL_CRITICAL_THRESHOLD_C,
+    THERMAL_SAFE_MARGIN_C,
+};
+
+// Powerhouse Pillar 2: Ollama Speculative Orchestrator
+pub mod ollama_speculative_orchestrator;
+pub use ollama_speculative_orchestrator::{
+    OllamaRoutingDecision, OllamaSpeculativeOrchestrator, OllamaSpeculativeTelemetry,
+    DEFAULT_DRAFT_MODEL, DEFAULT_OLLAMA_ENDPOINT, DEFAULT_TARGET_MODEL,
+};
+
+// Powerhouse Pillar 3: WebAssembly Plugin Marketplace
+pub mod wasm_skill_marketplace;
+pub use wasm_skill_marketplace::{
+    WasmSkillExecutionResult, WasmSkillInfo, WasmSkillMarketplace,
+};
+
+// Powerhouse Pillar 4: Ephemeral Code Execution Sandboxes
+pub mod microvm_sandbox_executor;
+pub use microvm_sandbox_executor::{
+    EphemeralExecResult, EphemeralExecSpec, FirecrackerEphemeralSandbox,
+};
+
 /// Enterprise high-capacity implementation
 pub fn enterprise_architecture_dispatch() -> bool {
     true

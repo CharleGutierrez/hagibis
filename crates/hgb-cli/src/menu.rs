@@ -647,6 +647,34 @@ impl InteractiveCommandCatalog {
                 syntax: "hgb cpu-governor [--boost <workload>] [--relax] [--status]",
                 description: "Hardware-Aware Dynamic CPU Governor Integration: commands performance profiles and EPP dynamically for heavy compilation and LLM tasks with thermal safeguard.",
             },
+            CommandEntry {
+                name: "hw-optimizer",
+                aliases: &["hw-opt"],
+                category: "Hardware/Optimizer",
+                syntax: "hgb hw-optimizer [--status] [--boost <workload>] [--relax]",
+                description: "Deep dynatune & kernel-optimizer bridge: MGLRU, memory PSI pressure tuning, Intel P-State governor control, and thermal protection.",
+            },
+            CommandEntry {
+                name: "ollama-speculative",
+                aliases: &["spec-infer", "ollama-split"],
+                category: "AI/Speculative",
+                syntax: "hgb ollama-speculative [--prompt <text>] [--split <text>] [--draft <model>] [--target <model>]",
+                description: "Supercharged Ollama speculative decoding pipeline with autonomous task complexity splitter and zero-failure fallback.",
+            },
+            CommandEntry {
+                name: "wasm-skills",
+                aliases: &["skill-market", "wasm-market"],
+                category: "Wasm/Marketplace",
+                syntax: "hgb wasm-skills [--list] [--hot-load <path> --name <name>] [--exec <name> --payload <str>]",
+                description: "WebAssembly (hgb-wasm-kernel) dynamic plugin marketplace with BLAKE3 validation, hot loading, and built-in standard skills.",
+            },
+            CommandEntry {
+                name: "microvm-exec",
+                aliases: &["vm-exec", "microvm-sandbox"],
+                category: "Sandbox/MicroVM",
+                syntax: "hgb microvm-exec --code <str> [--lang <bash|rust|python>] [--patch <path>]",
+                description: "Ephemeral code execution sandbox: sub-second Firecracker microVM with automatic Linux Landlock LSM + RAM CoW OverlayFS fallback.",
+            },
         ]
     }
 

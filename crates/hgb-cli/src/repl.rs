@@ -1675,6 +1675,53 @@ impl HagibisRepl {
                 };
                 self.render_response(resp);
             }
+            "/hw-opt" | "/hw-optimizer" => {
+                let trimmed = args.trim();
+                let resp = if trimmed == "relax" {
+                    self.dispatch(HgbRequest::HardwareOptimizeRelax).await
+                } else if trimmed.is_empty() || trimmed == "status" {
+                    self.dispatch(HgbRequest::HardwareOptimizeStatus).await
+                } else {
+                    self.dispatch(HgbRequest::HardwareOptimizeBoost { workload: trimmed.to_string() }).await
+                };
+                self.render_response(resp);
+            }
+            "/spec-infer" | "/ollama-split" | "/ollama-speculative" => {
+                let trimmed = args.trim();
+                let resp = if trimmed.starts_with("split ") {
+                    self.dispatch(HgbRequest::OllamaTaskSplit { prompt: trimmed["split ".len()..].to_string() }).await
+                } else {
+                    self.dispatch(HgbRequest::OllamaSpeculativeExec {
+                        prompt: trimmed.to_string(),
+                        draft_model: None,
+                        target_model: None,
+                    }).await
+                };
+                self.render_response(resp);
+            }
+            "/wasm-skills" | "/skill-market" => {
+                let trimmed = args.trim();
+                let resp = if trimmed.is_empty() || trimmed == "list" {
+                    self.dispatch(HgbRequest::WasmSkillList).await
+                } else if trimmed.starts_with("exec ") {
+                    let parts: Vec<&str> = trimmed["exec ".len()..].splitn(2, ' ').collect();
+                    let name = parts.get(0).unwrap_or(&"").to_string();
+                    let payload = parts.get(1).unwrap_or(&"").to_string();
+                    self.dispatch(HgbRequest::WasmSkillExec { name, payload }).await
+                } else {
+                    self.dispatch(HgbRequest::WasmSkillList).await
+                };
+                self.render_response(resp);
+            }
+            "/vm-exec" | "/microvm-exec" => {
+                let trimmed = args.trim();
+                let resp = self.dispatch(HgbRequest::MicrovmEphemeralExec {
+                    code: trimmed.to_string(),
+                    language: "bash".to_string(),
+                    patch_content: None,
+                }).await;
+                self.render_response(resp);
+            }
             "/cockpit" => {
                 let mut state = hgb_nextgen::CockpitState::new();
                 if let Some(ref m) = self.model {
@@ -5245,6 +5292,57 @@ impl HagibisRepl {
             HgbResponse::GovernorBoostResult(json) | HgbResponse::GovernorRelaxResult(json) | HgbResponse::GovernorStatusResult(json) => {
                 println!("{}", "⚡ DYNAMIC HARDWARE CPU GOVERNOR ⚡".bold().cyan());
                 println!("{}", json);
+            }
+            HgbResponse::HardwareOptimizeStatusResult(t) => {
+                println!("{}", "⚡ HARDWARE TELEMETRY OPTIMIZER ⚡".bold().cyan());
+                println!("  Governor:      {}", t.active_governor.green());
+                println!("  EPP:           {}", t.active_epp.green());
+                println!("  MGLRU:         {} ({})", if t.mglru_active { "ACTIVE".green() } else { "DISABLED".yellow() }, t.mglru_flags);
+                println!("  Memory:        {}/{} MB", t.memory_available_mb, t.memory_total_mb);
+                println!("  Temp / Trip:   {:.1}°C ({})", t.cpu_temp_c, if t.is_throttled { "THROTTLED".red() } else { "OPTIMAL".green() });
+            }
+            HgbResponse::HardwareOptimizeBoostResult(json) | HgbResponse::HardwareOptimizeRelaxResult(json) => {
+                println!("{}", "⚡ HARDWARE PROFILE SHIFT ⚡".bold().cyan());
+                println!("{}", json);
+            }
+            HgbResponse::OllamaSpeculativeResult(t) => {
+                println!("{}", "🧠 OLLAMA SPECULATIVE RESULT 🧠".bold().cyan());
+                println!("  Draft Model:     {} ({} tokens)", t.draft_model.yellow(), t.draft_tokens_generated);
+                println!("  Target Model:    {}", t.target_model.cyan());
+                println!("  Acceptance Rate: {:.1}%", t.verification_acceptance_rate * 100.0);
+                println!("  Speedup:         {:.2}x ({} ms)", t.speedup_factor, t.latency_ms);
+                println!("\n{}\n", t.completion);
+            }
+            HgbResponse::OllamaTaskSplitResult(d) => {
+                println!("{}", "🧠 OLLAMA TASK ROUTING DECISION 🧠".bold().cyan());
+                println!("  Selected Model:  {}", d.selected_model.green().bold());
+                println!("  Model Tier:      {}", d.model_tier.cyan());
+                println!("  Complexity:      {:.2}", d.estimated_complexity);
+                println!("  Reasoning:       {}", d.reasoning);
+            }
+            HgbResponse::WasmSkillListResult(skills) => {
+                println!("{}", "🧩 WEBASSEMBLY SKILLS CATALOG 🧩".bold().cyan());
+                for s in skills {
+                    let tag = if s.is_builtin { "[BUILT-IN]".cyan() } else { "[HOT-LOADED]".green() };
+                    println!("  • {} {} (v{}): {}", tag, s.name.bold(), s.version, s.description);
+                }
+            }
+            HgbResponse::WasmSkillHotLoadResult(json) | HgbResponse::WasmSkillExecResult(json) => {
+                println!("{}", "🧩 WEBASSEMBLY SKILL EXECUTION 🧩".bold().cyan());
+                println!("{}", json);
+            }
+            HgbResponse::MicrovmEphemeralResult(r) => {
+                println!("{}", "🛡️ EPHEMERAL MICROVM SANDBOX RESULT 🛡️".bold().cyan());
+                println!("  Sandbox ID:    {}", r.sandbox_id.green());
+                println!("  Tier:          {}", r.isolation_tier.cyan());
+                println!("  Status:        {} (Code: {})", if r.success { "SUCCESS".green().bold() } else { "FAILED".red().bold() }, r.exit_code);
+                println!("  Duration:      {} ms | Memory: {} MB | Blast Radius: {} bytes", r.duration_ms, r.memory_consumed_mb, r.blast_radius_bytes);
+                if !r.stdout.is_empty() {
+                    println!("\n[Stdout]:\n{}", r.stdout);
+                }
+                if !r.stderr.is_empty() {
+                    println!("\n[Stderr]:\n{}", r.stderr.red());
+                }
             }
         }
     }

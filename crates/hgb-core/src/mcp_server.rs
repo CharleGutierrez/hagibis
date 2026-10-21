@@ -234,6 +234,30 @@ impl HagibisMcpServer {
                     },
                     "required": ["target_file", "code"]
                 }
+            },
+            {
+                "name": "ollama_speculative_generate",
+                "description": "Speculative Decoding LLM inference using fast draft model (qwen2.5-coder:1.5b) validated by sovereign target model (phi3:3.8b) with zero-failure fallback",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "prompt": { "type": "string", "description": "Prompt or instruction for speculative synthesis" },
+                        "draft_model": { "type": "string", "description": "Optional fast draft model (default: qwen2.5-coder:1.5b)" },
+                        "target_model": { "type": "string", "description": "Optional heavy target model (default: phi3:3.8b)" }
+                    },
+                    "required": ["prompt"]
+                }
+            },
+            {
+                "name": "ollama_task_split",
+                "description": "Autonomous task complexity evaluator routing prompts between sub-second draft models (1.5B) and deep reasoning models (3.8B/7B)",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "prompt": { "type": "string", "description": "Prompt or code task to evaluate" }
+                    },
+                    "required": ["prompt"]
+                }
             }
         ])
     }
@@ -645,6 +669,28 @@ impl HagibisMcpServer {
                 )?;
 
                 Ok(serde_json::to_string_pretty(&report).unwrap_or_default())
+            }
+
+            "ollama_speculative_generate" => {
+                let prompt = args.get("prompt").and_then(|p| p.as_str()).ok_or_else(|| {
+                    HgbError::Execution("Missing 'prompt' argument".into())
+                })?;
+                let draft_model = args.get("draft_model").and_then(|m| m.as_str());
+                let target_model = args.get("target_model").and_then(|m| m.as_str());
+
+                let orchestrator = crate::ollama_speculative_orchestrator::OllamaSpeculativeOrchestrator::default();
+                let result = orchestrator.speculative_generate(prompt, draft_model, target_model).await?;
+                Ok(serde_json::to_string_pretty(&result).unwrap_or_default())
+            }
+
+            "ollama_task_split" => {
+                let prompt = args.get("prompt").and_then(|p| p.as_str()).ok_or_else(|| {
+                    HgbError::Execution("Missing 'prompt' argument".into())
+                })?;
+
+                let orchestrator = crate::ollama_speculative_orchestrator::OllamaSpeculativeOrchestrator::default();
+                let decision = orchestrator.task_split(prompt);
+                Ok(serde_json::to_string_pretty(&decision).unwrap_or_default())
             }
 
             other => Ok(format!("Tool '{}' recognized by Hagibis MCP dispatcher.", other)),

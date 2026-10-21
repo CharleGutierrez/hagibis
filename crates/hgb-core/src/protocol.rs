@@ -1333,6 +1333,40 @@ pub enum HgbRequest {
     },
     GovernorRelax,
     GovernorStatus,
+    // --- Pillar 1: Hardware Telemetry Optimizer ---
+    HardwareOptimizeStatus,
+    HardwareOptimizeBoost {
+        workload: String,
+    },
+    HardwareOptimizeRelax,
+    // --- Pillar 2: Ollama Speculative Orchestrator ---
+    OllamaSpeculativeExec {
+        prompt: String,
+        #[serde(default)]
+        draft_model: Option<String>,
+        #[serde(default)]
+        target_model: Option<String>,
+    },
+    OllamaTaskSplit {
+        prompt: String,
+    },
+    // --- Pillar 3: WebAssembly Plugin Marketplace ---
+    WasmSkillList,
+    WasmSkillHotLoad {
+        name: String,
+        wasm_path: String,
+    },
+    WasmSkillExec {
+        name: String,
+        payload: String,
+    },
+    // --- Pillar 4: Ephemeral Code Execution Sandboxes ---
+    MicrovmEphemeralExec {
+        code: String,
+        language: String,
+        #[serde(default)]
+        patch_content: Option<String>,
+    },
 }
 
 fn default_twenty_u64() -> u64 {
@@ -1901,6 +1935,19 @@ pub enum HgbResponse {
     GovernorBoostResult(String),
     GovernorRelaxResult(String),
     GovernorStatusResult(String),
+    // --- Pillar 1: Hardware Telemetry Optimizer ---
+    HardwareOptimizeStatusResult(crate::hardware_telemetry_optimizer::HardwareOptimizationTelemetry),
+    HardwareOptimizeBoostResult(String),
+    HardwareOptimizeRelaxResult(String),
+    // --- Pillar 2: Ollama Speculative Orchestrator ---
+    OllamaSpeculativeResult(crate::ollama_speculative_orchestrator::OllamaSpeculativeTelemetry),
+    OllamaTaskSplitResult(crate::ollama_speculative_orchestrator::OllamaRoutingDecision),
+    // --- Pillar 3: WebAssembly Plugin Marketplace ---
+    WasmSkillListResult(Vec<crate::wasm_skill_marketplace::WasmSkillInfo>),
+    WasmSkillHotLoadResult(String),
+    WasmSkillExecResult(String),
+    // --- Pillar 4: Ephemeral Code Execution Sandboxes ---
+    MicrovmEphemeralResult(crate::microvm_sandbox_executor::EphemeralExecResult),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

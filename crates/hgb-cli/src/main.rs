@@ -3102,6 +3102,71 @@ enum Commands {
         #[arg(long)]
         status: bool,
     },
+
+    /// Pillar 1: Hardware Telemetry Optimizer (dynatune & kernel-optimizer bridge)
+    #[command(name = "hw-optimizer", alias = "hw-opt")]
+    HwOptimizer {
+        /// Show active governor, EPP, MGLRU active, memory PSI avg10, CPU temp, and throttling
+        #[arg(long)]
+        status: bool,
+        /// Boost CPU governor and EPP for workload (compile, llm, test, wasm)
+        #[arg(long)]
+        boost: Option<String>,
+        /// Relax CPU governor and EPP back to baseline / powersave
+        #[arg(long)]
+        relax: bool,
+    },
+
+    /// Pillar 2: Ollama Speculative Orchestrator & Task Splitter
+    #[command(name = "ollama-speculative", alias = "spec-infer", alias = "ollama-split")]
+    OllamaSpeculative {
+        /// Run speculative decoding inference on prompt
+        #[arg(long)]
+        prompt: Option<String>,
+        /// Evaluate prompt and autonomous task splitting routing
+        #[arg(long)]
+        split: Option<String>,
+        /// Fast small draft model (default: qwen2.5-coder:1.5b)
+        #[arg(long)]
+        draft: Option<String>,
+        /// Larger sovereign target model (default: phi3:3.8b)
+        #[arg(long)]
+        target: Option<String>,
+    },
+
+    /// Pillar 3: WebAssembly (hgb-wasm-kernel) Plugin Marketplace
+    #[command(name = "wasm-skills", alias = "skill-market", alias = "wasm-market")]
+    WasmSkills {
+        /// List all loaded and built-in WebAssembly skills
+        #[arg(long)]
+        list: bool,
+        /// Path to .wasm file to dynamically hot-load into daemon
+        #[arg(long)]
+        hot_load: Option<String>,
+        /// Name identifier for hot-loaded skill
+        #[arg(long)]
+        name: Option<String>,
+        /// Execute skill by name
+        #[arg(long)]
+        exec: Option<String>,
+        /// Payload string to pass to skill
+        #[arg(long, default_value = "")]
+        payload: String,
+    },
+
+    /// Pillar 4: Ephemeral Code Execution Sandboxes (Firecracker & Landlock CoW)
+    #[command(name = "microvm-exec", alias = "vm-exec", alias = "microvm-sandbox")]
+    MicrovmExec {
+        /// Code string or script to execute inside ephemeral sandbox
+        #[arg(long)]
+        code: String,
+        /// Workload language (bash, python, rust, javascript)
+        #[arg(long, default_value = "bash")]
+        lang: String,
+        /// Path to .patch file to apply inside ephemeral sandbox before execution
+        #[arg(long)]
+        patch: Option<String>,
+    },
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -9097,6 +9162,185 @@ async fn test_calc() { assert!(calculate(5)); }".to_string()
                     hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Status error: {}", e.red()),
                     _ => {}
                 }
+            }
+            Ok(())
+        }
+        Commands::HwOptimizer { status, boost, relax } => {
+            println!("{}", "⚡ Hardware Telemetry Optimizer (dynatune & kernel-optimizer bridge)".cyan().bold());
+            let client = HgbClient::new();
+            if let Some(workload) = boost {
+                println!("  Escalating hardware governor, EPP, and MGLRU for workload: \"{}\"...", workload.yellow());
+                let res = client.send(hgb_core::protocol::HgbRequest::HardwareOptimizeBoost { workload }).await?;
+                match res {
+                    hgb_core::protocol::HgbResponse::HardwareOptimizeBoostResult(json) => println!("  ✔ Hardware Optimized:\n{}", json),
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Hardware boost error: {}", e.red()),
+                    _ => {}
+                }
+            } else if relax {
+                println!("  Restoring baseline CPU governor, EPP, and memory profile...");
+                let res = client.send(hgb_core::protocol::HgbRequest::HardwareOptimizeRelax).await?;
+                match res {
+                    hgb_core::protocol::HgbResponse::HardwareOptimizeRelaxResult(json) => println!("  ✔ Baseline Restored:\n{}", json),
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Relax error: {}", e.red()),
+                    _ => {}
+                }
+            } else if status || (boost.is_none() && !relax) {
+                let res = client.send(hgb_core::protocol::HgbRequest::HardwareOptimizeStatus).await?;
+                match res {
+                    hgb_core::protocol::HgbResponse::HardwareOptimizeStatusResult(t) => {
+                        println!("  • Active Governor:    {}", t.active_governor.green());
+                        println!("  • Active EPP:         {}", t.active_epp.green());
+                        println!("  • MGLRU Subsystem:    {} ({})", if t.mglru_active { "ACTIVE".green() } else { "DISABLED".yellow() }, t.mglru_flags);
+                        println!("  • Memory Available:   {}/{} MB", t.memory_available_mb, t.memory_total_mb);
+                        println!("  • Memory PSI (avg10): {:.2}%", t.memory_psi_some_avg10);
+                        println!("  • CPU Temperature:    {:.1}°C", t.cpu_temp_c);
+                        println!("  • Thermal Headroom:   {:.1}°C", t.thermal_headroom_c);
+                        println!("  • Throttled / Safe:   {}", if t.is_throttled { "THROTTLED (TRIP SAFEGUARD)".red().bold() } else { "OPTIMAL (UNTHROTTLED)".green() });
+                        println!("  • Kernel-Ctl Bridge:  {}", if t.dynabook_ctl_available { "AVAILABLE".green() } else { "NOT FOUND".yellow() });
+                        println!("  • Dynatune Watchdog:  {}", if t.dynatune_available { "AVAILABLE".green() } else { "NOT FOUND".yellow() });
+                    }
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Status error: {}", e.red()),
+                    _ => {}
+                }
+            }
+            Ok(())
+        }
+        Commands::OllamaSpeculative { prompt, split, draft, target } => {
+            println!("{}", "🧠 Ollama Speculative Orchestrator & Task Splitter".cyan().bold());
+            let client = HgbClient::new();
+            if let Some(task_prompt) = split {
+                println!("  Evaluating prompt complexity and autonomous model routing...");
+                let res = client.send(hgb_core::protocol::HgbRequest::OllamaTaskSplit { prompt: task_prompt }).await?;
+                match res {
+                    hgb_core::protocol::HgbResponse::OllamaTaskSplitResult(d) => {
+                        println!("  • Selected Model:     {}", d.selected_model.green().bold());
+                        println!("  • Model Tier:         {}", d.model_tier.cyan());
+                        println!("  • Complexity Score:   {:.2}", d.estimated_complexity);
+                        println!("  • Temperature:        {:.2}", d.suggested_temperature);
+                        println!("  • Routing Reasoning:  {}", d.reasoning);
+                    }
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Split error: {}", e.red()),
+                    _ => {}
+                }
+            } else if let Some(task_prompt) = prompt {
+                println!("  Executing speculative decoding pipeline (draft -> target verification)...");
+                let res = client.send(hgb_core::protocol::HgbRequest::OllamaSpeculativeExec {
+                    prompt: task_prompt,
+                    draft_model: draft,
+                    target_model: target,
+                }).await?;
+                match res {
+                    hgb_core::protocol::HgbResponse::OllamaSpeculativeResult(t) => {
+                        println!("  • Pipeline Mode:      {}", t.pipeline_mode.green());
+                        println!("  • Draft Model:        {}", t.draft_model.yellow());
+                        println!("  • Target Model:       {}", t.target_model.cyan());
+                        println!("  • Draft Tokens:       {}", t.draft_tokens_generated);
+                        println!("  • Acceptance Rate:    {:.1}%", t.verification_acceptance_rate * 100.0);
+                        println!("  • Speedup Factor:     {:.2}x", t.speedup_factor);
+                        println!("  • Total Latency:      {} ms", t.latency_ms);
+                        println!("\n{}\n", "─".repeat(60).dimmed());
+                        println!("{}", t.completion);
+                    }
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Speculative execution error: {}", e.red()),
+                    _ => {}
+                }
+            } else {
+                println!("  Usage: hgb ollama-speculative [--prompt <text>] [--split <text>] [--draft <model>] [--target <model>]");
+            }
+            Ok(())
+        }
+        Commands::WasmSkills { list, hot_load, name, exec, payload } => {
+            println!("{}", "🧩 WebAssembly (hgb-wasm-kernel) Plugin Marketplace".cyan().bold());
+            let client = HgbClient::new();
+            if let Some(path) = hot_load {
+                let skill_name = name.unwrap_or_else(|| {
+                    std::path::Path::new(&path)
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("unnamed_skill")
+                        .to_string()
+                });
+                println!("  Hot-loading WebAssembly skill '{}' from '{}'...", skill_name.yellow(), path);
+                let res = client.send(hgb_core::protocol::HgbRequest::WasmSkillHotLoad {
+                    name: skill_name,
+                    wasm_path: path,
+                }).await?;
+                match res {
+                    hgb_core::protocol::HgbResponse::WasmSkillHotLoadResult(json) => println!("  ✔ Skill Hot-Loaded Successfully:\n{}", json),
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Hot-load error: {}", e.red()),
+                    _ => {}
+                }
+            } else if let Some(skill_name) = exec {
+                println!("  Executing WebAssembly skill '{}'...", skill_name.yellow());
+                let res = client.send(hgb_core::protocol::HgbRequest::WasmSkillExec {
+                    name: skill_name,
+                    payload,
+                }).await?;
+                match res {
+                    hgb_core::protocol::HgbResponse::WasmSkillExecResult(json) => println!("  ✔ Skill Execution Result:\n{}", json),
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Execution error: {}", e.red()),
+                    _ => {}
+                }
+            } else if list || (!list && hot_load.is_none() && exec.is_none()) {
+                let res = client.send(hgb_core::protocol::HgbRequest::WasmSkillList).await?;
+                match res {
+                    hgb_core::protocol::HgbResponse::WasmSkillListResult(skills) => {
+                        println!("  Catalog ({} registered skills):", skills.len());
+                        for s in skills {
+                            let tag = if s.is_builtin { "[BUILT-IN]".cyan() } else { "[HOT-LOADED]".green() };
+                            println!("    • {} {} (v{}): {}", tag, s.name.bold(), s.version, s.description);
+                            println!("      Checksum: {} | Capabilities: {:?}", s.checksum, s.capabilities);
+                        }
+                    }
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ List error: {}", e.red()),
+                    _ => {}
+                }
+            }
+            Ok(())
+        }
+        Commands::MicrovmExec { code, lang, patch } => {
+            println!("{}", "🛡️ Ephemeral Code Execution Sandbox (Firecracker & Landlock CoW)".cyan().bold());
+            let client = HgbClient::new();
+            let patch_content = if let Some(ref p) = patch {
+                match std::fs::read_to_string(p) {
+                    Ok(c) => Some(c),
+                    Err(e) => {
+                        eprintln!("  ✖ Failed to read patch file '{}': {}", p, e.to_string().red());
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
+            println!("  Spawning sub-second isolated sandbox (lang: {})...", lang.yellow());
+            let res = client.send(hgb_core::protocol::HgbRequest::MicrovmEphemeralExec {
+                code,
+                language: lang,
+                patch_content,
+            }).await?;
+
+            match res {
+                hgb_core::protocol::HgbResponse::MicrovmEphemeralResult(r) => {
+                    println!("  • Sandbox ID:         {}", r.sandbox_id.green());
+                    println!("  • Isolation Tier:     {}", r.isolation_tier.cyan());
+                    println!("  • Execution Status:   {}", if r.success { "SUCCESS".green().bold() } else { "FAILED".red().bold() });
+                    println!("  • Exit Code:          {}", r.exit_code);
+                    println!("  • Duration:           {} ms", r.duration_ms);
+                    println!("  • Memory Consumed:    {} MB", r.memory_consumed_mb);
+                    println!("  • Blast Radius:       {} bytes", r.blast_radius_bytes);
+                    if r.patch_applied {
+                        println!("  • Patch Applied:      {}", "YES".green());
+                    }
+                    if !r.stdout.is_empty() {
+                        println!("\n[Stdout]:\n{}", r.stdout);
+                    }
+                    if !r.stderr.is_empty() {
+                        println!("\n[Stderr]:\n{}", r.stderr.red());
+                    }
+                }
+                hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Sandbox execution error: {}", e.red()),
+                _ => {}
             }
             Ok(())
         }

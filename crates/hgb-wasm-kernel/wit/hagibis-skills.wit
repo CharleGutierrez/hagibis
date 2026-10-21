@@ -1,0 +1,68 @@
+// Hagibis Skills WebAssembly Component Interface (WIT)
+// Standard specification for dynamic agent skill plugins and sandboxed modules
+package hagibis:skills@0.3.0;
+
+interface skill-parameter {
+    variant value {
+        text(string),
+        integer(s64),
+        boolean(bool),
+        raw-bytes(list<u8>),
+        json-payload(string),
+    }
+
+    record skill-arg {
+        name: string,
+        val: value,
+    }
+}
+
+interface skill-capability {
+    enum capability-kind {
+        fs-read,
+        crypto,
+        text-transform,
+        math,
+    }
+
+    record permission-grant {
+        kind: capability-kind,
+        allowed-paths: list<string>,
+        max-memory-pages: u32,
+    }
+}
+
+interface skill-manifest {
+    use skill-capability.{capability-kind};
+
+    record skill-descriptor {
+        name: string,
+        version: string,
+        author: string,
+        description: string,
+        capabilities: list<capability-kind>,
+        blake3-hash: string,
+    }
+
+    query-manifest: func() -> skill-descriptor;
+}
+
+interface skill-execute {
+    use skill-parameter.{skill-arg};
+
+    record execution-outcome {
+        success: bool,
+        exit-code: s32,
+        output: string,
+        fuel-used: u64,
+        duration-us: u64,
+    }
+
+    execute-skill: func(args: list<skill-arg>) -> result<execution-outcome, string>;
+}
+
+world hagibis-skill-runtime {
+    import skill-capability;
+    export skill-manifest;
+    export skill-execute;
+}
