@@ -3043,6 +3043,65 @@ enum Commands {
         #[arg(long)]
         status: bool,
     },
+
+    /// Pillar 1: Zero-Overhead IPC via Shared Memory & Unix Domain Sockets
+    #[command(name = "shm-ipc", alias = "ipc-bench")]
+    ShmIpc {
+        /// Execute live nanosecond throughput benchmark comparing loopback vs SHM
+        #[arg(long)]
+        bench: bool,
+        /// Show SHM-IPC bridge status and ring buffer telemetry
+        #[arg(long)]
+        status: bool,
+        /// Benchmark chunk size in bytes (default: 8192)
+        #[arg(long, default_value_t = 8192)]
+        chunk_size: usize,
+        /// Benchmark iterations count (default: 50)
+        #[arg(short, long, default_value_t = 50)]
+        iterations: usize,
+    },
+
+    /// Pillar 2: Autonomous Multi-Agent Swarm Orchestration
+    #[command(name = "actor-swarm", alias = "swarm-debate", alias = "agent-swarm")]
+    ActorSwarm {
+        /// Task requirements to debate and autonomously synthesize
+        #[arg(short, long)]
+        task: Option<String>,
+        /// Maximum debate and refinement rounds (default: 2)
+        #[arg(short, long, default_value_t = 2)]
+        rounds: usize,
+        /// Show actor roles and swarm engine status
+        #[arg(long)]
+        status: bool,
+    },
+
+    /// Pillar 3: Distributed Edge-to-Cloud State Synchronization
+    #[command(name = "crdt-sync", alias = "edge-sync", alias = "crdt")]
+    CrdtSync {
+        /// Export delta sync JSON payload for Cloudflare Workers KV / Durable Objects
+        #[arg(long)]
+        export: bool,
+        /// Import and merge remote delta sync JSON payload
+        #[arg(long)]
+        merge: Option<String>,
+        /// Show active vector clock, ADRs, skills, and style preferences status
+        #[arg(long)]
+        status: bool,
+    },
+
+    /// Pillar 4: Hardware-Aware Dynamic CPU Governor Integration
+    #[command(name = "cpu-governor", alias = "gov-tune", alias = "dynatune-boost")]
+    CpuGovernor {
+        /// Boost CPU governor and EPP for heavy workload (compile, llm, test, wasm)
+        #[arg(long)]
+        boost: Option<String>,
+        /// Relax CPU governor and EPP back to baseline / powersave
+        #[arg(long)]
+        relax: bool,
+        /// Show active governor, EPP, turbo boost, core frequencies, and thermal status
+        #[arg(long)]
+        status: bool,
+    },
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -8937,6 +8996,104 @@ async fn test_calc() { assert!(calculate(5)); }".to_string()
                 let res = client.send(hgb_core::protocol::HgbRequest::SwarmMeshStatus).await?;
                 match res {
                     hgb_core::protocol::HgbResponse::SwarmMeshStatusResult(json) => println!("{}", json),
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Status error: {}", e.red()),
+                    _ => {}
+                }
+            }
+            Ok(())
+        }
+        Commands::ShmIpc { bench, status, chunk_size, iterations } => {
+            println!("{}", "⚡ Zero-Overhead SHM-IPC Transport".cyan().bold());
+            let client = HgbClient::new();
+            if bench || (!status) {
+                println!("  Running high-throughput benchmark (chunk_size: {} B, iterations: {})...", chunk_size, iterations);
+                let res = client.send(hgb_core::protocol::HgbRequest::ShmIpcBench).await?;
+                match res {
+                    hgb_core::protocol::HgbResponse::ShmIpcBenchResult(json) => println!("{}", json),
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ SHM-IPC benchmark error: {}", e.red()),
+                    _ => {}
+                }
+            } else {
+                let res = client.send(hgb_core::protocol::HgbRequest::ShmRingStatus { ring_name: Some("daemon_shared_ring".to_string()) }).await?;
+                match res {
+                    hgb_core::protocol::HgbResponse::ShmRingStatusResult(json) => println!("{}", json),
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ SHM-IPC status error: {}", e.red()),
+                    _ => {}
+                }
+            }
+            Ok(())
+        }
+        Commands::ActorSwarm { task, rounds, status } => {
+            println!("{}", "🐝 Autonomous Multi-Agent Swarm Orchestration".cyan().bold());
+            let client = HgbClient::new();
+            if let Some(task_spec) = task {
+                println!("  Activating 4 specialized actors (Planner, Coder, Reviewer, SandboxExecutor) for task: \"{}\" (rounds: {})...", task_spec.yellow(), rounds);
+                let res = client.send(hgb_core::protocol::HgbRequest::ActorSwarmExecute { task: task_spec, max_rounds: rounds }).await?;
+                match res {
+                    hgb_core::protocol::HgbResponse::ActorSwarmExecuteResult(json) => println!("  ✔ Swarm Consensus Certificate:\n{}", json),
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Actor swarm error: {}", e.red()),
+                    _ => {}
+                }
+            } else if status || task.is_none() {
+                let res = client.send(hgb_core::protocol::HgbRequest::ActorSwarmStatus).await?;
+                match res {
+                    hgb_core::protocol::HgbResponse::ActorSwarmStatusResult(json) => println!("{}", json),
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Status error: {}", e.red()),
+                    _ => {}
+                }
+            }
+            Ok(())
+        }
+        Commands::CrdtSync { export, merge, status } => {
+            println!("{}", "🌐 Distributed Edge-to-Cloud CRDT State Synchronization".cyan().bold());
+            let client = HgbClient::new();
+            if export {
+                let res = client.send(hgb_core::protocol::HgbRequest::CrdtSyncExport).await?;
+                match res {
+                    hgb_core::protocol::HgbResponse::CrdtSyncExportResult(json) => println!("  ✔ Edge Sync JSON Envelope:\n{}", json),
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ CRDT export error: {}", e.red()),
+                    _ => {}
+                }
+            } else if let Some(payload) = merge {
+                let res = client.send(hgb_core::protocol::HgbRequest::CrdtSyncMerge { remote_payload: payload }).await?;
+                match res {
+                    hgb_core::protocol::HgbResponse::CrdtSyncMergeResult(json) => println!("  ✔ CRDT Replicated Document Merged:\n{}", json),
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ CRDT merge error: {}", e.red()),
+                    _ => {}
+                }
+            } else if status || (!export && merge.is_none()) {
+                let res = client.send(hgb_core::protocol::HgbRequest::CrdtSyncStatus).await?;
+                match res {
+                    hgb_core::protocol::HgbResponse::CrdtSyncStatusResult(json) => println!("{}", json),
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Status error: {}", e.red()),
+                    _ => {}
+                }
+            }
+            Ok(())
+        }
+        Commands::CpuGovernor { boost, relax, status } => {
+            println!("{}", "⚡ Hardware-Aware Dynamic CPU Governor Integration".cyan().bold());
+            let client = HgbClient::new();
+            if let Some(workload) = boost {
+                println!("  Escalating CPU governor and EPP to performance mode for workload: \"{}\"...", workload.yellow());
+                let res = client.send(hgb_core::protocol::HgbRequest::GovernorBoost { workload }).await?;
+                match res {
+                    hgb_core::protocol::HgbResponse::GovernorBoostResult(json) => println!("  ✔ CPU Governor Shifted:\n{}", json),
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Governor boost error: {}", e.red()),
+                    _ => {}
+                }
+            } else if relax {
+                println!("  Relaxing CPU governor and EPP back to baseline / powersave mode...");
+                let res = client.send(hgb_core::protocol::HgbRequest::GovernorRelax).await?;
+                match res {
+                    hgb_core::protocol::HgbResponse::GovernorRelaxResult(json) => println!("  ✔ CPU Governor Relaxed:\n{}", json),
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Governor relax error: {}", e.red()),
+                    _ => {}
+                }
+            } else if status || (boost.is_none() && !relax) {
+                let res = client.send(hgb_core::protocol::HgbRequest::GovernorStatus).await?;
+                match res {
+                    hgb_core::protocol::HgbResponse::GovernorStatusResult(json) => println!("{}", json),
                     hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Status error: {}", e.red()),
                     _ => {}
                 }

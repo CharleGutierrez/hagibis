@@ -46,6 +46,10 @@ pub struct DaemonState {
     pub shm_ring: Arc<tokio::sync::Mutex<hgb_storage::ShmRingBuffer>>,
     pub self_healing_daemon: Arc<crate::self_healing_daemon::SelfHealingDaemonLoop>,
     pub p2p_mesh: Arc<hgb_nextgen::P2pSwarmMesh>,
+    pub shm_bridge: Arc<crate::shm_grpc_bridge::ShmGrpcBridge>,
+    pub actor_swarm_coordinator: Arc<hgb_core::actor_swarm::SwarmCoordinator>,
+    pub crdt_sync_document: Arc<tokio::sync::RwLock<hgb_core::crdt_edge_sync::CrdtSyncDocument>>,
+    pub governor_watchdog: Arc<crate::governor_watchdog::GovernorWatchdog>,
 }
 
 impl DaemonState {
@@ -69,7 +73,13 @@ impl DaemonState {
             "gemini-2.5-flash".to_string()
         };
 
-        let ws_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let ws_dir = if let Ok(custom) = std::env::var("HGB_WORKSPACE") {
+            PathBuf::from(custom)
+        } else if Path::new("/home/toshiba/My AI Project/hagibis").is_dir() {
+            PathBuf::from("/home/toshiba/My AI Project/hagibis")
+        } else {
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+        };
         let mcp_orchestrator = Arc::new(hgb_core::McpHostOrchestrator::new(&ws_dir));
 
         let skill_db_path = socket_path.parent().unwrap_or_else(|| Path::new(".")).join("skills.db");
@@ -113,6 +123,15 @@ impl DaemonState {
                 .with_event_bus(event_bus.clone()),
         );
         let p2p_mesh = Arc::new(hgb_nextgen::P2pSwarmMesh::new("local_hgbd_node", "mesh_auth_secret_2026"));
+        let shm_bridge = Arc::new(
+            crate::shm_grpc_bridge::ShmGrpcBridge::default_bridge()
+                .unwrap_or_else(|_| crate::shm_grpc_bridge::ShmGrpcBridge::new(std::env::temp_dir().join("hgbd_shm.sock")).expect("fallback shm bridge"))
+        );
+        let actor_swarm_coordinator = Arc::new(hgb_core::actor_swarm::SwarmCoordinator::new(&ws_dir));
+        let crdt_sync_document = Arc::new(tokio::sync::RwLock::new(
+            hgb_core::crdt_edge_sync::CrdtSyncDocument::new("resident_hgbd_node")
+        ));
+        let governor_watchdog = Arc::new(crate::governor_watchdog::GovernorWatchdog::new());
 
         Self {
             start_time: std::time::Instant::now(),
@@ -143,6 +162,10 @@ impl DaemonState {
             shm_ring,
             self_healing_daemon,
             p2p_mesh,
+            shm_bridge,
+            actor_swarm_coordinator,
+            crdt_sync_document,
+            governor_watchdog,
         }
     }
 }
@@ -173,6 +196,13 @@ impl HagibisDaemon {
         let ws_dir = self.state.socket_path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
         crate::mcp_sse_server::McpSseServer::spawn_background(ws_dir, self.state.mcp_sse_port).await;
         println!("⚡ Native MCP SSE Streaming server active on http://127.0.0.1:{}", self.state.mcp_sse_port);
+
+        // Start Zero-Overhead SHM-IPC Streaming Bridge
+        if let Err(e) = self.state.shm_bridge.start().await {
+            eprintln!("⚠️ SHM-IPC Bridge initialization warning: {}", e);
+        } else {
+            println!("⚡ Zero-Overhead SHM-IPC Bridge active on {}", self.state.shm_bridge.status().socket_path);
+        }
 
         loop {
             match listener.accept().await {
@@ -2898,7 +2928,13 @@ impl HagibisDaemon {
             }
             // 121. Enterprise Distributed Monorepo Hypergraph & Build Cache
             HgbRequest::MonorepoAnalyze => {
-                let ws_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                let ws_dir = if let Ok(custom) = std::env::var("HGB_WORKSPACE") {
+            PathBuf::from(custom)
+        } else if Path::new("/home/toshiba/My AI Project/hagibis").is_dir() {
+            PathBuf::from("/home/toshiba/My AI Project/hagibis")
+        } else {
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+        };
                 match hgb_core::MonorepoHypergraphEngine::build_hypergraph(&ws_dir) {
                     Ok(rep) => HgbResponse::MonorepoAnalyzeResult(rep),
                     Err(e) => HgbResponse::Error(e.to_string()),
@@ -2937,7 +2973,13 @@ impl HagibisDaemon {
             }
             // 125. Interactive Visual WYSIWYG Web Canvas Studio
             HgbRequest::StudioStart { port } => {
-                let ws_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                let ws_dir = if let Ok(custom) = std::env::var("HGB_WORKSPACE") {
+            PathBuf::from(custom)
+        } else if Path::new("/home/toshiba/My AI Project/hagibis").is_dir() {
+            PathBuf::from("/home/toshiba/My AI Project/hagibis")
+        } else {
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+        };
                 match hgb_core::VisualCanvasStudioEngine::start_session(&ws_dir, port) {
                     Ok(rep) => HgbResponse::StudioStartResult(rep),
                     Err(e) => HgbResponse::Error(e.to_string()),
@@ -2958,7 +3000,13 @@ impl HagibisDaemon {
                 force_codex,
                 consent_given,
             } => {
-                let ws_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                let ws_dir = if let Ok(custom) = std::env::var("HGB_WORKSPACE") {
+            PathBuf::from(custom)
+        } else if Path::new("/home/toshiba/My AI Project/hagibis").is_dir() {
+            PathBuf::from("/home/toshiba/My AI Project/hagibis")
+        } else {
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+        };
                 let mut engine = hgb_core::HybridOrchestrationEngine::new(ws_dir);
                 match engine.execute_hybrid_task(
                     &task,
@@ -2973,7 +3021,13 @@ impl HagibisDaemon {
                 }
             }
             HgbRequest::HybridScorecard => {
-                let ws_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                let ws_dir = if let Ok(custom) = std::env::var("HGB_WORKSPACE") {
+            PathBuf::from(custom)
+        } else if Path::new("/home/toshiba/My AI Project/hagibis").is_dir() {
+            PathBuf::from("/home/toshiba/My AI Project/hagibis")
+        } else {
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+        };
                 let engine = hgb_core::HybridOrchestrationEngine::new(ws_dir);
                 match engine.get_scorecard() {
                     Ok(scorecard) => HgbResponse::HybridScorecardResult(scorecard),
@@ -3000,7 +3054,13 @@ impl HagibisDaemon {
             }
             // 129. Automated Masterclass CI Pipeline
             HgbRequest::MasterclassGen => {
-                let ws_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                let ws_dir = if let Ok(custom) = std::env::var("HGB_WORKSPACE") {
+            PathBuf::from(custom)
+        } else if Path::new("/home/toshiba/My AI Project/hagibis").is_dir() {
+            PathBuf::from("/home/toshiba/My AI Project/hagibis")
+        } else {
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+        };
                 let pipeline = hgb_core::MasterclassPipeline::new(ws_dir);
                 match pipeline.generate_pdf() {
                     Ok(rep) => HgbResponse::MasterclassGenResult(rep),
@@ -3009,7 +3069,13 @@ impl HagibisDaemon {
             }
             // 130. Wasm-Kernel Plugin System
             HgbRequest::WasmPluginRun { wasm_path, input } => {
-                let ws_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                let ws_dir = if let Ok(custom) = std::env::var("HGB_WORKSPACE") {
+            PathBuf::from(custom)
+        } else if Path::new("/home/toshiba/My AI Project/hagibis").is_dir() {
+            PathBuf::from("/home/toshiba/My AI Project/hagibis")
+        } else {
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+        };
                 let _governor_guard = hgb_nextgen::GovernorGuard::acquire();
                 let plugin_path = if Path::new(&wasm_path).is_absolute() {
                     PathBuf::from(&wasm_path)
@@ -3026,7 +3092,13 @@ impl HagibisDaemon {
             }
             // 131. Dual-Layer Sandbox Execution
             HgbRequest::DualLayerSandboxRun { workload, shell_command } => {
-                let ws_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                let ws_dir = if let Ok(custom) = std::env::var("HGB_WORKSPACE") {
+            PathBuf::from(custom)
+        } else if Path::new("/home/toshiba/My AI Project/hagibis").is_dir() {
+            PathBuf::from("/home/toshiba/My AI Project/hagibis")
+        } else {
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+        };
                 let _governor_guard = hgb_nextgen::GovernorGuard::acquire();
                 let engine = hgb_core::DualLayerSandboxEngine::new(&ws_dir);
                 match engine.execute_workload_auto(&workload, None, shell_command.as_deref(), None) {
@@ -3101,7 +3173,13 @@ impl HagibisDaemon {
                 HgbResponse::BareMetalCommandResult(output)
             }
             HgbRequest::WasmDistributedMigrate { target_node, package_bundle } => {
-                let ws_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                let ws_dir = if let Ok(custom) = std::env::var("HGB_WORKSPACE") {
+            PathBuf::from(custom)
+        } else if Path::new("/home/toshiba/My AI Project/hagibis").is_dir() {
+            PathBuf::from("/home/toshiba/My AI Project/hagibis")
+        } else {
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+        };
                 let mut comp = hgb_core::StatefulWasmComponent::new("hgbd-daemon-node", 4);
                 let _ = comp.write_memory(0, b"hgbd:distributed-stateful-context");
                 match comp.serialize_snapshot(&target_node) {
@@ -3134,7 +3212,13 @@ impl HagibisDaemon {
                 }
             }
             HgbRequest::VibeAutonomousCycle { auto_patch, run_tests } => {
-                let ws_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                let ws_dir = if let Ok(custom) = std::env::var("HGB_WORKSPACE") {
+            PathBuf::from(custom)
+        } else if Path::new("/home/toshiba/My AI Project/hagibis").is_dir() {
+            PathBuf::from("/home/toshiba/My AI Project/hagibis")
+        } else {
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+        };
                 let mut config = hgb_core::VibeLoopConfig::default();
                 config.workspace_root = ws_dir;
                 config.auto_patch = auto_patch;
@@ -3272,7 +3356,13 @@ impl HagibisDaemon {
 
             // Elite Superpower 2: Autonomous Self-Healing Compilation Loops
             HgbRequest::SelfHealingCompile { target_file, code, command, max_retries } => {
-                let ws_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                let ws_dir = if let Ok(custom) = std::env::var("HGB_WORKSPACE") {
+            PathBuf::from(custom)
+        } else if Path::new("/home/toshiba/My AI Project/hagibis").is_dir() {
+            PathBuf::from("/home/toshiba/My AI Project/hagibis")
+        } else {
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+        };
                 let retries = max_retries.unwrap_or(3);
                 match hgb_core::CompilerInterceptor::heal_and_verify(
                     &ws_dir,
@@ -3424,6 +3514,84 @@ impl HagibisDaemon {
             HgbRequest::SwarmMeshStatus => {
                 let status = state.p2p_mesh.status();
                 HgbResponse::SwarmMeshStatusResult(serde_json::to_string_pretty(&status).unwrap_or_default())
+            }
+
+            // Superpower 1: Zero-Overhead SHM-IPC Transport
+            HgbRequest::ShmIpcBench => {
+                match state.shm_bridge.run_benchmark(8192, 50).await {
+                    Ok(rep) => HgbResponse::ShmIpcBenchResult(serde_json::to_string_pretty(&rep).unwrap_or_default()),
+                    Err(e) => HgbResponse::Error(format!("SHM-IPC Benchmark failed: {}", e)),
+                }
+            }
+
+            // Superpower 2: Autonomous Multi-Agent Swarm Orchestration
+            HgbRequest::ActorSwarmExecute { task, max_rounds } => {
+                match state.actor_swarm_coordinator.execute_debate(&task, max_rounds).await {
+                    Ok(cert) => HgbResponse::ActorSwarmExecuteResult(serde_json::to_string_pretty(&cert).unwrap_or_default()),
+                    Err(e) => HgbResponse::Error(format!("Actor Swarm debate failed: {}", e)),
+                }
+            }
+            HgbRequest::ActorSwarmStatus => {
+                let status_json = serde_json::json!({
+                    "roles": ["Planner", "Coder", "Reviewer", "SandboxExecutor"],
+                    "actor_engine": "Tokio Asynchronous Message-Passing Mailboxes",
+                    "sandbox_tier": "RAM CoW OverlaySandbox",
+                    "consensus_protocol": "First-Green / Cryptographic BLAKE3 Certificates",
+                    "learning_integration": "DPO Training Pair Synthesizer",
+                });
+                HgbResponse::ActorSwarmStatusResult(serde_json::to_string_pretty(&status_json).unwrap_or_default())
+            }
+
+            // Superpower 3: Distributed Edge-to-Cloud State Synchronization
+            HgbRequest::CrdtSyncExport => {
+                let doc = state.crdt_sync_document.read().await;
+                let payload = doc.export_edge_sync_payload();
+                HgbResponse::CrdtSyncExportResult(serde_json::to_string_pretty(&payload).unwrap_or_default())
+            }
+            HgbRequest::CrdtSyncMerge { remote_payload } => {
+                match serde_json::from_str::<hgb_core::crdt_edge_sync::EdgeSyncPayload>(&remote_payload) {
+                    Ok(edge_payload) => {
+                        let mut doc = state.crdt_sync_document.write().await;
+                        match doc.import_edge_sync_payload(&edge_payload) {
+                            Ok(report) => HgbResponse::CrdtSyncMergeResult(serde_json::to_string_pretty(&report).unwrap_or_default()),
+                            Err(e) => HgbResponse::Error(format!("CRDT import failed: {}", e)),
+                        }
+                    }
+                    Err(e) => HgbResponse::Error(format!("Invalid EdgeSyncPayload JSON: {}", e)),
+                }
+            }
+            HgbRequest::CrdtSyncStatus => {
+                let doc = state.crdt_sync_document.read().await;
+                let status_json = serde_json::json!({
+                    "node_id": doc.node_id,
+                    "vector_clock": doc.vector_clock.clock,
+                    "active_adrs": doc.adrs.elements().len(),
+                    "active_skills": doc.skills.elements().len(),
+                    "style_preferences": doc.style_prefs.value,
+                    "vector_embeddings": doc.vector_embeddings.elements().len(),
+                    "last_synced_ms": doc.last_synced_ms,
+                    "cloudflare_workers_kv_binding": "HGB_KV_SYNC",
+                    "cloudflare_durable_objects_binding": "HGB_DO_SYNC",
+                });
+                HgbResponse::CrdtSyncStatusResult(serde_json::to_string_pretty(&status_json).unwrap_or_default())
+            }
+
+            // Superpower 4: Hardware-Aware Dynamic CPU Governor Integration
+            HgbRequest::GovernorBoost { workload } => {
+                match state.governor_watchdog.boost(&workload).await {
+                    Ok(status) => HgbResponse::GovernorBoostResult(serde_json::to_string_pretty(&status).unwrap_or_default()),
+                    Err(e) => HgbResponse::Error(format!("Governor boost failed: {}", e)),
+                }
+            }
+            HgbRequest::GovernorRelax => {
+                match state.governor_watchdog.relax().await {
+                    Ok(status) => HgbResponse::GovernorRelaxResult(serde_json::to_string_pretty(&status).unwrap_or_default()),
+                    Err(e) => HgbResponse::Error(format!("Governor relax failed: {}", e)),
+                }
+            }
+            HgbRequest::GovernorStatus => {
+                let status = state.governor_watchdog.status().await;
+                HgbResponse::GovernorStatusResult(serde_json::to_string_pretty(&status).unwrap_or_default())
             }
         }
     }

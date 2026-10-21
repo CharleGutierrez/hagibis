@@ -1312,6 +1312,27 @@ pub enum HgbRequest {
         ttl_secs: u64,
     },
     SwarmMeshStatus,
+    // --- Superpower 1: Zero-Overhead SHM-IPC Transport ---
+    ShmIpcBench,
+    // --- Superpower 2: Autonomous Multi-Agent Swarm Orchestration ---
+    ActorSwarmExecute {
+        task: String,
+        #[serde(default = "default_two")]
+        max_rounds: usize,
+    },
+    ActorSwarmStatus,
+    // --- Superpower 3: Distributed Edge-to-Cloud State Synchronization ---
+    CrdtSyncExport,
+    CrdtSyncMerge {
+        remote_payload: String,
+    },
+    CrdtSyncStatus,
+    // --- Superpower 4: Hardware-Aware Dynamic CPU Governor Integration ---
+    GovernorBoost {
+        workload: String,
+    },
+    GovernorRelax,
+    GovernorStatus,
 }
 
 fn default_twenty_u64() -> u64 {
@@ -1867,6 +1888,19 @@ pub enum HgbResponse {
     SwarmMeshDelegateResult(String),
     SwarmMeshSyncResult(String),
     SwarmMeshStatusResult(String),
+    // --- Superpower 1: Zero-Overhead SHM-IPC Transport ---
+    ShmIpcBenchResult(String),
+    // --- Superpower 2: Autonomous Multi-Agent Swarm Orchestration ---
+    ActorSwarmExecuteResult(String),
+    ActorSwarmStatusResult(String),
+    // --- Superpower 3: Distributed Edge-to-Cloud State Synchronization ---
+    CrdtSyncExportResult(String),
+    CrdtSyncMergeResult(String),
+    CrdtSyncStatusResult(String),
+    // --- Superpower 4: Hardware-Aware Dynamic CPU Governor Integration ---
+    GovernorBoostResult(String),
+    GovernorRelaxResult(String),
+    GovernorStatusResult(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -154,3 +154,16 @@ pub use self_healing_daemon::{
     DiagnosticPackage, ExecutionFailureEvent, FailureSource, HealingAttemptReport,
     SelfHealingDaemonLoop, SelfHealingDaemonStatus,
 };
+
+// Superpower 1: Zero-Overhead IPC via Shared Memory & Unix Domain Sockets
+pub mod shm_grpc_bridge;
+pub use shm_grpc_bridge::{
+    ShmBridgeStatus, ShmGrpcBridge, DEFAULT_SHM_SOCKET_PATH,
+};
+
+// Superpower 4: Hardware-Aware Dynamic CPU Governor Integration
+pub mod governor_watchdog;
+pub use governor_watchdog::{
+    GovernorWatchdog, GovernorWatchdogStatus,
+};
+

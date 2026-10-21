@@ -1640,6 +1640,41 @@ impl HagibisRepl {
                 let resp = self.dispatch(HgbRequest::SwarmMeshStatus).await;
                 self.render_response(resp);
             }
+            "/shm-ipc" | "/ipc-bench" => {
+                let resp = self.dispatch(HgbRequest::ShmIpcBench).await;
+                self.render_response(resp);
+            }
+            "/swarm-debate" | "/agent-swarm" => {
+                let trimmed = args.trim();
+                let resp = if trimmed.is_empty() || trimmed == "status" {
+                    self.dispatch(HgbRequest::ActorSwarmStatus).await
+                } else {
+                    self.dispatch(HgbRequest::ActorSwarmExecute { task: trimmed.to_string(), max_rounds: 2 }).await
+                };
+                self.render_response(resp);
+            }
+            "/crdt-sync" | "/edge-sync" => {
+                let trimmed = args.trim();
+                let resp = if trimmed == "export" {
+                    self.dispatch(HgbRequest::CrdtSyncExport).await
+                } else if trimmed == "status" || trimmed.is_empty() {
+                    self.dispatch(HgbRequest::CrdtSyncStatus).await
+                } else {
+                    self.dispatch(HgbRequest::CrdtSyncMerge { remote_payload: trimmed.to_string() }).await
+                };
+                self.render_response(resp);
+            }
+            "/gov-tune" | "/cpu-governor" => {
+                let trimmed = args.trim();
+                let resp = if trimmed == "relax" {
+                    self.dispatch(HgbRequest::GovernorRelax).await
+                } else if trimmed.is_empty() || trimmed == "status" {
+                    self.dispatch(HgbRequest::GovernorStatus).await
+                } else {
+                    self.dispatch(HgbRequest::GovernorBoost { workload: trimmed.to_string() }).await
+                };
+                self.render_response(resp);
+            }
             "/cockpit" => {
                 let mut state = hgb_nextgen::CockpitState::new();
                 if let Some(ref m) = self.model {
@@ -5193,6 +5228,22 @@ impl HagibisRepl {
             }
             HgbResponse::SwarmMeshDelegateResult(json) | HgbResponse::SwarmMeshSyncResult(json) | HgbResponse::SwarmMeshStatusResult(json) => {
                 println!("{}", "🌐 DISTRIBUTED P2P SWARM MESH 🌐".bold().cyan());
+                println!("{}", json);
+            }
+            HgbResponse::ShmIpcBenchResult(json) => {
+                println!("{}", "⚡ ZERO-OVERHEAD SHM-IPC TRANSPORT ⚡".bold().cyan());
+                println!("{}", json);
+            }
+            HgbResponse::ActorSwarmExecuteResult(json) | HgbResponse::ActorSwarmStatusResult(json) => {
+                println!("{}", "🐝 AUTONOMOUS MULTI-AGENT SWARM 🐝".bold().cyan());
+                println!("{}", json);
+            }
+            HgbResponse::CrdtSyncExportResult(json) | HgbResponse::CrdtSyncMergeResult(json) | HgbResponse::CrdtSyncStatusResult(json) => {
+                println!("{}", "🌐 DISTRIBUTED CRDT STATE SYNCHRONIZATION 🌐".bold().cyan());
+                println!("{}", json);
+            }
+            HgbResponse::GovernorBoostResult(json) | HgbResponse::GovernorRelaxResult(json) | HgbResponse::GovernorStatusResult(json) => {
+                println!("{}", "⚡ DYNAMIC HARDWARE CPU GOVERNOR ⚡".bold().cyan());
                 println!("{}", json);
             }
         }

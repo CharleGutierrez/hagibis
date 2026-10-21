@@ -619,6 +619,34 @@ impl InteractiveCommandCatalog {
                 syntax: "hgb swarm-mesh [--delegate <payload>] [--kind <compile|wasm>] [--sync-dht <key=val>] [--status]",
                 description: "Distributed P2P Swarm Mesh: sovereign peer discovery, BLAKE3 authentication, load-balanced task delegation to idle peer nodes, and encrypted distributed hash table (DHT) caching.",
             },
+            CommandEntry {
+                name: "shm-ipc",
+                aliases: &["ipc-bench"],
+                category: "IPC/ZeroCopy",
+                syntax: "hgb shm-ipc [--bench] [--chunk-size <bytes>] [--iterations <count>] [--status]",
+                description: "Zero-Overhead SHM-IPC Transport: framed UNIX Domain Socket streaming with zero-copy shared memory handles for large tensor vectors and LLM context payloads.",
+            },
+            CommandEntry {
+                name: "actor-swarm",
+                aliases: &["swarm-debate", "agent-swarm"],
+                category: "Autopilot/Swarm",
+                syntax: "hgb actor-swarm [--task <text>] [--rounds <N>] [--status]",
+                description: "Autonomous Multi-Agent Swarm Orchestration: native Tokio Actor Model with Planner, Coder, Reviewer, and Sandbox Executor roles debating and certifying patches.",
+            },
+            CommandEntry {
+                name: "crdt-sync",
+                aliases: &["edge-sync", "crdt"],
+                category: "Storage/CRDT",
+                syntax: "hgb crdt-sync [--export] [--merge <json>] [--status]",
+                description: "Distributed Edge-to-Cloud CRDT State Synchronization: conflict-free LWW and OR-Set synchronization across local workstation and Cloudflare Workers edge nodes.",
+            },
+            CommandEntry {
+                name: "cpu-governor",
+                aliases: &["gov-tune", "dynatune-boost"],
+                category: "Hardware/Governor",
+                syntax: "hgb cpu-governor [--boost <workload>] [--relax] [--status]",
+                description: "Hardware-Aware Dynamic CPU Governor Integration: commands performance profiles and EPP dynamically for heavy compilation and LLM tasks with thermal safeguard.",
+            },
         ]
     }
 

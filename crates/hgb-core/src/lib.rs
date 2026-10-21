@@ -965,8 +965,39 @@ pub use neural_coprocessor::{
     NeuralCoprocessor, PromptComplexityTier, RoutingDecision as CoprocessorRoutingDecision,
 };
 
+// Superpower 1: Zero-Overhead IPC via Shared Memory & Unix Domain Sockets
+pub mod shm_ipc_channel;
+pub use shm_ipc_channel::{
+    run_shm_ipc_benchmark, ShmIpcBenchReport, ShmIpcChannel, ShmIpcHeader, ShmIpcMessage,
+    ShmMessageType, ShmRingPool, DEFAULT_SHM_FILE_NAME, DEFAULT_SHM_POOL_CAPACITY,
+    HGB_IPC_MAGIC, SHM_THRESHOLD_BYTES,
+};
+
+// Superpower 2: Autonomous Multi-Agent Swarm Orchestration
+pub mod actor_swarm;
+pub use actor_swarm::{
+    ActorVote, CandidatePatch, CoderActor, DebateTurn, DpoTrainingPair, PlannerActor,
+    ReviewVerdict, ReviewerActor, SandboxExecutionVerdict, SandboxExecutorActor, SwarmActor,
+    SwarmConsensusCertificate, SwarmCoordinator, SwarmRole, WorkPlan, WorkUnit,
+};
+
+// Superpower 3: Distributed Edge-to-Cloud State Synchronization (CRDT Engine)
+pub mod crdt_edge_sync;
+pub use crdt_edge_sync::{
+    AdrRecord as CrdtAdrRecord, ClockRelation, CrdtSyncDocument, EdgeSyncPayload, ElementTag, LwwRegister,
+    MergeReport, OrSet, SkillRecord, StylePreferences, VectorClock, VectorEmbeddingRef,
+};
+
+// Superpower 4: Hardware-Aware Dynamic CPU Governor Integration
+pub mod dynamic_governor;
+pub use dynamic_governor::{
+    CpuBaselineState, DynamicGovernor, GovernorGuard, GovernorTelemetry, WorkloadKind,
+    THERMAL_RELAX_THRESHOLD_C, THERMAL_THROTTLE_THRESHOLD_C,
+};
+
 /// Enterprise high-capacity implementation
 pub fn enterprise_architecture_dispatch() -> bool {
     true
 }
+
 

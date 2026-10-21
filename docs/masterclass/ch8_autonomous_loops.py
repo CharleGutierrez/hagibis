@@ -69,4 +69,83 @@ def build_autonomous_loops_chapter():
     story.append(Paragraph(p4_desc, styles["BodyTextCustom"]))
     story.append(Spacer(1, 15))
 
+    p5_desc = (
+        "<b>5. Zero-Overhead IPC via Shared Memory & Unix Domain Sockets:</b><br/>"
+        "Upgrades daemon-to-CLI communication to framed Unix Domain Socket streaming paired with zero-copy shared memory handles. "
+        "Payloads exceeding 4 KiB (such as large LLM context windows or sibling Ollama tensor embeddings) are written directly to "
+        "<code>/dev/shm</code>, transmitting only 64-byte aligned descriptors over UDS to eliminate kernel buffer copying."
+    )
+    story.append(Paragraph(p5_desc, styles["BodyTextCustom"]))
+    story.append(Spacer(1, 10))
+
+    story.append(CodeSnippet(
+        "// Zero-Overhead UDS + SHM IPC Channel\n"
+        "let channel = ShmIpcChannel::connect(\"/run/user/1000/hgbd_shm.sock\")?;\n"
+        "let message = ShmIpcMessage::new_shm(ShmMessageType::TensorPayload, tensor_bytes)?;\n"
+        "channel.send(&message)?;\n"
+        "let response = channel.recv()?;",
+        "Rust"
+    ))
+    story.append(Spacer(1, 15))
+
+    p6_desc = (
+        "<b>6. Autonomous Multi-Agent Swarm Orchestration (Actor Model):</b><br/>"
+        "Implements a native Tokio Actor Model with four specialized roles: Planner, Coder, Reviewer, and Sandbox Executor. "
+        "Agents debate code modifications across iterative consensus rounds inside isolated RAM CoW OverlaySandboxes. "
+        "Upon achieving First-Green consensus, a cryptographic BLAKE3 SwarmConsensusCertificate is generated along with DPO distillation pairs."
+    )
+    story.append(Paragraph(p6_desc, styles["BodyTextCustom"]))
+    story.append(Spacer(1, 10))
+
+    story.append(CodeSnippet(
+        "// Multi-Agent Actor Swarm Consensus\n"
+        "let coordinator = ActorSwarmCoordinator::new(workspace_root)?;\n"
+        "let certificate = coordinator.execute_debate(\"optimize buffer pool allocation\", 3).await?;\n"
+        "assert!(certificate.consensus_reached);\n"
+        "println!(\"Winning patch blake3: {}\", certificate.certificate_hash);",
+        "Rust"
+    ))
+    story.append(Spacer(1, 15))
+
+    p7_desc = (
+        "<b>7. Distributed Edge-to-Cloud State Synchronization (CRDTs):</b><br/>"
+        "Features Conflict-free Replicated Data Types (CRDTs) including Last-Write-Wins (LWW) Registers, Observed-Remove (OR) Sets, "
+        "and Vector Clocks. Enables bidirectional synchronization of architectural decision records (ADRs), skill vaults, and vector embeddings "
+        "between local workstation runtimes and Cloudflare Workers edge nodes (wrangler.toml) with zero data loss."
+    )
+    story.append(Paragraph(p7_desc, styles["BodyTextCustom"]))
+    story.append(Spacer(1, 10))
+
+    story.append(CodeSnippet(
+        "// Distributed Edge-to-Cloud CRDT Synchronization\n"
+        "let mut local_doc = CrdtSyncDocument::new(\"dynabook-node\");\n"
+        "let edge_payload = local_doc.export_edge_sync_payload();\n"
+        "// Reconcile with remote Cloudflare Worker payload\n"
+        "let report = local_doc.import_edge_sync_payload(&remote_edge_payload)?;\n"
+        "println!(\"Reconciled {} ADRs and {} skills\", report.adrs_reconciled, report.skills_reconciled);",
+        "Rust"
+    ))
+    story.append(Spacer(1, 15))
+
+    p8_desc = (
+        "<b>8. Hardware-Aware Dynamic CPU Governor Integration:</b><br/>"
+        "Deeply bridges hgb-daemon with sibling modules dynatune and kernel-optimizer. Inspects Linux sysfs thermal zones, AC power state, "
+        "and CPU energy performance preference (EPP). Automatically bursts CPU frequency governors to 'performance' during heavy builds or "
+        "Ollama inferences, and utilizes RAII GovernorGuards to drop frequencies back to 'powersave' when idle, while throttling gracefully if temps exceed 80°C."
+    )
+    story.append(Paragraph(p8_desc, styles["BodyTextCustom"]))
+    story.append(Spacer(1, 10))
+
+    story.append(CodeSnippet(
+        "// Hardware-Aware Dynamic Governor Guard\n"
+        "let watchdog = DynamicGovernorWatchdog::new();\n"
+        "{\n"
+        "    let _guard = watchdog.boost_for_workload(WorkloadKind::HeavyCompilation)?;\n"
+        "    // CPU frequency scaled to peak, EPP shifted to performance\n"
+        "    run_heavy_compilation();\n"
+        "} // RAII drop: governor seamlessly restored to baseline powersave",
+        "Rust"
+    ))
+    story.append(Spacer(1, 15))
+
     return story

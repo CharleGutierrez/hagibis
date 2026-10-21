@@ -38,3 +38,10 @@ pub use shm_ring_buffer::{
     DEFAULT_RING_CAPACITY, ShmBenchReport, ShmRingBuffer, ShmRingBufferStatus,
 };
 
+// Distributed Edge-to-Cloud State Synchronization (CRDT Engine)
+pub use hgb_core::crdt_edge_sync::{
+    AdrRecord, ClockRelation, CrdtSyncDocument, EdgeSyncPayload, ElementTag, LwwRegister,
+    MergeReport, OrSet, SkillRecord as CrdtSkillRecord, StylePreferences, VectorClock, VectorEmbeddingRef,
+};
+
+
