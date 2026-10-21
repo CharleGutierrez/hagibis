@@ -1217,6 +1217,51 @@ pub enum HgbRequest {
         #[serde(default)]
         context_log: Option<String>,
     },
+    // Elite Superpower 1: Distributed Vector & Event Streaming
+    VectorStreamQuery {
+        collection: String,
+        query_vec: Vec<f32>,
+        #[serde(default = "default_five")]
+        top_k: usize,
+        #[serde(default)]
+        min_score: f32,
+    },
+    VectorStreamUpsert {
+        id: String,
+        collection: String,
+        embedding: Vec<f32>,
+        metadata: String,
+    },
+    VectorStreamStatus,
+    // Elite Superpower 2: Autonomous Self-Healing Compilation Loops
+    SelfHealingCompile {
+        target_file: String,
+        code: String,
+        #[serde(default)]
+        command: Option<String>,
+        #[serde(default)]
+        max_retries: Option<usize>,
+    },
+    SelfHealingStatus,
+    // Elite Superpower 3: JIT GPU/NPU Offloading via Dynatune Integration
+    JitAllocBoost {
+        #[serde(default)]
+        target_pid: Option<i32>,
+        #[serde(default)]
+        cores: Option<Vec<usize>>,
+        #[serde(default)]
+        priority_boost: bool,
+    },
+    JitAllocRelax,
+    JitAllocStatus,
+    // Elite Superpower 4: Zero-Copy WASM Shared Memory Pipelines
+    WasmShmBench {
+        #[serde(default)]
+        chunk_size_kb: Option<usize>,
+        #[serde(default)]
+        iterations: Option<usize>,
+    },
+    WasmShmStatus,
 }
 
 fn default_two() -> usize {
@@ -1739,6 +1784,20 @@ pub enum HgbResponse {
     // Superpower 4: Autonomous Self-Patching & Continuous Learning Loop
     SelfPatchStatusResult(crate::autonomous_self_patcher::SelfPatchStatusReport),
     SelfPatchTriggerResult(crate::autonomous_self_patcher::SelfPatchRecord),
+    // Elite Superpower 1: Distributed Vector & Event Streaming
+    VectorStreamQueryResult(String),
+    VectorStreamUpsertResult(String),
+    VectorStreamStatusResult(String),
+    // Elite Superpower 2: Autonomous Self-Healing Compilation Loops
+    SelfHealingCompileResult(crate::compiler_interceptor::SelfHealingReport),
+    SelfHealingStatusResult(String),
+    // Elite Superpower 3: JIT GPU/NPU Offloading via Dynatune Integration
+    JitAllocBoostResult(String),
+    JitAllocRelaxResult(String),
+    JitAllocStatusResult(crate::jit_resource_allocator::JitAllocationStatus),
+    // Elite Superpower 4: Zero-Copy WASM Shared Memory Pipelines
+    WasmShmBenchResult(crate::wasm_shared_memory::WasmShmBenchReport),
+    WasmShmStatusResult(crate::wasm_shared_memory::WasmShmStatus),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

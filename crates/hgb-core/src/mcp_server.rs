@@ -220,6 +220,20 @@ impl HagibisMcpServer {
                     },
                     "required": ["query"]
                 }
+            },
+            {
+                "name": "hgb_self_healing_compile",
+                "description": "Autonomous First-Green compilation loop: executes build/checks in RAM CoW overlay sandbox, intercepts diagnostics, and heals AST syntax errors before disk commit",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "target_file": { "type": "string", "description": "Relative path to target source file" },
+                        "code": { "type": "string", "description": "Candidate source code string to verify and heal" },
+                        "command": { "type": "string", "description": "Compiler check command (e.g. cargo check, zig test, python3 -m py_compile)" },
+                        "max_retries": { "type": "integer", "description": "Maximum autonomous repair iterations", "default": 3 }
+                    },
+                    "required": ["target_file", "code"]
+                }
             }
         ])
     }
@@ -610,6 +624,27 @@ impl HagibisMcpServer {
                 let acc = crate::ollama_sibling_accelerator::SiblingOllamaAccelerator::new(&self.workspace_root);
                 let matches = acc.query_mutation_vectors(query, top_k)?;
                 Ok(serde_json::to_string_pretty(&matches).unwrap_or_default())
+            }
+
+            "hgb_self_healing_compile" => {
+                let target_file = args.get("target_file").and_then(|t| t.as_str()).ok_or_else(|| {
+                    HgbError::Execution("Missing 'target_file'".into())
+                })?;
+                let code = args.get("code").and_then(|c| c.as_str()).ok_or_else(|| {
+                    HgbError::Execution("Missing 'code'".into())
+                })?;
+                let cmd = args.get("command").and_then(|c| c.as_str());
+                let max_retries = args.get("max_retries").and_then(|r| r.as_u64()).unwrap_or(3) as usize;
+
+                let report = crate::compiler_interceptor::CompilerInterceptor::heal_and_verify(
+                    &self.workspace_root,
+                    Path::new(target_file),
+                    code,
+                    cmd,
+                    max_retries,
+                )?;
+
+                Ok(serde_json::to_string_pretty(&report).unwrap_or_default())
             }
 
             other => Ok(format!("Tool '{}' recognized by Hagibis MCP dispatcher.", other)),

@@ -940,6 +940,24 @@ pub use autonomous_self_patcher::{
     AutonomousSelfPatcher, DistillationPair, SelfPatchRecord, SelfPatchStatusReport,
 };
 
+// Autonomous Self-Healing Compilation Loops
+pub mod compiler_interceptor;
+pub use compiler_interceptor::{
+    CompilerDiagnostic, CompilerInterceptor, CompilerTool, DiagnosticSeverity, SelfHealingReport,
+};
+
+// JIT GPU/NPU Offloading via Dynatune Integration
+pub mod jit_resource_allocator;
+pub use jit_resource_allocator::{
+    GpuTelemetry, HeavyProcessInfo, JitAllocationGuard, JitAllocationStatus, JitResourceAllocator,
+};
+
+// Zero-Copy WASM Shared Memory Pipelines
+pub mod wasm_shared_memory;
+pub use wasm_shared_memory::{
+    WasmSharedMemoryPipeline, WasmShmBenchReport, WasmShmStatus, DEFAULT_SHM_PAGES,
+};
+
 /// Enterprise high-capacity implementation
 pub fn enterprise_architecture_dispatch() -> bool {
     true

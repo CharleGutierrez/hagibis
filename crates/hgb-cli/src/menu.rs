@@ -563,6 +563,34 @@ impl InteractiveCommandCatalog {
                 syntax: "hgb self-patch [--trigger] [--log <context>] [--status]",
                 description: "Autonomous Self-Patching & Continuous Learning Loop: synthesizes unified diffs, verifies First-Green in sandbox, applies patches, and records DPO pairs.",
             },
+            CommandEntry {
+                name: "vector-stream",
+                aliases: &["vstream", "vec-stream"],
+                category: "Storage/Vector",
+                syntax: "hgb vector-stream [--collection <name>] [--query <text|vec>] [--upsert <id> <vec> <meta>] [--status]",
+                description: "Distributed Vector & Event Streaming: SQLite vector table (.hgb/vectors.db), SIMD cosine/Euclidean distance, and non-blocking event stream.",
+            },
+            CommandEntry {
+                name: "self-heal",
+                aliases: &["heal-loop", "fix-compile"],
+                category: "Compiler/Heal",
+                syntax: "hgb self-heal [--file <path>] [--code <string>] [--command <cmd>] [--max-retries <N>] [--status]",
+                description: "Autonomous Self-Healing Compilation Loop: RAM CoW sandbox verification, structured diagnostic parsing (Rust/Zig/Python), iterative AST repair, and First-Green disk commit.",
+            },
+            CommandEntry {
+                name: "jit-alloc",
+                aliases: &["gpu-jit", "resource-tune"],
+                category: "Hardware/JIT",
+                syntax: "hgb jit-alloc [--boost] [--relax] [--pid <id>] [--cores <0,1>] [--priority] [--status]",
+                description: "JIT GPU/NPU Offloading & Dynatune Allocator: queries /dev/dri/renderD128, sets performance governors, pins LLM threads to performance cores with RAII auto-relax.",
+            },
+            CommandEntry {
+                name: "wasm-shm",
+                aliases: &["shm-pipe", "wasm-zero-copy"],
+                category: "Wasm/ZeroCopy",
+                syntax: "hgb wasm-shm [--bench] [--chunk-kb <N>] [--iterations <N>] [--status]",
+                description: "Zero-Copy WebAssembly Shared Memory Pipeline: direct host-to-guest linear memory slicing, ring-buffer streams, and sub-microsecond invocation latency.",
+            },
         ]
     }
 

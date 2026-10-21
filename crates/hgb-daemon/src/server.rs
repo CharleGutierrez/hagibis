@@ -39,6 +39,9 @@ pub struct DaemonState {
     pub microvm_swarm: Arc<hgb_core::EphemeralSandboxSwarm>,
     pub mcp_mesh: Arc<crate::mcp_mesh_network::McpMeshNetwork>,
     pub self_patcher: Arc<hgb_core::AutonomousSelfPatcher>,
+    pub vector_engine: Arc<hgb_storage::DistributedVectorEngine>,
+    pub jit_allocator: Arc<hgb_core::JitResourceAllocator>,
+    pub wasm_shm_pipeline: Arc<tokio::sync::Mutex<hgb_core::WasmSharedMemoryPipeline>>,
 }
 
 impl DaemonState {
@@ -88,6 +91,14 @@ impl DaemonState {
         let mcp_mesh = Arc::new(crate::mcp_mesh_network::McpMeshNetwork::new(&ws_dir));
         let self_patcher = Arc::new(hgb_core::AutonomousSelfPatcher::new(&ws_dir));
 
+        let vec_db_path = socket_path.parent().unwrap_or_else(|| Path::new(".")).join("vectors.db");
+        let vector_engine = Arc::new(hgb_storage::DistributedVectorEngine::new(&vec_db_path)
+            .unwrap_or_else(|_| hgb_storage::DistributedVectorEngine::in_memory().expect("in-memory vector engine fallback")));
+        let jit_allocator = Arc::new(hgb_core::JitResourceAllocator::new());
+        let wasm_shm_pipeline = Arc::new(tokio::sync::Mutex::new(
+            hgb_core::WasmSharedMemoryPipeline::new().expect("init wasm shm pipeline"),
+        ));
+
         Self {
             start_time: std::time::Instant::now(),
             socket_path,
@@ -110,6 +121,9 @@ impl DaemonState {
             microvm_swarm,
             mcp_mesh,
             self_patcher,
+            vector_engine,
+            jit_allocator,
+            wasm_shm_pipeline,
         }
     }
 }
@@ -3211,6 +3225,92 @@ impl HagibisDaemon {
                     Ok(rec) => HgbResponse::SelfPatchTriggerResult(rec),
                     Err(e) => HgbResponse::Error(format!("Autonomous self-patch failed: {}", e)),
                 }
+            }
+            // Elite Superpower 1: Distributed Vector & Event Streaming
+            HgbRequest::VectorStreamQuery { collection, query_vec, top_k, min_score } => {
+                let matches = state.vector_engine.search_streaming(&collection, &query_vec, top_k, min_score);
+                HgbResponse::VectorStreamQueryResult(serde_json::to_string_pretty(&matches).unwrap_or_default())
+            }
+            HgbRequest::VectorStreamUpsert { id, collection, embedding, metadata } => {
+                let dim = embedding.len();
+                let entry = hgb_storage::distributed_vector_engine::VectorEntry {
+                    id: id.clone(),
+                    collection: collection.clone(),
+                    dimension: dim,
+                    embedding,
+                    metadata,
+                    created_at: chrono::Utc::now().timestamp(),
+                };
+                match state.vector_engine.upsert(entry) {
+                    Ok(()) => HgbResponse::VectorStreamUpsertResult(format!("Vector '{}' successfully indexed into collection '{}'.", id, collection)),
+                    Err(e) => HgbResponse::Error(format!("Vector upsert failed: {}", e)),
+                }
+            }
+            HgbRequest::VectorStreamStatus => {
+                let status = state.vector_engine.status();
+                HgbResponse::VectorStreamStatusResult(serde_json::to_string_pretty(&status).unwrap_or_default())
+            }
+
+            // Elite Superpower 2: Autonomous Self-Healing Compilation Loops
+            HgbRequest::SelfHealingCompile { target_file, code, command, max_retries } => {
+                let ws_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                let retries = max_retries.unwrap_or(3);
+                match hgb_core::CompilerInterceptor::heal_and_verify(
+                    &ws_dir,
+                    Path::new(&target_file),
+                    &code,
+                    command.as_deref(),
+                    retries,
+                ) {
+                    Ok(rep) => HgbResponse::SelfHealingCompileResult(rep),
+                    Err(e) => HgbResponse::Error(format!("Self-healing compilation error: {}", e)),
+                }
+            }
+            HgbRequest::SelfHealingStatus => {
+                HgbResponse::SelfHealingStatusResult(
+                    "Self-Healing Compiler Interceptor active. Supported tools: Rust (cargo/rustc), Zig (zig test), Python (py_compile).".to_string()
+                )
+            }
+
+            // Elite Superpower 3: JIT GPU/NPU Offloading via Dynatune Integration
+            HgbRequest::JitAllocBoost { target_pid, cores, priority_boost } => {
+                match state.jit_allocator.boost(target_pid, cores, priority_boost) {
+                    Ok(guard) => {
+                        std::mem::forget(guard);
+                        HgbResponse::JitAllocBoostResult(
+                            "Hardware resource boost engaged: CPU governor set to performance, process affinity pinned to high-efficiency execution cores.".to_string()
+                        )
+                    }
+                    Err(e) => HgbResponse::Error(format!("JIT hardware boost failed: {}", e)),
+                }
+            }
+            HgbRequest::JitAllocRelax => {
+                let current_pid = std::process::id() as i32;
+                match state.jit_allocator.relax(&[current_pid], "powersave", "balance_performance") {
+                    Ok(()) => HgbResponse::JitAllocRelaxResult(
+                        "Hardware resource boost relaxed: CPU governor restored, affinity reset to all cores.".to_string()
+                    ),
+                    Err(e) => HgbResponse::Error(format!("JIT relax failed: {}", e)),
+                }
+            }
+            HgbRequest::JitAllocStatus => {
+                let status = state.jit_allocator.status();
+                HgbResponse::JitAllocStatusResult(status)
+            }
+
+            // Elite Superpower 4: Zero-Copy WASM Shared Memory Pipelines
+            HgbRequest::WasmShmBench { chunk_size_kb, iterations } => {
+                let size_kb = chunk_size_kb.unwrap_or(64);
+                let iters = iterations.unwrap_or(20);
+                let mut pipeline = state.wasm_shm_pipeline.lock().await;
+                match pipeline.benchmark(size_kb, iters) {
+                    Ok(report) => HgbResponse::WasmShmBenchResult(report),
+                    Err(e) => HgbResponse::Error(format!("WASM SHM benchmark failed: {}", e)),
+                }
+            }
+            HgbRequest::WasmShmStatus => {
+                let pipeline = state.wasm_shm_pipeline.lock().await;
+                HgbResponse::WasmShmStatusResult(pipeline.status())
             }
         }
     }

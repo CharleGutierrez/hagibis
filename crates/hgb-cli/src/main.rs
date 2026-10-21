@@ -2892,6 +2892,89 @@ enum Commands {
         #[arg(long)]
         status: bool,
     },
+
+    /// Elite Superpower 1: Distributed Vector & Event Streaming Engine
+    #[command(name = "vector-stream", alias = "vstream", alias = "vec-stream")]
+    VectorStream {
+        /// Collection name
+        #[arg(short, long, default_value = "default")]
+        collection: String,
+        /// Query text or comma-separated float vector
+        #[arg(short, long)]
+        query: Option<String>,
+        /// Upsert vector entry: ID, comma-separated floats, and metadata
+        #[arg(long, num_args = 3, value_names = ["ID", "EMBEDDING", "METADATA"])]
+        upsert: Option<Vec<String>>,
+        /// Top-K nearest neighbors
+        #[arg(short, long, default_value_t = 5)]
+        top_k: usize,
+        /// Minimum similarity score
+        #[arg(short, long, default_value_t = 0.0)]
+        min_score: f32,
+        /// Show vector engine status and active collections
+        #[arg(long)]
+        status: bool,
+    },
+
+    /// Elite Superpower 2: Autonomous Self-Healing Compilation Loop
+    #[command(name = "self-heal", alias = "heal-loop", alias = "fix-compile")]
+    SelfHeal {
+        /// Target source file path to heal
+        #[arg(short, long)]
+        file: Option<String>,
+        /// Candidate code string or file content
+        #[arg(short, long)]
+        code: Option<String>,
+        /// Explicit compiler command (e.g. cargo check, zig test, python3 -m py_compile)
+        #[arg(short, long)]
+        command: Option<String>,
+        /// Max autonomous healing retry iterations
+        #[arg(short, long, default_value_t = 3)]
+        max_retries: usize,
+        /// Show self-healing interceptor status
+        #[arg(long)]
+        status: bool,
+    },
+
+    /// Elite Superpower 3: JIT GPU/NPU Offloading & Dynatune Resource Allocator
+    #[command(name = "jit-alloc", alias = "gpu-jit", alias = "resource-tune")]
+    JitAlloc {
+        /// Boost hardware execution resources for active workload
+        #[arg(long)]
+        boost: bool,
+        /// Relax hardware execution resources back to powersave/balanced
+        #[arg(long)]
+        relax: bool,
+        /// Target PID to boost (defaults to heavy active processes)
+        #[arg(short, long)]
+        pid: Option<i32>,
+        /// Comma-separated CPU core indices to bind (e.g. 0,1)
+        #[arg(short, long)]
+        cores: Option<String>,
+        /// Apply priority renice (-5)
+        #[arg(long)]
+        priority: bool,
+        /// Show status and telemetry
+        #[arg(long)]
+        status: bool,
+    },
+
+    /// Elite Superpower 4: Zero-Copy WebAssembly Shared Memory Pipelines
+    #[command(name = "wasm-shm", alias = "shm-pipe", alias = "wasm-zero-copy")]
+    WasmShm {
+        /// Run high-throughput zero-copy stream benchmark
+        #[arg(long)]
+        bench: bool,
+        /// Benchmark chunk size in Kilobytes (default 64 KB)
+        #[arg(long, default_value_t = 64)]
+        chunk_kb: usize,
+        /// Benchmark iterations count (default 20 iterations)
+        #[arg(short, long, default_value_t = 20)]
+        iterations: usize,
+        /// Show shared memory status and capacity
+        #[arg(long)]
+        status: bool,
+    },
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -8406,6 +8489,229 @@ async fn test_calc() { assert!(calculate(5)); }".to_string()
                     }
                 } else if let hgb_core::protocol::HgbResponse::Error(e) = res {
                     eprintln!("  ✖ Status error: {}", e.red());
+                }
+            }
+            Ok(())
+        }
+        Commands::VectorStream { collection, query, upsert, top_k, min_score, status: _status } => {
+            println!("{}", "⚡ Distributed Vector & Event Streaming Engine".cyan().bold());
+            let client = HgbClient::new();
+
+            if let Some(parts) = upsert {
+                if parts.len() >= 3 {
+                    let id = parts[0].clone();
+                    let embedding: Vec<f32> = parts[1]
+                        .split(',')
+                        .filter_map(|s| s.trim().parse::<f32>().ok())
+                        .collect();
+                    let metadata = parts[2].clone();
+
+                    let res = client.send(hgb_core::protocol::HgbRequest::VectorStreamUpsert {
+                        id: id.clone(),
+                        collection: collection.clone(),
+                        embedding,
+                        metadata,
+                    }).await?;
+
+                    match res {
+                        hgb_core::protocol::HgbResponse::VectorStreamUpsertResult(msg) => {
+                            println!("  ✔ {}", msg.green().bold());
+                            println!("  📢 Broadcast event published to non-blocking daemon stream.");
+                        }
+                        hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Upsert error: {}", e.red()),
+                        _ => {}
+                    }
+                } else {
+                    eprintln!("  ✖ --upsert requires 3 arguments: <ID> <EMBEDDING_COMMA_SEPARATED> <METADATA>");
+                }
+            } else if let Some(q) = query {
+                let query_vec: Vec<f32> = if q.contains(',') {
+                    q.split(',')
+                        .filter_map(|s| s.trim().parse::<f32>().ok())
+                        .collect()
+                } else {
+                    // Fast deterministic normalized embedding for text queries
+                    hgb_storage::simd_vector_index::SimdVectorIndex::generate_deterministic_embedding(&q, 64)
+                };
+
+                let res = client.send(hgb_core::protocol::HgbRequest::VectorStreamQuery {
+                    collection: collection.clone(),
+                    query_vec,
+                    top_k,
+                    min_score,
+                }).await?;
+
+                match res {
+                    hgb_core::protocol::HgbResponse::VectorStreamQueryResult(json_str) => {
+                        println!("  Collection:        {}", collection.yellow());
+                        println!("  Top-K:             {}", top_k);
+                        println!("  Threshold:         {}", min_score);
+                        println!("  Results:\n{}", json_str.green());
+                    }
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Query error: {}", e.red()),
+                    _ => {}
+                }
+            } else {
+                let res = client.send(hgb_core::protocol::HgbRequest::VectorStreamStatus).await?;
+                match res {
+                    hgb_core::protocol::HgbResponse::VectorStreamStatusResult(json_str) => {
+                        println!("  Status & Telemetry:\n{}", json_str.cyan());
+                    }
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Status error: {}", e.red()),
+                    _ => {}
+                }
+            }
+            Ok(())
+        }
+        Commands::SelfHeal { file, code, command, max_retries, status } => {
+            println!("{}", "🩺 Autonomous Self-Healing Compilation Loop".cyan().bold());
+            let client = HgbClient::new();
+
+            if status || (file.is_none() && code.is_none()) {
+                let res = client.send(hgb_core::protocol::HgbRequest::SelfHealingStatus).await?;
+                match res {
+                    hgb_core::protocol::HgbResponse::SelfHealingStatusResult(msg) => {
+                        println!("  Status:            {}", msg.green());
+                    }
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Error: {}", e.red()),
+                    _ => {}
+                }
+            } else {
+                let target_file = file.unwrap_or_else(|| "src/lib.rs".to_string());
+                let candidate_code = if let Some(c) = code {
+                    c
+                } else if std::path::Path::new(&target_file).exists() {
+                    std::fs::read_to_string(&target_file).unwrap_or_default()
+                } else {
+                    eprintln!("  ✖ File '{}' not found and no --code provided.", target_file);
+                    return Ok(());
+                };
+
+                println!("  Target File:       {}", target_file.yellow());
+                println!("  Checking in RAM CoW OverlaySandbox...");
+
+                let res = client.send(hgb_core::protocol::HgbRequest::SelfHealingCompile {
+                    target_file,
+                    code: candidate_code,
+                    command,
+                    max_retries: Some(max_retries),
+                }).await?;
+
+                match res {
+                    hgb_core::protocol::HgbResponse::SelfHealingCompileResult(rep) => {
+                        println!("  Verdict:           {}", if rep.success { "FIRST-GREEN PASSED".green().bold() } else { "HEALING INCOMPLETE".red().bold() });
+                        println!("  Iterations:        {}", rep.iterations);
+                        println!("  Initial Errors:    {}", rep.initial_errors);
+                        println!("  Final Errors:      {}", rep.final_errors);
+                        println!("  Committed to Disk: {}", if rep.committed_to_disk { "YES [Verified 100%]".green().bold() } else { "NO [Disk Untouched]".yellow() });
+                        println!("  Message:           {}", rep.message.cyan());
+                        if !rep.diagnostics.is_empty() {
+                            println!("\n  Diagnostics:");
+                            for d in &rep.diagnostics {
+                                println!("    • [{:?}] {}:{} - {}", d.severity, d.file.display(), d.line, d.message);
+                                if let Some(ref fix) = d.suggested_fix {
+                                    println!("      ↳ Fix: {}", fix.green());
+                                }
+                            }
+                        }
+                    }
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Self-heal error: {}", e.red()),
+                    _ => {}
+                }
+            }
+            Ok(())
+        }
+        Commands::JitAlloc { boost, relax, pid, cores, priority, status: _status } => {
+            println!("{}", "🚀 JIT GPU/NPU Offloading & Dynatune Resource Allocator".cyan().bold());
+            let client = HgbClient::new();
+
+            if boost {
+                let core_list = cores.map(|c| {
+                    c.split(',')
+                        .filter_map(|s| s.trim().parse::<usize>().ok())
+                        .collect()
+                });
+                let res = client.send(hgb_core::protocol::HgbRequest::JitAllocBoost {
+                    target_pid: pid,
+                    cores: core_list,
+                    priority_boost: priority,
+                }).await?;
+                match res {
+                    hgb_core::protocol::HgbResponse::JitAllocBoostResult(msg) => println!("  ✔ {}", msg.green().bold()),
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Boost error: {}", e.red()),
+                    _ => {}
+                }
+            } else if relax {
+                let res = client.send(hgb_core::protocol::HgbRequest::JitAllocRelax).await?;
+                match res {
+                    hgb_core::protocol::HgbResponse::JitAllocRelaxResult(msg) => println!("  ✔ {}", msg.green().bold()),
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Relax error: {}", e.red()),
+                    _ => {}
+                }
+            } else {
+                let res = client.send(hgb_core::protocol::HgbRequest::JitAllocStatus).await?;
+                match res {
+                    hgb_core::protocol::HgbResponse::JitAllocStatusResult(st) => {
+                        let gpu = &st.gpu_telemetry;
+                        println!("  DRI Device:        {} [{}]", gpu.dri_device_path.cyan(), if gpu.is_available { "AVAILABLE".green().bold() } else { "UNAVAILABLE".red() });
+                        println!("  GPU Model:         {} ({}:{})", gpu.device_name.green().bold(), gpu.vendor_id, gpu.device_id);
+                        println!("  Kernel Driver:     {}", gpu.kernel_driver);
+                        println!("  Vulkan Ready:      {}", if gpu.vulkan_available { "YES (Intel ICD Loaded)".green().bold() } else { "NO".yellow() });
+                        println!("  Acceleration Tier: {}", gpu.acceleration_tier.cyan());
+                        println!("  CPU Governor:      {} [EPP: {}]", st.active_governor.yellow().bold(), st.active_epp.dimmed());
+                        println!("  Alloc State:       {}", if st.is_boosted { "BOOSTED (Performance Pinning)".green().bold() } else { "BALANCED / POWER-AWARE".dimmed() });
+                        println!("  Dynabook KernelCtl:{}", if st.dynabook_kernel_ctl_present { "ONLINE".green() } else { "OFFLINE".dimmed() });
+                        println!("  Dynatune Synergy:  {}", if st.dynatune_synergy_active { "ACTIVE".green() } else { "OFFLINE".dimmed() });
+                        if !st.heavy_processes.is_empty() {
+                            println!("\n  Active Heavy Processes:");
+                            for p in &st.heavy_processes {
+                                println!("    • [PID {}] {} (Nice: {}) [LLM: {}, Compiler: {}]", p.pid, p.name.cyan(), p.nice, p.is_llm, p.is_compiler);
+                            }
+                        }
+                    }
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Status error: {}", e.red()),
+                    _ => {}
+                }
+            }
+            Ok(())
+        }
+        Commands::WasmShm { bench, chunk_kb, iterations, status } => {
+            println!("{}", "⚡ Zero-Copy WebAssembly Shared Memory Pipelines".cyan().bold());
+            let client = HgbClient::new();
+
+            if status && !bench {
+                let res = client.send(hgb_core::protocol::HgbRequest::WasmShmStatus).await?;
+                match res {
+                    hgb_core::protocol::HgbResponse::WasmShmStatusResult(st) => {
+                        println!("  Memory Pages:      {} pages ({} KB linear memory)", st.memory_pages, st.memory_size_bytes / 1024);
+                        println!("  Input Slice:       Offset {} (Cap: {} KB)", st.input_slice_offset, st.input_slice_capacity / 1024);
+                        println!("  Output Slice:      Offset {} (Cap: {} KB)", st.output_slice_offset, st.output_slice_capacity / 1024);
+                        println!("  Total Invocations: {}", st.total_invocations);
+                        println!("  Avg Latency:       {:.2} µs", st.avg_invocation_latency_us);
+                        println!("  Ready:             {}", if st.is_ready { "YES (Pipelined)".green().bold() } else { "NO".red() });
+                    }
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Status error: {}", e.red()),
+                    _ => {}
+                }
+            } else {
+                println!("  Running benchmark: {} iterations × {} KB chunks...", iterations, chunk_kb);
+                let res = client.send(hgb_core::protocol::HgbRequest::WasmShmBench {
+                    chunk_size_kb: Some(chunk_kb),
+                    iterations: Some(iterations),
+                }).await?;
+
+                match res {
+                    hgb_core::protocol::HgbResponse::WasmShmBenchResult(rep) => {
+                        println!("  Zero-Copy Verify:  {}", if rep.zero_copy_verified { "PASSED [Direct Memory Slicing]".green().bold() } else { "FAILED".red() });
+                        println!("  Processed Bytes:   {:.2} MB ({} chunks)", rep.total_bytes_processed as f64 / (1024.0 * 1024.0), rep.total_chunks);
+                        println!("  Throughput:        {:.2} MB/s", rep.throughput_mb_s.to_string().green().bold());
+                        println!("  Avg Latency:       {:.2} µs per chunk", rep.avg_latency_us.to_string().yellow().bold());
+                        println!("  p99 Latency:       {:.2} µs", rep.p99_latency_us);
+                        println!("  Total Duration:    {} µs", rep.elapsed_us);
+                        println!("  Status:            {}", rep.status.cyan());
+                    }
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Benchmark error: {}", e.red()),
+                    _ => {}
                 }
             }
             Ok(())

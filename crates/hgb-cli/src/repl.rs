@@ -1544,6 +1544,68 @@ impl HagibisRepl {
                 };
                 self.render_response(resp);
             }
+            "/vstream" | "/vector-stream" => {
+                let trimmed = args.trim();
+                let resp = if trimmed.starts_with("query ") {
+                    let q = trimmed.trim_start_matches("query ").trim();
+                    let query_vec = hgb_storage::simd_vector_index::SimdVectorIndex::generate_deterministic_embedding(q, 64);
+                    self.dispatch(HgbRequest::VectorStreamQuery {
+                        collection: "default".to_string(),
+                        query_vec,
+                        top_k: 5,
+                        min_score: 0.0,
+                    }).await
+                } else {
+                    self.dispatch(HgbRequest::VectorStreamStatus).await
+                };
+                self.render_response(resp);
+            }
+            "/self-heal" | "/heal" => {
+                let trimmed = args.trim();
+                let resp = if !trimmed.is_empty() {
+                    let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                    let file = parts[0].to_string();
+                    let code = if parts.len() > 1 { parts[1..].join(" ") } else {
+                        std::fs::read_to_string(&file).unwrap_or_default()
+                    };
+                    self.dispatch(HgbRequest::SelfHealingCompile {
+                        target_file: file,
+                        code,
+                        command: None,
+                        max_retries: Some(3),
+                    }).await
+                } else {
+                    self.dispatch(HgbRequest::SelfHealingStatus).await
+                };
+                self.render_response(resp);
+            }
+            "/jit-alloc" | "/jit" => {
+                let trimmed = args.trim();
+                let resp = if trimmed == "boost" {
+                    self.dispatch(HgbRequest::JitAllocBoost {
+                        target_pid: None,
+                        cores: Some(vec![0, 1]),
+                        priority_boost: false,
+                    }).await
+                } else if trimmed == "relax" {
+                    self.dispatch(HgbRequest::JitAllocRelax).await
+                } else {
+                    self.dispatch(HgbRequest::JitAllocStatus).await
+                };
+                self.render_response(resp);
+            }
+            "/wasm-shm" | "/shm" => {
+                let trimmed = args.trim();
+                let resp = if trimmed == "status" {
+                    self.dispatch(HgbRequest::WasmShmStatus).await
+                } else {
+                    self.dispatch(HgbRequest::WasmShmBench {
+                        chunk_size_kb: Some(64),
+                        iterations: Some(20),
+                    }).await
+                };
+                self.render_response(resp);
+            }
             "/cockpit" => {
                 let mut state = hgb_nextgen::CockpitState::new();
                 if let Some(ref m) = self.model {
@@ -5008,6 +5070,62 @@ impl HagibisRepl {
                 println!("  Applied to Disk:    {}", if rec.applied { "YES [git apply / atomic update]".green().bold() } else { "NO".yellow() });
                 println!("  DPO Pair Saved:     {}", if rec.dpo_recorded { "YES [.hgb/distillation/]".green() } else { "NO".yellow() });
                 println!("  Summary:            {}", rec.summary.cyan());
+            }
+            HgbResponse::VectorStreamQueryResult(json_str) => {
+                println!("{}", "⚡ VECTOR STREAM QUERY RESULTS ⚡".bold().cyan());
+                println!("{}", json_str);
+            }
+            HgbResponse::VectorStreamUpsertResult(msg) => {
+                println!("{}", "⚡ VECTOR STREAM UPSERT ⚡".bold().green());
+                println!("  ✔ {}", msg.green());
+            }
+            HgbResponse::VectorStreamStatusResult(json_str) => {
+                println!("{}", "⚡ VECTOR STREAM STATUS & TELEMETRY ⚡".bold().cyan());
+                println!("{}", json_str);
+            }
+            HgbResponse::SelfHealingCompileResult(rep) => {
+                println!("{}", "🩺 AUTONOMOUS SELF-HEALING COMPILATION 🩺".bold().cyan());
+                println!("  Verdict:           {}", if rep.success { "FIRST-GREEN PASSED".green().bold() } else { "HEALING INCOMPLETE".red().bold() });
+                println!("  Iterations:        {}", rep.iterations);
+                println!("  Initial Errors:    {}", rep.initial_errors);
+                println!("  Final Errors:      {}", rep.final_errors);
+                println!("  Committed to Disk: {}", if rep.committed_to_disk { "YES [Verified 100%]".green().bold() } else { "NO [Disk Untouched]".yellow() });
+                println!("  Message:           {}", rep.message.cyan());
+            }
+            HgbResponse::SelfHealingStatusResult(msg) => {
+                println!("{}", "🩺 SELF-HEALING INTERCEPTOR STATUS 🩺".bold().cyan());
+                println!("  {}", msg.green());
+            }
+            HgbResponse::JitAllocBoostResult(msg) | HgbResponse::JitAllocRelaxResult(msg) => {
+                println!("{}", "🚀 JIT HARDWARE ALLOCATOR 🚀".bold().cyan());
+                println!("  ✔ {}", msg.green().bold());
+            }
+            HgbResponse::JitAllocStatusResult(st) => {
+                println!("{}", "🚀 JIT GPU/NPU RESOURCE ALLOCATOR STATUS 🚀".bold().cyan());
+                let gpu = &st.gpu_telemetry;
+                println!("  DRI Device:        {} [{}]", gpu.dri_device_path.cyan(), if gpu.is_available { "AVAILABLE".green().bold() } else { "UNAVAILABLE".red() });
+                println!("  GPU Model:         {} ({}:{})", gpu.device_name.green().bold(), gpu.vendor_id, gpu.device_id);
+                println!("  Kernel Driver:     {}", gpu.kernel_driver);
+                println!("  Vulkan Ready:      {}", if gpu.vulkan_available { "YES (Intel ICD Loaded)".green().bold() } else { "NO".yellow() });
+                println!("  Acceleration Tier: {}", gpu.acceleration_tier.cyan());
+                println!("  CPU Governor:      {} [EPP: {}]", st.active_governor.yellow().bold(), st.active_epp.dimmed());
+                println!("  Alloc State:       {}", if st.is_boosted { "BOOSTED (Performance Pinning)".green().bold() } else { "BALANCED / POWER-AWARE".dimmed() });
+            }
+            HgbResponse::WasmShmBenchResult(rep) => {
+                println!("{}", "⚡ ZERO-COPY WASM SHARED MEMORY BENCHMARK ⚡".bold().cyan());
+                println!("  Zero-Copy Verify:  {}", if rep.zero_copy_verified { "PASSED [Direct Memory Slicing]".green().bold() } else { "FAILED".red() });
+                println!("  Throughput:        {:.2} MB/s", rep.throughput_mb_s.to_string().green().bold());
+                println!("  Avg Latency:       {:.2} µs per chunk", rep.avg_latency_us.to_string().yellow().bold());
+                println!("  p99 Latency:       {:.2} µs", rep.p99_latency_us);
+                println!("  Status:            {}", rep.status.cyan());
+            }
+            HgbResponse::WasmShmStatusResult(st) => {
+                println!("{}", "⚡ ZERO-COPY WASM SHARED MEMORY STATUS ⚡".bold().cyan());
+                println!("  Memory Pages:      {} pages ({} KB linear memory)", st.memory_pages, st.memory_size_bytes / 1024);
+                println!("  Input Slice:       Offset {} (Cap: {} KB)", st.input_slice_offset, st.input_slice_capacity / 1024);
+                println!("  Output Slice:      Offset {} (Cap: {} KB)", st.output_slice_offset, st.output_slice_capacity / 1024);
+                println!("  Total Invocations: {}", st.total_invocations);
+                println!("  Avg Latency:       {:.2} µs", st.avg_invocation_latency_us);
             }
         }
     }

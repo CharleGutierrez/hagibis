@@ -1,4 +1,15 @@
 {
+  "tools": {
+    "hgb_self_healing_compile": {
+      "description": "Autonomous First-Green compilation loop: executes build/checks in RAM CoW overlay sandbox, intercepts diagnostics, and heals AST syntax errors before disk commit",
+      "parameters": {
+        "target_file": { "type": "string", "description": "Relative path to target source file", "required": true },
+        "code": { "type": "string", "description": "Candidate source code string to verify and heal", "required": true },
+        "command": { "type": "string", "description": "Compiler check command (e.g. cargo check, zig test, python3 -m py_compile)" },
+        "max_retries": { "type": "integer", "description": "Maximum autonomous repair iterations", "default": 3 }
+      }
+    }
+  },
   "mcpServers": {
     "hagibis": {
       "command": "hgb",
@@ -7,7 +18,24 @@
         "HGB_WORKSPACE": ".",
         "OLLAMA_SIBLING_DIR": "/home/toshiba/My AI Project/ollama",
         "OLLAMA_HOST": "http://127.0.0.1:11434"
-      }
+      },
+      "tools": [
+        "hgb_self_healing_compile",
+        "hgb_sqlite_query",
+        "hgb_project_state",
+        "hgb_cow_sandbox",
+        "hgb_wasm_exec",
+        "hgb_ast_query",
+        "hgb_system_inspect",
+        "hgb_hybrid_orchestrate",
+        "hgb_repo_map_rank",
+        "hgb_authorship_audit",
+        "hgb_stream_squeeze",
+        "hgb_sandbox_check",
+        "hgb_ollama_sibling_status",
+        "hgb_ollama_vector_sync",
+        "hgb_ollama_vector_query"
+      ]
     },
     "hagibis_sse": {
       "url": "http://127.0.0.1:8083/sse"
