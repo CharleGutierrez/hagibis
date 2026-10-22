@@ -3224,6 +3224,23 @@ enum Commands {
         #[arg(long)]
         history: bool,
     },
+
+    /// Superpower 1: Direct Local Ollama Pipeline Acceleration & SQLite Mutation Vector Mesh
+    #[command(name = "ollama-sibling", alias = "sibling-ollama", alias = "ollama-vector")]
+    OllamaSibling {
+        /// Inspect sibling Ollama engine state, active models, and Dynabook patch
+        #[arg(long)]
+        status: bool,
+        /// Synchronize a file into SQLite mutation vector database (.hgb/mutation_vectors.db)
+        #[arg(long)]
+        sync: Option<String>,
+        /// Semantic search query over stored file mutation vectors
+        #[arg(long)]
+        query: Option<String>,
+        /// Number of top similarity matches to retrieve
+        #[arg(long, default_value_t = 3)]
+        top_k: usize,
+    },
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -9542,6 +9559,63 @@ async fn test_calc() { assert!(calculate(5)); }".to_string()
                 match resp {
                     hgb_core::protocol::HgbResponse::VibeWatcherStatusResult(json_str) => {
                         println!("  Watcher Status:\n{}", json_str);
+                    }
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Status error: {}", e.red()),
+                    _ => {}
+                }
+            }
+            Ok(())
+        }
+        Commands::OllamaSibling { status, sync, query, top_k } => {
+            println!("{}", "⚡ Direct Local Ollama Pipeline & Mutation Vector Mesh".cyan().bold());
+            let client = HgbClient::new();
+            if let Some(file_path) = sync {
+                let content = std::fs::read_to_string(&file_path)?;
+                println!("  Vectorizing & indexing '{}' into SQLite (.hgb/mutation_vectors.db)...", file_path.yellow());
+                let resp = client.send(hgb_core::protocol::HgbRequest::SiblingOllamaSync { file_path: file_path.clone(), content }).await?;
+                match resp {
+                    hgb_core::protocol::HgbResponse::SiblingOllamaSyncResult(r) => {
+                        println!("  ✔ Mutation Vector Synced:");
+                        println!("    • File Path:           {}", r.file_path.bold());
+                        println!("    • Total Chunks:        {}", r.total_chunks);
+                        println!("    • New Chunks Embedded: {}", r.new_chunks_embedded.to_string().green());
+                        println!("    • Elapsed:             {} ms", r.duration_ms);
+                        println!("    • SQLite DB:           {}", r.db_path.dimmed());
+                    }
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Sync error: {}", e.red()),
+                    _ => {}
+                }
+            } else if let Some(q) = query {
+                println!("  Querying semantic mutation vectors for '{}' (top_k: {})...", q.yellow(), top_k);
+                let resp = client.send(hgb_core::protocol::HgbRequest::SiblingOllamaQuery { query: q, top_k }).await?;
+                match resp {
+                    hgb_core::protocol::HgbResponse::SiblingOllamaQueryResult(matches) => {
+                        println!("  ✔ Retrieved {} match(es):", matches.len());
+                        for (i, m) in matches.iter().enumerate() {
+                            println!("    [{}] File: {} (lines {}-{}, score: {:.4})",
+                                i + 1,
+                                m.chunk.file_path.bold(),
+                                m.chunk.start_line,
+                                m.chunk.end_line,
+                                m.similarity_score
+                            );
+                            if let Some(ref sym) = m.chunk.symbol_name {
+                                println!("        Symbol: {}", sym.cyan());
+                            }
+                        }
+                    }
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Query error: {}", e.red()),
+                    _ => {}
+                }
+            } else if status || true {
+                let resp = client.send(hgb_core::protocol::HgbRequest::SiblingOllamaStatus).await?;
+                match resp {
+                    hgb_core::protocol::HgbResponse::SiblingOllamaStatusResult(meta) => {
+                        println!("  • Sibling Engine:     {}", meta.engine_dir.display().to_string().bold());
+                        println!("  • Sibling Online:     {}", if meta.is_online { "ONLINE (Zero Latency)".green() } else { "OFFLINE".yellow() });
+                        println!("  • Endpoint URL:       {}", meta.endpoint_url);
+                        println!("  • Dynabook Patch:     {}", if meta.has_dynabook_patch { "PRESENT & OPTIMIZED".green() } else { "NOT FOUND".yellow() });
+                        println!("  • Active Models:      {}", meta.available_models.join(", ").cyan());
                     }
                     hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Status error: {}", e.red()),
                     _ => {}

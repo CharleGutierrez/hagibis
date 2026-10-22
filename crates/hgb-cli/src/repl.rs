@@ -5492,6 +5492,21 @@ impl HagibisRepl {
             HgbResponse::VibeWatcherHistoryResult(hist_json) => {
                 println!("🔄 VIBE-WATCHER HISTORY:\n{}", hist_json);
             }
+            HgbResponse::SiblingOllamaStatusResult(meta) => {
+                println!("{}", "⚡ SIBLING OLLAMA ENGINE TELEMETRY ⚡".bold().cyan());
+                println!("  Engine Path:   {}", meta.engine_dir.display());
+                println!("  Status:        {}", if meta.is_online { "ONLINE".green() } else { "OFFLINE".yellow() });
+                println!("  Models ({}):   {}", meta.available_models.len(), meta.available_models.join(", "));
+            }
+            HgbResponse::SiblingOllamaSyncResult(r) => {
+                println!("  ✔ Synced {} (chunks: {}, embedded: {}, elapsed: {} ms)", r.file_path.green(), r.total_chunks, r.new_chunks_embedded, r.duration_ms);
+            }
+            HgbResponse::SiblingOllamaQueryResult(matches) => {
+                println!("  ✔ Mutation Vector Matches ({}):", matches.len());
+                for m in matches {
+                    println!("    • {} (lines {}-{}, score: {:.4})", m.chunk.file_path, m.chunk.start_line, m.chunk.end_line, m.similarity_score);
+                }
+            }
         }
     }
 

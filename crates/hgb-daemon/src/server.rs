@@ -3772,6 +3772,48 @@ impl HagibisDaemon {
                 let watcher = state.vibe_watcher.read().await;
                 HgbResponse::VibeWatcherHistoryResult(serde_json::to_string_pretty(&watcher.history()).unwrap_or_default())
             }
+
+            // Superpower 1: Sibling Ollama Pipeline & Local Mutation Vector Cache
+            HgbRequest::SiblingOllamaStatus => {
+                let ws_dir = if let Ok(custom) = std::env::var("HGB_WORKSPACE") {
+                    PathBuf::from(custom)
+                } else if Path::new("/home/toshiba/My AI Project/hagibis").is_dir() {
+                    PathBuf::from("/home/toshiba/My AI Project/hagibis")
+                } else {
+                    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                };
+                let acc = hgb_core::SiblingOllamaAccelerator::new(&ws_dir);
+                let meta = acc.inspect_sibling_engine().await;
+                HgbResponse::SiblingOllamaStatusResult(meta)
+            }
+            HgbRequest::SiblingOllamaSync { file_path, content } => {
+                let ws_dir = if let Ok(custom) = std::env::var("HGB_WORKSPACE") {
+                    PathBuf::from(custom)
+                } else if Path::new("/home/toshiba/My AI Project/hagibis").is_dir() {
+                    PathBuf::from("/home/toshiba/My AI Project/hagibis")
+                } else {
+                    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                };
+                let acc = hgb_core::SiblingOllamaAccelerator::new(&ws_dir);
+                match acc.sync_file_mutation(&file_path, &content).await {
+                    Ok(rep) => HgbResponse::SiblingOllamaSyncResult(rep),
+                    Err(e) => HgbResponse::Error(format!("Failed to sync file mutation vector: {}", e)),
+                }
+            }
+            HgbRequest::SiblingOllamaQuery { query, top_k } => {
+                let ws_dir = if let Ok(custom) = std::env::var("HGB_WORKSPACE") {
+                    PathBuf::from(custom)
+                } else if Path::new("/home/toshiba/My AI Project/hagibis").is_dir() {
+                    PathBuf::from("/home/toshiba/My AI Project/hagibis")
+                } else {
+                    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                };
+                let acc = hgb_core::SiblingOllamaAccelerator::new(&ws_dir);
+                match acc.query_mutation_vectors(&query, top_k) {
+                    Ok(matches) => HgbResponse::SiblingOllamaQueryResult(matches),
+                    Err(e) => HgbResponse::Error(format!("Failed to query mutation vectors: {}", e)),
+                }
+            }
         }
     }
 }

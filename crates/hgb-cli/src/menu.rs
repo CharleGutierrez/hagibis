@@ -662,6 +662,13 @@ impl InteractiveCommandCatalog {
                 description: "Supercharged Ollama speculative decoding pipeline with autonomous task complexity splitter and zero-failure fallback.",
             },
             CommandEntry {
+                name: "ollama-sibling",
+                aliases: &["sibling-ollama", "ollama-vector"],
+                category: "AI/Ollama",
+                syntax: "hgb ollama-sibling [--status] [--sync <file>] [--query <text>] [--top-k <num>]",
+                description: "Direct local Ollama sibling engine acceleration and zero-copy SQLite mutation vector mesh.",
+            },
+            CommandEntry {
                 name: "wasm-skills",
                 aliases: &["skill-market", "wasm-market"],
                 category: "Wasm/Marketplace",

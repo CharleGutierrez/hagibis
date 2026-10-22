@@ -1395,6 +1395,16 @@ pub enum HgbRequest {
         target_command: Option<String>,
     },
     VibeWatcherHistory,
+    // Superpower 1: Sibling Ollama Pipeline & Local Mutation Vector Cache
+    SiblingOllamaStatus,
+    SiblingOllamaSync {
+        file_path: String,
+        content: String,
+    },
+    SiblingOllamaQuery {
+        query: String,
+        top_k: usize,
+    },
 }
 
 fn default_twenty_u64() -> u64 {
@@ -1989,6 +1999,10 @@ pub enum HgbResponse {
     VibeWatcherStatusResult(String),
     VibeWatcherTriggerResult(String),
     VibeWatcherHistoryResult(String),
+    // Superpower 1: Sibling Ollama Pipeline & Local Mutation Vector Cache
+    SiblingOllamaStatusResult(crate::ollama_sibling_accelerator::SiblingOllamaMetadata),
+    SiblingOllamaSyncResult(crate::ollama_sibling_accelerator::VectorSyncReport),
+    SiblingOllamaQueryResult(Vec<crate::ollama_sibling_accelerator::MutationVectorMatch>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
