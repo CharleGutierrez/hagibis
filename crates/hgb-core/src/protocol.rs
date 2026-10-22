@@ -1405,6 +1405,40 @@ pub enum HgbRequest {
         query: String,
         top_k: usize,
     },
+    // Strategic Upgrade 1: Native Hardware Synergy with Local AI Runtimes
+    HardwareSynergyStatus,
+    HardwareSynergyEvaluate {
+        task_intensity: String,
+    },
+    // Strategic Upgrade 2: Distributed MicroVM Swarms & Agent Mesh via Firecracker & WASM
+    AgentMeshSubmit {
+        task_type: String,
+        payload: String,
+        worker_preference: String,
+    },
+    AgentMeshStatus,
+    AgentMeshWorkers,
+    // Strategic Upgrade 3: Advanced Vector Memory & Long-Horizon Self-Correction
+    EpisodicMemoryStore {
+        episode_id: String,
+        task: String,
+        embedding: Vec<f32>,
+        lesson: String,
+        success: bool,
+    },
+    EpisodicMemoryQuery {
+        query_vec: Vec<f32>,
+        top_k: usize,
+    },
+    EpisodicMemoryStatus,
+    // Strategic Upgrade 4: Universal Model Context Protocol (MCP) Hot-Reloading
+    McpHotReloadScan,
+    McpHotReloadAdd {
+        plugin_name: String,
+        wasm_path: String,
+        description: String,
+    },
+    McpHotReloadStatus,
 }
 
 fn default_twenty_u64() -> u64 {
@@ -2003,7 +2037,30 @@ pub enum HgbResponse {
     SiblingOllamaStatusResult(crate::ollama_sibling_accelerator::SiblingOllamaMetadata),
     SiblingOllamaSyncResult(crate::ollama_sibling_accelerator::VectorSyncReport),
     SiblingOllamaQueryResult(Vec<crate::ollama_sibling_accelerator::MutationVectorMatch>),
+    // Strategic Upgrade 1: Native Hardware Synergy with Local AI Runtimes
+    HardwareSynergyStatusResult(hardware_runtime_synergy::HardwareRuntimeTelemetry),
+    HardwareSynergyEvaluateResult(hardware_runtime_synergy::WorkloadGovernorDecision),
+    // Strategic Upgrade 2: Distributed MicroVM Swarms & Agent Mesh via Firecracker & WASM
+    AgentMeshSubmitResult(String),
+    AgentMeshStatusResult(String),
+    AgentMeshWorkersResult(String),
+    // Strategic Upgrade 3: Advanced Vector Memory & Long-Horizon Self-Correction
+    EpisodicMemoryStoreResult(String),
+    EpisodicMemoryQueryResult(String),
+    EpisodicMemoryStatusResult(String),
+    // Strategic Upgrade 4: Universal Model Context Protocol (MCP) Hot-Reloading
+    McpHotReloadScanResult(String),
+    McpHotReloadAddResult(String),
+    McpHotReloadStatusResult(String),
 }
+
+#[path = "hardware_runtime_synergy.rs"]
+pub mod hardware_runtime_synergy;
+pub use hardware_runtime_synergy::{
+    HardwareRuntimeSynergy, HardwareRuntimeTelemetry, HardwareWorkloadTier,
+    WorkloadGovernorDecision, HEADROOM_CRITICAL_C, HEADROOM_WARM_C, HEADROOM_COOL_C,
+    LATENCY_OVERLOAD_THRESHOLD_MS, THERMAL_OVERLOAD_TEMP_C,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DaemonStatus {

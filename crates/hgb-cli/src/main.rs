@@ -3241,6 +3241,77 @@ enum Commands {
         #[arg(long, default_value_t = 3)]
         top_k: usize,
     },
+
+    /// Strategic Upgrade 1: Native Hardware Synergy with Local AI Runtimes
+    #[command(name = "hw-synergy", alias = "synergy", alias = "vitals-route")]
+    HwSynergy {
+        /// Show live hardware & AI runtime telemetry report
+        #[arg(long)]
+        status: bool,
+        /// Evaluate workload scheduling decision for specified task intensity (e.g. coding, deterministic, minimal)
+        #[arg(long)]
+        evaluate: Option<String>,
+    },
+
+    /// Strategic Upgrade 2: Distributed MicroVM Swarms & Agent Mesh via Firecracker & WASM
+    #[command(name = "agent-mesh", alias = "microvm-mesh", alias = "swarm-mesh-v2")]
+    AgentMesh {
+        /// Show distributed task queue, worker pools, and heartbeat status
+        #[arg(long)]
+        status: bool,
+        /// Submit a new task into the distributed priority queue
+        #[arg(long)]
+        submit: Option<String>,
+        /// Payload data or script for submitted task
+        #[arg(long, default_value = "")]
+        payload: String,
+        /// Worker tier preference (fast, heavy, auto)
+        #[arg(long, default_value = "auto")]
+        worker: String,
+        /// List all registered workers and heartbeats
+        #[arg(long)]
+        workers: bool,
+    },
+
+    /// Strategic Upgrade 3: Advanced Vector Memory & Long-Horizon Self-Correction
+    #[command(name = "episodic-mem", alias = "vector-memory", alias = "reflection-loop")]
+    EpisodicMem {
+        /// Show status of episodic vector memory database
+        #[arg(long)]
+        status: bool,
+        /// Query semantically similar past failures and self-correction reflections
+        #[arg(long)]
+        query: Option<String>,
+        /// Store an episode: task specification
+        #[arg(long)]
+        store: Option<String>,
+        /// Lesson learned for stored episode
+        #[arg(long, default_value = "Manual verification")]
+        lesson: String,
+        /// Mark episode as failure instead of success
+        #[arg(long)]
+        fail: bool,
+    },
+
+    /// Strategic Upgrade 4: Universal Model Context Protocol (MCP) Hot-Reloading
+    #[command(name = "mcp-hotload", alias = "mcp-reload", alias = "plugin-reload")]
+    McpHotload {
+        /// Show hot-reloaded tools catalog and plugins directory status
+        #[arg(long)]
+        status: bool,
+        /// Scan .hgb/mcp_plugins/ and hot-register newly discovered tools
+        #[arg(long)]
+        scan: bool,
+        /// Register a standalone WebAssembly plugin by name
+        #[arg(long)]
+        add: Option<String>,
+        /// Path to .wasm plugin file
+        #[arg(long)]
+        path: Option<String>,
+        /// Description of the plugin
+        #[arg(long, default_value = "Hot-loaded WASM tool")]
+        desc: String,
+    },
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -9618,6 +9689,161 @@ async fn test_calc() { assert!(calculate(5)); }".to_string()
                         println!("  • Active Models:      {}", meta.available_models.join(", ").cyan());
                     }
                     hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Status error: {}", e.red()),
+                    _ => {}
+                }
+            }
+            Ok(())
+        }
+        Commands::HwSynergy { status: _, evaluate } => {
+            let client = HgbClient::new();
+            if let Some(intensity) = evaluate {
+                println!("{}", format!("⚡ Evaluating Hardware Synergy Routing for task intensity: '{}'...", intensity).cyan().bold());
+                let resp = client.send(hgb_core::protocol::HgbRequest::HardwareSynergyEvaluate { task_intensity: intensity }).await?;
+                match resp {
+                    hgb_core::protocol::HgbResponse::HardwareSynergyEvaluateResult(dec) => {
+                        println!("\n{}", "🎯 DYNAMIC WORKLOAD GOVERNOR DECISION".green().bold());
+                        println!("  • Tier:             {:?}", dec.tier);
+                        println!("  • Selected Model:   {}", dec.selected_model.bold().cyan());
+                        println!("  • Active Backend:   {}", dec.active_backend.magenta());
+                        println!("  • Concurrency Limit:{} workers", dec.concurrency_limit);
+                        println!("  • WASM Offload:     {}", dec.offload_to_wasm);
+                        println!("  • GGUF Fallback:    {}", dec.fallback_to_embedded_gguf);
+                        println!("  • Governor Reason:  {}", dec.reason.yellow());
+                    }
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Hardware synergy error: {}", e.red()),
+                    _ => {}
+                }
+            } else {
+                let resp = client.send(hgb_core::protocol::HgbRequest::HardwareSynergyStatus).await?;
+                match resp {
+                    hgb_core::protocol::HgbResponse::HardwareSynergyStatusResult(telemetry) => {
+                        println!("{}", telemetry.render_terminal_card());
+                    }
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Hardware synergy error: {}", e.red()),
+                    _ => {}
+                }
+            }
+            Ok(())
+        }
+        Commands::AgentMesh { status: _, submit, payload, worker, workers } => {
+            let client = HgbClient::new();
+            if workers {
+                println!("{}", "🌐 Querying Distributed Agent Mesh Worker Nodes...".cyan().bold());
+                let resp = client.send(hgb_core::protocol::HgbRequest::AgentMeshWorkers).await?;
+                match resp {
+                    hgb_core::protocol::HgbResponse::AgentMeshWorkersResult(json_str) => {
+                        println!("{}", json_str);
+                    }
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Agent mesh error: {}", e.red()),
+                    _ => {}
+                }
+            } else if let Some(task_type) = submit {
+                println!("{}", format!("🚀 Submitting task '{}' to Distributed Agent Mesh...", task_type).cyan().bold());
+                let resp = client.send(hgb_core::protocol::HgbRequest::AgentMeshSubmit {
+                    task_type,
+                    payload,
+                    worker_preference: worker,
+                }).await?;
+                match resp {
+                    hgb_core::protocol::HgbResponse::AgentMeshSubmitResult(task_id) => {
+                        println!("{} Task leased into SQLite WAL priority queue: {}", "✔".green().bold(), task_id.cyan().bold());
+                    }
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Submission failed: {}", e.red()),
+                    _ => {}
+                }
+            } else {
+                println!("{}", "🌐 DISTRIBUTED AGENT MESH TELEMETRY".cyan().bold());
+                let resp = client.send(hgb_core::protocol::HgbRequest::AgentMeshStatus).await?;
+                match resp {
+                    hgb_core::protocol::HgbResponse::AgentMeshStatusResult(json_str) => {
+                        println!("{}", json_str);
+                    }
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Agent mesh error: {}", e.red()),
+                    _ => {}
+                }
+            }
+            Ok(())
+        }
+        Commands::EpisodicMem { status: _, query, store, lesson, fail } => {
+            let client = HgbClient::new();
+            if let Some(query_text) = query {
+                println!("{}", format!("🧠 Querying Episodic Vector Memory for: '{}'...", query_text).cyan().bold());
+                let query_vec = hgb_storage::advanced_vector_memory::EpisodicVectorMemoryEngine::synthesize_embedding(&query_text, 64);
+                let resp = client.send(hgb_core::protocol::HgbRequest::EpisodicMemoryQuery {
+                    query_vec,
+                    top_k: 3,
+                }).await?;
+                match resp {
+                    hgb_core::protocol::HgbResponse::EpisodicMemoryQueryResult(json_str) => {
+                        println!("{}", json_str);
+                    }
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Memory query error: {}", e.red()),
+                    _ => {}
+                }
+            } else if let Some(task) = store {
+                println!("{}", format!("💾 Storing Episodic Memory for task: '{}'...", task).cyan().bold());
+                let resp = client.send(hgb_core::protocol::HgbRequest::EpisodicMemoryStore {
+                    episode_id: String::new(),
+                    task,
+                    embedding: Vec::new(),
+                    lesson,
+                    success: !fail,
+                }).await?;
+                match resp {
+                    hgb_core::protocol::HgbResponse::EpisodicMemoryStoreResult(id) => {
+                        println!("{} Episode persisted to .hgb/episodic_vector_memory.db: {}", "✔".green().bold(), id.cyan().bold());
+                    }
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Memory storage error: {}", e.red()),
+                    _ => {}
+                }
+            } else {
+                println!("{}", "🧠 EPISODIC VECTOR MEMORY STATUS".cyan().bold());
+                let resp = client.send(hgb_core::protocol::HgbRequest::EpisodicMemoryStatus).await?;
+                match resp {
+                    hgb_core::protocol::HgbResponse::EpisodicMemoryStatusResult(json_str) => {
+                        println!("{}", json_str);
+                    }
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Memory status error: {}", e.red()),
+                    _ => {}
+                }
+            }
+            Ok(())
+        }
+        Commands::McpHotload { status: _, scan, add, path, desc } => {
+            let client = HgbClient::new();
+            if scan {
+                println!("{}", "🔍 Scanning .hgb/mcp_plugins/ and hot-reloading MCP catalog...".cyan().bold());
+                let resp = client.send(hgb_core::protocol::HgbRequest::McpHotReloadScan).await?;
+                match resp {
+                    hgb_core::protocol::HgbResponse::McpHotReloadScanResult(json_str) => {
+                        println!("{}", json_str);
+                    }
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Hot-reload error: {}", e.red()),
+                    _ => {}
+                }
+            } else if let Some(name) = add {
+                let p = path.unwrap_or_else(|| format!("{}.wasm", name));
+                println!("{}", format!("⚡ Registering MCP WASM tool '{}' from '{}'...", name, p).cyan().bold());
+                let resp = client.send(hgb_core::protocol::HgbRequest::McpHotReloadAdd {
+                    plugin_name: name,
+                    wasm_path: p,
+                    description: desc,
+                }).await?;
+                match resp {
+                    hgb_core::protocol::HgbResponse::McpHotReloadAddResult(msg) => {
+                        println!("{} {}", "✔".green().bold(), msg);
+                    }
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Registration error: {}", e.red()),
+                    _ => {}
+                }
+            } else {
+                println!("{}", "🔌 UNIVERSAL MCP HOT-RELOADER STATUS".cyan().bold());
+                let resp = client.send(hgb_core::protocol::HgbRequest::McpHotReloadStatus).await?;
+                match resp {
+                    hgb_core::protocol::HgbResponse::McpHotReloadStatusResult(json_str) => {
+                        println!("{}", json_str);
+                    }
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Hot-reload status error: {}", e.red()),
                     _ => {}
                 }
             }

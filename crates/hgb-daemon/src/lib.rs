@@ -173,4 +173,18 @@ pub use vibe_coding_watcher::{
     DpoDistillationPair, VibeCodingWatcher, VibeWatcherCycleRecord, VibeWatcherStatusReport,
 };
 
+// Strategic Upgrade 2: Distributed MicroVM Swarms & Agent Mesh via Firecracker & WASM
+pub mod distributed_agent_mesh;
+pub use distributed_agent_mesh::{
+    AgentMeshStatusReport, DistributedAgentMesh, MeshTask, MeshTaskStatus, MeshWorkerInfo,
+    MeshWorkerTier, SwarmExecutionResult,
+};
+
+// Strategic Upgrade 4: Universal Model Context Protocol (MCP) Hot-Reloading
+pub mod mcp_hot_reloader;
+pub use mcp_hot_reloader::{
+    HotLoadedTool, McpHotReloader, McpHotReloaderReport, McpPluginManifest,
+};
+
+
 

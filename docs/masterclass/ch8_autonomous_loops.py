@@ -215,5 +215,27 @@ def build_autonomous_loops_chapter():
     ))
     story.append(Spacer(1, 15))
 
+    p12_desc = (
+        "<b>12. Advanced Episodic Vector Memory & Long-Horizon Self-Correction (hgb-storage):</b><br/>"
+        "Features an embedded zero-dependency SIMD-accelerated vector indexing engine backed by SQLite WAL "
+        "(<code>.hgb/episodic_vector_memory.db</code>). When a task or compilation fails, captures compiler diagnostics "
+        "and error stacks, searches past semantically similar incidents via 8-wide unrolled SIMD cosine similarity, "
+        "recalls winning patches, and synthesizes a high-confidence Self-Correction Reflection that guides the next iteration."
+    )
+    story.append(Paragraph(p12_desc, styles["BodyTextCustom"]))
+    story.append(Spacer(1, 10))
+
+    story.append(CodeSnippet(
+        "// Long-Horizon Self-Correction Reflection Loop\n"
+        "let memory = EpisodicVectorMemoryEngine::new(workspace_root)?;\n"
+        "let reflection = memory.generate_self_correction_reflection(&compiler_diagnostic)?;\n"
+        "if reflection.should_apply_known_fix {\n"
+        "    println!(\"Applying verified winning patch from episode: {}\", reflection.failure_analysis);\n"
+        "    sandbox.apply_patch(&reflection.best_matching_fix.unwrap())?;\n"
+        "}",
+        "Rust"
+    ))
+    story.append(Spacer(1, 15))
+
     return story
 

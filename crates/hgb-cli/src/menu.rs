@@ -703,6 +703,34 @@ impl InteractiveCommandCatalog {
                 syntax: "hgb vibe-watcher [--status] [--trigger <path> --cmd <command>] [--history]",
                 description: "Proactive Autonomous Feedback Loop: real-time code change interception, automated test/build trigger, diagnostic Ollama closed-loop feedback, and First-Green sandbox verification.",
             },
+            CommandEntry {
+                name: "hw-synergy",
+                aliases: &["synergy", "vitals-route"],
+                category: "Hardware/Synergy",
+                syntax: "hgb hw-synergy [--status] [--evaluate <task_intensity>]",
+                description: "Native Hardware Synergy with Local AI Runtimes: telemetry bridge querying dynatune, kernel-optimizer, sysfs/procfs, Ollama health/latency monitor, and dynamic tier governor.",
+            },
+            CommandEntry {
+                name: "agent-mesh",
+                aliases: &["microvm-mesh", "swarm-mesh-v2"],
+                category: "Mesh/MicroVM",
+                syntax: "hgb agent-mesh [--status] [--submit <task_type>] [--payload <data>] [--workers]",
+                description: "Distributed MicroVM Swarms & Agent Mesh: SQLite WAL task queue with dual-tier ephemeral workers (fast WASM hot-pool & heavy Firecracker microVM) and parallel swarm dispatch.",
+            },
+            CommandEntry {
+                name: "episodic-mem",
+                aliases: &["vector-memory", "reflection-loop"],
+                category: "Memory/Vector",
+                syntax: "hgb episodic-mem [--status] [--query <text>] [--store <task> --lesson <lesson>]",
+                description: "Advanced Vector Memory & Long-Horizon Self-Correction: embedded zero-dependency SIMD vector index, SQLite WAL episodic memory, and autonomous self-debugging reflection loop.",
+            },
+            CommandEntry {
+                name: "mcp-hotload",
+                aliases: &["mcp-reload", "plugin-reload"],
+                category: "MCP/Plugins",
+                syntax: "hgb mcp-hotload [--status] [--scan] [--add <plugin_name> --path <wasm_path>]",
+                description: "Universal Model Context Protocol (MCP) Hot-Reloading: dynamic discovery in .hgb/mcp_plugins/, live catalog registration, and instant SSE tools/list_changed broadcast.",
+            },
         ]
     }
 

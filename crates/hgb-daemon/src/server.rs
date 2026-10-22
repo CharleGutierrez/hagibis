@@ -57,6 +57,10 @@ pub struct DaemonState {
     pub hybrid_kernel: Arc<hgb_core::hybrid_kernel_accelerator::HybridKernelAccelerator>,
     pub wasm_mesh: Arc<tokio::sync::RwLock<hgb_core::wasm_mesh_network::WasmComputeMesh>>,
     pub vibe_watcher: Arc<tokio::sync::RwLock<crate::vibe_coding_watcher::VibeCodingWatcher>>,
+    pub hardware_synergy: Arc<hgb_core::protocol::hardware_runtime_synergy::HardwareRuntimeSynergy>,
+    pub agent_mesh: Arc<crate::distributed_agent_mesh::DistributedAgentMesh>,
+    pub episodic_memory: Arc<tokio::sync::RwLock<hgb_storage::advanced_vector_memory::EpisodicVectorMemoryEngine>>,
+    pub mcp_hot_reloader: Arc<crate::mcp_hot_reloader::McpHotReloader>,
 }
 
 impl DaemonState {
@@ -153,6 +157,16 @@ impl DaemonState {
         let vibe_watcher = Arc::new(tokio::sync::RwLock::new(
             crate::vibe_coding_watcher::VibeCodingWatcher::new(&ws_dir)
         ));
+        let hardware_synergy = Arc::new(hgb_core::protocol::hardware_runtime_synergy::HardwareRuntimeSynergy::new());
+        let agent_mesh = Arc::new(
+            crate::distributed_agent_mesh::DistributedAgentMesh::new(&ws_dir, Some(Arc::clone(&wasm_hot_pool)))
+                .expect("init distributed agent mesh")
+        );
+        let episodic_memory = Arc::new(tokio::sync::RwLock::new(
+            hgb_storage::advanced_vector_memory::EpisodicVectorMemoryEngine::new(&ws_dir)
+                .expect("init episodic vector memory")
+        ));
+        let mcp_hot_reloader = Arc::new(crate::mcp_hot_reloader::McpHotReloader::new(&ws_dir, None));
 
         Self {
             start_time: std::time::Instant::now(),
@@ -194,6 +208,10 @@ impl DaemonState {
             hybrid_kernel,
             wasm_mesh,
             vibe_watcher,
+            hardware_synergy,
+            agent_mesh,
+            episodic_memory,
+            mcp_hot_reloader,
         }
     }
 }
@@ -3813,6 +3831,87 @@ impl HagibisDaemon {
                     Ok(matches) => HgbResponse::SiblingOllamaQueryResult(matches),
                     Err(e) => HgbResponse::Error(format!("Failed to query mutation vectors: {}", e)),
                 }
+            }
+
+            // Strategic Upgrade 1: Native Hardware Synergy with Local AI Runtimes
+            HgbRequest::HardwareSynergyStatus => {
+                match state.hardware_synergy.probe_telemetry() {
+                    Ok(telemetry) => HgbResponse::HardwareSynergyStatusResult(telemetry),
+                    Err(e) => HgbResponse::Error(format!("Failed to probe hardware synergy telemetry: {}", e)),
+                }
+            }
+            HgbRequest::HardwareSynergyEvaluate { task_intensity } => {
+                match state.hardware_synergy.evaluate_workload(&task_intensity) {
+                    Ok(decision) => HgbResponse::HardwareSynergyEvaluateResult(decision),
+                    Err(e) => HgbResponse::Error(format!("Failed to evaluate workload: {}", e)),
+                }
+            }
+
+            // Strategic Upgrade 2: Distributed MicroVM Swarms & Agent Mesh via Firecracker & WASM
+            HgbRequest::AgentMeshSubmit { task_type, payload, worker_preference } => {
+                let tier = match worker_preference.to_lowercase().as_str() {
+                    "wasm" | "fast" | "fast_wasm" => crate::distributed_agent_mesh::MeshWorkerTier::FastWasm,
+                    "microvm" | "heavy" | "heavy_microvm" => crate::distributed_agent_mesh::MeshWorkerTier::HeavyMicrovm,
+                    _ => crate::distributed_agent_mesh::MeshWorkerTier::Auto,
+                };
+                match state.agent_mesh.submit_task(&task_type, &payload, 50, tier).await {
+                    Ok(task_id) => HgbResponse::AgentMeshSubmitResult(task_id),
+                    Err(e) => HgbResponse::Error(format!("Failed to submit task to agent mesh: {}", e)),
+                }
+            }
+            HgbRequest::AgentMeshStatus => {
+                match state.agent_mesh.get_status().await {
+                    Ok(status) => HgbResponse::AgentMeshStatusResult(serde_json::to_string_pretty(&status).unwrap_or_default()),
+                    Err(e) => HgbResponse::Error(format!("Failed to get agent mesh status: {}", e)),
+                }
+            }
+            HgbRequest::AgentMeshWorkers => {
+                match state.agent_mesh.list_workers().await {
+                    Ok(workers) => HgbResponse::AgentMeshWorkersResult(serde_json::to_string_pretty(&workers).unwrap_or_default()),
+                    Err(e) => HgbResponse::Error(format!("Failed to list agent mesh workers: {}", e)),
+                }
+            }
+
+            // Strategic Upgrade 3: Advanced Vector Memory & Long-Horizon Self-Correction
+            HgbRequest::EpisodicMemoryStore { episode_id: _, task, embedding, lesson, success } => {
+                let engine = state.episodic_memory.read().await;
+                let custom_emb = if embedding.is_empty() { None } else { Some(embedding) };
+                match engine.record_episode(&task, None, None, None, &lesson, success, custom_emb) {
+                    Ok(id) => HgbResponse::EpisodicMemoryStoreResult(id),
+                    Err(e) => HgbResponse::Error(format!("Failed to store episodic memory: {}", e)),
+                }
+            }
+            HgbRequest::EpisodicMemoryQuery { query_vec, top_k } => {
+                let engine = state.episodic_memory.read().await;
+                match engine.query_similar_episodes(&query_vec, top_k) {
+                    Ok(matches) => HgbResponse::EpisodicMemoryQueryResult(serde_json::to_string_pretty(&matches).unwrap_or_default()),
+                    Err(e) => HgbResponse::Error(format!("Failed to query episodic memory: {}", e)),
+                }
+            }
+            HgbRequest::EpisodicMemoryStatus => {
+                let engine = state.episodic_memory.read().await;
+                match engine.get_status() {
+                    Ok(status) => HgbResponse::EpisodicMemoryStatusResult(serde_json::to_string_pretty(&status).unwrap_or_default()),
+                    Err(e) => HgbResponse::Error(format!("Failed to get episodic memory status: {}", e)),
+                }
+            }
+
+            // Strategic Upgrade 4: Universal Model Context Protocol (MCP) Hot-Reloading
+            HgbRequest::McpHotReloadScan => {
+                match state.mcp_hot_reloader.scan_and_hot_reload().await {
+                    Ok(report) => HgbResponse::McpHotReloadScanResult(serde_json::to_string_pretty(&report).unwrap_or_default()),
+                    Err(e) => HgbResponse::Error(format!("Failed to scan and hot-reload MCP plugins: {}", e)),
+                }
+            }
+            HgbRequest::McpHotReloadAdd { plugin_name, wasm_path, description } => {
+                match state.mcp_hot_reloader.register_wasm_plugin(&plugin_name, Path::new(&wasm_path), &description).await {
+                    Ok(()) => HgbResponse::McpHotReloadAddResult(format!("Plugin '{}' registered successfully.", plugin_name)),
+                    Err(e) => HgbResponse::Error(format!("Failed to add MCP plugin: {}", e)),
+                }
+            }
+            HgbRequest::McpHotReloadStatus => {
+                let report = state.mcp_hot_reloader.get_status().await;
+                HgbResponse::McpHotReloadStatusResult(serde_json::to_string_pretty(&report).unwrap_or_default())
             }
         }
     }

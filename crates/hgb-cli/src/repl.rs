@@ -3262,6 +3262,41 @@ impl HagibisRepl {
                 let resp = self.dispatch(HgbRequest::StudioStart { port }).await;
                 self.render_response(resp);
             }
+            "/synergy" | "/hw-synergy" => {
+                let resp = if args.is_empty() {
+                    self.dispatch(HgbRequest::HardwareSynergyStatus).await
+                } else {
+                    self.dispatch(HgbRequest::HardwareSynergyEvaluate { task_intensity: args.to_string() }).await
+                };
+                self.render_response(resp);
+            }
+            "/agentmesh" | "/mesh2" => {
+                let resp = if args.starts_with("workers") {
+                    self.dispatch(HgbRequest::AgentMeshWorkers).await
+                } else if !args.is_empty() {
+                    self.dispatch(HgbRequest::AgentMeshSubmit { task_type: "interactive".to_string(), payload: args.to_string(), worker_preference: "auto".to_string() }).await
+                } else {
+                    self.dispatch(HgbRequest::AgentMeshStatus).await
+                };
+                self.render_response(resp);
+            }
+            "/episodic" | "/epmem" => {
+                let resp = if !args.is_empty() {
+                    let query_vec = hgb_storage::advanced_vector_memory::EpisodicVectorMemoryEngine::synthesize_embedding(args, 64);
+                    self.dispatch(HgbRequest::EpisodicMemoryQuery { query_vec, top_k: 3 }).await
+                } else {
+                    self.dispatch(HgbRequest::EpisodicMemoryStatus).await
+                };
+                self.render_response(resp);
+            }
+            "/hotload" | "/mcphot" => {
+                let resp = if args.starts_with("scan") {
+                    self.dispatch(HgbRequest::McpHotReloadScan).await
+                } else {
+                    self.dispatch(HgbRequest::McpHotReloadStatus).await
+                };
+                self.render_response(resp);
+            }
             _ => {}
         }
 
@@ -5506,6 +5541,30 @@ impl HagibisRepl {
                 for m in matches {
                     println!("    • {} (lines {}-{}, score: {:.4})", m.chunk.file_path, m.chunk.start_line, m.chunk.end_line, m.similarity_score);
                 }
+            }
+            HgbResponse::HardwareSynergyStatusResult(t) => {
+                println!("{}", t.render_terminal_card());
+            }
+            HgbResponse::HardwareSynergyEvaluateResult(d) => {
+                println!("🎯 Hardware Synergy Decision: {:?} -> {} ({})", d.tier, d.selected_model.bold().cyan(), d.reason.yellow());
+            }
+            HgbResponse::AgentMeshSubmitResult(tid) => {
+                println!("✔ Submitted task to Agent Mesh: {}", tid.cyan().bold());
+            }
+            HgbResponse::AgentMeshStatusResult(s) | HgbResponse::AgentMeshWorkersResult(s) => {
+                println!("{}", s);
+            }
+            HgbResponse::EpisodicMemoryStoreResult(id) => {
+                println!("✔ Stored Episodic Memory: {}", id.cyan().bold());
+            }
+            HgbResponse::EpisodicMemoryQueryResult(s) | HgbResponse::EpisodicMemoryStatusResult(s) => {
+                println!("{}", s);
+            }
+            HgbResponse::McpHotReloadScanResult(s) | HgbResponse::McpHotReloadStatusResult(s) => {
+                println!("{}", s);
+            }
+            HgbResponse::McpHotReloadAddResult(msg) => {
+                println!("✔ {}", msg.green());
             }
         }
     }

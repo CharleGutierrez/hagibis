@@ -44,4 +44,12 @@ pub use hgb_core::crdt_edge_sync::{
     MergeReport, OrSet, SkillRecord as CrdtSkillRecord, StylePreferences, VectorClock, VectorEmbeddingRef,
 };
 
+// Strategic Upgrade 3: Advanced Vector Memory & Long-Horizon Self-Correction
+pub mod advanced_vector_memory;
+pub use advanced_vector_memory::{
+    EpisodicMatch, EpisodicMemoryStatusReport, EpisodicRecord, EpisodicVectorMemoryEngine,
+    SelfCorrectionReflection, DEFAULT_VECTOR_DIM,
+};
+
+
 
