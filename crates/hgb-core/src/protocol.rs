@@ -1367,6 +1367,34 @@ pub enum HgbRequest {
         #[serde(default)]
         patch_content: Option<String>,
     },
+    // --- Three-Pillar Expansion ---
+    // Pillar 1: Hybrid Kernel-Level Acceleration
+    HybridKernelStatus,
+    HybridKernelBoost {
+        workload: String,
+    },
+    HybridKernelRelax,
+    // Pillar 2: Distributed P2P WASM Mesh Networking
+    WasmMeshStatus,
+    WasmMeshPackagePublish {
+        name: String,
+        wasm_path: String,
+        capabilities: Vec<String>,
+    },
+    WasmMeshExecute {
+        task_id: String,
+        module_name: String,
+        payload: String,
+        prefer_microvm: bool,
+    },
+    // Pillar 3: Proactive Autonomous Feedback Loops
+    VibeWatcherStatus,
+    VibeWatcherTrigger {
+        path: String,
+        #[serde(default)]
+        target_command: Option<String>,
+    },
+    VibeWatcherHistory,
 }
 
 fn default_twenty_u64() -> u64 {
@@ -1948,6 +1976,19 @@ pub enum HgbResponse {
     WasmSkillExecResult(String),
     // --- Pillar 4: Ephemeral Code Execution Sandboxes ---
     MicrovmEphemeralResult(crate::microvm_sandbox_executor::EphemeralExecResult),
+    // --- Three-Pillar Expansion ---
+    // Pillar 1: Hybrid Kernel-Level Acceleration
+    HybridKernelStatusResult(crate::hybrid_kernel_accelerator::HybridKernelTelemetry),
+    HybridKernelBoostResult(String),
+    HybridKernelRelaxResult(String),
+    // Pillar 2: Distributed P2P WASM Mesh Networking
+    WasmMeshStatusResult(Vec<crate::wasm_mesh_network::WasmMeshNode>),
+    WasmMeshPackagePublishResult(crate::wasm_mesh_network::WasmMeshPackage),
+    WasmMeshExecuteResult(crate::wasm_mesh_network::WasmMeshExecutionResult),
+    // Pillar 3: Proactive Autonomous Feedback Loops
+    VibeWatcherStatusResult(String),
+    VibeWatcherTriggerResult(String),
+    VibeWatcherHistoryResult(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

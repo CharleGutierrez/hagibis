@@ -3167,6 +3167,63 @@ enum Commands {
         #[arg(long)]
         patch: Option<String>,
     },
+
+    /// Three-Pillar Expansion: Pillar 1: Hybrid Kernel-Level Acceleration (dynatune & kernel-optimizer)
+    #[command(name = "kernel-boost", alias = "hybrid-accel", alias = "mglru-tune")]
+    KernelBoost {
+        /// Query live hybrid kernel telemetry & MGLRU status
+        #[arg(long)]
+        status: bool,
+        /// Workload to boost hardware for (compile, test, llm, wasm, embed)
+        #[arg(long)]
+        boost: Option<String>,
+        /// Relax hardware back to powersave / balanced baseline
+        #[arg(long)]
+        relax: bool,
+    },
+
+    /// Three-Pillar Expansion: Pillar 2: Distributed P2P WASM Mesh Networking
+    #[command(name = "wasm-mesh", alias = "mesh-compute", alias = "p2p-wasm")]
+    WasmMesh {
+        /// Query peer nodes and active mesh state
+        #[arg(long)]
+        status: bool,
+        /// Publish a WASM package to the mesh
+        #[arg(long)]
+        publish: Option<String>,
+        /// Path to .wasm file to publish
+        #[arg(long)]
+        wasm: Option<String>,
+        /// Capabilities for published module (comma-separated, e.g. "fs_read,crypto")
+        #[arg(long)]
+        caps: Option<String>,
+        /// Execute a task across the mesh
+        #[arg(long)]
+        exec: Option<String>,
+        /// Payload string for mesh execution
+        #[arg(long, default_value = "")]
+        payload: String,
+        /// Require Firecracker microVM hardware sandbox isolation
+        #[arg(long)]
+        microvm: bool,
+    },
+
+    /// Three-Pillar Expansion: Pillar 3: Proactive Autonomous Feedback Loops
+    #[command(name = "vibe-watcher", alias = "self-heal-loop", alias = "vibe-watch")]
+    VibeWatcher {
+        /// Query vibe-coding watcher status and auto-healed statistics
+        #[arg(long)]
+        status: bool,
+        /// Run an immediate watch & self-healing cycle on target path
+        #[arg(long)]
+        trigger: Option<String>,
+        /// Custom test/check command to invoke (e.g. "cargo test")
+        #[arg(long)]
+        cmd: Option<String>,
+        /// View recent cycle history
+        #[arg(long)]
+        history: bool,
+    },
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -9341,6 +9398,154 @@ async fn test_calc() { assert!(calculate(5)); }".to_string()
                 }
                 hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Sandbox execution error: {}", e.red()),
                 _ => {}
+            }
+            Ok(())
+        }
+        Commands::KernelBoost { status, boost, relax } => {
+            println!("{}", "⚡ Hybrid Kernel-Level Acceleration (dynatune & kernel-optimizer)".cyan().bold());
+            let client = HgbClient::new();
+            if let Some(workload) = boost {
+                println!("  Boosting CPU governor & MGLRU memory subsystem for workload: {}...", workload.yellow());
+                let resp = client.send(hgb_core::protocol::HgbRequest::HybridKernelBoost { workload }).await?;
+                match resp {
+                    hgb_core::protocol::HgbResponse::HybridKernelBoostResult(msg) => {
+                        println!("  ✔ {}", msg.green());
+                    }
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Boost error: {}", e.red()),
+                    _ => {}
+                }
+            } else if relax {
+                println!("  Relaxing CPU governor & MGLRU subsystem back to powersave / balanced...");
+                let resp = client.send(hgb_core::protocol::HgbRequest::HybridKernelRelax).await?;
+                match resp {
+                    hgb_core::protocol::HgbResponse::HybridKernelRelaxResult(msg) => {
+                        println!("  ✔ {}", msg.green());
+                    }
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Relax error: {}", e.red()),
+                    _ => {}
+                }
+            } else if status || true {
+                let resp = client.send(hgb_core::protocol::HgbRequest::HybridKernelStatus).await?;
+                match resp {
+                    hgb_core::protocol::HgbResponse::HybridKernelStatusResult(t) => {
+                        println!("  • Active Governor:    {}", t.active_governor.bold());
+                        println!("  • Active EPP:         {}", t.active_epp.bold());
+                        println!("  • MGLRU Subsystem:    {}", t.mglru_flags.bold());
+                        println!("  • MGLRU Min TTL:      {} ms", t.mglru_min_ttl_ms);
+                        println!("  • Memory Pressure:    {:.2}%", t.memory_pressure_psi);
+                        println!("  • Reclaim Efficiency: {:.2}%", t.reclaim_efficiency);
+                        println!("  • CPU Temperature:    {:.1}°C", t.cpu_temp_c);
+                        println!("  • Battery Status:     {} (level: {}%)", if t.on_battery { "DISCHARGING".yellow() } else { "AC MAINS".green() }, t.battery_pct.unwrap_or(100));
+                        println!("  • Throttled / Safe:   {}", if t.is_throttled { "THROTTLED".red() } else { "OPTIMAL (UNTHROTTLED)".green() });
+                        if let Some(ref w) = t.active_workload {
+                            println!("  • Active Workload:    {}", w.cyan());
+                        }
+                    }
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Status error: {}", e.red()),
+                    _ => {}
+                }
+            }
+            Ok(())
+        }
+        Commands::WasmMesh { status, publish, wasm, caps, exec, payload, microvm } => {
+            println!("{}", "🌐 Distributed P2P WASM Compute Mesh".cyan().bold());
+            let client = HgbClient::new();
+            if let Some(name) = publish {
+                if let Some(wasm_file) = wasm {
+                    let capabilities: Vec<String> = caps.map(|c| c.split(',').map(|s| s.trim().to_string()).collect()).unwrap_or_else(|| vec!["crypto".to_string(), "sandbox".to_string()]);
+                    println!("  Publishing WASM package '{}' from file '{}'...", name.yellow(), wasm_file);
+                    let resp = client.send(hgb_core::protocol::HgbRequest::WasmMeshPackagePublish { name, wasm_path: wasm_file, capabilities }).await?;
+                    match resp {
+                        hgb_core::protocol::HgbResponse::WasmMeshPackagePublishResult(pkg) => {
+                            println!("  ✔ Package Published Successfully:");
+                            println!("    • Name:         {}", pkg.name.bold());
+                            println!("    • Version:      {}", pkg.version);
+                            println!("    • BLAKE3 Hash:  {}", pkg.blake3_hash.green());
+                            println!("    • Capabilities: {:?}", pkg.capabilities);
+                            println!("    • Size:         {} bytes", pkg.size_bytes);
+                        }
+                        hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Publish error: {}", e.red()),
+                        _ => {}
+                    }
+                } else {
+                    eprintln!("  ✖ Missing required --wasm <path> parameter for publish.");
+                }
+            } else if let Some(module) = exec {
+                let task_id = format!("task_{:x}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0));
+                println!("  Dispatching workload '{}' to compute mesh (task: {}, microvm: {})...", module.yellow(), task_id, microvm);
+                let resp = client.send(hgb_core::protocol::HgbRequest::WasmMeshExecute {
+                    task_id,
+                    module_name: module,
+                    payload,
+                    prefer_microvm: microvm,
+                }).await?;
+                match resp {
+                    hgb_core::protocol::HgbResponse::WasmMeshExecuteResult(r) => {
+                        println!("  ✔ Mesh Task Executed:");
+                        println!("    • Executing Node:  {}", r.executing_node_id.bold());
+                        println!("    • Tier Used:       {}", r.execution_tier.green());
+                        println!("    • Duration:        {} ms", r.duration_ms);
+                        println!("    • Success:         {}", if r.success { "YES".green() } else { "NO".red() });
+                        println!("    • Blast Radius:    {} bytes", r.blast_radius_bytes);
+                        if !r.stdout.is_empty() {
+                            println!("\n[Stdout]:\n{}", r.stdout);
+                        }
+                        if !r.stderr.is_empty() {
+                            println!("\n[Stderr]:\n{}", r.stderr.red());
+                        }
+                    }
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Execution error: {}", e.red()),
+                    _ => {}
+                }
+            } else if status || true {
+                let resp = client.send(hgb_core::protocol::HgbRequest::WasmMeshStatus).await?;
+                match resp {
+                    hgb_core::protocol::HgbResponse::WasmMeshStatusResult(peers) => {
+                        println!("  Discovered {} compute mesh node(s):", peers.len());
+                        for p in peers {
+                            println!("    • Node ID:    {}", p.node_id.bold());
+                            println!("      Address:    {} | Local: {}", p.address, if p.is_local { "YES".green() } else { "NO".yellow() });
+                            println!("      CPU Load:   {:.2} | Available RAM: {} MB", p.cpu_load, p.available_memory_mb);
+                            println!("      Modules:    {} active | Capabilities: {:?}", p.active_modules_count, p.capabilities);
+                        }
+                    }
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Status error: {}", e.red()),
+                    _ => {}
+                }
+            }
+            Ok(())
+        }
+        Commands::VibeWatcher { status, trigger, cmd, history } => {
+            println!("{}", "🔄 Proactive Autonomous Vibe-Coding Watcher".cyan().bold());
+            let client = HgbClient::new();
+            if let Some(path) = trigger {
+                println!("  Running autonomous watch & self-heal cycle on path '{}'...", path.yellow());
+                let resp = client.send(hgb_core::protocol::HgbRequest::VibeWatcherTrigger { path, target_command: cmd }).await?;
+                match resp {
+                    hgb_core::protocol::HgbResponse::VibeWatcherTriggerResult(json_str) => {
+                        println!("  ✔ Cycle Completed:\n{}", json_str);
+                    }
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Trigger error: {}", e.red()),
+                    _ => {}
+                }
+            } else if history {
+                let resp = client.send(hgb_core::protocol::HgbRequest::VibeWatcherHistory).await?;
+                match resp {
+                    hgb_core::protocol::HgbResponse::VibeWatcherHistoryResult(json_str) => {
+                        println!("  Cycle History:\n{}", json_str);
+                    }
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ History error: {}", e.red()),
+                    _ => {}
+                }
+            } else if status || true {
+                let resp = client.send(hgb_core::protocol::HgbRequest::VibeWatcherStatus).await?;
+                match resp {
+                    hgb_core::protocol::HgbResponse::VibeWatcherStatusResult(json_str) => {
+                        println!("  Watcher Status:\n{}", json_str);
+                    }
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Status error: {}", e.red()),
+                    _ => {}
+                }
             }
             Ok(())
         }

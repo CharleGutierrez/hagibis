@@ -1722,6 +1722,113 @@ impl HagibisRepl {
                 }).await;
                 self.render_response(resp);
             }
+            "/kernel-boost" | "/hybrid-accel" | "/mglru-tune" => {
+                let trimmed = args.trim();
+                println!("{}", "⚡ Hybrid Kernel-Level Accelerator (dynatune & kernel-optimizer)".cyan().bold());
+                let accelerator = hgb_core::hybrid_kernel_accelerator::HybridKernelAccelerator::new();
+                if trimmed.starts_with("boost ") {
+                    let workload = trimmed["boost ".len()..].trim();
+                    match accelerator.boost_workload(workload) {
+                        Ok(_guard) => {
+                            let telem = accelerator.telemetry();
+                            println!("  ✔ {}", "Workload Boosted Successfully:".green().bold());
+                            println!("    • Governor:         {}", telem.active_governor.green().bold());
+                            println!("    • EPP:              {}", telem.active_epp.green().bold());
+                            println!("    • MGLRU Min TTL:    {} ms", telem.mglru_min_ttl_ms);
+                            println!("    • Workload:         {}", workload.cyan());
+                            std::mem::forget(_guard); // Keep active until /kernel-boost relax
+                        }
+                        Err(e) => eprintln!("  ✖ Boost error: {}", e.to_string().red()),
+                    }
+                } else if trimmed == "relax" {
+                    match accelerator.relax() {
+                        Ok(()) => println!("  ✔ Restored baseline powersave governor, balance_performance EPP, and MGLRU min_ttl_ms 0."),
+                        Err(e) => eprintln!("  ✖ Relax error: {}", e.to_string().red()),
+                    }
+                } else {
+                    let telem = accelerator.telemetry();
+                    println!("  • Active Governor:    {}", telem.active_governor.green().bold());
+                    println!("  • Active EPP:         {}", telem.active_epp.cyan().bold());
+                    println!("  • MGLRU Flags:        {} (min_ttl: {} ms)", telem.mglru_flags.yellow(), telem.mglru_min_ttl_ms);
+                    println!("  • Memory Pressure:    {:.2}% PSI avg10", telem.memory_pressure_psi);
+                    println!("  • Reclaim Efficiency: {:.2}%", telem.reclaim_efficiency);
+                    println!("  • CPU Temperature:    {:.1}°C", telem.cpu_temp_c);
+                    println!("  • Throttling Status:  {}", if telem.is_throttled { "THROTTLED (Thermal/Battery trip)".red().bold() } else { "OPTIMAL (Headroom nominal)".green() });
+                    if let Some(pct) = telem.battery_pct {
+                        println!("  • Battery:            {}% (Discharging: {})", pct, telem.on_battery);
+                    }
+                }
+            }
+            "/wasm-mesh" | "/mesh-compute" | "/p2p-wasm" => {
+                let trimmed = args.trim();
+                println!("{}", "🌐 Distributed P2P WASM Compute Mesh".cyan().bold());
+                let ws = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                let mut mesh = hgb_core::wasm_mesh_network::WasmComputeMesh::new(&ws).unwrap_or_else(|_| hgb_core::wasm_mesh_network::WasmComputeMesh::in_memory().expect("in-memory wasm mesh"));
+                if trimmed.starts_with("exec ") {
+                    let parts: Vec<&str> = trimmed["exec ".len()..].splitn(2, ' ').collect();
+                    let module_name = parts.get(0).unwrap_or(&"json_stream_parser");
+                    let payload = parts.get(1).unwrap_or(&"{\"status\": \"mesh_active\"}");
+                    match mesh.execute_workload("repl_task", module_name, payload, false) {
+                        Ok(res) => {
+                            println!("  ✔ Task ID:        {}", res.task_id.cyan());
+                            println!("  ✔ Executed On:    {}", res.executing_node_id.green().bold());
+                            println!("  ✔ Tier:           {}", res.execution_tier.yellow());
+                            println!("  ✔ Duration:       {} ms", res.duration_ms);
+                            println!("  ✔ Output:         {}", res.stdout);
+                        }
+                        Err(e) => eprintln!("  ✖ Mesh exec error: {}", e.to_string().red()),
+                    }
+                } else {
+                    let status = mesh.status();
+                    println!("  • Local Node ID:     {}", status.local_node_id.green().bold());
+                    println!("  • Local Address:     {}", status.local_address.cyan());
+                    println!("  • Discovered Peers:  {} peer(s)", status.peers.len());
+                    for p in &status.peers {
+                        println!("    - Node {}: CPU Load {:.2}, RAM {} MB (local: {})", p.node_id, p.cpu_load, p.available_memory_mb, p.is_local);
+                    }
+                    println!("  • Published Modules: {} package(s)", status.packages.len());
+                    for pkg in &status.packages {
+                        println!("    - {} (v{}) [Hash: {}] Cap: {:?}", pkg.name, pkg.version, &pkg.blake3_hash[..8], pkg.capabilities);
+                    }
+                    println!("  • MicroVM Swarms:    {}", if status.microvm_available { "READY".green().bold() } else { "NOT DETECTED".yellow() });
+                }
+            }
+            "/vibe-watcher" | "/self-heal-loop" | "/vibe-watch" => {
+                let trimmed = args.trim();
+                println!("{}", "🩺 Proactive Autonomous Vibe-Coding Watcher".cyan().bold());
+                let ws = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                let watcher = hgb_daemon::vibe_coding_watcher::VibeCodingWatcher::new(&ws);
+                if trimmed.starts_with("trigger ") {
+                    let path_str = trimmed["trigger ".len()..].trim();
+                    let path = std::path::Path::new(path_str);
+                    match watcher.trigger_watch_cycle(path, None) {
+                        Ok(rec) => {
+                            println!("  • Cycle ID:         {}", rec.cycle_id.cyan());
+                            println!("  • Target:           {}", rec.target_path);
+                            println!("  • Command:          {}", rec.command_invoked);
+                            println!("  • Exit Code:        {}", rec.exit_code);
+                            println!("  • Compiler Failed:  {}", if rec.compiler_failed { "YES (Interception engaged)".red().bold() } else { "NO (Clean compilation)".green().bold() });
+                            println!("  • Sandbox Verified: {}", if rec.sandbox_verified { "YES (First-Green)".green().bold() } else { "N/A".dimmed() });
+                            println!("  • Patch Committed:  {}", if rec.patch_committed { "YES (Applied to disk)".green().bold() } else { "NO".dimmed() });
+                            println!("  • Duration:         {} ms", rec.duration_ms);
+                        }
+                        Err(e) => eprintln!("  ✖ Watcher error: {}", e.to_string().red()),
+                    }
+                } else if trimmed == "history" {
+                    let hist = watcher.history();
+                    println!("  Recent Watch Cycles ({} total):", hist.len());
+                    for r in hist {
+                        println!("    • [{}] {} -> exit {} (duration {} ms)", r.cycle_id, r.command_invoked, r.exit_code, r.duration_ms);
+                    }
+                } else {
+                    let st = watcher.status();
+                    println!("  • Status:           {}", if st.active { "ACTIVE (Proactive daemon loop)".green().bold() } else { "INACTIVE".red() });
+                    println!("  • Cycles Executed:  {}", st.cycles_executed);
+                    println!("  • Failures Caught:  {}", st.failures_detected);
+                    println!("  • Auto-Healed Fixes:{}", st.auto_healed_iterations);
+                    println!("  • DPO Pairs Logged: {}", st.dpo_pairs_count);
+                }
+            }
             "/cockpit" => {
                 let mut state = hgb_nextgen::CockpitState::new();
                 if let Some(ref m) = self.model {
@@ -5343,6 +5450,47 @@ impl HagibisRepl {
                 if !r.stderr.is_empty() {
                     println!("\n[Stderr]:\n{}", r.stderr.red());
                 }
+            }
+            HgbResponse::HybridKernelStatusResult(t) => {
+                println!("{}", "⚡ HYBRID KERNEL TELEMETRY ⚡".bold().cyan());
+                println!("  Active Governor:    {}", t.active_governor.bold());
+                println!("  Active EPP:         {}", t.active_epp.bold());
+                println!("  MGLRU Flags:        {}", t.mglru_flags.bold());
+                println!("  MGLRU Min TTL:      {} ms", t.mglru_min_ttl_ms);
+                println!("  Memory PSI:         {:.2}%", t.memory_pressure_psi);
+                println!("  Reclaim Efficiency: {:.2}%", t.reclaim_efficiency);
+                println!("  CPU Temp:           {:.1}°C", t.cpu_temp_c);
+                println!("  Throttled:          {}", if t.is_throttled { "YES".red() } else { "NO".green() });
+            }
+            HgbResponse::HybridKernelBoostResult(msg) => {
+                println!("  ✔ {}", msg.green());
+            }
+            HgbResponse::HybridKernelRelaxResult(msg) => {
+                println!("  ✔ {}", msg.green());
+            }
+            HgbResponse::WasmMeshStatusResult(peers) => {
+                println!("{}", "🌐 WASM COMPUTE MESH PEERS 🌐".bold().cyan());
+                for p in peers {
+                    println!("  Node: {} ({}) | Load: {:.2} | RAM: {} MB", p.node_id.green(), p.address, p.cpu_load, p.available_memory_mb);
+                }
+            }
+            HgbResponse::WasmMeshPackagePublishResult(pkg) => {
+                println!("  ✔ Published Package: {} (Hash: {})", pkg.name.green(), pkg.blake3_hash);
+            }
+            HgbResponse::WasmMeshExecuteResult(r) => {
+                println!("  ✔ Mesh Task Executed: {} on node {}", r.module_name.green(), r.executing_node_id);
+                if !r.stdout.is_empty() {
+                    println!("\n[Stdout]:\n{}", r.stdout);
+                }
+            }
+            HgbResponse::VibeWatcherStatusResult(status_json) => {
+                println!("🔄 VIBE-WATCHER STATUS:\n{}", status_json);
+            }
+            HgbResponse::VibeWatcherTriggerResult(rec_json) => {
+                println!("🔄 VIBE-WATCHER CYCLE:\n{}", rec_json);
+            }
+            HgbResponse::VibeWatcherHistoryResult(hist_json) => {
+                println!("🔄 VIBE-WATCHER HISTORY:\n{}", hist_json);
             }
         }
     }

@@ -675,6 +675,27 @@ impl InteractiveCommandCatalog {
                 syntax: "hgb microvm-exec --code <str> [--lang <bash|rust|python>] [--patch <path>]",
                 description: "Ephemeral code execution sandbox: sub-second Firecracker microVM with automatic Linux Landlock LSM + RAM CoW OverlayFS fallback.",
             },
+            CommandEntry {
+                name: "kernel-boost",
+                aliases: &["hybrid-accel", "mglru-tune"],
+                category: "Hardware/Kernel",
+                syntax: "hgb kernel-boost [--status] [--boost <workload>] [--relax]",
+                description: "Hybrid Kernel-Level Acceleration: dynatune & kernel-optimizer bridge, performance governor, EPP tuning, MGLRU low latency (min_ttl_ms 1000), and thermal/battery watchdogs.",
+            },
+            CommandEntry {
+                name: "wasm-mesh",
+                aliases: &["mesh-compute", "p2p-wasm"],
+                category: "Mesh/Compute",
+                syntax: "hgb wasm-mesh [--status] [--publish <path> --name <name> --capabilities <c1,c2>] [--exec <mod> --task <id> --payload <str> --microvm]",
+                description: "Distributed P2P WASM Compute Mesh: dynamic peer discovery, BLAKE3 packages, idle node task streaming, and ephemeral Firecracker microVM / Landlock RAM CoW execution.",
+            },
+            CommandEntry {
+                name: "vibe-watcher",
+                aliases: &["self-heal-loop", "vibe-watch"],
+                category: "Daemon/Watcher",
+                syntax: "hgb vibe-watcher [--status] [--trigger <path> --cmd <command>] [--history]",
+                description: "Proactive Autonomous Feedback Loop: real-time code change interception, automated test/build trigger, diagnostic Ollama closed-loop feedback, and First-Green sandbox verification.",
+            },
         ]
     }
 

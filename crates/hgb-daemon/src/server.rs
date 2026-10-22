@@ -54,6 +54,9 @@ pub struct DaemonState {
     pub ollama_orchestrator: Arc<hgb_core::ollama_speculative_orchestrator::OllamaSpeculativeOrchestrator>,
     pub wasm_marketplace: Arc<tokio::sync::RwLock<hgb_core::wasm_skill_marketplace::WasmSkillMarketplace>>,
     pub microvm_sandbox: Arc<hgb_core::microvm_sandbox_executor::FirecrackerEphemeralSandbox>,
+    pub hybrid_kernel: Arc<hgb_core::hybrid_kernel_accelerator::HybridKernelAccelerator>,
+    pub wasm_mesh: Arc<tokio::sync::RwLock<hgb_core::wasm_mesh_network::WasmComputeMesh>>,
+    pub vibe_watcher: Arc<tokio::sync::RwLock<crate::vibe_coding_watcher::VibeCodingWatcher>>,
 }
 
 impl DaemonState {
@@ -142,6 +145,14 @@ impl DaemonState {
             hgb_core::wasm_skill_marketplace::WasmSkillMarketplace::new(&ws_dir).unwrap_or_else(|_| hgb_core::wasm_skill_marketplace::WasmSkillMarketplace::in_memory().expect("in-memory wasm marketplace"))
         ));
         let microvm_sandbox = Arc::new(hgb_core::microvm_sandbox_executor::FirecrackerEphemeralSandbox::new(&ws_dir));
+        let hybrid_kernel = Arc::new(hgb_core::hybrid_kernel_accelerator::HybridKernelAccelerator::new());
+        let wasm_mesh = Arc::new(tokio::sync::RwLock::new(
+            hgb_core::wasm_mesh_network::WasmComputeMesh::new(&ws_dir)
+                .expect("init wasm compute mesh")
+        ));
+        let vibe_watcher = Arc::new(tokio::sync::RwLock::new(
+            crate::vibe_coding_watcher::VibeCodingWatcher::new(&ws_dir)
+        ));
 
         Self {
             start_time: std::time::Instant::now(),
@@ -180,6 +191,9 @@ impl DaemonState {
             ollama_orchestrator,
             wasm_marketplace,
             microvm_sandbox,
+            hybrid_kernel,
+            wasm_mesh,
+            vibe_watcher,
         }
     }
 }
@@ -3690,6 +3704,73 @@ impl HagibisDaemon {
                     Ok(res) => HgbResponse::MicrovmEphemeralResult(res),
                     Err(e) => HgbResponse::Error(format!("MicroVM ephemeral execution error: {}", e)),
                 }
+            }
+
+            // Three-Pillar Expansion: Pillar 1: Hybrid Kernel-Level Acceleration
+            HgbRequest::HybridKernelStatus => {
+                let tel = state.hybrid_kernel.telemetry();
+                HgbResponse::HybridKernelStatusResult(tel)
+            }
+            HgbRequest::HybridKernelBoost { workload } => {
+                match state.hybrid_kernel.boost_workload(&workload) {
+                    Ok(guard) => {
+                        let tel = state.hybrid_kernel.telemetry();
+                        let msg = format!("Hardware successfully boosted for workload '{}' (active_gov: {}, epp: {}, mglru_ttl: {}ms)",
+                            workload, tel.active_governor, tel.active_epp, tel.mglru_min_ttl_ms);
+                        std::mem::forget(guard);
+                        HgbResponse::HybridKernelBoostResult(msg)
+                    }
+                    Err(e) => HgbResponse::Error(format!("Failed to boost hardware: {}", e)),
+                }
+            }
+            HgbRequest::HybridKernelRelax => {
+                match state.hybrid_kernel.relax() {
+                    Ok(_) => HgbResponse::HybridKernelRelaxResult("Hardware relaxed back to baseline powersave profile".to_string()),
+                    Err(e) => HgbResponse::Error(format!("Failed to relax hardware: {}", e)),
+                }
+            }
+
+            // Three-Pillar Expansion: Pillar 2: Distributed P2P WASM Mesh Networking
+            HgbRequest::WasmMeshStatus => {
+                let mut mesh = state.wasm_mesh.write().await;
+                match mesh.discover_peers() {
+                    Ok(peers) => HgbResponse::WasmMeshStatusResult(peers),
+                    Err(e) => HgbResponse::Error(format!("Failed to discover mesh peers: {}", e)),
+                }
+            }
+            HgbRequest::WasmMeshPackagePublish { name, wasm_path, capabilities } => {
+                let mut mesh = state.wasm_mesh.write().await;
+                match mesh.publish_package_from_path(&name, Path::new(&wasm_path), capabilities) {
+                    Ok(pkg) => HgbResponse::WasmMeshPackagePublishResult(pkg),
+                    Err(e) => HgbResponse::Error(format!("Failed to publish WASM package: {}", e)),
+                }
+            }
+            HgbRequest::WasmMeshExecute { task_id, module_name, payload, prefer_microvm } => {
+                let _kernel_guard = state.hybrid_kernel.boost_workload("wasm_mesh").ok();
+                let mut mesh = state.wasm_mesh.write().await;
+                match mesh.execute_workload(&task_id, &module_name, &payload, prefer_microvm) {
+                    Ok(res) => HgbResponse::WasmMeshExecuteResult(res),
+                    Err(e) => HgbResponse::Error(format!("Failed to execute mesh workload: {}", e)),
+                }
+            }
+
+            // Three-Pillar Expansion: Pillar 3: Proactive Autonomous Feedback Loops
+            HgbRequest::VibeWatcherStatus => {
+                let watcher = state.vibe_watcher.read().await;
+                let status = watcher.status();
+                HgbResponse::VibeWatcherStatusResult(serde_json::to_string_pretty(&status).unwrap_or_default())
+            }
+            HgbRequest::VibeWatcherTrigger { path, target_command } => {
+                let _kernel_guard = state.hybrid_kernel.boost_workload("vibe_heal").ok();
+                let mut watcher = state.vibe_watcher.write().await;
+                match watcher.trigger_watch_cycle(Path::new(&path), target_command.as_deref()) {
+                    Ok(record) => HgbResponse::VibeWatcherTriggerResult(serde_json::to_string_pretty(&record).unwrap_or_default()),
+                    Err(e) => HgbResponse::Error(format!("Failed to run vibe-coding watch cycle: {}", e)),
+                }
+            }
+            HgbRequest::VibeWatcherHistory => {
+                let watcher = state.vibe_watcher.read().await;
+                HgbResponse::VibeWatcherHistoryResult(serde_json::to_string_pretty(&watcher.history()).unwrap_or_default())
             }
         }
     }

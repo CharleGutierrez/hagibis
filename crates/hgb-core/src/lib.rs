@@ -1022,9 +1022,23 @@ pub use microvm_sandbox_executor::{
     EphemeralExecResult, EphemeralExecSpec, FirecrackerEphemeralSandbox,
 };
 
+// Autonomous Expansion Pillar 1: Hybrid Kernel-Level Acceleration (dynatune & kernel-optimizer)
+pub mod hybrid_kernel_accelerator;
+pub use hybrid_kernel_accelerator::{
+    BaselineKernelProfile, HybridKernelAccelerator, HybridKernelTelemetry, KernelAccelerationGuard,
+    BATTERY_LOW_THRESHOLD_PCT, THERMAL_CRITICAL_HEADROOM_C,
+};
+
+// Autonomous Expansion Pillar 2: Distributed P2P WASM Mesh Networking
+pub mod wasm_mesh_network;
+pub use wasm_mesh_network::{
+    WasmComputeMesh, WasmMeshExecutionResult, WasmMeshNode, WasmMeshPackage, WasmMeshStatusReport,
+};
+
 /// Enterprise high-capacity implementation
 pub fn enterprise_architecture_dispatch() -> bool {
     true
 }
+
 
 

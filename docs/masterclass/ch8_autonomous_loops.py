@@ -148,4 +148,72 @@ def build_autonomous_loops_chapter():
     ))
     story.append(Spacer(1, 15))
 
+    p9_desc = (
+        "<b>9. Hybrid Kernel-Level Acceleration (dynatune, CPU Governors & MGLRU Memory Pressure):</b><br/>"
+        "Bridges hgb-daemon deeply with sibling projects <code>dynatune</code> and <code>kernel-optimizer</code> "
+        "(<code>dynabook-kernel-ctl</code>, <code>plugins/mglru-monitor.sh</code>, <code>plugins/cpu-governor.sh</code>). "
+        "Dynamic CPU frequency governor shifting to <code>performance</code>, Energy Performance Preference (EPP) "
+        "tuning to <code>performance</code>, Multi-Gen LRU (MGLRU) low-latency tuning (<code>min_ttl_ms 1000</code>), "
+        "and reclaim efficiency analysis in <code>/proc/vmstat</code> (pgscan vs pgsteal). Features thermal and battery "
+        "watchdogs backing off to balanced mode when CPU temp approaches 80°C or battery power is low, managed by RAII <code>KernelAccelerationGuard</code>."
+    )
+    story.append(Paragraph(p9_desc, styles["BodyTextCustom"]))
+    story.append(Spacer(1, 10))
+
+    story.append(CodeSnippet(
+        "// Hybrid Kernel-Level Acceleration with RAII Guard\n"
+        "let accelerator = HybridKernelAccelerator::new();\n"
+        "{\n"
+        "    let _guard = accelerator.boost_workload(\"heavy_ai_inference\")?;\n"
+        "    // CPU governor -> performance, EPP -> performance, MGLRU min_ttl_ms -> 1000\n"
+        "    execute_heavy_model_pipeline();\n"
+        "} // RAII drop: automatically resets to powersave governor, balance_performance EPP, min_ttl_ms 0",
+        "Rust"
+    ))
+    story.append(Spacer(1, 15))
+
+    p10_desc = (
+        "<b>10. Distributed P2P Wasm Compute Mesh & Ephemeral MicroVM Swarms:</b><br/>"
+        "Evolves <code>hgb-wasm-kernel</code> into a sovereign Distributed Compute Mesh. Discovers peer <code>hgbd</code> nodes "
+        "across LAN and edge environments, tracks CPU load from <code>/proc/loadavg</code> and memory from <code>/proc/meminfo</code>, "
+        "and packages mini-agents or parsers into <code>.wasm</code> modules with cryptographic BLAKE3 hashes and capability declarations. "
+        "Streams modules across peers and delegates workloads to idle nodes, seamlessly integrating ephemeral Firecracker microVMs "
+        "or rootless Landlock LSM + RAM CoW <code>OverlaySandbox</code> in <code>/dev/shm</code> for untrusted LLM code isolation."
+    )
+    story.append(Paragraph(p10_desc, styles["BodyTextCustom"]))
+    story.append(Spacer(1, 10))
+
+    story.append(CodeSnippet(
+        "// Distributed P2P WASM Compute Mesh Execution\n"
+        "let mut mesh = WasmComputeMesh::new(workspace_root)?;\n"
+        "let pkg = mesh.publish_package(\"data_cleaner\", &wasm_bytes, vec![\"crypto\".into()])?;\n"
+        "let result = mesh.execute_workload(\"task_01\", \"data_cleaner\", payload, false)?;\n"
+        "println!(\"Executed on node {} in {}ms\", result.executing_node_id, result.duration_ms);",
+        "Rust"
+    ))
+    story.append(Spacer(1, 15))
+
+    p11_desc = (
+        "<b>11. Proactive Autonomous Feedback Loops (Vibe-Coding Watcher & Closed-Loop Self-Healing):</b><br/>"
+        "Real-time autonomous feedback loop embedded in <code>hgb-daemon</code>. Automatically intercepts code changes or MCP tool file writes, "
+        "triggers language checks (<code>cargo check</code>, <code>zig test</code>, <code>python3 -m py_compile</code>), and catches failures. "
+        "Synthesizes structured diagnostic prompts, queries local Ollama models (<code>qwen2.5-coder:1.5b</code>, <code>phi3:3.8b</code>) "
+        "for surgical diffs, verifies candidate fixes inside an isolated RAM CoW <code>OverlaySandbox</code>, and commits only when "
+        "First-Green verified! Simultaneously logs DPO distillation pairs in <code>.hgb/distillation/</code> for recursive self-evolution."
+    )
+    story.append(Paragraph(p11_desc, styles["BodyTextCustom"]))
+    story.append(Spacer(1, 10))
+
+    story.append(CodeSnippet(
+        "// Proactive Autonomous Vibe-Coding Watcher\n"
+        "let watcher = VibeCodingWatcher::new(workspace_root);\n"
+        "let record = watcher.trigger_watch_cycle(Path::new(\"src/main.rs\"), None)?;\n"
+        "if record.compiler_failed && record.sandbox_verified {\n"
+        "    println!(\"Auto-healed file and committed First-Green patch in {}ms!\", record.duration_ms);\n"
+        "}",
+        "Rust"
+    ))
+    story.append(Spacer(1, 15))
+
     return story
+

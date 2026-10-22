@@ -167,3 +167,10 @@ pub use governor_watchdog::{
     GovernorWatchdog, GovernorWatchdogStatus,
 };
 
+// Autonomous Expansion Pillar 3: Proactive Autonomous Feedback Loops (Vibe-Coding Watcher)
+pub mod vibe_coding_watcher;
+pub use vibe_coding_watcher::{
+    DpoDistillationPair, VibeCodingWatcher, VibeWatcherCycleRecord, VibeWatcherStatusReport,
+};
+
+
