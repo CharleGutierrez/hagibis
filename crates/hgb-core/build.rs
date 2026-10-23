@@ -5,6 +5,7 @@ use std::process::Command;
 fn main() {
     println!("cargo:rerun-if-changed=native/zig/hgb_accelerate.zig");
     println!("cargo:rerun-if-changed=native/zig/hgb_mcp.zig");
+    println!("cargo:rerun-if-changed=native/c/fallback_stubs.c");
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
@@ -29,7 +30,10 @@ fn main() {
             println!("cargo:rustc-cfg=has_zig_accelerate");
         }
         _ => {
-            println!("cargo:warning=Zig compiler not found or build failed. Falling back.");
+            println!("cargo:warning=Zig compiler not found or build failed. Compiling C fallback stubs.");
+            cc::Build::new()
+                .file(manifest_dir.join("native/c/fallback_stubs.c"))
+                .compile("hgb_accelerate");
         }
     }
 }

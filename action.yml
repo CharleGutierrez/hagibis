@@ -59,6 +59,11 @@ runs:
           sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
         fi
 
+    - name: Setup Zig Compiler
+      uses: goto-bus-stop/setup-zig@v2
+      with:
+        version: 0.13.0
+
     - name: Ensure Rust toolchain
       shell: bash
       run: |
