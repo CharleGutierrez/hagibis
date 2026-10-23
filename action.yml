@@ -52,6 +52,13 @@ outputs:
 runs:
   using: 'composite'
   steps:
+    - name: Install System Dependencies
+      shell: bash
+      run: |
+        if command -v apt-get &> /dev/null; then
+          sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+        fi
+
     - name: Ensure Rust toolchain
       shell: bash
       run: |
