@@ -243,12 +243,47 @@ void hgb_zig_vector_batch_cosine(const float* query, const float* matrix, size_t
 }
 
 size_t hgb_zig_vector_top_k(const float* scores, size_t n_vectors, size_t top_k, size_t* out_indices, float* out_scores) {
-    size_t count = top_k < n_vectors ? top_k : n_vectors;
-    for (size_t i = 0; i < count; i++) {
+    if (n_vectors == 0 || top_k == 0) return 0;
+    size_t actual_k = top_k < n_vectors ? top_k : n_vectors;
+
+    for (size_t i = 0; i < actual_k; i++) {
         out_indices[i] = i;
         out_scores[i] = scores[i];
     }
-    return count;
+
+    for (size_t i = 0; i < actual_k; i++) {
+        for (size_t j = i + 1; j < actual_k; j++) {
+            if (out_scores[j] > out_scores[i]) {
+                float tmp_s = out_scores[i];
+                out_scores[i] = out_scores[j];
+                out_scores[j] = tmp_s;
+                size_t tmp_idx = out_indices[i];
+                out_indices[i] = out_indices[j];
+                out_indices[j] = tmp_idx;
+            }
+        }
+    }
+
+    for (size_t i = actual_k; i < n_vectors; i++) {
+        float sc = scores[i];
+        if (sc > out_scores[actual_k - 1]) {
+            out_scores[actual_k - 1] = sc;
+            out_indices[actual_k - 1] = i;
+            for (size_t j = actual_k - 1; j > 0; j--) {
+                if (out_scores[j] > out_scores[j - 1]) {
+                    float tmp_s = out_scores[j];
+                    out_scores[j] = out_scores[j - 1];
+                    out_scores[j - 1] = tmp_s;
+                    size_t tmp_idx = out_indices[j];
+                    out_indices[j] = out_indices[j - 1];
+                    out_indices[j - 1] = tmp_idx;
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+    return actual_k;
 }
 
 size_t hgb_zig_simd_find_newlines(const uint8_t* data, size_t len, size_t* out_offsets, size_t out_cap) {

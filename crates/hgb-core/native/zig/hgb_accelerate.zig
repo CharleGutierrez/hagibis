@@ -1166,6 +1166,27 @@ export fn hgb_zig_vector_top_k(
         }
     }
 
+    // Sort min-heap buffer descending so index 0 holds highest score
+    var i: usize = 0;
+    while (i < actual_k) : (i += 1) {
+        var max_idx = i;
+        var j = i + 1;
+        while (j < actual_k) : (j += 1) {
+            if (heap_scores[j] > heap_scores[max_idx]) {
+                max_idx = j;
+            }
+        }
+        if (max_idx != i) {
+            const tmp_s = heap_scores[i];
+            heap_scores[i] = heap_scores[max_idx];
+            heap_scores[max_idx] = tmp_s;
+
+            const tmp_i = heap_indices[i];
+            heap_indices[i] = heap_indices[max_idx];
+            heap_indices[max_idx] = tmp_i;
+        }
+    }
+
     for (0..actual_k) |idx| {
         out_indices[idx] = heap_indices[idx];
         out_scores[idx] = heap_scores[idx];
