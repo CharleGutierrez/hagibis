@@ -31,3 +31,4 @@ blake3 = { workspace = true }
 rusqlite = { workspace = true }
 memmap2 = { workspace = true }
 libc = "0.2"
+wasmtime = "18.0"

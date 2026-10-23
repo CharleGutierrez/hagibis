@@ -59,5 +59,13 @@ pub use raft_state_mesh::{
     VectorSearchResult as RaftVectorSearchResult,
 };
 
+// Strategic Upgrade 4: Distributed Edge-to-Cloud Vector Mesh (CRDT Engine)
+pub mod distributed_crdt_mesh;
+pub use distributed_crdt_mesh::{
+    AgentMemoryNode, CloudflareWorkerEdgePayload, CrdtMeshDelta, DistributedCrdtMesh,
+    EpisodicLogEntry, LwwVectorRegister, MemoryTag, MeshMergeReport, OrSetMemory,
+    VectorEmbeddingRecord,
+};
+
 
 

@@ -1051,6 +1051,28 @@ pub use wasm_gpu_wasi_nn::{
     WasiNnStatusReport, WasmGpuWasiNnEngine, INTEL_GPU_RENDER_NODE,
 };
 
+// Strategic Upgrade 3: Hardware-Aware Autonomous Throttling (dynatune FFI throttler)
+pub mod dynatune_ffi_throttler;
+pub use dynatune_ffi_throttler::{
+    CDynatuneHardwareReport, DynatuneSysfsReader, HardwareSensorSnapshot, HardwareThrottleArbiter,
+    HardwareThrottleReport, DEFAULT_CRITICAL_WORKERS, DEFAULT_MAX_WORKERS,
+    DEFAULT_MODERATE_WORKERS, MAX_COOLDOWN_MS, MIN_COOLDOWN_MS, THERMAL_COOL_THRESHOLD_C,
+    THERMAL_HOT_THRESHOLD_C,
+};
+
+// Strategic Upgrade 1: Unified Shared-Memory IPC & WASM Linear Memory Bridge
+pub mod unified_shm_wasm_bridge;
+pub use unified_shm_wasm_bridge::{
+    UnifiedRingControl, UnifiedShmBenchReport, UnifiedShmStatus, UnifiedShmWasmBridge,
+    UnifiedShmWasmHeader, CONTROL_HEADER_SIZE, DEFAULT_UNIFIED_RING_CAPACITY,
+    DEFAULT_UNIFIED_SHM_PATH, FLAG_AST_REPRESENTATION, FLAG_CONTEXT_BUFFER,
+    FLAG_DIRECT_POINTER_MAP, FLAG_MODEL_TENSOR_WEIGHTS, FLAG_STREAM_CHUNK, FLAG_STREAM_FINAL,
+    FLAG_URGENT, FLAG_ZERO_COPY_VERIFIED, UNIFIED_HEADER_SIZE, UNIFIED_RING_CONTROL_MAGIC,
+    UNIFIED_SHM_MAGIC,
+};
+
+pub use wasmtime;
+
 /// Enterprise high-capacity implementation
 pub fn enterprise_architecture_dispatch() -> bool {
     true

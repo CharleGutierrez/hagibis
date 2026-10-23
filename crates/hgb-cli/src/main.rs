@@ -3371,6 +3371,67 @@ enum Commands {
         #[arg(long, default_value_t = 100)]
         iterations: usize,
     },
+
+    /// Upgrade 1: Unified Shared-Memory IPC (hgb-daemon <-> hgb-wasm-kernel)
+    #[command(name = "wasm-shm-pipe", alias = "shm-wasm", alias = "nano-ipc")]
+    WasmShmPipe {
+        #[arg(long)]
+        status: bool,
+        #[arg(long)]
+        bench: bool,
+        #[arg(long, default_value_t = 100)]
+        iterations: usize,
+        #[arg(long, default_value_t = 65536)]
+        chunk_size: usize,
+    },
+
+    /// Upgrade 2: Native Multi-Modal MCP Streaming & Dynamic Tool Hot-Swapping
+    #[command(name = "mcp-hotswap", alias = "tool-hotswap", alias = "compile-tool")]
+    McpHotswap {
+        #[arg(long)]
+        status: bool,
+        #[arg(long)]
+        compile: Option<String>,
+        #[arg(long, default_value = "rust")]
+        lang: String,
+        #[arg(long)]
+        code: Option<String>,
+        #[arg(long, default_value = "Dynamic hot-swapped tool")]
+        desc: String,
+    },
+
+    /// Upgrade 3: Hardware-Aware Autonomous Throttling (Integrating dynatune)
+    #[command(name = "dynatune-throttle", alias = "hw-throttle", alias = "thermal-guard")]
+    DynatuneThrottle {
+        #[arg(long)]
+        status: bool,
+        #[arg(long)]
+        tune: bool,
+    },
+
+    /// Upgrade 4: Distributed Edge-to-Cloud Vector Mesh (hgb-storage)
+    #[command(name = "crdt-mesh", alias = "crdt-sync", alias = "vector-mesh")]
+    CrdtMesh {
+        #[arg(long)]
+        status: bool,
+        #[arg(long)]
+        sync_edge: bool,
+        #[arg(long)]
+        add_vec: Option<String>,
+    },
+
+    /// Upgrade 5: Autonomous "Self-Healing" Vibe Loops (hgb-nextgen)
+    #[command(name = "vibe-heal", alias = "self-heal-loop", alias = "vibe-loop")]
+    VibeHeal {
+        #[arg(long)]
+        status: bool,
+        #[arg(long)]
+        run: bool,
+        #[arg(long)]
+        target_crate: Option<String>,
+        #[arg(long)]
+        test_filter: Option<String>,
+    },
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -10039,6 +10100,129 @@ async fn test_calc() { assert!(calculate(5)); }".to_string()
                 match resp {
                     hgb_core::protocol::HgbResponse::ZeroCopyIpcStatusResult(s) => println!("{}", s),
                     hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Zero-copy IPC status error: {}", e.red()),
+                    _ => {}
+                }
+            }
+            Ok(())
+        }
+        Commands::WasmShmPipe { status: _, bench, iterations, chunk_size } => {
+            let client = HgbClient::new();
+            if bench {
+                println!("{}", format!("⚡ Running Unified Shared-Memory IPC Benchmark ({} iters, {} bytes/chunk)...", iterations, chunk_size).cyan().bold());
+                let resp = client.send(hgb_core::protocol::HgbRequest::UnifiedShmWasmBench { iterations, chunk_size }).await?;
+                match resp {
+                    hgb_core::protocol::HgbResponse::UnifiedShmWasmBenchResult(s) => println!("{}", s),
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Unified SHM bench error: {}", e.red()),
+                    _ => {}
+                }
+            } else {
+                println!("{}", "⚡ UNIFIED SHARED-MEMORY IPC & WASM LINEAR MEMORY STATUS".cyan().bold());
+                let resp = client.send(hgb_core::protocol::HgbRequest::UnifiedShmWasmStatus).await?;
+                match resp {
+                    hgb_core::protocol::HgbResponse::UnifiedShmWasmStatusResult(s) => println!("{}", s),
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Unified SHM status error: {}", e.red()),
+                    _ => {}
+                }
+            }
+            Ok(())
+        }
+        Commands::McpHotswap { status: _, compile, lang, code, desc } => {
+            let client = HgbClient::new();
+            if let Some(tool_name) = compile {
+                let source_code = code.unwrap_or_else(|| {
+                    format!("// Dynamic tool: {}\npub fn main() {{}}\n", tool_name)
+                });
+                println!("{}", format!("⚡ Compiling & hot-swapping tool '{}' ({lang})...", tool_name).cyan().bold());
+                let resp = client.send(hgb_core::protocol::HgbRequest::DynamicToolHotswapCompile {
+                    tool_name,
+                    language: lang,
+                    source_code,
+                    description: desc,
+                }).await?;
+                match resp {
+                    hgb_core::protocol::HgbResponse::DynamicToolHotswapCompileResult(s) => println!("{}", s),
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Dynamic tool compile error: {}", e.red()),
+                    _ => {}
+                }
+            } else {
+                println!("{}", "🔌 DYNAMIC MCP TOOL HOT-SWAPPER STATUS".cyan().bold());
+                let resp = client.send(hgb_core::protocol::HgbRequest::DynamicToolHotswapStatus).await?;
+                match resp {
+                    hgb_core::protocol::HgbResponse::DynamicToolHotswapStatusResult(s) => println!("{}", s),
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Dynamic tool status error: {}", e.red()),
+                    _ => {}
+                }
+            }
+            Ok(())
+        }
+        Commands::DynatuneThrottle { status: _, tune: _ } => {
+            let client = HgbClient::new();
+            println!("{}", "🌡️ DYNATUNE HARDWARE-AWARE THROTTLER STATUS".cyan().bold());
+            let resp = client.send(hgb_core::protocol::HgbRequest::DynatuneThrottleStatus).await?;
+            match resp {
+                hgb_core::protocol::HgbResponse::DynatuneThrottleStatusResult(r) => {
+                    println!("  • CPU Package Temp:    {:.1}°C", r.cpu_temp_c);
+                    println!("  • Throttling State:    {}", if r.is_throttling { "ACTIVE (Throttled)".red() } else { "OPTIMAL (Headroom Clear)".green() });
+                    println!("  • Active Workers:      {}/{}", r.active_workers, r.max_workers);
+                    println!("  • Governor Profile:    {}", r.governor_profile.green());
+                    println!("  • Power Source:        {} ({:?}%)", r.power_source, r.battery_pct);
+                    println!("  • Cooldown Micro-pause:{} ms", r.cooling_cooldown_ms);
+                }
+                hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Dynatune throttler error: {}", e.red()),
+                _ => {}
+            }
+            Ok(())
+        }
+        Commands::CrdtMesh { status: _, sync_edge, add_vec } => {
+            let client = HgbClient::new();
+            if sync_edge {
+                println!("{}", "🌐 Exporting CRDT Delta for Cloudflare Workers edge nodes...".cyan().bold());
+                let resp = client.send(hgb_core::protocol::HgbRequest::CrdtMeshSyncCloudflare).await?;
+                match resp {
+                    hgb_core::protocol::HgbResponse::CrdtMeshSyncCloudflareResult(s) => println!("{}", s),
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ CRDT Cloudflare sync error: {}", e.red()),
+                    _ => {}
+                }
+            } else if let Some(id) = add_vec {
+                println!("{}", format!("🗳️ Replicating vector '{}' into CRDT mesh...", id).cyan().bold());
+                let embedding = vec![0.1f32; 64];
+                let resp = client.send(hgb_core::protocol::HgbRequest::CrdtMeshAddVector {
+                    id,
+                    embedding,
+                    metadata: "{\"author\": \"AutonomousAgent\"}".to_string(),
+                }).await?;
+                match resp {
+                    hgb_core::protocol::HgbResponse::CrdtMeshAddVectorResult(s) => println!("  ✔ {}", s.green().bold()),
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ CRDT add vector error: {}", e.red()),
+                    _ => {}
+                }
+            } else {
+                println!("{}", "🌐 DISTRIBUTED CRDT VECTOR MESH STATUS".cyan().bold());
+                let resp = client.send(hgb_core::protocol::HgbRequest::CrdtMeshStatus).await?;
+                match resp {
+                    hgb_core::protocol::HgbResponse::CrdtMeshStatusResult(s) => println!("{}", s),
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ CRDT mesh status error: {}", e.red()),
+                    _ => {}
+                }
+            }
+            Ok(())
+        }
+        Commands::VibeHeal { status: _, run, target_crate, test_filter } => {
+            let client = HgbClient::new();
+            if run {
+                println!("{}", "🪽 Triggering Autonomous Self-Healing Vibe Loop...".cyan().bold());
+                let resp = client.send(hgb_core::protocol::HgbRequest::SelfHealingVibeTrigger { target_crate, test_filter }).await?;
+                match resp {
+                    hgb_core::protocol::HgbResponse::SelfHealingVibeTriggerResult(s) => println!("{}", s),
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Self-healing vibe error: {}", e.red()),
+                    _ => {}
+                }
+            } else {
+                println!("{}", "🪽 AUTONOMOUS SELF-HEALING VIBE LOOP STATUS".cyan().bold());
+                let resp = client.send(hgb_core::protocol::HgbRequest::SelfHealingVibeStatus).await?;
+                match resp {
+                    hgb_core::protocol::HgbResponse::SelfHealingVibeStatusResult(s) => println!("{}", s),
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Self-healing vibe status error: {}", e.red()),
                     _ => {}
                 }
             }

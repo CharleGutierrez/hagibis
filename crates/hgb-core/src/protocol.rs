@@ -1479,6 +1479,42 @@ pub enum HgbRequest {
     ZeroCopyIpcBench {
         iterations: usize,
     },
+
+    // Strategic Upgrade 1: Unified Shared-Memory IPC & WASM Linear Memory Bridge
+    UnifiedShmWasmStatus,
+    UnifiedShmWasmBench {
+        iterations: usize,
+        chunk_size: usize,
+    },
+
+    // Strategic Upgrade 2: Native Multi-Modal MCP Streaming & Dynamic Tool Hot-Swapping
+    DynamicToolHotswapCompile {
+        tool_name: String,
+        language: String,
+        source_code: String,
+        description: String,
+    },
+    DynamicToolHotswapStatus,
+
+    // Strategic Upgrade 3: Hardware-Aware Autonomous Throttling (Integrating dynatune)
+    DynatuneThrottleStatus,
+    DynatuneThrottleSample,
+
+    // Strategic Upgrade 4: Distributed Edge-to-Cloud Vector Mesh (hgb-storage)
+    CrdtMeshStatus,
+    CrdtMeshSyncCloudflare,
+    CrdtMeshAddVector {
+        id: String,
+        embedding: Vec<f32>,
+        metadata: String,
+    },
+
+    // Strategic Upgrade 5: Autonomous "Self-Healing" Vibe Loops (hgb-nextgen)
+    SelfHealingVibeStatus,
+    SelfHealingVibeTrigger {
+        target_crate: Option<String>,
+        test_filter: Option<String>,
+    },
 }
 
 fn default_twenty_u64() -> u64 {
@@ -2115,6 +2151,26 @@ pub enum HgbResponse {
     // Upgrade 5: Zero-Copy IPC Daemon Communication
     ZeroCopyIpcStatusResult(String),
     ZeroCopyIpcBenchResult(String),
+
+    // Strategic Upgrade 1: Unified Shared-Memory IPC & WASM Linear Memory Bridge
+    UnifiedShmWasmStatusResult(String),
+    UnifiedShmWasmBenchResult(String),
+
+    // Strategic Upgrade 2: Native Multi-Modal MCP Streaming & Dynamic Tool Hot-Swapping
+    DynamicToolHotswapCompileResult(String),
+    DynamicToolHotswapStatusResult(String),
+
+    // Strategic Upgrade 3: Hardware-Aware Autonomous Throttling (Integrating dynatune)
+    DynatuneThrottleStatusResult(crate::dynatune_ffi_throttler::HardwareThrottleReport),
+
+    // Strategic Upgrade 4: Distributed Edge-to-Cloud Vector Mesh (hgb-storage)
+    CrdtMeshStatusResult(String),
+    CrdtMeshSyncCloudflareResult(String),
+    CrdtMeshAddVectorResult(String),
+
+    // Strategic Upgrade 5: Autonomous "Self-Healing" Vibe Loops (hgb-nextgen)
+    SelfHealingVibeStatusResult(String),
+    SelfHealingVibeTriggerResult(String),
 }
 
 #[path = "hardware_runtime_synergy.rs"]

@@ -172,6 +172,14 @@ pub use genetic_patch_mutator::{
     MutationKind, PatchMutationCandidate,
 };
 
+// Strategic Upgrade 5: Autonomous "Self-Healing" Vibe Loops (Masterclass Chapter 8)
+pub mod self_healing_vibe_loop;
+pub use self_healing_vibe_loop::{
+    DiagnosticKind, FailureDiagnostic, HealCandidate, HealIterationAttempt, PatchSource,
+    SandboxMode, SelfHealingVibeConfig, SelfHealingVibeLoopReport, SelfHealingVibeRunner,
+    TestRunResult, VerifiedPatchReceipt, VibeLoopRecord, VibeLoopStats,
+};
+
 
 
 

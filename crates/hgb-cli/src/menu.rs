@@ -766,6 +766,41 @@ impl InteractiveCommandCatalog {
                 syntax: "hgb zero-copy-ipc [--status] [--bench] [--iterations <count>]",
                 description: "Zero-Copy POSIX Shared Memory IPC Transport: high-frequency memory-mapped ring buffer in /dev/shm dropping daemon-to-CLI latency below 100 microseconds.",
             },
+            CommandEntry {
+                name: "wasm-shm-pipe",
+                aliases: &["shm-wasm", "nano-ipc"],
+                category: "WASM/IPC",
+                syntax: "hgb wasm-shm-pipe [--status] [--bench] [--iterations <N>] [--chunk-size <bytes>]",
+                description: "Unified Shared-Memory IPC: zero-copy SHM ring buffer (/dev/shm/hgb_wasm_shm_ring) with direct linear memory pointer mapping into Wasmtime guest sandbox.",
+            },
+            CommandEntry {
+                name: "mcp-hotswap",
+                aliases: &["tool-hotswap", "compile-tool"],
+                category: "MCP/Plugins",
+                syntax: "hgb mcp-hotswap [--status] [--compile <tool>] [--lang <rust|zig>] [--code <src>]",
+                description: "Dynamic MCP Tool Hot-Swapping: on-the-fly Rust/Zig-to-WASM compilation, live catalog registration without daemon restart, and SSE event broadcast.",
+            },
+            CommandEntry {
+                name: "dynatune-throttle",
+                aliases: &["hw-throttle", "thermal-guard"],
+                category: "Hardware/Dynatune",
+                syntax: "hgb dynatune-throttle [--status] [--tune]",
+                description: "Hardware-Aware Autonomous Throttling: direct FFI/sysfs bridge to dynatune, dynamically scaling agent concurrency, core pinning, and thermal safety (>78°C).",
+            },
+            CommandEntry {
+                name: "crdt-mesh",
+                aliases: &["crdt-sync", "vector-mesh"],
+                category: "Distributed/CRDT",
+                syntax: "hgb crdt-mesh [--status] [--sync-edge] [--add-vec <id>]",
+                description: "Distributed Edge-to-Cloud Vector Mesh: state-based CRDT layer (VectorClock, LWW-Register, OR-Set) syncing SQLite vector memories to Cloudflare Workers edge nodes.",
+            },
+            CommandEntry {
+                name: "vibe-heal",
+                aliases: &["self-heal-loop", "vibe-loop"],
+                category: "Autonomous/Vibe",
+                syntax: "hgb vibe-heal [--status] [--run] [--target-crate <crate>] [--test-filter <test>]",
+                description: "Autonomous Self-Healing Vibe Loop: test-driven error interception, Ollama heuristic/LLM repair, RAM CoW sandbox verification, and First-Green auto-commit.",
+            },
         ]
     }
 

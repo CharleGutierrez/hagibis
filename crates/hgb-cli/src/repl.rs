@@ -5595,6 +5595,26 @@ impl HagibisRepl {
             HgbResponse::ZeroCopyIpcStatusResult(s) | HgbResponse::ZeroCopyIpcBenchResult(s) => {
                 println!("{}", s);
             }
+            HgbResponse::UnifiedShmWasmStatusResult(s) | HgbResponse::UnifiedShmWasmBenchResult(s) => {
+                println!("{}", s);
+            }
+            HgbResponse::DynamicToolHotswapCompileResult(s) | HgbResponse::DynamicToolHotswapStatusResult(s) => {
+                println!("{}", s);
+            }
+            HgbResponse::DynatuneThrottleStatusResult(r) => {
+                println!("{}", "🌡️ DYNATUNE HARDWARE-AWARE THROTTLER 🌡️".bold().cyan());
+                println!("  CPU Temp:      {:.1}°C", r.cpu_temp_c);
+                println!("  State:         {}", if r.is_throttling { "THROTTLED".red() } else { "OPTIMAL".green() });
+                println!("  Workers:       {}/{}", r.active_workers, r.max_workers);
+                println!("  Governor:      {}", r.governor_profile.green());
+                println!("  Power:         {} ({:?}%)", r.power_source, r.battery_pct);
+            }
+            HgbResponse::CrdtMeshStatusResult(s) | HgbResponse::CrdtMeshSyncCloudflareResult(s) | HgbResponse::CrdtMeshAddVectorResult(s) => {
+                println!("{}", s);
+            }
+            HgbResponse::SelfHealingVibeStatusResult(s) | HgbResponse::SelfHealingVibeTriggerResult(s) => {
+                println!("{}", s);
+            }
         }
     }
 

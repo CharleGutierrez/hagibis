@@ -66,6 +66,11 @@ pub struct DaemonState {
     pub wasi_nn_engine: Arc<hgb_core::wasm_gpu_wasi_nn::WasmGpuWasiNnEngine>,
     pub genetic_mutator: Arc<hgb_nextgen::genetic_patch_mutator::GeneticPatchMutator>,
     pub zero_copy_transport: Arc<crate::zero_copy_ipc::ZeroCopyIpcTransport>,
+    pub unified_shm_bridge: Arc<hgb_core::unified_shm_wasm_bridge::UnifiedShmWasmBridge>,
+    pub tool_hotswapper: Arc<crate::dynamic_tool_hotswap::DynamicToolHotSwapper>,
+    pub dynatune_throttler: Arc<tokio::sync::Mutex<hgb_core::dynatune_ffi_throttler::HardwareThrottleArbiter>>,
+    pub crdt_mesh: Arc<tokio::sync::RwLock<hgb_storage::distributed_crdt_mesh::DistributedCrdtMesh>>,
+    pub vibe_healer: Arc<hgb_nextgen::self_healing_vibe_loop::SelfHealingVibeRunner>,
 }
 
 impl DaemonState {
@@ -184,6 +189,26 @@ impl DaemonState {
             crate::zero_copy_ipc::ZeroCopyIpcTransport::new_or_default()
                 .expect("init zero-copy IPC transport")
         );
+        let unified_shm_bridge = Arc::new(
+            hgb_core::unified_shm_wasm_bridge::UnifiedShmWasmBridge::new_or_default()
+                .expect("init unified shm bridge")
+        );
+        let tool_hotswapper = Arc::new(
+            crate::dynamic_tool_hotswap::DynamicToolHotSwapper::with_reloader(
+                ws_dir.clone(),
+                mcp_hot_reloader.clone(),
+                None,
+            )
+        );
+        let dynatune_throttler = Arc::new(tokio::sync::Mutex::new(
+            hgb_core::dynatune_ffi_throttler::HardwareThrottleArbiter::new()
+        ));
+        let crdt_mesh = Arc::new(tokio::sync::RwLock::new(
+            hgb_storage::distributed_crdt_mesh::DistributedCrdtMesh::new("dynabook-node-01")
+        ));
+        let vibe_healer = Arc::new(
+            hgb_nextgen::self_healing_vibe_loop::SelfHealingVibeRunner::new(&ws_dir)
+        );
 
         Self {
             start_time: std::time::Instant::now(),
@@ -234,6 +259,11 @@ impl DaemonState {
             wasi_nn_engine,
             genetic_mutator,
             zero_copy_transport,
+            unified_shm_bridge,
+            tool_hotswapper,
+            dynatune_throttler,
+            crdt_mesh,
+            vibe_healer,
         }
     }
 }
@@ -4009,6 +4039,92 @@ impl HagibisDaemon {
                 match state.zero_copy_transport.run_benchmark(iterations) {
                     Ok(report) => HgbResponse::ZeroCopyIpcBenchResult(serde_json::to_string_pretty(&report).unwrap_or_default()),
                     Err(e) => HgbResponse::Error(format!("Zero-copy IPC benchmark failed: {}", e)),
+                }
+            }
+
+            // Strategic Upgrade 1: Unified Shared-Memory IPC & WASM Linear Memory Bridge
+            HgbRequest::UnifiedShmWasmStatus => {
+                let status = state.unified_shm_bridge.get_status();
+                HgbResponse::UnifiedShmWasmStatusResult(serde_json::to_string_pretty(&status).unwrap_or_default())
+            }
+            HgbRequest::UnifiedShmWasmBench { iterations, chunk_size } => {
+                match state.unified_shm_bridge.run_benchmark(iterations, chunk_size) {
+                    Ok(report) => HgbResponse::UnifiedShmWasmBenchResult(serde_json::to_string_pretty(&report).unwrap_or_default()),
+                    Err(e) => HgbResponse::Error(format!("Unified SHM benchmark failed: {}", e)),
+                }
+            }
+
+            // Strategic Upgrade 2: Native Multi-Modal MCP Streaming & Dynamic Tool Hot-Swapping
+            HgbRequest::DynamicToolHotswapCompile { tool_name, language, source_code, description } => {
+                let lang = crate::dynamic_tool_hotswap::DynamicSourceLanguage::from_str_loose(&language);
+                let req = crate::dynamic_tool_hotswap::DynamicToolRequest {
+                    name: tool_name,
+                    description,
+                    language: lang,
+                    source_code,
+                    input_schema: None,
+                    author: Some("AutonomousAgent".to_string()),
+                };
+                match state.tool_hotswapper.compile_and_hotswap(&req).await {
+                    Ok(res) => HgbResponse::DynamicToolHotswapCompileResult(serde_json::to_string_pretty(&res).unwrap_or_default()),
+                    Err(e) => HgbResponse::Error(format!("Tool dynamic compilation failed: {}", e)),
+                }
+            }
+            HgbRequest::DynamicToolHotswapStatus => {
+                let status = state.tool_hotswapper.get_status().await;
+                HgbResponse::DynamicToolHotswapStatusResult(serde_json::to_string_pretty(&status).unwrap_or_default())
+            }
+
+            // Strategic Upgrade 3: Hardware-Aware Autonomous Throttling (Integrating dynatune)
+            HgbRequest::DynatuneThrottleStatus | HgbRequest::DynatuneThrottleSample => {
+                let mut arbiter = state.dynatune_throttler.lock().await;
+                let report = arbiter.evaluate_and_tune();
+                HgbResponse::DynatuneThrottleStatusResult(report)
+            }
+
+            // Strategic Upgrade 4: Distributed Edge-to-Cloud Vector Mesh (hgb-storage)
+            HgbRequest::CrdtMeshStatus => {
+                let mesh = state.crdt_mesh.read().await;
+                let summary = serde_json::json!({
+                    "node_id": "dynabook-node-01",
+                    "vector_clock": mesh.generate_delta(&hgb_storage::distributed_crdt_mesh::VectorClock::new()).baseline_clock,
+                    "edge_sync_protocol": "QUIC / TLS over /dev/shm & loopback",
+                    "cloudflare_wrangler_support": true,
+                    "active": true
+                });
+                HgbResponse::CrdtMeshStatusResult(serde_json::to_string_pretty(&summary).unwrap_or_default())
+            }
+            HgbRequest::CrdtMeshSyncCloudflare => {
+                let mesh = state.crdt_mesh.read().await;
+                let empty_clock = hgb_storage::distributed_crdt_mesh::VectorClock::new();
+                let payload = mesh.export_cloudflare_edge_delta(&empty_clock, None);
+                HgbResponse::CrdtMeshSyncCloudflareResult(serde_json::to_string_pretty(&payload).unwrap_or_default())
+            }
+            HgbRequest::CrdtMeshAddVector { id, embedding, metadata } => {
+                let mut mesh = state.crdt_mesh.write().await;
+                mesh.upsert_vector(id.clone(), "agent_state_graph", embedding, metadata);
+                HgbResponse::CrdtMeshAddVectorResult(format!("Vector '{}' replicated into CRDT mesh.", id))
+            }
+
+            // Strategic Upgrade 5: Autonomous "Self-Healing" Vibe Loops (hgb-nextgen)
+            HgbRequest::SelfHealingVibeStatus => {
+                let stats = state.vibe_healer.stats();
+                let history = state.vibe_healer.get_history();
+                let summary = serde_json::json!({
+                    "ollama_online": state.vibe_healer.is_ollama_online(),
+                    "total_runs": stats.total_runs,
+                    "successful_heals": stats.successful_heals,
+                    "total_intercepted_errors": stats.total_intercepted_errors,
+                    "receipts_minted": stats.receipts_minted,
+                    "sandbox_mode": "OverlaySandbox + RAM CoW /dev/shm",
+                    "history_records": history.len()
+                });
+                HgbResponse::SelfHealingVibeStatusResult(serde_json::to_string_pretty(&summary).unwrap_or_default())
+            }
+            HgbRequest::SelfHealingVibeTrigger { target_crate: _, test_filter: _ } => {
+                match state.vibe_healer.run_healing_loop().await {
+                    Ok(report) => HgbResponse::SelfHealingVibeTriggerResult(serde_json::to_string_pretty(&report).unwrap_or_default()),
+                    Err(e) => HgbResponse::Error(format!("Self-healing vibe loop failed: {}", e)),
                 }
             }
         }

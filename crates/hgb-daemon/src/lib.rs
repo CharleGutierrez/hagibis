@@ -193,6 +193,13 @@ pub use zero_copy_ipc::{
     DEFAULT_SHM_FILE_PATH, DEFAULT_SHM_RING_CAPACITY, ZERO_COPY_MAGIC,
 };
 
+// Strategic Upgrade 2: Native Multi-Modal MCP Streaming & Dynamic Tool Hot-Swapping
+pub mod dynamic_tool_hotswap;
+pub use dynamic_tool_hotswap::{
+    DynamicCompilationResult, DynamicHotSwapperReport, DynamicSourceLanguage,
+    DynamicToolHotSwapper, DynamicToolRequest, DynamicToolSummary,
+};
+
 
 
 
