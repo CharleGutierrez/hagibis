@@ -51,5 +51,13 @@ pub use advanced_vector_memory::{
     SelfCorrectionReflection, DEFAULT_VECTOR_DIM,
 };
 
+// Strategic Upgrade 2: Distributed Raft Vector & State Mesh
+pub mod raft_state_mesh;
+pub use raft_state_mesh::{
+    AppendEntriesArgs, AppendEntriesReply, RaftCommand, RaftLogEntry, RaftMeshError,
+    RaftMeshStatusReport, RaftRole, RaftSnapshot, RaftStateMesh, RequestVoteArgs, RequestVoteReply,
+    VectorSearchResult as RaftVectorSearchResult,
+};
+
 
 

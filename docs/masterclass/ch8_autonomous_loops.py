@@ -237,5 +237,29 @@ def build_autonomous_loops_chapter():
     ))
     story.append(Spacer(1, 15))
 
+    p13_desc = (
+        "<b>13. Test-Driven Genetic Mutator & Autonomous Self-Healing (hgb-nextgen):</b><br/>"
+        "Integrates directly with CI workflows and local CLI test executions. When compile or test errors occur, "
+        "the Genetic Mutator captures stderr diagnostics, error codes, and line numbers. It queries sibling local Ollama "
+        "(<code>qwen2.5-coder:1.5b</code> / <code>dynabook-coder:latest</code>) and deploys 4 genetic mutation operators "
+        "(<code>TypeCast</code>, <code>BoundaryCheck</code>, <code>ImportFix</code>, <code>SyntaxCorrection</code>). "
+        "Mutant candidates are evaluated inside an ephemeral RAM CoW <code>OverlaySandbox</code> with a multi-objective fitness "
+        "function (exit code == 0, blast radius minimization, test pass rate). Winning patches are cryptographically sealed "
+        "with a BLAKE3 certificate and automatically committed."
+    )
+    story.append(Paragraph(p13_desc, styles["BodyTextCustom"]))
+    story.append(Spacer(1, 10))
+
+    story.append(CodeSnippet(
+        "// Test-Driven Genetic Mutator Self-Healing\n"
+        "let mutator = GeneticPatchMutator::new(workspace_root);\n"
+        "let report = mutator.evaluate_and_heal(\"src/lib.rs\", failure_log);\n"
+        "if let Some(winner) = report.winning_candidate {\n"
+        "    println!(\"Sealed winning mutant patch {} (fitness: {:.1}) with BLAKE3: {}\", winner.id, winner.fitness_score, report.certificate_hash);\n"
+        "}",
+        "Rust"
+    ))
+    story.append(Spacer(1, 15))
+
     return story
 

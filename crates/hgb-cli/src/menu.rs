@@ -731,6 +731,41 @@ impl InteractiveCommandCatalog {
                 syntax: "hgb mcp-hotload [--status] [--scan] [--add <plugin_name> --path <wasm_path>]",
                 description: "Universal Model Context Protocol (MCP) Hot-Reloading: dynamic discovery in .hgb/mcp_plugins/, live catalog registration, and instant SSE tools/list_changed broadcast.",
             },
+            CommandEntry {
+                name: "ebpf-telemetry",
+                aliases: &["ebpf", "kernel-vitals"],
+                category: "Kernel/eBPF",
+                syntax: "hgb ebpf-telemetry [--status] [--boost <workload>] [--relax]",
+                description: "Native eBPF & Kernel-Level Telemetry: real-time syscall latency (p50/p95/p99), thermal throttle trips, memory allocation spikes, and autonomous CPU governor actuation.",
+            },
+            CommandEntry {
+                name: "raft-mesh",
+                aliases: &["raft", "state-mesh"],
+                category: "Distributed/Raft",
+                syntax: "hgb raft-mesh [--status] [--propose <key> --value <val>] [--add-node <id> --addr <ip>]",
+                description: "Distributed Raft Vector & State Mesh: embedded Raft consensus engine over SQLite WAL for multi-node state replication and distributed episodic memory.",
+            },
+            CommandEntry {
+                name: "wasi-nn",
+                aliases: &["gpu-wasm", "wasi-gpu"],
+                category: "WASM/GPU",
+                syntax: "hgb wasi-nn [--status] [--bench] [--exec <model_format>]",
+                description: "Ephemeral GPU-Accelerated WASM Sandboxing & WASI-NN: Wasmtime neural network host calls and Intel HD Graphics GPU compute passthrough for sandboxed tensor execution.",
+            },
+            CommandEntry {
+                name: "genetic-patch",
+                aliases: &["genetic", "auto-mutate"],
+                category: "Autonomous/Mutation",
+                syntax: "hgb genetic-patch [--status] [--heal <file> --log <err_log>]",
+                description: "Autonomous Loop Self-Healing & Genetic Patching: test-driven genetic mutations, sandbox verification, and auto-commit of winning patches.",
+            },
+            CommandEntry {
+                name: "zero-copy-ipc",
+                aliases: &["zc-ipc", "fast-ipc"],
+                category: "IPC/Transport",
+                syntax: "hgb zero-copy-ipc [--status] [--bench] [--iterations <count>]",
+                description: "Zero-Copy POSIX Shared Memory IPC Transport: high-frequency memory-mapped ring buffer in /dev/shm dropping daemon-to-CLI latency below 100 microseconds.",
+            },
         ]
     }
 

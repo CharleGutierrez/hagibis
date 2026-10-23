@@ -61,6 +61,11 @@ pub struct DaemonState {
     pub agent_mesh: Arc<crate::distributed_agent_mesh::DistributedAgentMesh>,
     pub episodic_memory: Arc<tokio::sync::RwLock<hgb_storage::advanced_vector_memory::EpisodicVectorMemoryEngine>>,
     pub mcp_hot_reloader: Arc<crate::mcp_hot_reloader::McpHotReloader>,
+    pub ebpf_engine: Arc<hgb_core::ebpf_telemetry_probe::EbpfProbeEngine>,
+    pub raft_mesh: Arc<tokio::sync::RwLock<hgb_storage::raft_state_mesh::RaftStateMesh>>,
+    pub wasi_nn_engine: Arc<hgb_core::wasm_gpu_wasi_nn::WasmGpuWasiNnEngine>,
+    pub genetic_mutator: Arc<hgb_nextgen::genetic_patch_mutator::GeneticPatchMutator>,
+    pub zero_copy_transport: Arc<crate::zero_copy_ipc::ZeroCopyIpcTransport>,
 }
 
 impl DaemonState {
@@ -167,6 +172,18 @@ impl DaemonState {
                 .expect("init episodic vector memory")
         ));
         let mcp_hot_reloader = Arc::new(crate::mcp_hot_reloader::McpHotReloader::new(&ws_dir, None));
+        let ebpf_engine = Arc::new(hgb_core::ebpf_telemetry_probe::EbpfProbeEngine::new());
+        let raft_db_path = ws_dir.join(".hgb").join("raft_mesh.db");
+        let raft_mesh = Arc::new(tokio::sync::RwLock::new(
+            hgb_storage::raft_state_mesh::RaftStateMesh::new(1, &raft_db_path)
+                .expect("init raft state mesh")
+        ));
+        let wasi_nn_engine = Arc::new(hgb_core::wasm_gpu_wasi_nn::WasmGpuWasiNnEngine::new());
+        let genetic_mutator = Arc::new(hgb_nextgen::genetic_patch_mutator::GeneticPatchMutator::new(&ws_dir));
+        let zero_copy_transport = Arc::new(
+            crate::zero_copy_ipc::ZeroCopyIpcTransport::new_or_default()
+                .expect("init zero-copy IPC transport")
+        );
 
         Self {
             start_time: std::time::Instant::now(),
@@ -212,6 +229,11 @@ impl DaemonState {
             agent_mesh,
             episodic_memory,
             mcp_hot_reloader,
+            ebpf_engine,
+            raft_mesh,
+            wasi_nn_engine,
+            genetic_mutator,
+            zero_copy_transport,
         }
     }
 }
@@ -3912,6 +3934,82 @@ impl HagibisDaemon {
             HgbRequest::McpHotReloadStatus => {
                 let report = state.mcp_hot_reloader.get_status().await;
                 HgbResponse::McpHotReloadStatusResult(serde_json::to_string_pretty(&report).unwrap_or_default())
+            }
+
+            // Strategic Upgrade 1: Native eBPF & Kernel-Level Telemetry
+            HgbRequest::EbpfTelemetryStatus => {
+                let report = state.ebpf_engine.probe_telemetry();
+                HgbResponse::EbpfTelemetryStatusResult(report)
+            }
+            HgbRequest::EbpfGovernorBoost { workload } => {
+                match state.ebpf_engine.boost_performance(&workload) {
+                    Ok(guard) => HgbResponse::EbpfGovernorBoostResult(format!(
+                        "Kernel governor boosted to performance for workload '{}' (prev: {:?})",
+                        workload, guard.baseline_governor
+                    )),
+                    Err(e) => HgbResponse::Error(format!("eBPF governor boost failed: {}", e)),
+                }
+            }
+            HgbRequest::EbpfGovernorRelax => {
+                match state.ebpf_engine.relax_governor() {
+                    Ok(()) => HgbResponse::EbpfGovernorRelaxResult("Kernel governor relaxed to powersave.".to_string()),
+                    Err(e) => HgbResponse::Error(format!("eBPF governor relax failed: {}", e)),
+                }
+            }
+
+            // Strategic Upgrade 2: Distributed Raft Vector & State Mesh
+            HgbRequest::RaftMeshStatus => {
+                let mesh = state.raft_mesh.read().await;
+                let status = mesh.get_status();
+                HgbResponse::RaftMeshStatusResult(serde_json::to_string_pretty(&status).unwrap_or_default())
+            }
+            HgbRequest::RaftMeshPropose { key, value } => {
+                let mesh = state.raft_mesh.write().await;
+                match mesh.propose(hgb_storage::raft_state_mesh::RaftCommand::SetKV { key: key.clone(), value }) {
+                    Ok(idx) => HgbResponse::RaftMeshProposeResult(format!("Committed key '{}' at Raft log index {}", key, idx)),
+                    Err(e) => HgbResponse::Error(format!("Raft propose error: {}", e)),
+                }
+            }
+            HgbRequest::RaftMeshAddNode { node_id, address } => {
+                let mesh = state.raft_mesh.write().await;
+                match mesh.add_node(node_id, address.clone()) {
+                    Ok(()) => HgbResponse::RaftMeshAddNodeResult(format!("Added Raft node {} at {}", node_id, address)),
+                    Err(e) => HgbResponse::Error(format!("Failed to add Raft node: {}", e)),
+                }
+            }
+
+            // Strategic Upgrade 3: Ephemeral GPU-Accelerated WASM Sandboxing & WASI-NN
+            HgbRequest::WasiNnStatus => {
+                let report = state.wasi_nn_engine.get_status();
+                HgbResponse::WasiNnStatusResult(report)
+            }
+            HgbRequest::WasiNnExec { model_format, input_tensor, dimensions } => {
+                match state.wasi_nn_engine.execute_direct(&model_format, input_tensor, dimensions) {
+                    Ok(res) => HgbResponse::WasiNnExecResult(res),
+                    Err(e) => HgbResponse::Error(format!("WASI-NN execution failed: {}", e)),
+                }
+            }
+
+            // Strategic Upgrade 4: Autonomous Loop Self-Healing & Genetic Patching
+            HgbRequest::GeneticMutateStatus => {
+                let report = state.genetic_mutator.get_status();
+                HgbResponse::GeneticMutateStatusResult(serde_json::to_string_pretty(&report).unwrap_or_default())
+            }
+            HgbRequest::GeneticMutateTrigger { target_file, failure_log } => {
+                let report = state.genetic_mutator.evaluate_and_heal(&target_file, &failure_log);
+                HgbResponse::GeneticMutateTriggerResult(serde_json::to_string_pretty(&report).unwrap_or_default())
+            }
+
+            // Strategic Upgrade 5: Zero-Copy IPC Daemon Communication
+            HgbRequest::ZeroCopyIpcStatus => {
+                let status = state.zero_copy_transport.get_status();
+                HgbResponse::ZeroCopyIpcStatusResult(serde_json::to_string_pretty(&status).unwrap_or_default())
+            }
+            HgbRequest::ZeroCopyIpcBench { iterations } => {
+                match state.zero_copy_transport.run_benchmark(iterations) {
+                    Ok(report) => HgbResponse::ZeroCopyIpcBenchResult(serde_json::to_string_pretty(&report).unwrap_or_default()),
+                    Err(e) => HgbResponse::Error(format!("Zero-copy IPC benchmark failed: {}", e)),
+                }
             }
         }
     }

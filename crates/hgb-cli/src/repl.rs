@@ -5566,6 +5566,35 @@ impl HagibisRepl {
             HgbResponse::McpHotReloadAddResult(msg) => {
                 println!("✔ {}", msg.green());
             }
+            HgbResponse::EbpfTelemetryStatusResult(t) => {
+                println!("{}", "⚡ NATIVE eBPF & KERNEL TELEMETRY PROBE ⚡".bold().cyan());
+                println!("  Governor:      {}", t.governor_state.current_governor.green());
+                println!("  CPU Temp:      {:.1}°C ({})", t.thermal_metrics.package_temp_c, if t.thermal_metrics.is_throttled { "THROTTLED".red() } else { "OPTIMAL".green() });
+                println!("  Syscall p50:   {:.2} µs | p95: {:.2} µs | p99: {:.2} µs", t.syscall_latency.p50_us, t.syscall_latency.p95_us, t.syscall_latency.p99_us);
+                println!("  Memory PSI:    {:.2}% | Major Faults: {}", t.memory_spikes.psi_some_avg10, t.memory_spikes.major_faults);
+            }
+            HgbResponse::EbpfGovernorBoostResult(s) | HgbResponse::EbpfGovernorRelaxResult(s) => {
+                println!("  ✔ {}", s.green().bold());
+            }
+            HgbResponse::RaftMeshStatusResult(s) | HgbResponse::RaftMeshProposeResult(s) | HgbResponse::RaftMeshAddNodeResult(s) => {
+                println!("{}", s);
+            }
+            HgbResponse::WasiNnStatusResult(s) => {
+                println!("{}", "🧠 WASI-NN HARDWARE RUNTIME STATUS 🧠".bold().cyan());
+                println!("  Intel GPU:     {} ({})", if s.gpu_available { "ONLINE".green() } else { "NOT FOUND".yellow() }, s.gpu_render_node);
+                println!("  Encodings:     {}", s.supported_encodings.join(", "));
+                println!("  Targets:       {}", s.supported_targets.join(", "));
+                println!("  GFLOPS Bench:  {:.2} GFLOPS ({})", s.gemm_benchmark.gflops, s.gemm_benchmark.hardware_target);
+            }
+            HgbResponse::WasiNnExecResult(r) => {
+                println!("  ✔ WASI-NN Execution: compute latency: {} µs (Target: {}, GFLOPS: {:.2})", r.duration_us, r.target_used.green(), r.gflops);
+            }
+            HgbResponse::GeneticMutateStatusResult(s) | HgbResponse::GeneticMutateTriggerResult(s) => {
+                println!("{}", s);
+            }
+            HgbResponse::ZeroCopyIpcStatusResult(s) | HgbResponse::ZeroCopyIpcBenchResult(s) => {
+                println!("{}", s);
+            }
         }
     }
 

@@ -3312,6 +3312,65 @@ enum Commands {
         #[arg(long, default_value = "Hot-loaded WASM tool")]
         desc: String,
     },
+
+    /// Strategic Upgrade 1: Native eBPF & Kernel-Level Telemetry Probe
+    #[command(name = "ebpf-telemetry", alias = "ebpf", alias = "kernel-vitals")]
+    EbpfTelemetry {
+        #[arg(long)]
+        status: bool,
+        #[arg(long)]
+        boost: Option<String>,
+        #[arg(long)]
+        relax: bool,
+    },
+
+    /// Strategic Upgrade 2: Distributed Raft Vector & State Mesh
+    #[command(name = "raft-mesh", alias = "raft", alias = "state-mesh")]
+    RaftMesh {
+        #[arg(long)]
+        status: bool,
+        #[arg(long)]
+        propose: Option<String>,
+        #[arg(long)]
+        value: Option<String>,
+        #[arg(long)]
+        add_node: Option<u64>,
+        #[arg(long, default_value = "127.0.0.1:9090")]
+        addr: String,
+    },
+
+    /// Strategic Upgrade 3: Ephemeral GPU-Accelerated WASM Sandboxing & WASI-NN
+    #[command(name = "wasi-nn", alias = "gpu-wasm", alias = "wasi-gpu")]
+    WasiNn {
+        #[arg(long)]
+        status: bool,
+        #[arg(long)]
+        bench: bool,
+        #[arg(long)]
+        exec: Option<String>,
+    },
+
+    /// Strategic Upgrade 4: Autonomous Loop Self-Healing & Genetic Patching
+    #[command(name = "genetic-patch", alias = "genetic", alias = "auto-mutate")]
+    GeneticPatch {
+        #[arg(long)]
+        status: bool,
+        #[arg(long)]
+        heal: Option<String>,
+        #[arg(long, default_value = "")]
+        log: String,
+    },
+
+    /// Strategic Upgrade 5: Zero-Copy POSIX Shared Memory IPC Transport
+    #[command(name = "zero-copy-ipc", alias = "zc-ipc", alias = "fast-ipc")]
+    ZeroCopyIpc {
+        #[arg(long)]
+        status: bool,
+        #[arg(long)]
+        bench: bool,
+        #[arg(long, default_value_t = 100)]
+        iterations: usize,
+    },
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -9844,6 +9903,142 @@ async fn test_calc() { assert!(calculate(5)); }".to_string()
                         println!("{}", json_str);
                     }
                     hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Hot-reload status error: {}", e.red()),
+                    _ => {}
+                }
+            }
+            Ok(())
+        }
+        Commands::EbpfTelemetry { status: _, boost, relax } => {
+            let client = HgbClient::new();
+            if let Some(workload) = boost {
+                println!("{}", format!("🚀 Boosting CPU governor for workload '{}'...", workload).yellow().bold());
+                let resp = client.send(hgb_core::protocol::HgbRequest::EbpfGovernorBoost { workload }).await?;
+                match resp {
+                    hgb_core::protocol::HgbResponse::EbpfGovernorBoostResult(s) => println!("  ✔ {}", s.green().bold()),
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ eBPF boost error: {}", e.red()),
+                    _ => {}
+                }
+            } else if relax {
+                println!("{}", "💤 Relaxing CPU governor to powersave...".cyan().bold());
+                let resp = client.send(hgb_core::protocol::HgbRequest::EbpfGovernorRelax).await?;
+                match resp {
+                    hgb_core::protocol::HgbResponse::EbpfGovernorRelaxResult(s) => println!("  ✔ {}", s.green().bold()),
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ eBPF relax error: {}", e.red()),
+                    _ => {}
+                }
+            } else {
+                println!("{}", "⚡ NATIVE eBPF & KERNEL TELEMETRY PROBE".cyan().bold());
+                let resp = client.send(hgb_core::protocol::HgbRequest::EbpfTelemetryStatus).await?;
+                match resp {
+                    hgb_core::protocol::HgbResponse::EbpfTelemetryStatusResult(t) => {
+                        println!("  • Active Governor:     {}", t.governor_state.current_governor.green());
+                        println!("  • CPU Temp:            {:.1}°C ({})", t.thermal_metrics.package_temp_c, if t.thermal_metrics.is_throttled { "THROTTLED".red() } else { "OPTIMAL".green() });
+                        println!("  • Syscall p50:         {:.2} µs | p95: {:.2} µs | p99: {:.2} µs", t.syscall_latency.p50_us, t.syscall_latency.p95_us, t.syscall_latency.p99_us);
+                        println!("  • Memory PSI:          {:.2}% | Major Faults: {}", t.memory_spikes.psi_some_avg10, t.memory_spikes.major_faults);
+                    }
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ eBPF status error: {}", e.red()),
+                    _ => {}
+                }
+            }
+            Ok(())
+        }
+        Commands::RaftMesh { status: _, propose, value, add_node, addr } => {
+            let client = HgbClient::new();
+            if let Some(key) = propose {
+                let v = value.unwrap_or_else(|| "default_val".to_string());
+                println!("{}", format!("🗳️ Proposing key '{}' => '{}' to Raft cluster...", key, v).cyan().bold());
+                let resp = client.send(hgb_core::protocol::HgbRequest::RaftMeshPropose { key, value: v }).await?;
+                match resp {
+                    hgb_core::protocol::HgbResponse::RaftMeshProposeResult(s) => println!("  ✔ {}", s.green().bold()),
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Raft propose error: {}", e.red()),
+                    _ => {}
+                }
+            } else if let Some(node_id) = add_node {
+                println!("{}", format!("🤝 Adding Raft peer node {} ({}) to cluster...", node_id, addr).cyan().bold());
+                let resp = client.send(hgb_core::protocol::HgbRequest::RaftMeshAddNode { node_id, address: addr }).await?;
+                match resp {
+                    hgb_core::protocol::HgbResponse::RaftMeshAddNodeResult(s) => println!("  ✔ {}", s.green().bold()),
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Raft add peer error: {}", e.red()),
+                    _ => {}
+                }
+            } else {
+                println!("{}", "🌐 DISTRIBUTED RAFT VECTOR & STATE MESH".cyan().bold());
+                let resp = client.send(hgb_core::protocol::HgbRequest::RaftMeshStatus).await?;
+                match resp {
+                    hgb_core::protocol::HgbResponse::RaftMeshStatusResult(s) => println!("{}", s),
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Raft status error: {}", e.red()),
+                    _ => {}
+                }
+            }
+            Ok(())
+        }
+        Commands::WasiNn { status: _, bench: _, exec } => {
+            let client = HgbClient::new();
+            if let Some(model_format) = exec {
+                println!("{}", format!("🧠 Executing WASI-NN inference ({format})...", format = model_format).cyan().bold());
+                let input_tensor = vec![1.0f32; 128];
+                let dimensions = vec![1, 128];
+                let resp = client.send(hgb_core::protocol::HgbRequest::WasiNnExec { model_format, input_tensor, dimensions }).await?;
+                match resp {
+                    hgb_core::protocol::HgbResponse::WasiNnExecResult(r) => {
+                        println!("  ✔ Computed in {} µs (Target: {}, GFLOPS: {:.2})", r.duration_us, r.target_used.green(), r.gflops);
+                    }
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ WASI-NN execution error: {}", e.red()),
+                    _ => {}
+                }
+            } else {
+                println!("{}", "🧠 WASI-NN & GPU-ACCELERATED WASM RUNTIME STATUS".cyan().bold());
+                let resp = client.send(hgb_core::protocol::HgbRequest::WasiNnStatus).await?;
+                match resp {
+                    hgb_core::protocol::HgbResponse::WasiNnStatusResult(s) => {
+                        println!("  • Intel GPU:           {} ({})", if s.gpu_available { "ONLINE".green() } else { "NOT FOUND".yellow() }, s.gpu_render_node);
+                        println!("  • Supported Encodings: {}", s.supported_encodings.join(", "));
+                        println!("  • Supported Targets:   {}", s.supported_targets.join(", "));
+                        println!("  • GEMM Compute Bench:  {:.2} GFLOPS ({})", s.gemm_benchmark.gflops, s.gemm_benchmark.hardware_target);
+                    }
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ WASI-NN status error: {}", e.red()),
+                    _ => {}
+                }
+            }
+            Ok(())
+        }
+        Commands::GeneticPatch { status: _, heal, log } => {
+            let client = HgbClient::new();
+            if let Some(target_file) = heal {
+                println!("{}", format!("🧬 Running Test-Driven Genetic Mutator on '{}'...", target_file).cyan().bold());
+                let resp = client.send(hgb_core::protocol::HgbRequest::GeneticMutateTrigger { target_file, failure_log: log }).await?;
+                match resp {
+                    hgb_core::protocol::HgbResponse::GeneticMutateTriggerResult(s) => println!("{}", s),
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Genetic mutator error: {}", e.red()),
+                    _ => {}
+                }
+            } else {
+                println!("{}", "🧬 AUTONOMOUS GENETIC PATCH MUTATOR STATUS".cyan().bold());
+                let resp = client.send(hgb_core::protocol::HgbRequest::GeneticMutateStatus).await?;
+                match resp {
+                    hgb_core::protocol::HgbResponse::GeneticMutateStatusResult(s) => println!("{}", s),
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Genetic mutator status error: {}", e.red()),
+                    _ => {}
+                }
+            }
+            Ok(())
+        }
+        Commands::ZeroCopyIpc { status: _, bench, iterations } => {
+            let client = HgbClient::new();
+            if bench {
+                println!("{}", format!("⚡ Running Zero-Copy POSIX Shared Memory IPC Benchmark ({} iterations)...", iterations).cyan().bold());
+                let resp = client.send(hgb_core::protocol::HgbRequest::ZeroCopyIpcBench { iterations }).await?;
+                match resp {
+                    hgb_core::protocol::HgbResponse::ZeroCopyIpcBenchResult(s) => println!("{}", s),
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Zero-copy IPC bench error: {}", e.red()),
+                    _ => {}
+                }
+            } else {
+                println!("{}", "⚡ ZERO-COPY IPC TRANSPORT TELEMETRY".cyan().bold());
+                let resp = client.send(hgb_core::protocol::HgbRequest::ZeroCopyIpcStatus).await?;
+                match resp {
+                    hgb_core::protocol::HgbResponse::ZeroCopyIpcStatusResult(s) => println!("{}", s),
+                    hgb_core::protocol::HgbResponse::Error(e) => eprintln!("  ✖ Zero-copy IPC status error: {}", e.red()),
                     _ => {}
                 }
             }

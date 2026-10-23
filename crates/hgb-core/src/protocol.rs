@@ -1439,6 +1439,46 @@ pub enum HgbRequest {
         description: String,
     },
     McpHotReloadStatus,
+
+    // Hyper-Execution Engine Strategic Upgrades:
+    // Upgrade 1: Native eBPF & Kernel-Level Telemetry
+    EbpfTelemetryStatus,
+    EbpfGovernorBoost {
+        workload: String,
+    },
+    EbpfGovernorRelax,
+
+    // Upgrade 2: Distributed Raft Vector & State Mesh
+    RaftMeshStatus,
+    RaftMeshPropose {
+        key: String,
+        value: String,
+    },
+    RaftMeshAddNode {
+        node_id: u64,
+        address: String,
+    },
+
+    // Upgrade 3: Ephemeral GPU-Accelerated WASM Sandboxing & WASI-NN
+    WasiNnStatus,
+    WasiNnExec {
+        model_format: String,
+        input_tensor: Vec<f32>,
+        dimensions: Vec<usize>,
+    },
+
+    // Upgrade 4: Autonomous Loop Self-Healing & Genetic Patching
+    GeneticMutateStatus,
+    GeneticMutateTrigger {
+        target_file: String,
+        failure_log: String,
+    },
+
+    // Upgrade 5: Zero-Copy IPC Daemon Communication
+    ZeroCopyIpcStatus,
+    ZeroCopyIpcBench {
+        iterations: usize,
+    },
 }
 
 fn default_twenty_u64() -> u64 {
@@ -2052,6 +2092,29 @@ pub enum HgbResponse {
     McpHotReloadScanResult(String),
     McpHotReloadAddResult(String),
     McpHotReloadStatusResult(String),
+
+    // Hyper-Execution Engine Strategic Upgrades:
+    // Upgrade 1: Native eBPF & Kernel-Level Telemetry
+    EbpfTelemetryStatusResult(crate::ebpf_telemetry_probe::EbpfTelemetryReport),
+    EbpfGovernorBoostResult(String),
+    EbpfGovernorRelaxResult(String),
+
+    // Upgrade 2: Distributed Raft Vector & State Mesh
+    RaftMeshStatusResult(String),
+    RaftMeshProposeResult(String),
+    RaftMeshAddNodeResult(String),
+
+    // Upgrade 3: Ephemeral GPU-Accelerated WASM Sandboxing & WASI-NN
+    WasiNnStatusResult(crate::wasm_gpu_wasi_nn::WasiNnStatusReport),
+    WasiNnExecResult(crate::wasm_gpu_wasi_nn::WasiNnExecutionResult),
+
+    // Upgrade 4: Autonomous Loop Self-Healing & Genetic Patching
+    GeneticMutateStatusResult(String),
+    GeneticMutateTriggerResult(String),
+
+    // Upgrade 5: Zero-Copy IPC Daemon Communication
+    ZeroCopyIpcStatusResult(String),
+    ZeroCopyIpcBenchResult(String),
 }
 
 #[path = "hardware_runtime_synergy.rs"]

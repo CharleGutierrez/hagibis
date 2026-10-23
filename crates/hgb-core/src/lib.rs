@@ -1035,6 +1035,22 @@ pub use wasm_mesh_network::{
     WasmComputeMesh, WasmMeshExecutionResult, WasmMeshNode, WasmMeshPackage, WasmMeshStatusReport,
 };
 
+// Strategic Upgrade 1: Native eBPF & Kernel-Level Telemetry
+pub mod ebpf_telemetry_probe;
+pub use ebpf_telemetry_probe::{
+    CpuThermalMetrics, EbpfGovernorGuard, EbpfProbeEngine, EbpfTelemetryReport, GovernorState,
+    MemorySpikeMetrics, SyscallLatencyMetrics, ThermalZoneReading, DYNATUNE_PROJECT_DIR,
+    KERNEL_OPTIMIZER_CTL,
+};
+
+// Strategic Upgrade 3: Ephemeral GPU-Accelerated WASM Sandboxing & WASI-NN
+pub mod wasm_gpu_wasi_nn;
+pub use wasm_gpu_wasi_nn::{
+    ExecutionContext, ExecutionTarget as WasiExecutionTarget, GraphEncoding, ModelGraph, Tensor, TensorType,
+    WasiNnBenchmarkReport, WasiNnError, WasiNnExecutionResult, WasiNnHostState,
+    WasiNnStatusReport, WasmGpuWasiNnEngine, INTEL_GPU_RENDER_NODE,
+};
+
 /// Enterprise high-capacity implementation
 pub fn enterprise_architecture_dispatch() -> bool {
     true

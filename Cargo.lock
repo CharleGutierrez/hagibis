@@ -2000,6 +2000,8 @@ dependencies = [
  "hgb-core",
  "hgb-nextgen",
  "hgb-storage",
+ "libc",
+ "memmap2",
  "reqwest",
  "rusqlite",
  "serde",

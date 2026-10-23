@@ -165,6 +165,13 @@ pub use p2p_swarm_mesh::{
     P2pSwarmMesh, P2pSwarmStatus, WorkloadKind,
 };
 
+// Strategic Upgrade 4: Autonomous Loop Self-Healing & Genetic Patching
+pub mod genetic_patch_mutator;
+pub use genetic_patch_mutator::{
+    DiagnosticInfo, GeneticMutateStatusReport, GeneticMutationReport, GeneticPatchMutator,
+    MutationKind, PatchMutationCandidate,
+};
+
 
 
 

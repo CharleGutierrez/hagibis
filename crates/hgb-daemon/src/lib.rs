@@ -186,5 +186,13 @@ pub use mcp_hot_reloader::{
     HotLoadedTool, McpHotReloader, McpHotReloaderReport, McpPluginManifest,
 };
 
+// Strategic Upgrade 5: Zero-Copy IPC Daemon Communication
+pub mod zero_copy_ipc;
+pub use zero_copy_ipc::{
+    ZeroCopyFrameHeader, ZeroCopyIpcBenchReport, ZeroCopyIpcStatusReport, ZeroCopyIpcTransport,
+    DEFAULT_SHM_FILE_PATH, DEFAULT_SHM_RING_CAPACITY, ZERO_COPY_MAGIC,
+};
+
+
 
 
