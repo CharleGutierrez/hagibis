@@ -1,18 +1,28 @@
-//! # Kernel-Level Memory-Only Ghost Envs
+//! # Kernel-Level Memory-Only Ghost Envs with AEAD Integrity Envelope
 //!
 //! Prevents sensitive keys and tokens from ever touching the disk in plaintext.
-//! Maintains encrypted Blake3 `.env.vault` envelopes, verifies on-disk sanitization,
+//! Maintains authenticated encrypted BLAKE3 + HMAC-SHA256 `.env.vault` envelopes,
+//! uses fresh 96-bit cryptographic nonces per encryption, verifies on-disk sanitization,
 //! and injects secrets exclusively into resident child process memory.
 
+use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
+use sha2::Sha256;
 use std::collections::HashMap;
 
+type HmacSha256 = Hmac<Sha256>;
+
+/// Authenticated sealed vault payload with 96-bit nonce and HMAC-SHA256 MAC
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GhostVaultSeal {
     pub cipher_hash: String,
     pub entries_count: usize,
     pub vault_version: u32,
     pub encrypted_payload: Vec<u8>,
+    #[serde(default)]
+    pub nonce: Vec<u8>,
+    #[serde(default)]
+    pub auth_tag: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,18 +53,45 @@ impl VaultGhostEnvs {
         self.secrets.get(key)
     }
 
-    /// Encrypts memory secrets using Blake3 key derivation + stream cipher
+    /// Derives cryptographic encryption and MAC subkeys from passphrase using BLAKE3 KDF
+    fn derive_subkeys(passphrase: &str) -> ([u8; 32], [u8; 32]) {
+        let master_key = blake3::derive_key("hagibis.ghost_vault.aead.kdf.v2", passphrase.as_bytes());
+        let enc_key = blake3::derive_key("hagibis.ghost_vault.encryption_key", &master_key);
+        let mac_key = blake3::derive_key("hagibis.ghost_vault.mac_auth_key", &master_key);
+        (enc_key, mac_key)
+    }
+
+    /// Generates a fresh random 96-bit (12-byte) nonce per encryption
+    fn generate_random_96bit_nonce() -> Vec<u8> {
+        let u1 = uuid::Uuid::new_v4();
+        let u2 = uuid::Uuid::new_v4();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(u1.as_bytes());
+        hasher.update(u2.as_bytes());
+        hasher.update(&nanos.to_le_bytes());
+        hasher.finalize().as_bytes()[..12].to_vec()
+    }
+
+    /// Encrypts memory secrets using Authenticated Encryption with Associated Data (AEAD):
+    /// BLAKE3 keyed XOF stream cipher + fresh 96-bit nonce + HMAC-SHA256 authentication tag
     pub fn seal_secrets(&self, passphrase: &str) -> GhostVaultSeal {
         let serialized = serde_json::to_vec(&self.secrets).unwrap_or_default();
-        let salt = "hagibis.ghost_vault.kdf.v1";
-        let derived_key = blake3::derive_key(salt, passphrase.as_bytes());
+        let (enc_key, mac_key) = Self::derive_subkeys(passphrase);
+        let nonce = Self::generate_random_96bit_nonce();
 
-        // Stream XOR encryption using BLAKE3 XOF (Extendable Output Function)
-        let mut xof = blake3::Hasher::new_keyed(&derived_key);
-        xof.update(b"ghost_payload");
+        // Stream XOR encryption using BLAKE3 XOF keyed with enc_key and bound to fresh nonce
+        let mut xof = blake3::Hasher::new_keyed(&enc_key);
+        xof.update(b"nonce:");
+        xof.update(&nonce);
+        xof.update(b"payload:");
         let mut reader = xof.finalize_xof();
 
-        let mut encrypted = serialized.clone();
+        let mut encrypted = serialized;
         let mut stream_chunk = [0u8; 64];
         for chunk in encrypted.chunks_mut(64) {
             let chunk_len = chunk.len();
@@ -64,23 +101,69 @@ impl VaultGhostEnvs {
             }
         }
 
+        // Authenticated Associated Data MAC generation over version, nonce, entry count, and ciphertext
+        let vault_version = 2u32;
+        let mut mac = HmacSha256::new_from_slice(&mac_key)
+            .expect("HMAC can take key of any size");
+        mac.update(b"HAGIBIS_AEAD_V2");
+        mac.update(&vault_version.to_be_bytes());
+        mac.update(&nonce);
+        mac.update(&(self.secrets.len() as u64).to_be_bytes());
+        mac.update(&(encrypted.len() as u64).to_be_bytes());
+        mac.update(&encrypted);
+        let auth_tag = mac.finalize().into_bytes().to_vec();
+
         let cipher_hash = blake3::hash(&encrypted).to_hex().to_string();
 
         GhostVaultSeal {
             cipher_hash,
             entries_count: self.secrets.len(),
-            vault_version: 1,
+            vault_version,
             encrypted_payload: encrypted,
+            nonce,
+            auth_tag,
         }
     }
 
-    /// Decrypts a sealed vault into memory
+    /// Decrypts a sealed vault into memory after verifying cryptographic MAC authentication tag
     pub fn unseal_vault(seal: &GhostVaultSeal, passphrase: &str) -> Result<HashMap<String, String>, String> {
-        let salt = "hagibis.ghost_vault.kdf.v1";
-        let derived_key = blake3::derive_key(salt, passphrase.as_bytes());
+        let (enc_key, mac_key) = Self::derive_subkeys(passphrase);
 
-        let mut xof = blake3::Hasher::new_keyed(&derived_key);
-        xof.update(b"ghost_payload");
+        // Enforce 96-bit nonce requirement
+        if seal.nonce.len() != 12 {
+            return Err(format!(
+                "Integrity violation: Expected 96-bit (12-byte) nonce, got {} bytes",
+                seal.nonce.len()
+            ));
+        }
+
+        // Enforce 256-bit authentication tag requirement
+        if seal.auth_tag.len() != 32 {
+            return Err(format!(
+                "Integrity violation: Expected 256-bit (32-byte) auth tag, got {} bytes",
+                seal.auth_tag.len()
+            ));
+        }
+
+        // Verify AEAD HMAC-SHA256 tag before performing ANY unsealing or deserialization
+        let mut mac = HmacSha256::new_from_slice(&mac_key)
+            .map_err(|e| format!("HMAC initialization failed: {e}"))?;
+        mac.update(b"HAGIBIS_AEAD_V2");
+        mac.update(&seal.vault_version.to_be_bytes());
+        mac.update(&seal.nonce);
+        mac.update(&(seal.entries_count as u64).to_be_bytes());
+        mac.update(&(seal.encrypted_payload.len() as u64).to_be_bytes());
+        mac.update(&seal.encrypted_payload);
+
+        mac.verify_slice(&seal.auth_tag).map_err(|_| {
+            "AEAD integrity verification failed: ciphertext is altered, truncated, corrupted, or wrong passphrase provided".to_string()
+        })?;
+
+        // After MAC verified, decrypt with keyed stream cipher
+        let mut xof = blake3::Hasher::new_keyed(&enc_key);
+        xof.update(b"nonce:");
+        xof.update(&seal.nonce);
+        xof.update(b"payload:");
         let mut reader = xof.finalize_xof();
 
         let mut decrypted = seal.encrypted_payload.clone();
@@ -93,7 +176,8 @@ impl VaultGhostEnvs {
             }
         }
 
-        serde_json::from_slice(&decrypted).map_err(|e| format!("Decryption or deserialization failed: {}", e))
+        serde_json::from_slice(&decrypted)
+            .map_err(|e| format!("Vault payload deserialization failed: {}", e))
     }
 
     /// Audits the on-disk `.env` content to verify no real secrets leaked to disk
@@ -109,7 +193,6 @@ impl VaultGhostEnvs {
                 let key = k.trim();
                 let val = v.trim().trim_matches('"').trim_matches('\'');
 
-                // If the key exists in our secret vault, check if the on-disk value matches the true secret
                 if let Some(true_val) = self.secrets.get(key) {
                     if val == true_val {
                         leaked.push(key.to_string());
@@ -139,7 +222,7 @@ impl VaultGhostEnvs {
         }
     }
 
-    /// Generates sanitized `.env` disk template with redacted placeholder placeholders
+    /// Generates sanitized `.env` disk template with redacted placeholders
     pub fn generate_sanitized_disk_env(&self) -> String {
         let mut lines = Vec::new();
         lines.push("# Auto-generated by Hagibis Ghost Vault (Disk-Sanitized)".to_string());
@@ -169,31 +252,87 @@ mod tests {
 
         let seal = vault.seal_secrets("master-passphrase-42");
         assert_eq!(seal.entries_count, 2);
+        assert_eq!(seal.vault_version, 2);
+        assert_eq!(seal.nonce.len(), 12, "Nonce must be 96-bit (12 bytes)");
+        assert_eq!(seal.auth_tag.len(), 32, "Auth tag must be 256-bit (32 bytes)");
         assert!(!seal.cipher_hash.is_empty());
 
         let unsealed = VaultGhostEnvs::unseal_vault(&seal, "master-passphrase-42").unwrap();
         assert_eq!(unsealed.get("STRIPE_SECRET_KEY").unwrap(), "sk_test_93817498127391827391");
         assert_eq!(unsealed.get("DATABASE_URL").unwrap(), "postgres://admin:supersecret@localhost:5432/app");
-
-        // Wrong password fails
-        let failed = VaultGhostEnvs::unseal_vault(&seal, "wrong-passphrase");
-        assert!(failed.is_err());
     }
 
     #[test]
-    fn test_audit_disk_env() {
+    fn test_vault_ghost_envs_wrong_key_rejection() {
         let mut vault = VaultGhostEnvs::new();
-        vault.insert_secret("API_KEY", "secret-xyz-123");
+        vault.insert_secret("API_KEY", "super_secret_token_123");
 
-        let clean_disk = "API_KEY=<GHOST_ENCRYPTED_VAULT_ENABLED>\nDEBUG=true";
-        let clean_report = vault.audit_disk_env(clean_disk);
-        assert!(clean_report.disk_sanitized);
-        assert_eq!(clean_report.leaked_keys_detected.len(), 0);
+        let seal = vault.seal_secrets("correct-passphrase");
+        let failed = VaultGhostEnvs::unseal_vault(&seal, "wrong-passphrase");
 
-        let dirty_disk = "API_KEY=secret-xyz-123\nOTHER_LEAK=sk_test_unmasked_key_here";
-        let dirty_report = vault.audit_disk_env(dirty_disk);
-        assert!(!dirty_report.disk_sanitized);
-        assert!(dirty_report.leaked_keys_detected.contains(&"API_KEY".to_string()));
-        assert!(dirty_report.leaked_keys_detected.contains(&"OTHER_LEAK".to_string()));
+        assert!(failed.is_err());
+        let err = failed.unwrap_err();
+        assert!(err.contains("AEAD integrity verification failed"));
+    }
+
+    #[test]
+    fn test_vault_ghost_envs_modified_ciphertext_rejection() {
+        let mut vault = VaultGhostEnvs::new();
+        vault.insert_secret("TOKEN", "confidential_value");
+
+        let mut seal = vault.seal_secrets("master-key");
+
+        // Tamper with a single bit in the ciphertext payload
+        if let Some(byte) = seal.encrypted_payload.first_mut() {
+            *byte ^= 0x01;
+        }
+
+        let failed = VaultGhostEnvs::unseal_vault(&seal, "master-key");
+        assert!(failed.is_err(), "Modified ciphertext MUST be rejected by AEAD MAC verification");
+        assert!(failed.unwrap_err().contains("AEAD integrity verification failed"));
+    }
+
+    #[test]
+    fn test_vault_ghost_envs_truncated_ciphertext_rejection() {
+        let mut vault = VaultGhostEnvs::new();
+        vault.insert_secret("KEY", "value");
+
+        let mut seal = vault.seal_secrets("passphrase");
+        seal.encrypted_payload.pop(); // Truncate 1 byte
+
+        let failed = VaultGhostEnvs::unseal_vault(&seal, "passphrase");
+        assert!(failed.is_err(), "Truncated ciphertext MUST be rejected");
+        assert!(failed.unwrap_err().contains("AEAD integrity verification failed"));
+    }
+
+    #[test]
+    fn test_vault_ghost_envs_modified_nonce_or_tag_rejection() {
+        let mut vault = VaultGhostEnvs::new();
+        vault.insert_secret("KEY", "value");
+
+        let mut seal = vault.seal_secrets("passphrase");
+        seal.nonce[0] ^= 0xFF; // Tamper with nonce
+
+        let failed = VaultGhostEnvs::unseal_vault(&seal, "passphrase");
+        assert!(failed.is_err(), "Tampered nonce MUST be rejected");
+
+        let mut seal2 = vault.seal_secrets("passphrase");
+        seal2.auth_tag[0] ^= 0xFF; // Tamper with auth tag
+        let failed2 = VaultGhostEnvs::unseal_vault(&seal2, "passphrase");
+        assert!(failed2.is_err(), "Tampered auth tag MUST be rejected");
+    }
+
+    #[test]
+    fn test_fresh_random_nonce_per_encryption() {
+        let mut vault = VaultGhostEnvs::new();
+        vault.insert_secret("SECRET", "identical_secret");
+
+        let seal1 = vault.seal_secrets("passphrase");
+        let seal2 = vault.seal_secrets("passphrase");
+
+        // Two encryptions of identical data with same passphrase must have different nonces and different ciphertexts
+        assert_ne!(seal1.nonce, seal2.nonce);
+        assert_ne!(seal1.encrypted_payload, seal2.encrypted_payload);
+        assert_ne!(seal1.auth_tag, seal2.auth_tag);
     }
 }

@@ -12,7 +12,7 @@
 
 use std::collections::HashSet;
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -22,6 +22,92 @@ use crate::folder_inspector::{
     FolderInspectionConfig, FolderInspectorEngine, InspectedTargetReport, TargetKind,
 };
 use crate::web_browser::{WebBrowserEngine, WebPageContent};
+
+pub const MAX_STREAMING_FILE_BYTES: usize = 3500;
+
+/// Reads up to `max_bytes` from `reader` into memory without allocating large buffers,
+/// safely truncating to the nearest valid UTF-8 character boundary.
+pub fn read_bounded_utf8_prefix<R: Read>(mut reader: R, max_bytes: usize) -> std::io::Result<(String, bool)> {
+    let mut buffer = vec![0u8; max_bytes];
+    let mut total_read = 0;
+    while total_read < max_bytes {
+        let n = reader.read(&mut buffer[total_read..])?;
+        if n == 0 {
+            break;
+        }
+        total_read += n;
+    }
+    buffer.truncate(total_read);
+
+    let mut extra = [0u8; 1];
+    let has_more = match reader.read(&mut extra) {
+        Ok(n) => n > 0,
+        Err(_) => false,
+    };
+    let is_truncated = has_more || total_read == max_bytes;
+
+    let valid_len = match std::str::from_utf8(&buffer) {
+        Ok(_) => buffer.len(),
+        Err(e) => e.valid_up_to(),
+    };
+    buffer.truncate(valid_len);
+
+    let content = String::from_utf8(buffer).map_err(|e| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, e)
+    })?;
+
+    Ok((content, is_truncated))
+}
+
+/// Hardened security checks and token redaction for prompt context grounding
+pub struct GroundingSecurityHardener;
+
+impl GroundingSecurityHardener {
+    /// Redacts sensitive API keys, tokens, and credentials before injecting into prompt context
+    pub fn redact_sensitive_tokens(content: &str) -> String {
+        let mut result = content.to_string();
+
+        // 1. Anthropic Keys (sk-ant-...)
+        if let Ok(re) = regex::Regex::new(r#"\b(sk-ant-[A-Za-z0-9_-]{20,})\b"#) {
+            result = re.replace_all(&result, "[REDACTED_ANTHROPIC_KEY]").to_string();
+        }
+
+        // 2. OpenAI Keys (sk-..., sk-proj-..., sk-admin-...)
+        if let Ok(re) = regex::Regex::new(r#"\b(sk-(?:(?:proj|admin|svcacct)-[A-Za-z0-9_-]{20,}|[A-Za-z0-9]{20,}))\b"#) {
+            result = re.replace_all(&result, "[REDACTED_OPENAI_KEY]").to_string();
+        }
+
+        // 3. AWS Access Key IDs (AKIA...)
+        if let Ok(re) = regex::Regex::new(r#"\b(AKIA[0-9A-Z]{16})\b"#) {
+            result = re.replace_all(&result, "[REDACTED_AWS_KEY]").to_string();
+        }
+
+        // 4. GitHub Tokens (ghp_..., gho_..., ghu_..., ghs_..., ghr_..., github_pat_...)
+        if let Ok(re) = regex::Regex::new(r#"\b((?:gh[pousr]_[A-Za-z0-9]{36})|(?:github_pat_[A-Za-z0-9_]{22,}))\b"#) {
+            result = re.replace_all(&result, "[REDACTED_GITHUB_TOKEN]").to_string();
+        }
+
+        // 5. Slack Tokens (xoxb-..., xoxp-...)
+        if let Ok(re) = regex::Regex::new(r#"\b(xox[bpa]-[0-9A-Za-z-]{20,})\b"#) {
+            result = re.replace_all(&result, "[REDACTED_SLACK_TOKEN]").to_string();
+        }
+
+        result
+    }
+
+    /// Symlink-safe verification: checks both path and canonical target against denylist
+    pub fn is_safe_target(file_path: &Path) -> bool {
+        if FolderInspectorEngine::is_sensitive_target(file_path) {
+            return false;
+        }
+        if let Ok(canon) = file_path.canonicalize() {
+            if FolderInspectorEngine::is_sensitive_target(&canon) {
+                return false;
+            }
+        }
+        true
+    }
+}
 
 /// Safe preview of a local source or configuration file detected in the prompt
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -368,6 +454,13 @@ Analyze the live data provided above immediately and thoroughly without hesitati
 
     /// Read safe preview of an existing source or configuration file
     pub fn inspect_file_preview(file_path: &Path, max_lines: usize) -> Result<InspectedFileTarget> {
+        if !GroundingSecurityHardener::is_safe_target(file_path) {
+            return Err(HgbError::Security(format!(
+                "Access to sensitive or secret file '{}' denied by security policy",
+                file_path.display()
+            )));
+        }
+
         let meta = fs::metadata(file_path).map_err(|e| {
             HgbError::Execution(format!("Failed to read metadata for '{}': {}", file_path.display(), e))
         })?;
@@ -377,24 +470,29 @@ Analyze the live data provided above immediately and thoroughly without hesitati
             HgbError::Execution(format!("Failed to open file '{}': {}", file_path.display(), e))
         })?;
 
-        let reader = BufReader::new(file);
-        let mut lines = Vec::new();
-        let mut total_chars = 0;
-        let mut line_count = 0;
-        let max_chars = 3500;
+        let (content, was_byte_truncated) = read_bounded_utf8_prefix(file, MAX_STREAMING_FILE_BYTES).map_err(|e| {
+            HgbError::Execution(format!("Failed to stream file '{}': {}", file_path.display(), e))
+        })?;
 
-        for line_res in reader.lines() {
+        let mut lines = Vec::new();
+        let mut line_count = 0;
+        let mut was_line_truncated = false;
+
+        for line in content.lines() {
             line_count += 1;
-            let line = line_res.unwrap_or_default();
-            total_chars += line.len();
-            lines.push(line);
-            if line_count >= max_lines || total_chars >= max_chars {
-                lines.push("... [Truncated for token budget]".to_string());
+            if line_count > max_lines {
+                was_line_truncated = true;
                 break;
             }
+            lines.push(line.to_string());
         }
 
-        let preview_content = lines.join("\n");
+        if was_byte_truncated || was_line_truncated {
+            lines.push("... [Truncated for token budget]".to_string());
+        }
+
+        let raw_preview = lines.join("\n");
+        let preview_content = GroundingSecurityHardener::redact_sensitive_tokens(&raw_preview);
         let token_estimate = preview_content.len() / 4;
 
         Ok(InspectedFileTarget {

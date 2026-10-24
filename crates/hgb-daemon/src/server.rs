@@ -71,6 +71,7 @@ pub struct DaemonState {
     pub dynatune_throttler: Arc<tokio::sync::Mutex<hgb_core::dynatune_ffi_throttler::HardwareThrottleArbiter>>,
     pub crdt_mesh: Arc<tokio::sync::RwLock<hgb_storage::distributed_crdt_mesh::DistributedCrdtMesh>>,
     pub vibe_healer: Arc<hgb_nextgen::self_healing_vibe_loop::SelfHealingVibeRunner>,
+    pub vibe_governor: Arc<hgb_core::vibe_hardware_governor::VibeHardwareGovernor>,
 }
 
 impl DaemonState {
@@ -209,6 +210,7 @@ impl DaemonState {
         let vibe_healer = Arc::new(
             hgb_nextgen::self_healing_vibe_loop::SelfHealingVibeRunner::new(&ws_dir)
         );
+        let vibe_governor = Arc::new(hgb_core::vibe_hardware_governor::VibeHardwareGovernor::new());
 
         Self {
             start_time: std::time::Instant::now(),
@@ -264,6 +266,7 @@ impl DaemonState {
             dynatune_throttler,
             crdt_mesh,
             vibe_healer,
+            vibe_governor,
         }
     }
 }
@@ -4126,6 +4129,30 @@ impl HagibisDaemon {
                     Ok(report) => HgbResponse::SelfHealingVibeTriggerResult(serde_json::to_string_pretty(&report).unwrap_or_default()),
                     Err(e) => HgbResponse::Error(format!("Self-healing vibe loop failed: {}", e)),
                 }
+            }
+
+            // Frictionless Vibe Prompting & Hardware Governor
+            HgbRequest::VibePrompt { prompt, target_dir, auto_commit } => {
+                let target_path = target_dir.map(std::path::PathBuf::from);
+                let runner = hgb_core::vibe_prompt_runner::VibePromptRunner::with_governor(
+                    target_path.clone().unwrap_or_else(|| std::path::PathBuf::from(".")),
+                    (*state.vibe_governor).clone(),
+                );
+                let spec = hgb_core::vibe_prompt_runner::VibePromptSpec {
+                    prompt,
+                    target_dir: target_path,
+                    auto_commit,
+                    use_local_ollama: true,
+                    check_command: None,
+                };
+                match runner.execute_vibe_prompt(&spec).await {
+                    Ok(result) => HgbResponse::VibePromptResult(result),
+                    Err(e) => HgbResponse::Error(format!("Vibe prompt failed: {}", e)),
+                }
+            }
+            HgbRequest::VibeGovernorStatus => {
+                let thermal_state = state.vibe_governor.get_vibe_thermal_state();
+                HgbResponse::VibeGovernorStatusResult(thermal_state)
             }
         }
     }

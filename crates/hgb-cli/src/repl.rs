@@ -5615,6 +5615,17 @@ impl HagibisRepl {
             HgbResponse::SelfHealingVibeStatusResult(s) | HgbResponse::SelfHealingVibeTriggerResult(s) => {
                 println!("{}", s);
             }
+            HgbResponse::VibePromptResult(res) => {
+                println!("{}", hgb_core::vibe_prompt_runner::format_ambient_status_card(&res));
+            }
+            HgbResponse::VibeGovernorStatusResult(s) => {
+                println!("{}", "⚡ AMBIENT VIBE HARDWARE TELEMETRY ⚡".bold().magenta());
+                println!("  CPU Temp:      {:.1}°C", s.cpu_temp_c);
+                println!("  Governor:      {}", s.governor.cyan());
+                println!("  EPP Profile:   {}", s.epp.cyan());
+                println!("  Mode:          {}", s.vibe_mode.green());
+                println!("  Power:         Charging: {}, Battery: {:?}%", s.is_charging, s.battery_pct);
+            }
         }
     }
 

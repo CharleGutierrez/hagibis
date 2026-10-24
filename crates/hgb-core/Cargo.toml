@@ -44,6 +44,9 @@ tokio-tungstenite = "0.21"
 futures-util = "0.3"
 ndarray = "0.15"
 
+[dev-dependencies]
+tempfile = "3.10"
+
 [features]
 default = []
 enterprise = ["azure", "onnx"]

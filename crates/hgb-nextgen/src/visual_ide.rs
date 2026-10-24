@@ -3579,9 +3579,11 @@ pub struct AgentStepRequest {
     pub auto_approve: Option<bool>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct AgentApproveRequest {
+    #[serde(alias = "approval_id")]
     pub call_id: String,
+    #[serde(alias = "allow")]
     pub approved: bool,
     #[serde(default)]
     pub allow_all: bool,

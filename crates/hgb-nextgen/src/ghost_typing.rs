@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use std::fs;
-use std::path::Path;
 use syn::Item;
 
 /// Speculative completion candidate precomputed in daemon memory

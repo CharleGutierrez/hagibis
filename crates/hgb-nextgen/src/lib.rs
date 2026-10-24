@@ -127,7 +127,10 @@ pub use terminal_graphics::{
     detect_graphics_protocol, ImageBuffer, RgbPixel, TerminalGraphicsProtocol,
 };
 pub use variant_race::VariantRaceEngine;
-pub use voice_hook::{AudioPromptEngine, VoicePromptSession};
+pub use voice_hook::{
+    play_alert_tone, play_green_chime, synthesize_alert_tone_wav, synthesize_green_chime_wav,
+    AudioPromptEngine, VoiceIntentTranscriber, VoicePromptSession, WavAudioInfo,
+};
 pub use wattage_governor::{GovernorConfig, RoutingDecision, SessionExpenditure, WattageGovernor};
 pub use wiretap::{ContractDrift, ContractPatch, DriftKind, ExpectedField, WiretapEngine};
 pub use worktree::{AtmosphericWorktreeHandle, SemanticStash, SemanticStashManager};
@@ -179,6 +182,14 @@ pub use self_healing_vibe_loop::{
     SandboxMode, SelfHealingVibeConfig, SelfHealingVibeLoopReport, SelfHealingVibeRunner,
     TestRunResult, VerifiedPatchReceipt, VibeLoopRecord, VibeLoopStats,
 };
+
+// Recommendation 4: Interactive "Vibe Cockpit" & TUI Dashboard
+pub mod vibe_cockpit_tui;
+pub use vibe_cockpit_tui::{
+    FocusedPane, VibeChatMessage, VibeChatSender, VibeCockpitApp, VibeCockpitState,
+    VibeFileDiff, VibeStatus, VibeStepStatus, VibeTelemetrySnapshot, VirtualTuiBuffer,
+};
+
 
 
 

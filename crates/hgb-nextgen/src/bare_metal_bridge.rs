@@ -6,7 +6,7 @@
 //! - Provides RAII `GovernorGuard` that boosts CPU to high-performance and automatically reverts to energy-saving states on idle.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 use serde::{Deserialize, Serialize};
 

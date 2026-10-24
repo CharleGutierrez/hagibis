@@ -9,7 +9,7 @@ use std::sync::RwLock;
 use std::time::Instant;
 use serde::{Deserialize, Serialize};
 
-use hgb_core::error::{HgbError, Result};
+use hgb_core::error::Result;
 
 /// Information regarding an authenticated peer in the swarm mesh
 #[derive(Debug, Clone, Serialize, Deserialize)]

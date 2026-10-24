@@ -2,16 +2,26 @@
 //!
 //! Provides sub-millisecond workspace snapshots and instantaneous atomic rollbacks:
 //! - Records full cryptographic state before any agent modification into `.hgb/checkpoints/`.
-//! - Supports 1-key undo (`hgb undo` / `/undo`) without touching git stash or branch history.
-//! - Cleans up any newly created files during rollback and restores modified files byte-for-byte.
+//! - Tracks cryptographic SHA-256 checksum manifests for all workspace files.
+//! - Fully supports dotfiles (.github, .env, .gitignore, etc.) while ignoring transient build dirs.
+//! - Guarantees lossless, atomic rollback with zero data loss or partial writes.
 
 use crate::error::{HgbError, Result};
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use std::fs::{self, File};
-use std::io::Write;
+use sha2::Digest;
+use std::collections::HashSet;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
+
+/// Individual file entry in a checkpoint manifest
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FileManifestEntry {
+    pub relative_path: String,
+    pub sha256: String,
+    pub size_bytes: u64,
+}
 
 /// Metadata for an individual workspace checkpoint
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -22,6 +32,8 @@ pub struct CheckpointMetadata {
     pub file_count: usize,
     pub total_bytes: u64,
     pub git_head: Option<String>,
+    #[serde(default)]
+    pub manifest: Vec<FileManifestEntry>,
 }
 
 /// Report of a rollback operation
@@ -50,15 +62,31 @@ impl CheckpointTimeMachine {
         }
     }
 
-    /// Recursively collect all relevant source files in the workspace
+    /// Recursively collect all relevant source files in the workspace.
+    /// Supports essential dotfiles/directories (.github, .env, .cargo, .gitignore),
+    /// while strictly pruning transient VCS/checkpoint stores and build artifacts (.git, .hgb, target, node_modules, .cache).
     fn collect_workspace_files(&self, dir: &Path, rel_prefix: &Path, files: &mut Vec<(PathBuf, PathBuf)>) {
         if let Ok(entries) = fs::read_dir(dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
                 let file_name = entry.file_name().to_string_lossy().to_string();
 
-                if file_name.starts_with('.') || file_name == "target" || file_name == "node_modules" {
+                // Skip internal metadata and transient build artifacts only
+                if file_name == ".git"
+                    || file_name == ".hgb"
+                    || file_name == "target"
+                    || file_name == "node_modules"
+                    || file_name == ".cache"
+                    || file_name.ends_with(".tmp")
+                {
                     continue;
+                }
+
+                // Prevent symlink loops
+                if let Ok(ft) = entry.file_type() {
+                    if ft.is_symlink() && path.is_dir() {
+                        continue;
+                    }
                 }
 
                 let rel_path = rel_prefix.join(&file_name);
@@ -91,7 +119,7 @@ impl CheckpointTimeMachine {
         None
     }
 
-    /// Capture an atomic checkpoint of the workspace
+    /// Capture an atomic checkpoint of the workspace with SHA-256 manifests
     pub fn create_checkpoint(&self, label: &str) -> Result<CheckpointMetadata> {
         let now = Utc::now();
         let timestamp_str = now.to_rfc3339();
@@ -112,29 +140,50 @@ impl CheckpointTimeMachine {
         self.collect_workspace_files(&self.workspace_root, Path::new(""), &mut ws_files);
 
         let mut total_bytes = 0u64;
-        let mut recorded_files = Vec::new();
+        let mut manifest = Vec::with_capacity(ws_files.len());
 
         for (abs_path, rel_path) in ws_files {
             let target_dest = files_store_dir.join(&rel_path);
             if let Some(parent) = target_dest.parent() {
-                let _ = fs::create_dir_all(parent);
+                fs::create_dir_all(parent).map_err(|e| {
+                    HgbError::Storage(format!("Failed to create checkpoint parent dir for {}: {e}", rel_path.display()))
+                })?;
             }
 
-            if let Ok(meta) = fs::metadata(&abs_path) {
-                total_bytes += meta.len();
-            }
+            // Read raw bytes to compute SHA-256 and verify copy integrity
+            let bytes = fs::read(&abs_path).map_err(|e| {
+                HgbError::Storage(format!("Failed to read file for checkpoint '{}': {e}", abs_path.display()))
+            })?;
 
-            let _ = fs::copy(&abs_path, &target_dest);
-            recorded_files.push(rel_path.to_string_lossy().to_string());
+            let file_size = bytes.len() as u64;
+            total_bytes += file_size;
+
+            let sha256_hex = {
+                let mut sha = sha2::Sha256::new();
+                sha2::Digest::update(&mut sha, &bytes);
+                hex::encode(sha2::Digest::finalize(sha))
+            };
+
+            // Write to backup destination and explicitly handle errors
+            fs::write(&target_dest, &bytes).map_err(|e| {
+                HgbError::Storage(format!("Failed to backup file '{}' to checkpoint: {e}", rel_path.display()))
+            })?;
+
+            manifest.push(FileManifestEntry {
+                relative_path: rel_path.to_string_lossy().to_string(),
+                sha256: sha256_hex,
+                size_bytes: file_size,
+            });
         }
 
         let metadata = CheckpointMetadata {
             id: checkpoint_id.clone(),
             timestamp: timestamp_str,
             label: label.to_string(),
-            file_count: recorded_files.len(),
+            file_count: manifest.len(),
             total_bytes,
             git_head: self.read_git_head(),
+            manifest: manifest.clone(),
         };
 
         // Write checkpoint.json
@@ -143,6 +192,13 @@ impl CheckpointTimeMachine {
             .map_err(|e| HgbError::Serialization(e.to_string()))?;
         fs::write(&meta_file, meta_json)
             .map_err(|e| HgbError::Storage(format!("Failed to write checkpoint metadata: {e}")))?;
+
+        // Write dedicated manifest.json
+        let manifest_file = cp_dir.join("manifest.json");
+        let manifest_json = serde_json::to_string_pretty(&manifest)
+            .map_err(|e| HgbError::Serialization(e.to_string()))?;
+        fs::write(&manifest_file, manifest_json)
+            .map_err(|e| HgbError::Storage(format!("Failed to write checkpoint manifest: {e}")))?;
 
         // Write latest pointer
         let latest_file = self.checkpoints_dir.join("latest.json");
@@ -178,7 +234,7 @@ impl CheckpointTimeMachine {
         Ok(list)
     }
 
-    /// Restore the workspace to an exact checkpoint state
+    /// Restore the workspace to an exact checkpoint state with atomic verification and zero data loss
     pub fn rollback_to(&self, checkpoint_id: &str) -> Result<RollbackReport> {
         let start = Instant::now();
         let cp_dir = self.checkpoints_dir.join(checkpoint_id);
@@ -201,29 +257,91 @@ impl CheckpointTimeMachine {
             return Err(HgbError::Storage(format!("Checkpoint files directory missing for '{}'", checkpoint_id)));
         }
 
-        // 1. Gather all files stored in the checkpoint
-        let mut cp_files = Vec::new();
-        self.collect_workspace_files(&files_store_dir, Path::new(""), &mut cp_files);
+        // --- PHASE 1: MANIFEST INTEGRITY VERIFICATION ---
+        // Verify every backup file in the checkpoint exists and matches its recorded SHA-256 checksum
+        // BEFORE any mutations or deletions occur in the live workspace.
+        let mut verified_entries: Vec<(&FileManifestEntry, PathBuf, Vec<u8>)> = Vec::with_capacity(metadata.manifest.len());
 
-        let mut cp_rel_paths = std::collections::HashSet::new();
+        if !metadata.manifest.is_empty() {
+            for entry in &metadata.manifest {
+                let backup_file = files_store_dir.join(&entry.relative_path);
+                if !backup_file.exists() {
+                    return Err(HgbError::Storage(format!(
+                        "Rollback aborted: Checkpoint integrity violation. Backup file '{}' is missing from checkpoint storage",
+                        entry.relative_path
+                    )));
+                }
+
+                let backup_bytes = fs::read(&backup_file).map_err(|e| {
+                    HgbError::Storage(format!("Rollback aborted: Failed to read backup file '{}': {e}", entry.relative_path))
+                })?;
+
+                let actual_sha256 = {
+                    let mut sha = sha2::Sha256::new();
+                    sha2::Digest::update(&mut sha, &backup_bytes);
+                    hex::encode(sha2::Digest::finalize(sha))
+                };
+
+                if actual_sha256 != entry.sha256 {
+                    return Err(HgbError::Storage(format!(
+                        "Rollback aborted: Checkpoint checksum mismatch for '{}'. Expected SHA-256 {}, got {}",
+                        entry.relative_path, entry.sha256, actual_sha256
+                    )));
+                }
+
+                verified_entries.push((entry, backup_file, backup_bytes));
+            }
+        } else {
+            // Backward-compat fallback if checkpoint predated manifest support
+            let mut cp_files = Vec::new();
+            self.collect_workspace_files(&files_store_dir, Path::new(""), &mut cp_files);
+            for (src_path, rel_path) in cp_files {
+                let bytes = fs::read(&src_path).map_err(|e| {
+                    HgbError::Storage(format!("Rollback aborted: Failed to read backup file '{}': {e}", rel_path.display()))
+                })?;
+                verified_entries.push((
+                    Box::leak(Box::new(FileManifestEntry {
+                        relative_path: rel_path.to_string_lossy().to_string(),
+                        sha256: String::new(),
+                        size_bytes: bytes.len() as u64,
+                    })),
+                    src_path,
+                    bytes,
+                ));
+            }
+        }
+
+        // --- PHASE 2: ATOMIC RESTORATION INTO WORKSPACE ---
+        let mut cp_rel_paths = HashSet::new();
         let mut files_restored = Vec::new();
 
-        // 2. Restore all files from checkpoint into workspace
-        for (src_path, rel_path) in cp_files {
-            let rel_str = rel_path.to_string_lossy().to_string();
+        for (entry, _, backup_bytes) in verified_entries {
+            let rel_str = entry.relative_path.clone();
             cp_rel_paths.insert(rel_str.clone());
 
-            let dest_path = self.workspace_root.join(&rel_path);
+            let dest_path = self.workspace_root.join(&entry.relative_path);
             if let Some(parent) = dest_path.parent() {
-                let _ = fs::create_dir_all(parent);
+                fs::create_dir_all(parent).map_err(|e| {
+                    HgbError::Storage(format!("Failed to create directory for '{}': {e}", rel_str))
+                })?;
             }
 
-            fs::copy(&src_path, &dest_path)
-                .map_err(|e| HgbError::Storage(format!("Failed to restore file '{}': {e}", rel_str)))?;
+            // Atomic write using temporary sibling file and rename
+            let tmp_dest = dest_path.with_extension(format!("hgb_tmp_{}", uuid::Uuid::new_v4().simple()));
+            fs::write(&tmp_dest, &backup_bytes).map_err(|e| {
+                HgbError::Storage(format!("Failed to stage atomic restore for '{}': {e}", rel_str))
+            })?;
+
+            if let Err(e) = fs::rename(&tmp_dest, &dest_path) {
+                let _ = fs::remove_file(&tmp_dest);
+                return Err(HgbError::Storage(format!("Failed to commit restored file '{}': {e}", rel_str)));
+            }
+
             files_restored.push(rel_str);
         }
 
-        // 3. Delete any files in workspace that were created AFTER the checkpoint
+        // --- PHASE 3: CLEANUP POST-CHECKPOINT UNTRACKED FILES ---
+        // Only executed after 100% of checkpoint files have been restored and verified!
         let mut current_ws_files = Vec::new();
         self.collect_workspace_files(&self.workspace_root, Path::new(""), &mut current_ws_files);
 
@@ -231,8 +349,9 @@ impl CheckpointTimeMachine {
         for (abs_path, rel_path) in current_ws_files {
             let rel_str = rel_path.to_string_lossy().to_string();
             if !cp_rel_paths.contains(&rel_str) {
-                let _ = fs::remove_file(&abs_path);
-                files_deleted.push(rel_str);
+                if fs::remove_file(&abs_path).is_ok() {
+                    files_deleted.push(rel_str);
+                }
             }
         }
 
@@ -276,42 +395,84 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_checkpoint_and_rollback_lifecycle() {
-        let temp_dir = std::env::temp_dir().join(format!("cp_test_{}", uuid::Uuid::new_v4().simple()));
+    fn test_checkpoint_and_rollback_lifecycle_with_manifest_and_dotfiles() {
+        let temp_dir = std::env::temp_dir().join(format!("cp_test_manifest_{}", uuid::Uuid::new_v4().simple()));
         let _ = fs::create_dir_all(&temp_dir);
 
         let src_file = temp_dir.join("src/main.rs");
         fs::create_dir_all(src_file.parent().unwrap()).unwrap();
         fs::write(&src_file, "fn main() { println!(\"original state\"); }").unwrap();
 
+        // Dotfiles support: .env and .github/workflows/ci.yml
+        let env_file = temp_dir.join(".env");
+        fs::write(&env_file, "DATABASE_URL=postgres://localhost/app\nPORT=8080").unwrap();
+
+        let github_ci = temp_dir.join(".github/workflows/ci.yml");
+        fs::create_dir_all(github_ci.parent().unwrap()).unwrap();
+        fs::write(&github_ci, "name: CI\non: [push]").unwrap();
+
         let tm = CheckpointTimeMachine::new(&temp_dir);
 
         // 1. Create initial checkpoint
         let cp = tm.create_checkpoint("before_feature_x").unwrap();
         assert_eq!(cp.label, "before_feature_x");
-        assert_eq!(cp.file_count, 1);
+        assert_eq!(cp.file_count, 3);
+        assert_eq!(cp.manifest.len(), 3);
 
-        // 2. Modify existing file & add a new file
-        fs::write(&src_file, "fn main() { println!(\"heavily modified and broken\"); }").unwrap();
-        let new_file = temp_dir.join("src/unwanted.rs");
-        fs::write(&new_file, "// unwanted file").unwrap();
+        // Verify manifest contains SHA-256 for all files including dotfiles
+        let env_entry = cp.manifest.iter().find(|e| e.relative_path == ".env").expect(".env in manifest");
+        assert_eq!(env_entry.sha256.len(), 64);
 
-        assert_eq!(fs::read_to_string(&src_file).unwrap(), "fn main() { println!(\"heavily modified and broken\"); }");
-        assert!(new_file.exists());
+        let ci_entry = cp.manifest.iter().find(|e| e.relative_path == ".github/workflows/ci.yml").expect("ci in manifest");
+        assert_eq!(ci_entry.sha256.len(), 64);
+
+        // 2. Modify existing files & add unwanted files
+        fs::write(&src_file, "fn main() { println!(\"broken state\"); }").unwrap();
+        fs::write(&env_file, "DATABASE_URL=corrupted").unwrap();
+        let unwanted = temp_dir.join("unwanted.rs");
+        fs::write(&unwanted, "// unwanted").unwrap();
 
         // 3. Roll back to latest checkpoint
         let report = tm.rollback_latest().unwrap();
         assert!(report.success);
         assert_eq!(report.checkpoint_id, cp.id);
         assert!(report.files_restored.contains(&"src/main.rs".to_string()));
-        assert!(report.files_deleted.contains(&"src/unwanted.rs".to_string()));
+        assert!(report.files_restored.contains(&".env".to_string()));
+        assert!(report.files_restored.contains(&".github/workflows/ci.yml".to_string()));
+        assert!(report.files_deleted.contains(&"unwanted.rs".to_string()));
 
-        // 4. Verify file restoration
-        let restored = fs::read_to_string(&src_file).unwrap();
-        assert_eq!(restored, "fn main() { println!(\"original state\"); }");
+        // 4. Verify byte-for-byte exact restoration
+        assert_eq!(fs::read_to_string(&src_file).unwrap(), "fn main() { println!(\"original state\"); }");
+        assert_eq!(fs::read_to_string(&env_file).unwrap(), "DATABASE_URL=postgres://localhost/app\nPORT=8080");
+        assert_eq!(fs::read_to_string(&github_ci).unwrap(), "name: CI\non: [push]");
+        assert!(!unwanted.exists());
 
-        // 5. Verify unwanted file was deleted
-        assert!(!new_file.exists());
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_checkpoint_rollback_integrity_rejection() {
+        let temp_dir = std::env::temp_dir().join(format!("cp_test_tamper_{}", uuid::Uuid::new_v4().simple()));
+        let _ = fs::create_dir_all(&temp_dir);
+
+        let file = temp_dir.join("app.rs");
+        fs::write(&file, "pub fn run() {}").unwrap();
+
+        let tm = CheckpointTimeMachine::new(&temp_dir);
+        let cp = tm.create_checkpoint("initial").unwrap();
+
+        // Corrupt backup file directly in checkpoint storage
+        let backup_file = temp_dir.join(".hgb/checkpoints").join(&cp.id).join("files/app.rs");
+        assert!(backup_file.exists());
+        fs::write(&backup_file, "tampered malicious content").unwrap();
+
+        // Working file modified
+        fs::write(&file, "pub fn working_file_state() {}").unwrap();
+
+        // Rollback must abort on checksum mismatch and preserve working file state
+        let res = tm.rollback_latest();
+        assert!(res.is_err(), "Rollback must fail on manifest checksum mismatch");
+        assert_eq!(fs::read_to_string(&file).unwrap(), "pub fn working_file_state() {}", "Surviving working file must not be damaged");
 
         let _ = fs::remove_dir_all(&temp_dir);
     }

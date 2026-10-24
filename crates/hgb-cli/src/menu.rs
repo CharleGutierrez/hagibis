@@ -509,10 +509,17 @@ impl InteractiveCommandCatalog {
             },
             CommandEntry {
                 name: "vibe",
-                aliases: &["vibe-loop", "autonomous-loop"],
+                aliases: &["vibe-loop", "autonomous-loop", "vibe-cockpit"],
                 category: "Autopilot/Vibe",
-                syntax: "hgb vibe [--once] [--watch] [--auto-patch] [--no-tests] [--debounce <ms>]",
-                description: "Autonomous Vibe Coding Agent Loop: watches filesystem events, runs speculative First-Green sandbox checks, and self-optimizes codebases.",
+                syntax: "hgb vibe [--cockpit] [--once] [--watch] [--auto-patch] [--no-tests] [--debounce <ms>]",
+                description: "Autonomous Vibe Coding Agent Loop & Real-Time Interactive Cockpit: watches filesystem events, runs speculative First-Green sandbox checks, and self-optimizes codebases.",
+            },
+            CommandEntry {
+                name: "cockpit",
+                aliases: &["tui", "vibe-cockpit"],
+                category: "Autopilot/Cockpit",
+                syntax: "hgb cockpit [--vibe] [--headless]",
+                description: "Interactive Vibe Cockpit TUI Dashboard: real-time split-screen streaming, live git diffs, Dynatune hardware telemetry, and mid-flight vibe steering.",
             },
             CommandEntry {
                 name: "wasm-pool",

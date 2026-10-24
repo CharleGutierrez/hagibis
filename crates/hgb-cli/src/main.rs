@@ -3,6 +3,9 @@ mod client;
 mod repl;
 pub mod menu;
 pub mod desktop_ide;
+pub mod setup_ide;
+
+use std::path::{Path, PathBuf};
 
 use canvas::{ChatCanvas, ToolCallCard, ToolCardStatus};
 use clap::{Parser, Subcommand};
@@ -696,6 +699,9 @@ enum Commands {
     /// Speculative dual-draft racing & Masterclass Autonomous Vibe Coding Agent Loop
     #[command(alias = "vibe-loop", alias = "autonomous-loop")]
     Vibe {
+        /// Launch interactive real-time Vibe Cockpit TUI dashboard
+        #[arg(long)]
+        cockpit: bool,
         /// Prompt or task description to race
         #[arg(default_value = "")]
         prompt: String,
@@ -720,6 +726,17 @@ enum Commands {
         /// Debounce interval in milliseconds
         #[arg(long, default_value_t = 500)]
         debounce: u64,
+    },
+
+    /// Hands-Free Voice Vibe Coding & Multimodal Push-to-Talk Execution
+    #[command(alias = "vibe-voice", alias = "listen")]
+    Voice {
+        /// Optional audio WAV file to ingest instead of live microphone capture
+        #[arg(short, long)]
+        file: Option<PathBuf>,
+        /// Automatically commit First-Green verified changes to git
+        #[arg(short, long, default_value_t = true)]
+        auto_commit: bool,
     },
 
     /// Style Memory & Reject-Learner Vault
@@ -804,6 +821,9 @@ enum Commands {
     /// Interactive Cockpit TUI Engine & Mid-Flight Steering
     #[command(alias = "tui")]
     Cockpit {
+        /// Launch interactive split-screen Vibe Cockpit TUI dashboard
+        #[arg(long)]
+        vibe: bool,
         /// Render in headless mode without spawning terminal interactive loop
         #[arg(long)]
         headless: bool,
@@ -896,7 +916,7 @@ enum Commands {
         #[arg(short, long)]
         target: String,
         /// Replacement content
-        #[arg(short, long, alias = "replace")]
+        #[arg(short, long)]
         replacement: String,
         /// Optional 1-indexed start line boundary
         #[arg(short, long)]
@@ -1313,11 +1333,24 @@ enum Commands {
         stderr: String,
     },
 
-    /// Generate shell companion integration script for Bash, Zsh, or Fish
+    /// Generate shell companion integration script or run 1-click frictionless Vibe onboarding
     Init {
-        /// Target shell: bash, zsh, fish
-        shell: String,
+        /// Target shell (bash, zsh, fish) or target workspace path
+        #[arg(value_name = "TARGET")]
+        target: Option<String>,
+
+        /// 1-Click frictionless Vibe Coding onboarding initialization
+        #[arg(long)]
+        vibe: bool,
+
+        /// Optional target directory for onboarding
+        #[arg(short, long, value_name = "PATH")]
+        dir: Option<PathBuf>,
     },
+
+    /// 1-Click IDE Onboarding & MCP Configuration (Cursor, VS Code, Windsurf)
+    #[command(alias = "ide-setup")]
+    Setup(setup_ide::SetupArgs),
 
     /// Universal Model Context Protocol (MCP) Client & Sovereign Stdio Server
     Mcp {
@@ -1533,23 +1566,6 @@ enum Commands {
     Teleport {
         /// DOM selector or test ID (e.g. button#checkout-btn)
         selector: String,
-    },
-
-    /// Full-Duplex Zero-Latency Voice Flow Co-Pilot & Local Whisper VAD
-    #[command(alias = "mic", alias = "listen")]
-    Voice {
-        /// Optional spoken audio transcript to process
-        #[arg(default_value = "")]
-        transcript: String,
-        /// Audio file to parse and transcribe (WAV)
-        #[arg(short, long)]
-        file: Option<String>,
-        /// Live microphone capture armed
-        #[arg(short, long)]
-        record: bool,
-        /// Use Groq Cloud Whisper endpoint
-        #[arg(long)]
-        groq: bool,
     },
 
     /// Headless Screenplay & Automated PR Loom Tape: capture animated visual proof
@@ -2784,7 +2800,7 @@ enum Commands {
     },
 
     /// Stateful WebAssembly Edge Sync & Cloudflare Workers Migration (WIT bindings)
-    #[command(alias = "wasm-migrate", alias = "edge-sync")]
+    #[command(alias = "wasm-migrate", alias = "wasm-edge-sync")]
     WasmSync {
         /// Target node or tier (edge, worker, local, firecracker)
         #[arg(long, short, default_value = "edge")]
@@ -2988,7 +3004,7 @@ enum Commands {
     },
 
     /// Pillar 2: Zero-Copy POSIX Shared Memory Ring Buffer
-    #[command(alias = "ring-buffer", alias = "shm-pipe")]
+    #[command(alias = "ring-buffer", alias = "shm-ring-pipe")]
     ShmRing {
         /// Push string data into shared memory ring buffer
         #[arg(long)]
@@ -3011,7 +3027,7 @@ enum Commands {
     },
 
     /// Pillar 3: Self-Healing Autonomous Daemon Loops
-    #[command(alias = "daemon-heal", alias = "heal-loop")]
+    #[command(alias = "daemon-heal", alias = "daemon-heal-loop")]
     SelfHealingDaemon {
         /// Trigger autonomous self-healing loop
         #[arg(long)]
@@ -3028,7 +3044,7 @@ enum Commands {
     },
 
     /// Pillar 4: Distributed P2P Swarm Mesh
-    #[command(alias = "p2p-mesh", alias = "swarm")]
+    #[command(alias = "p2p-mesh", alias = "peer-mesh")]
     SwarmMesh {
         /// Delegate workload payload to best idle peer node
         #[arg(long)]
@@ -3410,7 +3426,7 @@ enum Commands {
     },
 
     /// Upgrade 4: Distributed Edge-to-Cloud Vector Mesh (hgb-storage)
-    #[command(name = "crdt-mesh", alias = "crdt-sync", alias = "vector-mesh")]
+    #[command(name = "crdt-mesh", alias = "mesh-crdt", alias = "vector-mesh")]
     CrdtMesh {
         #[arg(long)]
         status: bool,
@@ -3421,7 +3437,7 @@ enum Commands {
     },
 
     /// Upgrade 5: Autonomous "Self-Healing" Vibe Loops (hgb-nextgen)
-    #[command(name = "vibe-heal", alias = "self-heal-loop", alias = "vibe-loop")]
+    #[command(name = "vibe-heal", alias = "vibe-healing", alias = "vibe-auto-heal")]
     VibeHeal {
         #[arg(long)]
         status: bool,
@@ -3573,7 +3589,19 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    if let Commands::Cockpit { headless } = command {
+    if let Commands::Cockpit { vibe, headless } = command {
+        if vibe {
+            if headless {
+                println!("{}", "🎛️ Hagibis Interactive Vibe Cockpit (Headless Mode) 🎛️".bold().cyan());
+                let app = hgb_nextgen::VibeCockpitApp::new();
+                let buffer = app.render_headless(120, 35);
+                println!("  ✔ Rendered virtual Vibe Cockpit buffer ({} cells)", buffer.content.len());
+                return Ok(());
+            } else {
+                return hgb_nextgen::VibeCockpitApp::run().await;
+            }
+        }
+
         let mut state = hgb_nextgen::CockpitState::new();
 
         let mut node1 = hgb_nextgen::CockpitDagNode::new("n1", "Input Ingestion & Tokenizer", "in-process-gguf");
@@ -5378,7 +5406,10 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             }
             Ok(())
         }
-        Commands::Vibe { prompt, target_dir, race: _, watch, once, auto_patch, no_tests, debounce } => {
+        Commands::Vibe { cockpit, prompt, target_dir, race: _, watch, once, auto_patch, no_tests, debounce } => {
+            if cockpit {
+                return hgb_nextgen::VibeCockpitApp::run().await;
+            }
             if once || auto_patch || no_tests {
                 println!("{}", "🪽 Hagibis Fully Autonomous Vibe Coding Agent Loop".bright_purple().bold());
                 let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
@@ -5444,29 +5475,95 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
                 let resp = repl_helper.dispatch(HgbRequest::AmbientVibeRunOnce { workspace_root: None }).await;
                 repl_helper.render_response(resp);
             } else {
-                println!("{}", "🏎️ Speculative Dual-Draft Race: Fast Local vs Frontier Reasoner...".bold().cyan());
-                let repl_helper = HagibisRepl::new(client);
-                let resp = repl_helper.dispatch(HgbRequest::VibeRace { prompt, target_dir }).await;
-                match resp {
-                    HgbResponse::RaceResult { winner, duration_ms, patch, passed_checks } => {
-                        if passed_checks {
-                            println!(
-                                "{} {} ({})",
-                                "🏆 First Green Candidate Won:".green().bold(),
-                                winner.bold().white(),
-                                format!("{} ms", duration_ms).dimmed()
-                            );
-                            ChatCanvas::print_markdown(&patch);
-                            hgb_core::play_vibe_chime(true);
-                        } else {
-                            println!("{} {} (all candidates failed checks)", "✖ Race Failed:".red().bold(), winner);
-                            hgb_core::play_vibe_chime(false);
+                println!("{}", "🪽 Hagibis Frictionless Vibe Prompt Engine Initializing...".bright_purple().bold());
+                println!("   • Intent: {}", prompt.cyan().bold());
+                let cwd = target_dir
+                    .as_ref()
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+                let runner = hgb_core::vibe_prompt_runner::VibePromptRunner::new(cwd.clone());
+                let spec = hgb_core::vibe_prompt_runner::VibePromptSpec {
+                    prompt: prompt.clone(),
+                    target_dir: Some(cwd),
+                    auto_commit: true,
+                    use_local_ollama: true,
+                    check_command: None,
+                };
+
+                match runner.execute_vibe_prompt(&spec).await {
+                    Ok(result) => {
+                        println!("\n{}", hgb_core::vibe_prompt_runner::format_ambient_status_card(&result).bright_cyan());
+                        if !result.patch_content.is_empty() {
+                            println!("\n{}", "📄 Applied Patch:".bold().white());
+                            ChatCanvas::print_markdown(&format!("```diff\n{}\n```", result.patch_content));
                         }
                     }
-                    other => {
+                    Err(e) => {
                         hgb_core::play_vibe_chime(false);
-                        repl_helper.render_response(other);
+                        eprintln!("{} {}", "✖ Vibe prompt execution failed:".red().bold(), e);
                     }
+                }
+            }
+            Ok(())
+        }
+        Commands::Voice { file, auto_commit } => {
+            println!("{}", "🎙️ Hagibis Hands-Free Voice Vibe Coding Engine".bright_purple().bold());
+            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            let transcriber = hgb_nextgen::VoiceIntentTranscriber::new();
+
+            let spec = if let Some(ref wav_file) = file {
+                println!("   • Audio Input File: {}", wav_file.display().to_string().cyan());
+                match transcriber.transcribe_and_build_spec(Some(wav_file), Some(cwd.clone()), auto_commit) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        hgb_nextgen::play_alert_tone();
+                        eprintln!("{} {}", "✖ Failed to transcribe audio file:".red().bold(), e);
+                        return Ok(());
+                    }
+                }
+            } else {
+                println!("   • Mode: Microphone Push-to-Talk (Streaming Capture)");
+                println!("   • Speak your intent, or press Enter when done:");
+                let mut engine = hgb_nextgen::AudioPromptEngine::new();
+                engine.start_listening();
+                println!("   {}", engine.render_indicator(0).bright_yellow());
+
+                let mut input = String::new();
+                let _ = std::io::stdin().read_line(&mut input);
+                let captured_text = engine.stop_listening();
+
+                let spoken = if !input.trim().is_empty() {
+                    input.trim().to_string()
+                } else if !captured_text.trim().is_empty() {
+                    captured_text
+                } else {
+                    "Run cargo check and verify workspace health".to_string()
+                };
+
+                transcriber.map_spoken_prompt(&spoken, Some(cwd.clone()), auto_commit)
+            };
+
+            println!("   • Transcribed Voice Intent: {}", spec.prompt.cyan().bold());
+            println!("   • Auto-commit: {}", if spec.auto_commit { "Enabled".green() } else { "Disabled (approval required)".yellow() });
+
+            let runner = hgb_core::vibe_prompt_runner::VibePromptRunner::new(cwd);
+            match runner.execute_vibe_prompt(&spec).await {
+                Ok(result) => {
+                    println!("\n{}", hgb_core::vibe_prompt_runner::format_ambient_status_card(&result).bright_cyan());
+                    if !result.patch_content.is_empty() {
+                        println!("\n{}", "📄 Applied Voice Patch:".bold().white());
+                        ChatCanvas::print_markdown(&format!("```diff\n{}\n```", result.patch_content));
+                    }
+                    if result.tests_passed {
+                        hgb_nextgen::play_green_chime();
+                    } else {
+                        hgb_nextgen::play_alert_tone();
+                    }
+                }
+                Err(e) => {
+                    hgb_nextgen::play_alert_tone();
+                    eprintln!("{} {}", "✖ Voice prompt execution failed:".red().bold(), e);
                 }
             }
             Ok(())
@@ -6141,10 +6238,35 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             let _ = repl_helper.dispatch(HgbRequest::ShellCrashRecord { record: rec }).await;
             Ok(())
         }
-        Commands::Init { shell } => {
-            let repl_helper = HagibisRepl::new(client);
-            let resp = repl_helper.dispatch(HgbRequest::ShellInit { shell }).await;
-            repl_helper.render_response(resp);
+        Commands::Init { target, vibe, dir } => {
+            let is_vibe = vibe || dir.is_some() || target.as_deref().map_or(false, |s| s != "bash" && s != "zsh" && s != "fish");
+            if is_vibe {
+                let target_path = dir.or_else(|| {
+                    target.filter(|s| s != "bash" && s != "zsh" && s != "fish").map(PathBuf::from)
+                });
+                let report = hgb_cli::init_vibe::VibeOnboardingEngine::execute_onboarding(target_path.as_deref())?;
+                println!("{}", hgb_cli::init_vibe::VibeOnboardingEngine::render_dashboard(&report));
+                hgb_core::play_vibe_chime(true);
+                Ok(())
+            } else {
+                let shell = target.unwrap_or_else(|| "bash".to_string());
+                let repl_helper = HagibisRepl::new(client);
+                let resp = repl_helper.dispatch(HgbRequest::ShellInit { shell }).await;
+                repl_helper.render_response(resp);
+                Ok(())
+            }
+        }
+        Commands::Setup(ref args) => {
+            let ws = args.path.clone().unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+            let results = setup_ide::run_setup(&ws, args)?;
+            for res in results {
+                if res.success {
+                    println!("{} {} ({})", "✔".green(), res.message.bold(), res.config_path.display().to_string().cyan());
+                } else {
+                    eprintln!("{} {} ({})", "✖".red(), res.message.bold(), res.config_path.display().to_string().yellow());
+                }
+            }
+            hgb_core::play_vibe_chime(true);
             Ok(())
         }
         Commands::Mcp { action } => {
@@ -6457,69 +6579,6 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             let repl_helper = HagibisRepl::new(client);
             let resp = repl_helper.dispatch(HgbRequest::CdpTeleportResolve { selector }).await;
             repl_helper.render_response(resp);
-            Ok(())
-        }
-        Commands::Voice { transcript, file, record, groq } => {
-            println!("{}", "🎙️  HAGIBIS VOICE-TO-INTENT ENGINE".cyan().bold());
-            if let Some(file_path) = file {
-                let bytes = std::fs::read(&file_path)
-                    .map_err(|e| format!("Failed to read audio file '{}': {}", file_path, e))?;
-                let audio = hgb_core::parse_wav(&bytes)
-                    .map_err(|e| format!("WAV parse error: {}", e))?;
-
-                println!("  Sample Rate: {} Hz • Channels: {} • Duration: {:.2}s",
-                    audio.sample_rate.to_string().yellow(),
-                    audio.channels.to_string().yellow(),
-                    audio.duration_seconds
-                );
-
-                let vad = hgb_core::VoiceActivityDetector::new(hgb_core::VadConfig::default());
-                let segments = vad.detect_segments(&audio.samples, audio.sample_rate);
-                println!("  Detected Speech Segments: {}", segments.len().to_string().green().bold());
-                for (i, s) in segments.iter().enumerate() {
-                    println!("    [{}] {:.2}s - {:.2}s (peak RMS: {:.3})", i + 1, s.start_sec, s.end_sec, s.peak_rms);
-                }
-
-                let client = if groq {
-                    hgb_core::VoiceTranscriptionClient::new(
-                        "https://api.groq.com/openai/v1/audio/transcriptions",
-                        std::env::var("GROQ_API_KEY").ok(),
-                        "whisper-large-v3",
-                    )
-                } else {
-                    hgb_core::VoiceTranscriptionClient::default()
-                };
-
-                println!("  Transcribing audio via endpoint: {} ...", client.endpoint.dimmed());
-                match client.transcribe(bytes).await {
-                    Ok(text) => {
-                        println!("  {} \"{}\"", "Transcribed:".green().bold(), text.white().bold());
-                        let intent = hgb_core::VoiceIntentClassifier::classify(&text);
-                        println!("  {} {}", "Parsed Intent:".magenta().bold(), intent);
-                    }
-                    Err(e) => {
-                        println!("  {} {}", "Transcription Notice:".yellow().bold(), e);
-                        let sample_utterance = "Refactor function parse_wav to use zero-copy bytes";
-                        let intent = hgb_core::VoiceIntentClassifier::classify(sample_utterance);
-                        println!("  {} \"{}\"", "Example Spoken Query:".cyan(), sample_utterance);
-                        println!("  {} {}", "Parsed Intent:".magenta().bold(), intent);
-                    }
-                }
-            } else if record {
-                println!("  {} Live microphone recording is armed. (Target format: 16kHz PCM mono)", "●".red().bold());
-            } else if !transcript.is_empty() {
-                let intent = hgb_core::VoiceIntentClassifier::classify(&transcript);
-                println!("  {} \"{}\"", "Input Spoken Query:".cyan(), transcript);
-                println!("  {} {}", "Parsed Intent:".magenta().bold(), intent);
-                let repl_helper = HagibisRepl::new(client);
-                let resp = repl_helper.dispatch(HgbRequest::VoiceFlowProcess { transcript }).await;
-                repl_helper.render_response(resp);
-            } else {
-                println!("  Usage: hgb voice --file <audio.wav> [--groq] OR hgb voice \"<text>\" OR hgb voice --record");
-                let sample_utterance = "Refactor function parse_wav to use zero-copy bytes";
-                let intent = hgb_core::VoiceIntentClassifier::classify(sample_utterance);
-                println!("  Example Intent Classification: \"{}\" => {}", sample_utterance, intent.to_string().green());
-            }
             Ok(())
         }
         Commands::Tape { url, scenario } => {

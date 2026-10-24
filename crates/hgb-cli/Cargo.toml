@@ -33,6 +33,7 @@ uuid = { version = "1.27.0", features = ["v4"] }
 base64 = { workspace = true }
 
 [dev-dependencies]
+tempfile = "3.10"
 hgb-storage = { path = "../hgb-storage" }
 async-trait = { workspace = true }
 reqwest = { workspace = true }

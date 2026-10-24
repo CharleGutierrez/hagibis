@@ -87,15 +87,13 @@ impl GhostEngine {
             tokio::runtime::Runtime::new().unwrap().block_on(provider.complete(&prompt_clone, None))
         }).join().unwrap();
         
-        let mut diff = String::new();
-        let rationale = "Real AI speculated diff".to_string();
-        let confidence = 0.95f32;
-        
-        if let Ok(resp) = ai_res {
-            diff = resp;
+        let diff = if let Ok(resp) = ai_res {
+            resp
         } else {
             return None;
-        }
+        };
+        let rationale = "Real AI speculated diff".to_string();
+        let confidence = 0.95f32;
 
         let latency_us = start.elapsed().as_micros() as u64;
         self.total_precomputations += 1;

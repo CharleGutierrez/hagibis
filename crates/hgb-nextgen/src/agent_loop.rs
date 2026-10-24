@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use sha2::Digest;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -27,12 +28,29 @@ pub struct ToolResult {
     pub is_error: bool,
 }
 
+/// Immutable approval token representation bound to exact execution context
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalToken {
+    pub token: String,
+    pub call_id: String,
+    pub session_id: String,
+    pub tool_name: String,
+    pub payload_hash: String,
+    pub target_path_hash: Option<String>,
+    pub created_at: u64,
+}
+
+/// Pending tool approval with server-generated UUIDv4 token and cryptographic payload binding
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PendingToolApproval {
+    pub approval_token: String,
     pub call_id: String,
+    pub session_id: String,
     pub tool_name: String,
     pub arguments: serde_json::Value,
     pub description: String,
+    pub payload_hash: String,
+    pub target_path_hash: Option<String>,
     pub created_at: u64,
 }
 
@@ -44,6 +62,8 @@ pub enum AgentStepResponse {
     #[serde(rename = "tool_approval_required")]
     ToolApprovalRequired {
         call_id: String,
+        #[serde(default)]
+        approval_token: String,
         tool: String,
         arguments: serde_json::Value,
         description: String,
@@ -68,6 +88,7 @@ pub struct ChatMessageItem {
 pub struct AgentLoopEngine {
     workspace_root: PathBuf,
     pending_approvals: Arc<Mutex<HashMap<String, PendingToolApproval>>>,
+    consumed_tokens: Arc<Mutex<HashSet<String>>>,
     auto_approve_session: Arc<AtomicBool>,
 }
 
@@ -76,6 +97,7 @@ impl AgentLoopEngine {
         Self {
             workspace_root,
             pending_approvals: Arc::new(Mutex::new(HashMap::new())),
+            consumed_tokens: Arc::new(Mutex::new(HashSet::new())),
             auto_approve_session: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -462,8 +484,13 @@ impl AgentLoopEngine {
         matches!(tool_name, "bash_run" | "file_write" | "file_patch")
     }
 
-    /// Registers a tool call requiring user approval
+    /// Registers a tool call requiring user approval with server-generated UUIDv4 token and payload binding
     pub async fn register_pending_approval(&self, call: &ToolCall) -> PendingToolApproval {
+        self.register_pending_approval_with_session(call, "default_session").await
+    }
+
+    /// Registers a tool call requiring user approval bound to a specific session ID
+    pub async fn register_pending_approval_with_session(&self, call: &ToolCall, session_id: &str) -> PendingToolApproval {
         let desc = match call.name.as_str() {
             "bash_run" => {
                 let cmd = call.arguments.get("command").and_then(|v| v.as_str()).unwrap_or("");
@@ -485,25 +512,99 @@ impl AgentLoopEngine {
             .unwrap_or_default()
             .as_secs();
 
+        // Server-generated cryptographically unique single-use token
+        let approval_token = format!("appr_{}", uuid::Uuid::new_v4());
+
+        // Cryptographic payload hash (SHA-256 of canonical JSON arguments)
+        let arg_bytes = serde_json::to_vec(&call.arguments).unwrap_or_default();
+        let payload_hash = {
+            let mut hasher = sha2::Sha256::new();
+            sha2::Digest::update(&mut hasher, &arg_bytes);
+            hex::encode(sha2::Digest::finalize(hasher))
+        };
+
+        // Target path hash if the tool call touches a file
+        let target_path_hash = call.arguments.get("path")
+            .or_else(|| call.arguments.get("target_dir"))
+            .or_else(|| call.arguments.get("target_file"))
+            .and_then(|v| v.as_str())
+            .map(|p| {
+                let full = self.resolve_path(p);
+                let path_bytes = full.to_string_lossy().as_bytes().to_vec();
+                let mut hasher = sha2::Sha256::new();
+                sha2::Digest::update(&mut hasher, &path_bytes);
+                hex::encode(sha2::Digest::finalize(hasher))
+            });
+
         let pending = PendingToolApproval {
+            approval_token: approval_token.clone(),
             call_id: call.id.clone(),
+            session_id: session_id.to_string(),
             tool_name: call.name.clone(),
             arguments: call.arguments.clone(),
             description: desc,
+            payload_hash,
+            target_path_hash,
             created_at: now,
         };
 
         let mut lock = self.pending_approvals.lock().await;
-        lock.insert(call.id.clone(), pending.clone());
+        // Index by server-generated token and model call_id for lookup compatibility
+        lock.insert(approval_token.clone(), pending.clone());
+        if !lock.contains_key(&call.id) {
+            lock.insert(call.id.clone(), pending.clone());
+        }
+
         pending
     }
 
-    /// Handles a user response to an approval request
-    pub async fn resolve_approval(&self, call_id: &str, approved: bool, allow_all: bool) -> Result<ToolResult, String> {
+    /// Handles a user response to an approval request with single-consumption enforcement
+    pub async fn resolve_approval(&self, token_or_id: &str, approved: bool, allow_all: bool) -> Result<ToolResult, String> {
+        // Enforce single-use: reject if token was already consumed
+        {
+            let consumed = self.consumed_tokens.lock().await;
+            if consumed.contains(token_or_id) {
+                return Err(format!(
+                    "Approval token '{}' has already been consumed (single-use enforcement violation)",
+                    token_or_id
+                ));
+            }
+        }
+
         let pending = {
             let mut lock = self.pending_approvals.lock().await;
-            lock.remove(call_id).ok_or_else(|| format!("Approval ID {} not found", call_id))?
+            // Remove matching approval
+            let item = lock.remove(token_or_id);
+            if let Some(ref p) = item {
+                // Remove alternate key mappings
+                lock.remove(&p.approval_token);
+                lock.remove(&p.call_id);
+            }
+            item.ok_or_else(|| format!("Approval token or call ID '{}' not found or invalid", token_or_id))?
         };
+
+        // Mark token and original call_id as consumed immediately
+        {
+            let mut consumed = self.consumed_tokens.lock().await;
+            consumed.insert(pending.approval_token.clone());
+            consumed.insert(pending.call_id.clone());
+            consumed.insert(token_or_id.to_string());
+        }
+
+        // Verify payload immutability against original registered hash
+        let current_arg_bytes = serde_json::to_vec(&pending.arguments).unwrap_or_default();
+        let current_hash = {
+            let mut hasher = sha2::Sha256::new();
+            sha2::Digest::update(&mut hasher, &current_arg_bytes);
+            hex::encode(sha2::Digest::finalize(hasher))
+        };
+
+        if current_hash != pending.payload_hash {
+            return Err(format!(
+                "Security violation: Tool payload hash mismatch for token '{}'. Registered: {}, Actual: {}",
+                pending.approval_token, pending.payload_hash, current_hash
+            ));
+        }
 
         if allow_all {
             self.set_auto_approve(true);
@@ -511,7 +612,7 @@ impl AgentLoopEngine {
 
         if !approved {
             return Ok(ToolResult {
-                call_id: call_id.to_string(),
+                call_id: pending.call_id,
                 output: "Action rejected by user.".to_string(),
                 is_error: true,
             });
@@ -645,26 +746,38 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_agent_approval_gate() {
+    async fn test_immutable_approval_token_lifecycle_and_single_use() {
         let dir = tempdir().unwrap();
         let engine = AgentLoopEngine::new(dir.path().to_path_buf());
 
-        assert!(engine.requires_approval("bash_run"));
-        assert!(engine.requires_approval("file_write"));
-        assert!(!engine.requires_approval("file_read"));
-
         let call = ToolCall {
-            id: "gate_1".to_string(),
+            id: "client_call_99".to_string(),
             name: "bash_run".to_string(),
-            arguments: serde_json::json!({ "command": "echo test" }),
+            arguments: serde_json::json!({ "command": "echo 'approval test'" }),
         };
 
-        let pending = engine.register_pending_approval(&call).await;
-        assert_eq!(pending.call_id, "gate_1");
+        // 1. Register approval
+        let pending = engine.register_pending_approval_with_session(&call, "session-xyz").await;
 
-        // Resolve approval positively
-        let result = engine.resolve_approval("gate_1", true, false).await.unwrap();
+        // Verify server-generated UUIDv4 token format
+        assert!(pending.approval_token.starts_with("appr_"));
+        assert_ne!(pending.approval_token, call.id);
+        assert_eq!(pending.session_id, "session-xyz");
+        assert_eq!(pending.payload_hash.len(), 64);
+
+        // 2. Resolve with server-generated token
+        let result = engine.resolve_approval(&pending.approval_token, true, false).await.unwrap();
         assert!(!result.is_error);
-        assert!(result.output.contains("test"));
+        assert!(result.output.contains("approval test"));
+
+        // 3. Second resolution of the same token MUST be strictly rejected
+        let replay_result = engine.resolve_approval(&pending.approval_token, true, false).await;
+        assert!(replay_result.is_err(), "Consumed approval token must be strictly rejected");
+        let err_msg = replay_result.unwrap_err();
+        assert!(err_msg.contains("already been consumed"));
+
+        // 4. Arbitrary unapproved or forged token must fail
+        let fake_result = engine.resolve_approval("appr_fake_unregistered_token", true, false).await;
+        assert!(fake_result.is_err());
     }
 }

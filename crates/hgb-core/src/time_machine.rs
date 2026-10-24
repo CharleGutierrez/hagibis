@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use colored::Colorize;
 use serde::{Deserialize, Serialize};
+use sha2::Digest;
 
 /// Outcome status of an edit or speculative branch
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -80,6 +81,24 @@ impl TimelineSnapshot {
             metadata: HashMap::new(),
         }
     }
+}
+
+/// Structured diff line representation
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DiffLine {
+    Context(String),
+    Add(String),    // In original forward diff: '+'
+    Remove(String), // In original forward diff: '-'
+}
+
+/// Git-compatible unified patch hunk
+#[derive(Debug, Clone)]
+pub struct GitPatchHunk {
+    pub old_start: usize,
+    pub old_count: usize,
+    pub new_start: usize,
+    pub new_count: usize,
+    pub lines: Vec<DiffLine>,
 }
 
 /// ChronoWarp Time-Machine Storage & Scrubber Engine
@@ -236,7 +255,7 @@ impl TimeMachineEngine {
         Ok(restored_files)
     }
 
-    /// Parse and apply reverse diff to files in workspace_root
+    /// Parse and apply reverse diff to files in workspace_root with Git-compatible hunk validation
     pub fn apply_reverse_unified_diff(
         diff: &str,
         workspace_root: &Path,
@@ -248,149 +267,354 @@ impl TimeMachineEngine {
             return Ok(restored);
         }
 
+        // Parse diff into per-file hunks
+        let file_hunks = Self::parse_unified_diff_hunks(diff, modified_files);
+        if file_hunks.is_empty() && !modified_files.is_empty() {
+            return Err("Failed to parse any valid Git unified diff hunks from diff content".to_string());
+        }
+
+        // Transactional staging: path -> Some(content) or None (delete)
+        let mut staged_writes: HashMap<PathBuf, Option<String>> = HashMap::new();
+
         for file_rel in modified_files {
             let target_file = workspace_root.join(file_rel);
+            let hunks = match file_hunks.get(file_rel) {
+                Some(h) if !h.is_empty() => h,
+                _ => {
+                    // If diff has only one file's hunks without matching filename header, use those if single file
+                    if modified_files.len() == 1 && file_hunks.len() == 1 {
+                        file_hunks.values().next().unwrap()
+                    } else {
+                        return Err(format!("No diff hunks found for modified file '{}'", file_rel));
+                    }
+                }
+            };
+
             let current_content = if target_file.exists() {
-                fs::read_to_string(&target_file).map_err(|e| format!("Failed to read {}: {}", target_file.display(), e))?
+                fs::read_to_string(&target_file)
+                    .map_err(|e| format!("Failed to read {}: {}", target_file.display(), e))?
             } else {
                 String::new()
             };
 
-            let diff_lines = Self::extract_file_diff_lines(diff, file_rel, modified_files.len() == 1);
-            if diff_lines.is_empty() {
-                continue;
-            }
+            // Compute pre-patch SHA-256
+            let sha_before = {
+                let mut hasher = sha2::Sha256::new();
+                sha2::Digest::update(&mut hasher, current_content.as_bytes());
+                hex::encode(sha2::Digest::finalize(hasher))
+            };
 
-            let hunks = Self::extract_hunks(&diff_lines);
-            let mut new_content = current_content.clone();
-            let mut applied = false;
+            let reversed_content = Self::apply_hunks_reverse(
+                &current_content,
+                hunks,
+                target_file.exists(),
+                file_rel,
+            )?;
 
-            for (post_img, pre_img) in hunks {
-                if !post_img.is_empty() && new_content.contains(&post_img) {
-                    new_content = new_content.replacen(&post_img, &pre_img, 1);
-                    applied = true;
-                } else if !target_file.exists() && !pre_img.is_empty() {
-                    new_content = pre_img;
-                    applied = true;
+            // If reversed content is Some, verify post-patch state
+            if let Some(ref content) = reversed_content {
+                let mut hasher = sha2::Sha256::new();
+                sha2::Digest::update(&mut hasher, content.as_bytes());
+                let sha_after = hex::encode(sha2::Digest::finalize(hasher));
+
+                if target_file.exists() && sha_before == sha_after && !hunks.is_empty() {
+                    let has_effective_changes = hunks.iter().any(|h| {
+                        h.lines.iter().any(|l| matches!(l, DiffLine::Add(_) | DiffLine::Remove(_)))
+                    });
+                    if has_effective_changes {
+                        return Err(format!(
+                            "Reverse diff validation failed: file '{}' was unchanged after applying hunks (SHA-256: {})",
+                            file_rel, sha_before
+                        ));
+                    }
                 }
             }
 
-            if applied {
-                if let Some(parent) = target_file.parent() {
-                    let _ = fs::create_dir_all(parent);
+            staged_writes.insert(target_file, reversed_content);
+            restored.push(file_rel.clone());
+        }
+
+        // If all files validated and applied cleanly in-memory, commit transaction to disk
+        for (file_path, content_opt) in staged_writes {
+            match content_opt {
+                Some(content) => {
+                    if let Some(parent) = file_path.parent() {
+                        fs::create_dir_all(parent)
+                            .map_err(|e| format!("Failed to create parent dir for {}: {}", file_path.display(), e))?;
+                    }
+                    fs::write(&file_path, content)
+                        .map_err(|e| format!("Failed to write {}: {}", file_path.display(), e))?;
                 }
-                fs::write(&target_file, &new_content)
-                    .map_err(|e| format!("Failed to write {}: {}", target_file.display(), e))?;
-                restored.push(file_rel.clone());
-            } else if target_file.exists() && !diff_lines.is_empty() {
-                let pre_lines: Vec<String> = diff_lines
-                    .iter()
-                    .filter_map(|l| {
-                        if l.starts_with('-') && !l.starts_with("---") {
-                            Some(l[1..].to_string())
-                        } else if l.starts_with(' ') {
-                            Some(l[1..].to_string())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-                if !pre_lines.is_empty() {
-                    let candidate = pre_lines.join("\n") + "\n";
-                    if candidate.trim() != current_content.trim() {
-                        if let Some(parent) = target_file.parent() {
-                            let _ = fs::create_dir_all(parent);
-                        }
-                        fs::write(&target_file, &candidate)
-                            .map_err(|e| format!("Failed to write {}: {}", target_file.display(), e))?;
-                        restored.push(file_rel.clone());
+                None => {
+                    if file_path.exists() {
+                        fs::remove_file(&file_path)
+                            .map_err(|e| format!("Failed to remove rolled-back file {}: {}", file_path.display(), e))?;
                     }
                 }
             }
         }
 
-        if restored.is_empty() && !modified_files.is_empty() {
-            return Err("Diff could not be reversed against workspace files".to_string());
-        }
-
         Ok(restored)
     }
 
-    fn extract_file_diff_lines(diff: &str, file_rel: &str, is_only_file: bool) -> Vec<String> {
+    /// Parses unified diff into structured per-file hunks
+    pub fn parse_unified_diff_hunks(diff: &str, modified_files: &[String]) -> HashMap<String, Vec<GitPatchHunk>> {
+        let mut result: HashMap<String, Vec<GitPatchHunk>> = HashMap::new();
         let lines: Vec<&str> = diff.lines().collect();
-        if is_only_file {
-            return lines.iter().map(|s| s.to_string()).collect();
-        }
+        let mut idx = 0;
+        let mut current_file: Option<String> = if modified_files.len() == 1 {
+            Some(modified_files[0].clone())
+        } else {
+            None
+        };
 
-        let mut in_file = false;
-        let mut file_lines = Vec::new();
-        let target_marker = format!("b/{}", file_rel);
+        while idx < lines.len() {
+            let line = lines[idx];
 
-        for line in lines {
-            if line.starts_with("--- ") || line.starts_with("+++ ") || line.starts_with("diff ") {
-                if line.contains(file_rel) || line.contains(&target_marker) {
-                    in_file = true;
-                } else if in_file && (line.starts_with("diff ") || (line.starts_with("--- ") && !line.contains(file_rel))) {
-                    in_file = false;
+            // Match diff header: diff --git a/path b/path
+            if line.starts_with("diff --git ") {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 4 {
+                    let b_path = parts[3].trim_start_matches("b/").trim_start_matches("a/");
+                    current_file = Some(b_path.to_string());
+                }
+                idx += 1;
+                continue;
+            }
+
+            // Match --- a/path or +++ b/path
+            if line.starts_with("--- ") || line.starts_with("+++ ") {
+                let raw_path = line[4..].trim().split('\t').next().unwrap_or("").trim();
+                let clean = raw_path.trim_start_matches("a/").trim_start_matches("b/");
+                if clean != "/dev/null" && !clean.is_empty() {
+                    for mf in modified_files {
+                        if clean == mf || clean.ends_with(mf) || mf.ends_with(clean) {
+                            current_file = Some(mf.clone());
+                            break;
+                        }
+                    }
+                }
+                idx += 1;
+                continue;
+            }
+
+            // Match hunk header @@ -old_start,old_count +new_start,new_count @@
+            if line.starts_with("@@ ") {
+                if let Some((old_start, old_count, new_start, new_count)) = Self::parse_hunk_header(line) {
+                    let file_key = current_file.clone().unwrap_or_else(|| {
+                        modified_files.first().cloned().unwrap_or_else(|| "unknown".to_string())
+                    });
+
+                    idx += 1;
+                    let mut hunk_lines = Vec::new();
+
+                    while idx < lines.len() {
+                        let h_line = lines[idx];
+                        if h_line.starts_with("@@ ") || h_line.starts_with("diff --git ") || h_line.starts_with("--- ") {
+                            break;
+                        }
+                        if let Some(ch) = h_line.chars().next() {
+                            match ch {
+                                ' ' => hunk_lines.push(DiffLine::Context(h_line[1..].to_string())),
+                                '+' => hunk_lines.push(DiffLine::Add(h_line[1..].to_string())),
+                                '-' => hunk_lines.push(DiffLine::Remove(h_line[1..].to_string())),
+                                '\\' => {} // "\ No newline at end of file"
+                                _ => {
+                                    // Treat as context line if unadorned
+                                    hunk_lines.push(DiffLine::Context(h_line.to_string()));
+                                }
+                            }
+                        } else {
+                            // Empty line treated as empty context line
+                            hunk_lines.push(DiffLine::Context(String::new()));
+                        }
+                        idx += 1;
+                    }
+
+                    let hunk = GitPatchHunk {
+                        old_start,
+                        old_count,
+                        new_start,
+                        new_count,
+                        lines: hunk_lines,
+                    };
+
+                    result.entry(file_key).or_default().push(hunk);
+                    continue;
                 }
             }
-            if in_file {
-                file_lines.push(line.to_string());
-            }
+
+            idx += 1;
         }
 
-        if file_lines.is_empty() {
-            diff.lines().map(|s| s.to_string()).collect()
-        } else {
-            file_lines
-        }
+        result
     }
 
-    fn extract_hunks(lines: &[String]) -> Vec<(String, String)> {
-        let mut hunks = Vec::new();
-        let mut cur_post: Vec<String> = Vec::new();
-        let mut cur_pre: Vec<String> = Vec::new();
-        let mut in_hunk = false;
+    /// Parse header @@ -old_start,old_count +new_start,new_count @@
+    fn parse_hunk_header(header: &str) -> Option<(usize, usize, usize, usize)> {
+        let rest = header.strip_prefix("@@ -")?;
+        let at_pos = rest.find(" @@")?;
+        let spec = &rest[..at_pos];
 
-        for line in lines {
-            if line.starts_with("@@") {
-                if in_hunk && (!cur_post.is_empty() || !cur_pre.is_empty()) {
-                    hunks.push((cur_post.join("\n"), cur_pre.join("\n")));
-                    cur_post.clear();
-                    cur_pre.clear();
+        let mut parts = spec.split(' ');
+        let old_part = parts.next()?;
+        let new_part = parts.next()?.strip_prefix('+')?;
+
+        let (old_start, old_count) = if let Some((s, c)) = old_part.split_once(',') {
+            (s.parse::<usize>().ok()?, c.parse::<usize>().ok()?)
+        } else {
+            (old_part.parse::<usize>().ok()?, 1)
+        };
+
+        let (new_start, new_count) = if let Some((s, c)) = new_part.split_once(',') {
+            (s.parse::<usize>().ok()?, c.parse::<usize>().ok()?)
+        } else {
+            (new_part.parse::<usize>().ok()?, 1)
+        };
+
+        Some((old_start, old_count, new_start, new_count))
+    }
+
+    /// Apply hunks in reverse to a single file's content
+    fn apply_hunks_reverse(
+        current_content: &str,
+        hunks: &[GitPatchHunk],
+        file_exists_on_disk: bool,
+        _file_rel: &str,
+    ) -> Result<Option<String>, String> {
+        // Check for file creation in forward diff (all added lines, old_start == 0, old_count == 0)
+        let is_pure_addition = hunks.iter().all(|h| {
+            h.old_count == 0 && h.lines.iter().all(|l| matches!(l, DiffLine::Add(_)))
+        });
+
+        if is_pure_addition && file_exists_on_disk {
+            return Ok(None);
+        }
+
+        // Check for file deletion in forward diff (all removed lines, new_count == 0)
+        let is_pure_deletion = hunks.iter().all(|h| {
+            h.new_count == 0 && h.lines.iter().all(|l| matches!(l, DiffLine::Remove(_)))
+        });
+
+        if is_pure_deletion && !file_exists_on_disk {
+            let mut recreated = Vec::new();
+            for h in hunks {
+                for l in &h.lines {
+                    if let DiffLine::Remove(s) = l {
+                        recreated.push(s.as_str());
+                    }
                 }
-                in_hunk = true;
+            }
+            let mut out = recreated.join("\n");
+            if !out.is_empty() && !out.ends_with('\n') {
+                out.push('\n');
+            }
+            return Ok(Some(out));
+        }
+
+        let mut lines: Vec<String> = current_content.lines().map(|s| s.to_string()).collect();
+
+        // Sort hunks by new_start descending so applying lower hunks doesn't shift line numbers of upper hunks
+        let mut sorted_hunks = hunks.to_vec();
+        sorted_hunks.sort_by(|a, b| b.new_start.cmp(&a.new_start));
+
+        for hunk in &sorted_hunks {
+            let mut expected_post: Vec<String> = Vec::new();
+            let mut replacement_pre: Vec<String> = Vec::new();
+
+            for dl in &hunk.lines {
+                match dl {
+                    DiffLine::Context(c) => {
+                        expected_post.push(c.clone());
+                        replacement_pre.push(c.clone());
+                    }
+                    DiffLine::Add(a) => {
+                        expected_post.push(a.clone());
+                    }
+                    DiffLine::Remove(r) => {
+                        replacement_pre.push(r.clone());
+                    }
+                }
+            }
+
+            if expected_post.is_empty() && replacement_pre.is_empty() {
                 continue;
             }
 
-            if line.starts_with("---") || line.starts_with("+++") || line.starts_with("diff") {
-                continue;
-            }
+            let target_line_idx = hunk.new_start.saturating_sub(1);
+            let match_idx = Self::locate_hunk_match(&lines, &expected_post, target_line_idx)?;
 
-            if in_hunk {
-                if line.starts_with('+') {
-                    cur_post.push(line[1..].to_string());
-                } else if line.starts_with('-') {
-                    cur_pre.push(line[1..].to_string());
-                } else if line.starts_with(' ') {
-                    cur_post.push(line[1..].to_string());
-                    cur_pre.push(line[1..].to_string());
+            lines.splice(match_idx..match_idx + expected_post.len(), replacement_pre);
+        }
+
+        let mut reconstructed = lines.join("\n");
+        if current_content.ends_with('\n') || (lines.is_empty() && current_content.is_empty()) {
+            if !reconstructed.ends_with('\n') && !reconstructed.is_empty() {
+                reconstructed.push('\n');
+            }
+        }
+
+        Ok(Some(reconstructed))
+    }
+
+    /// Locates exact line index for a hunk match, testing nominal line first, then searching fuzz radius
+    fn locate_hunk_match(
+        file_lines: &[String],
+        expected: &[String],
+        target_idx: usize,
+    ) -> Result<usize, String> {
+        if expected.is_empty() {
+            return Ok(target_idx.min(file_lines.len()));
+        }
+
+        let exp_len = expected.len();
+
+        // 1. Check exact nominal index
+        if target_idx + exp_len <= file_lines.len() {
+            if &file_lines[target_idx..target_idx + exp_len] == expected {
+                return Ok(target_idx);
+            }
+        }
+
+        // 2. Search fuzz radius: ±1, ±2, ±3, ±4, ±5
+        for offset in 1..=5 {
+            if let Some(cand) = target_idx.checked_add(offset) {
+                if cand + exp_len <= file_lines.len() && &file_lines[cand..cand + exp_len] == expected {
+                    return Ok(cand);
                 }
-            } else if line.starts_with('+') || line.starts_with('-') {
-                in_hunk = true;
-                if line.starts_with('+') {
-                    cur_post.push(line[1..].to_string());
-                } else if line.starts_with('-') {
-                    cur_pre.push(line[1..].to_string());
+            }
+            if let Some(cand) = target_idx.checked_sub(offset) {
+                if cand + exp_len <= file_lines.len() && &file_lines[cand..cand + exp_len] == expected {
+                    return Ok(cand);
                 }
             }
         }
 
-        if !cur_post.is_empty() || !cur_pre.is_empty() {
-            hunks.push((cur_post.join("\n"), cur_pre.join("\n")));
+        // 3. Fallback: full file search with unambiguous check
+        let mut candidates = Vec::new();
+        for i in 0..=file_lines.len().saturating_sub(exp_len) {
+            if &file_lines[i..i + exp_len] == expected {
+                candidates.push(i);
+            }
         }
 
-        hunks
+        if candidates.len() == 1 {
+            return Ok(candidates[0]);
+        }
+
+        if candidates.len() > 1 {
+            return Err(format!(
+                "Hunk context matches multiple ({}) ambiguous locations in file; cannot safely apply patch without corruption",
+                candidates.len()
+            ));
+        }
+
+        Err(format!(
+            "Hunk failed to apply: expected context not found around line {} (expected {} lines: '{}')",
+            target_idx + 1,
+            exp_len,
+            expected.first().map(|s| s.as_str()).unwrap_or("")
+        ))
     }
 
     /// Render interactive / terminal timeline scrubber graph
@@ -547,6 +771,142 @@ mod tests {
         assert!(rendered.contains(&snap1.snapshot_id));
         assert!(rendered.contains(&snap2.snapshot_id));
         assert!(rendered.contains("ACTIVE SCRUBBER HEAD"));
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_apply_reverse_unified_diff_multi_hunk() {
+        let temp_dir = std::env::temp_dir().join(format!("hgb_test_tm_diff_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let file_path = temp_dir.join("src/service.rs");
+        fs::create_dir_all(file_path.parent().unwrap()).unwrap();
+
+        // Target file in modified state:
+        let modified_file_content = "\
+// Service Header
+fn init() {
+    println!(\"modified_init\");
+}
+
+fn worker() {
+    let x = 10;
+    println!(\"modified_worker\");
+}
+
+fn cleanup() {
+    println!(\"cleanup\");
+}
+";
+        fs::write(&file_path, modified_file_content).unwrap();
+
+        // Forward diff that changed init and worker:
+        let diff = "\
+--- a/src/service.rs
++++ b/src/service.rs
+@@ -2,3 +2,3 @@
+ fn init() {
+-    println!(\"original_init\");
++    println!(\"modified_init\");
+ }
+@@ -7,4 +7,4 @@
+ fn worker() {
+     let x = 10;
+-    println!(\"original_worker\");
++    println!(\"modified_worker\");
+ }
+";
+
+        let res = TimeMachineEngine::apply_reverse_unified_diff(
+            diff,
+            &temp_dir,
+            &["src/service.rs".to_string()],
+        ).expect("Multi-hunk reverse diff should apply cleanly");
+
+        assert_eq!(res, vec!["src/service.rs"]);
+
+        let restored_content = fs::read_to_string(&file_path).unwrap();
+        assert!(restored_content.contains("original_init"));
+        assert!(restored_content.contains("original_worker"));
+        assert!(!restored_content.contains("modified_init"));
+        assert!(!restored_content.contains("modified_worker"));
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_apply_reverse_repeated_lines_handling() {
+        let temp_dir = std::env::temp_dir().join(format!("hgb_test_tm_rep_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let file_path = temp_dir.join("repeated.txt");
+        // File has identical repeated lines
+        let modified_file_content = "\
+line_item
+line_item
+TARGET_MODIFIED
+line_item
+line_item
+";
+        fs::write(&file_path, modified_file_content).unwrap();
+
+        // Diff targeting line 3 specifically with surrounding context
+        let diff = "\
+--- a/repeated.txt
++++ b/repeated.txt
+@@ -2,3 +2,3 @@
+ line_item
+-TARGET_ORIGINAL
++TARGET_MODIFIED
+ line_item
+";
+
+        let res = TimeMachineEngine::apply_reverse_unified_diff(
+            diff,
+            &temp_dir,
+            &["repeated.txt".to_string()],
+        ).expect("Repeated lines should resolve correctly by line position");
+
+        assert_eq!(res, vec!["repeated.txt"]);
+
+        let restored_content = fs::read_to_string(&file_path).unwrap();
+        assert!(restored_content.contains("TARGET_ORIGINAL"));
+        assert!(!restored_content.contains("TARGET_MODIFIED"));
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_apply_reverse_clean_rejection_on_mismatch() {
+        let temp_dir = std::env::temp_dir().join(format!("hgb_test_tm_reject_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let file_path = temp_dir.join("file.rs");
+        let initial_content = "fn main() {\n    println!(\"different code\");\n}\n";
+        fs::write(&file_path, initial_content).unwrap();
+
+        // Diff expecting context that doesn't match
+        let diff = "\
+--- a/file.rs
++++ b/file.rs
+@@ -1,3 +1,3 @@
+ fn main() {
+-    println!(\"alpha\");
++    println!(\"beta\");
+ }
+";
+
+        let res = TimeMachineEngine::apply_reverse_unified_diff(
+            diff,
+            &temp_dir,
+            &["file.rs".to_string()],
+        );
+
+        assert!(res.is_err(), "Patch must fail cleanly on context mismatch");
+        // Verify working file remains 100% untouched
+        let content_after = fs::read_to_string(&file_path).unwrap();
+        assert_eq!(content_after, initial_content);
 
         let _ = fs::remove_dir_all(&temp_dir);
     }

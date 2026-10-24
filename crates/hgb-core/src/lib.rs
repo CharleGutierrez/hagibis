@@ -60,6 +60,7 @@ pub mod micro_sandbox;
 pub mod ambient_audio;
 pub mod cdp_patcher;
 pub mod skeleton_lens;
+pub mod code_skeleton;
 pub mod lakandiwa_swarm;
 pub mod db_cow_time_machine;
 pub mod slopsquatting_firewall;
@@ -1072,6 +1073,19 @@ pub use unified_shm_wasm_bridge::{
 };
 
 pub use wasmtime;
+
+// Frictionless Vibe Prompting & Ambient Hardware Synergy
+pub mod vibe_hardware_governor;
+pub use vibe_hardware_governor::{
+    VibeHardwareGovernor, VibeHardwareGuard, VibeThermalState,
+    VIBE_THERMAL_HEADROOM_THRESHOLD_C,
+};
+
+pub mod vibe_prompt_runner;
+pub use vibe_prompt_runner::{
+    format_ambient_status_card, VibePromptResult, VibePromptRunner, VibePromptSpec,
+};
+pub use code_skeleton::{CodeSkeletonizer, SkeletonReport};
 
 /// Enterprise high-capacity implementation
 pub fn enterprise_architecture_dispatch() -> bool {

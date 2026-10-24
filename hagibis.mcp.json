@@ -22,6 +22,48 @@
       "parameters": {
         "prompt": { "type": "string", "description": "Prompt or code task to evaluate", "required": true }
       }
+    },
+    "hgb_mcp_run_tests": {
+      "description": "Execute cargo test asynchronously with real-time diagnostic parsing (extracting compilation errors E0308, E0425, test assertion panics, and stack traces)",
+      "parameters": {
+        "target_crate": { "type": "string", "description": "Target crate name in workspace (e.g. 'hgb-core')" },
+        "test_name": { "type": "string", "description": "Specific test function or filter name" },
+        "release": { "type": "boolean", "description": "Execute tests in release mode", "default": false }
+      }
+    },
+    "hgb_mcp_read_patch": {
+      "description": "Read patch file from .hgb/patches/ or filesystem path, returning metadata, target files, line additions/deletions, and raw unified diff",
+      "parameters": {
+        "patch_name_or_path": { "type": "string", "description": "Patch filename in .hgb/patches/ or relative/absolute path", "required": true }
+      }
+    },
+    "hgb_mcp_apply_patch": {
+      "description": "Atomically validate and apply unified diff. If dry_run is true, tests inside RAM CoW OverlaySandbox in /dev/shm. If real, atomically applies to workspace files, verifies syntax, and records timeline checkpoint in .hgb/timelines/",
+      "parameters": {
+        "patch_content": { "type": "string", "description": "Raw unified diff patch content to apply", "required": true },
+        "dry_run": { "type": "boolean", "description": "Dry run verification inside RAM CoW sandbox without modifying disk", "default": false }
+      }
+    },
+    "hgb_mcp_sandbox_exec": {
+      "description": "Execute untrusted code (Rust, Zig, Bash, Python) inside isolated ephemeral sandbox (Landlock LSM /dev/shm CoW or Firecracker microVM), measuring duration, memory, and blast radius",
+      "parameters": {
+        "code": { "type": "string", "description": "Source code or script payload to execute", "required": true },
+        "language": { "type": "string", "enum": ["rust", "zig", "bash", "python"], "description": "Programming language runner", "required": true },
+        "timeout_ms": { "type": "integer", "description": "Execution timeout in milliseconds", "default": 5000 },
+        "use_microvm": { "type": "boolean", "description": "Attempt hardware-isolated Firecracker microVM (/dev/kvm) if available", "default": false }
+      }
+    },
+    "hgb_daemon_telemetry": {
+      "description": "Return live Hagibis daemon health, uptime, active models, dynatune thermal/power state, vector mesh status, and memory stats",
+      "parameters": {}
+    },
+    "hgb_filesystem_tree": {
+      "description": "Generate compact ASCII and JSON directory tree of workspace files with sizes, line counts, and git modified status",
+      "parameters": {
+        "path": { "type": "string", "description": "Relative directory path to inspect (defaults to workspace root)" },
+        "depth": { "type": "integer", "description": "Maximum directory traversal depth (default: 3)", "default": 3 },
+        "include_git_status": { "type": "boolean", "description": "Include git modified/staged status for each file", "default": true }
+      }
     }
   },
   "mcpServers": {
@@ -35,6 +77,12 @@
       },
       "tools": [
         "hgb_self_healing_compile",
+        "hgb_mcp_run_tests",
+        "hgb_mcp_read_patch",
+        "hgb_mcp_apply_patch",
+        "hgb_mcp_sandbox_exec",
+        "hgb_daemon_telemetry",
+        "hgb_filesystem_tree",
         "hgb_sqlite_query",
         "hgb_project_state",
         "hgb_cow_sandbox",

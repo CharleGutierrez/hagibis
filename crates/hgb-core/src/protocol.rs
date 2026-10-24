@@ -1515,6 +1515,14 @@ pub enum HgbRequest {
         target_crate: Option<String>,
         test_filter: Option<String>,
     },
+
+    // Frictionless Vibe Prompting & Hardware Governor
+    VibePrompt {
+        prompt: String,
+        target_dir: Option<String>,
+        auto_commit: bool,
+    },
+    VibeGovernorStatus,
 }
 
 fn default_twenty_u64() -> u64 {
@@ -2171,6 +2179,10 @@ pub enum HgbResponse {
     // Strategic Upgrade 5: Autonomous "Self-Healing" Vibe Loops (hgb-nextgen)
     SelfHealingVibeStatusResult(String),
     SelfHealingVibeTriggerResult(String),
+
+    // Frictionless Vibe Prompting & Hardware Governor
+    VibePromptResult(crate::vibe_prompt_runner::VibePromptResult),
+    VibeGovernorStatusResult(crate::vibe_hardware_governor::VibeThermalState),
 }
 
 #[path = "hardware_runtime_synergy.rs"]

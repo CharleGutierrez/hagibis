@@ -287,7 +287,7 @@ impl LocalProxyFabric {
 
     /// Generate synthetic records with realistic names, emails, prices, timestamps, and booleans
     pub fn generate_synthetic_record(schema: &Value, index: usize) -> Value {
-        let prompt = format!("Generate a realistic JSON object matching this schema: {}. Make it record #{}.", schema, index);
+        let _prompt = format!("Generate a realistic JSON object matching this schema: {}. Make it record #{}.", schema, index);
         
         // Bypassed blocking Ollama HTTP request during tests to prevent connection hang
         let ai_res: std::result::Result<hgb_core::Result<String>, ()> = Err(());

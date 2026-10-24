@@ -225,7 +225,14 @@ smt = false
         let (script_name, runner, args_prefix): (&str, &str, Vec<&str>) = match spec.language.to_lowercase().as_str() {
             "bash" | "sh" => ("payload.sh", "bash", vec![]),
             "python" | "py" => ("payload.py", "python3", vec![]),
-            "rust" | "rs" => ("payload.rs", "rustc", vec!["--crate-type", "lib", "-o", "payload.rlib"]),
+            "zig" => ("payload.zig", "zig", vec!["run"]),
+            "rust" | "rs" => {
+                if spec.code.contains("fn main") {
+                    ("payload.rs", "bash", vec!["-c", "rustc payload.rs -o payload_bin && ./payload_bin; ret=$?; rm -f payload_bin; exit $ret"])
+                } else {
+                    ("payload.rs", "rustc", vec!["--crate-type", "lib", "-o", "payload.rlib"])
+                }
+            }
             "javascript" | "js" => ("payload.js", "node", vec![]),
             _ => ("payload.sh", "bash", vec![]),
         };

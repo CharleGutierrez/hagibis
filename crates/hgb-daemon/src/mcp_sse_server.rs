@@ -168,11 +168,11 @@ async fn handle_sse_connect(
 }
 
 /// POST /message?sessionId=<uuid> - Receives JSON-RPC 2.0 requests from MCP clients
-async fn handle_client_message(
+pub async fn handle_client_message(
     State(state): State<Arc<McpSseState>>,
     Query(query): Query<MessageQuery>,
     Json(body): Json<serde_json::Value>,
-) -> impl IntoResponse {
+) -> (StatusCode, Json<serde_json::Value>) {
     state.total_messages.fetch_add(1, Ordering::Relaxed);
 
     let id = body.get("id").cloned();
@@ -233,47 +233,46 @@ async fn handle_client_message(
             let tool_name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
             let arguments = params.get("arguments").cloned().unwrap_or(serde_json::json!({}));
 
-            // Stream progress notification over active SSE connection
-            if !session_id.is_empty() {
-                let progress_evt = Event::default().event("message").data(
-                    serde_json::json!({
-                        "jsonrpc": "2.0",
-                        "method": "notifications/progress",
-                        "params": {
-                            "progressToken": 1,
-                            "progress": 50,
-                            "total": 100,
-                            "message": format!("Executing sovereign Hagibis tool: {}", tool_name)
-                        }
-                    })
-                    .to_string(),
-                );
-                state.emit_to_session(&session_id, progress_evt).await;
-            }
+            let (progress_tx, mut progress_rx) = mpsc::unbounded_channel::<(u32, String)>();
+            let state_clone = Arc::clone(&state);
+            let s_id = session_id.clone();
 
-            // Execute the tool
-            let result_str = match state.mcp_server.execute_tool(tool_name, &arguments).await {
+            // Background task to pump granular progress notifications over SSE stream
+            let progress_pump = tokio::spawn(async move {
+                while let Some((pct, msg)) = progress_rx.recv().await {
+                    if !s_id.is_empty() {
+                        let evt = Event::default().event("message").data(
+                            serde_json::json!({
+                                "jsonrpc": "2.0",
+                                "method": "notifications/progress",
+                                "params": {
+                                    "progressToken": 1,
+                                    "progress": pct,
+                                    "total": 100,
+                                    "message": msg
+                                }
+                            })
+                            .to_string(),
+                        );
+                        state_clone.emit_to_session(&s_id, evt).await;
+                    }
+                }
+            });
+
+            let tx_clone = progress_tx.clone();
+            let progress_cb = move |pct: u32, msg: &str| {
+                let _ = tx_clone.send((pct, msg.to_string()));
+            };
+
+            // Execute the tool with streaming progress feedback
+            let result_str = match state.mcp_server.execute_tool_with_progress(tool_name, &arguments, progress_cb).await {
                 Ok(res) => res,
                 Err(e) => format!("Error executing {}: {}", tool_name, e),
             };
 
-            // Stream completion notice over SSE
-            if !session_id.is_empty() {
-                let complete_evt = Event::default().event("message").data(
-                    serde_json::json!({
-                        "jsonrpc": "2.0",
-                        "method": "notifications/progress",
-                        "params": {
-                            "progressToken": 1,
-                            "progress": 100,
-                            "total": 100,
-                            "message": format!("Tool {} execution completed", tool_name)
-                        }
-                    })
-                    .to_string(),
-                );
-                state.emit_to_session(&session_id, complete_evt).await;
-            }
+            // Close progress channel and wait for pump to flush
+            drop(progress_tx);
+            let _ = progress_pump.await;
 
             // Return standardized MCP tool call content result
             let resp = serde_json::json!({
@@ -332,5 +331,64 @@ mod tests {
         let _router = McpSseServer::create_router(state.clone());
         assert_eq!(state.port, 8083);
         assert_eq!(state.total_connections.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn test_mcp_sse_tools_list_discovery() {
+        let state = Arc::new(McpSseState::new(".", 8083));
+        let query = MessageQuery { session_id: None };
+        let req = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/list"
+        });
+
+        let resp = handle_client_message(State(state), Query(query), Json(req)).await;
+        let body = serde_json::to_string(&resp.1 .0).expect("Serialize");
+        assert!(body.contains("hgb_mcp_run_tests"));
+        assert!(body.contains("hgb_mcp_read_patch"));
+        assert!(body.contains("hgb_mcp_apply_patch"));
+        assert!(body.contains("hgb_mcp_sandbox_exec"));
+        assert!(body.contains("hgb_daemon_telemetry"));
+        assert!(body.contains("hgb_filesystem_tree"));
+    }
+
+    #[tokio::test]
+    async fn test_mcp_sse_tool_call_with_progress_streaming() {
+        let state = Arc::new(McpSseState::new(".", 8083));
+        let session_id = "test-session-uuid".to_string();
+
+        // Register session channel
+        let (tx, mut rx) = mpsc::unbounded_channel::<Event>();
+        {
+            let mut sess = state.sessions.write().await;
+            sess.insert(session_id.clone(), tx);
+        }
+
+        let query = MessageQuery { session_id: Some(session_id) };
+        let req = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "hgb_daemon_telemetry",
+                "arguments": {}
+            }
+        });
+
+        let resp = handle_client_message(State(state.clone()), Query(query), Json(req)).await;
+        assert_eq!(resp.0, StatusCode::OK);
+
+        // Verify that intermediate progress events were streamed into session
+        let mut progress_events = Vec::new();
+        while let Ok(evt) = rx.try_recv() {
+            progress_events.push(format!("{:?}", evt));
+        }
+        assert!(!progress_events.is_empty(), "Must stream granular SSE progress events");
+
+        // Verify response content
+        let body = serde_json::to_string(&resp.1 .0).expect("Serialize");
+        assert!(body.contains("healthy"));
+        assert!(body.contains("daemon_health"));
     }
 }

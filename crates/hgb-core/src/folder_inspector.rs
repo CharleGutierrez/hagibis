@@ -279,7 +279,7 @@ impl Default for FolderInspectionConfig {
             max_entries_per_dir: 40,
             max_total_entries: 250,
             show_hidden: false,
-            probe_network_ports: true,
+            probe_network_ports: false,
             probe_timeout_ms: 350,
         }
     }
