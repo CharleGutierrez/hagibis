@@ -64,6 +64,126 @@
         "depth": { "type": "integer", "description": "Maximum directory traversal depth (default: 3)", "default": 3 },
         "include_git_status": { "type": "boolean", "description": "Include git modified/staged status for each file", "default": true }
       }
+    },
+    "hgb_code_skeleton": {
+      "description": "Extract AST signatures of large files using syn-based CodeSkeletonizer (reducing prompt context token consumption by >70% while preserving structs, traits, and method interfaces)",
+      "parameters": {
+        "file_path": { "type": "string", "description": "Relative file path inside workspace" },
+        "content": { "type": "string", "description": "Optional inline source code content (reads file_path if omitted)" },
+        "file_ext": { "type": "string", "description": "Optional file extension override (rs, py, ts, zig, go)" }
+      }
+    },
+    "hgb_time_machine_rollback": {
+      "description": "Atomically roll back the entire workspace to a specific cryptographic checkpoint snapshot or latest checkpoint with zero data loss",
+      "parameters": {
+        "checkpoint_id": { "type": "string", "description": "Target checkpoint snapshot ID (defaults to most recent checkpoint)" }
+      }
+    },
+    "hgb_undo": {
+      "description": "Instant atomic 1-key undo: reverts workspace changes back to the immediately preceding checkpoint",
+      "parameters": {
+        "steps": { "type": "integer", "description": "Number of checkpoints to undo (default: 1)", "default": 1 }
+      }
+    },
+    "hgb_vault_get_secret": {
+      "description": "Access AEAD-encrypted API keys and ghost envs safely without putting credentials into plaintext prompts",
+      "parameters": {
+        "key": { "type": "string", "description": "Environment variable or secret credential name (e.g. STRIPE_SECRET_KEY, OPENAI_API_KEY)", "required": true },
+        "passphrase": { "type": "string", "description": "Optional vault master passphrase" },
+        "vault_path": { "type": "string", "description": "Optional custom path to .env.vault file" }
+      }
+    },
+    "hgb_vault_set_secret": {
+      "description": "Store API key or credential securely inside AEAD-encrypted ghost vault (.hgb/.env.vault) with fresh 96-bit nonce and HMAC-SHA256 authentication tag",
+      "parameters": {
+        "key": { "type": "string", "description": "Environment variable or secret credential name", "required": true },
+        "value": { "type": "string", "description": "Plaintext secret value to seal into encrypted vault", "required": true },
+        "passphrase": { "type": "string", "description": "Optional vault master passphrase" },
+        "vault_path": { "type": "string", "description": "Optional custom path to .env.vault file" }
+      }
+    },
+    "hgb_cdp_tweak_sync": {
+      "description": "Live DevTools Click-to-Source sync: bridges browser DOM element tweaks directly back into source JSX, TSX, Vue, or HTML files with surgical line replacements",
+      "parameters": {
+        "selector": { "type": "string", "description": "DOM CSS selector (e.g. 'button.checkout')", "required": true },
+        "property_or_attr": { "type": "string", "description": "Target CSS property or attribute (e.g. 'class', 'color')", "required": true },
+        "old_value": { "type": "string", "description": "Old attribute or style value", "required": true },
+        "new_value": { "type": "string", "description": "New attribute or style value", "required": true },
+        "component_hint": { "type": "string", "description": "Optional component name hint" },
+        "file_hint": { "type": "string", "description": "Optional source file path hint" },
+        "apply_to_disk": { "type": "boolean", "description": "Commit verified tweak directly to disk", "default": true }
+      }
+    },
+    "hgb_mirage_mock": {
+      "description": "Spin up synthetic mock backends or execute simulated calls for Stripe, GitHub, Resend, and Auth0 using ApiMirageEngine",
+      "parameters": {
+        "action": { "type": "string", "enum": ["mock_call", "start_server", "list_endpoints"], "description": "Action to perform", "default": "mock_call" },
+        "endpoint": { "type": "string", "description": "API route path (e.g. /v1/payment_intents, /emails, /oauth/token, /user)" },
+        "method": { "type": "string", "description": "HTTP method (GET, POST, PUT, DELETE)", "default": "GET" },
+        "port": { "type": "integer", "description": "Port to bind when starting mock server", "default": 8089 }
+      }
+    },
+    "hgb_baas_graduate": {
+      "description": "Auto-generate Supabase/Neon PostgreSQL DDL + RLS security policies + TypeScript SDK from in-memory prototypes using BaasGraduateEngine",
+      "parameters": {
+        "resource_name": { "type": "string", "description": "Entity/resource name (e.g. orders, users, invoices)", "required": true },
+        "sample_json": { "description": "Sample JSON record or schema structure" },
+        "target": { "type": "string", "enum": ["supabase", "neon", "firebase"], "description": "BaaS cloud platform target", "default": "supabase" }
+      }
+    },
+    "hgb_mobile_teleport": {
+      "description": "Generate instant terminal ANSI QR code and PWA manifest scaffolding for mobile device live preview teleportation",
+      "parameters": {
+        "target_url": { "type": "string", "description": "Target HTTP/HTTPS URL to teleport (dev server or tunnel)", "required": true },
+        "app_name": { "type": "string", "description": "Optional Progressive Web App name" }
+      }
+    },
+    "hgb_figma_sync": {
+      "description": "Bi-directional Figma design token extraction and React/Tailwind component synchronization",
+      "parameters": {
+        "file_key": { "type": "string", "description": "Figma file key or URL identifier", "required": true },
+        "figma_json": { "type": "string", "description": "Optional inline Figma REST JSON payload" }
+      }
+    },
+    "hgb_git_micro_commit": {
+      "description": "Atomically stage verified files and create conventional micro-commits with rollback safety",
+      "parameters": {
+        "intent": { "type": "string", "description": "Semantic commit intent or bugfix description", "required": true },
+        "path": { "type": "string", "description": "Optional single file path or target directory to stage" }
+      }
+    },
+    "hgb_agentic_bisect": {
+      "description": "Autonomous binary search across Git revisions to isolate regression culprits and generate root-cause analysis",
+      "parameters": {
+        "good_commit": { "type": "string", "description": "Known good commit hash or revision", "required": true },
+        "bad_commit": { "type": "string", "description": "Known bad commit hash or revision", "required": true },
+        "test_cmd": { "type": "string", "description": "Automated verification test command (e.g. 'cargo test', 'npm test')", "required": true }
+      }
+    },
+    "hgb_nightshift": {
+      "description": "Dispatch autonomous 4-stage night-shift swarm pipeline in an isolated git worktree branch",
+      "parameters": {
+        "goal": { "type": "string", "description": "High-level goal or ticket specification for autonomous execution", "required": true },
+        "base_branch": { "type": "string", "description": "Base git branch (defaults to 'main')" }
+      }
+    },
+    "hgb_desktop_drive": {
+      "description": "OS-level desktop window sentry and mouse/keyboard action dispatcher",
+      "parameters": {
+        "action": { "type": "string", "description": "Action to perform: inspect, click, type, key, focus, screenshot", "required": true },
+        "x": { "type": "integer", "description": "Optional X coordinate for mouse actions" },
+        "y": { "type": "integer", "description": "Optional Y coordinate for mouse actions" },
+        "text": { "type": "string", "description": "Optional text to type or key name to press" }
+      }
+    },
+    "hgb_viral_og": {
+      "description": "Generate high-CTR dynamic SVG OpenGraph launch cards, Twitter/X meta tags, and Next.js edge route code",
+      "parameters": {
+        "title": { "type": "string", "description": "Launch card title or headline", "required": true },
+        "badge": { "type": "string", "description": "Optional badge pill text (e.g. '⚡ Launch')" },
+        "desc": { "type": "string", "description": "Optional card description or subtitle" },
+        "twitter": { "type": "string", "description": "Optional author Twitter/X handle" }
+      }
     }
   },
   "mcpServers": {
@@ -98,7 +218,22 @@
         "hgb_ollama_vector_sync",
         "hgb_ollama_vector_query",
         "ollama_speculative_generate",
-        "ollama_task_split"
+        "ollama_task_split",
+        "hgb_code_skeleton",
+        "hgb_time_machine_rollback",
+        "hgb_undo",
+        "hgb_vault_get_secret",
+        "hgb_vault_set_secret",
+        "hgb_cdp_tweak_sync",
+        "hgb_mirage_mock",
+        "hgb_baas_graduate",
+        "hgb_mobile_teleport",
+        "hgb_figma_sync",
+        "hgb_git_micro_commit",
+        "hgb_agentic_bisect",
+        "hgb_nightshift",
+        "hgb_desktop_drive",
+        "hgb_viral_og"
       ]
     },
     "hagibis_sse": {

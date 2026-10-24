@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MicroCommitPlan {
     pub scope: String,
     pub intent: String,
@@ -13,7 +13,7 @@ pub struct MicroCommitPlan {
     pub diff_preview: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MicroCommitReport {
     pub commit_hash: String,
     pub conventional_message: String,
@@ -22,6 +22,8 @@ pub struct MicroCommitReport {
     pub lines_removed: usize,
     pub verified_syntax: bool,
     pub undo_command: String,
+    #[serde(default)]
+    pub blake3_hash: String,
 }
 
 pub struct GitMicroCommitMirror;
@@ -119,6 +121,9 @@ impl GitMicroCommitMirror {
             "error".to_string()
         };
 
+        let hash_payload = format!("{}:{}", message, plan.diff_preview);
+        let blake3_hash = blake3::hash(hash_payload.as_bytes()).to_hex().to_string();
+
         MicroCommitReport {
             commit_hash,
             conventional_message: message,
@@ -127,6 +132,7 @@ impl GitMicroCommitMirror {
             lines_removed: removed,
             verified_syntax: true,
             undo_command: "git reset --soft HEAD~1".to_string(),
+            blake3_hash,
         }
     }
 }

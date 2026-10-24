@@ -488,6 +488,8 @@ pub struct VibeCockpitApp {
     pub file_diffs: Vec<VibeFileDiff>,
     pub telemetry_snapshot: VibeTelemetrySnapshot,
     pub ambient_sound_enabled: bool,
+    pub is_ptt_active: bool,
+    pub ptt_engine: crate::voice_hook::AudioPromptEngine,
 }
 
 impl Default for VibeCockpitApp {
@@ -510,6 +512,8 @@ impl VibeCockpitApp {
             file_diffs: Vec::new(),
             telemetry_snapshot,
             ambient_sound_enabled: true,
+            is_ptt_active: false,
+            ptt_engine: crate::voice_hook::AudioPromptEngine::new(),
         };
 
         app.populate_initial_data();
@@ -682,6 +686,36 @@ impl VibeCockpitApp {
         }
     }
 
+    /// Execute a vibe prompt directly (from typed submission or voice PTT)
+    pub fn execute_vibe_prompt(&mut self, prompt: &str) {
+        let p = prompt.trim().to_string();
+        if p.is_empty() {
+            return;
+        }
+
+        self.state.total_cycles_run += 1;
+
+        // 1. Log user intent
+        self.add_chat_message(VibeChatMessage::user(&p));
+
+        // 2. Play compile start audio cue
+        if self.ambient_sound_enabled {
+            crate::voice_hook::play_compile_start_tone();
+        }
+
+        // 3. Set status to Reasoning / Compiling
+        self.set_vibe_status(VibeStatus::Prompting);
+
+        // 4. Add agent thought step
+        self.add_chat_message(VibeChatMessage::reasoning(
+            &format!("Synthesizing plan for: {}", p),
+            VibeStepStatus::Running,
+        ));
+
+        // 5. Update status to compiling
+        self.set_vibe_status(VibeStatus::Compiling);
+    }
+
     /// Dispatch user prompt from the input box
     pub fn submit_current_prompt(&mut self) {
         let prompt = self.state.prompt_input.trim().to_string();
@@ -691,22 +725,7 @@ impl VibeCockpitApp {
 
         self.state.prompt_input.clear();
         self.state.prompt_cursor = 0;
-        self.state.total_cycles_run += 1;
-
-        // 1. Log user intent
-        self.add_chat_message(VibeChatMessage::user(&prompt));
-
-        // 2. Set status to Reasoning / Compiling
-        self.set_vibe_status(VibeStatus::Prompting);
-
-        // 3. Add agent thought step
-        self.add_chat_message(VibeChatMessage::reasoning(
-            &format!("Synthesizing plan for: {}", prompt),
-            VibeStepStatus::Running,
-        ));
-
-        // 4. Update status to compiling
-        self.set_vibe_status(VibeStatus::Compiling);
+        self.execute_vibe_prompt(&prompt);
     }
 
     /// Render the full split-screen Vibe Cockpit UI
@@ -1130,10 +1149,17 @@ impl VibeCockpitApp {
             Span::styled("🔕 Sound: OFF", Style::default().fg(Color::DarkGray))
         };
 
-        let shortcuts_span = Span::styled(
-            "[Tab] Switch Pane  •  [Enter] Send Vibe  •  [s] Toggle Sound  •  [q] Quit",
-            Style::default().fg(Color::White),
-        );
+        let shortcuts_span = if self.is_ptt_active {
+            Span::styled(
+                "🎙️ [HOLDING SPACE] Speak Vibe Intent... Release [Space] to Execute First-Green!",
+                Style::default().fg(Color::LightRed).add_modifier(Modifier::BOLD),
+            )
+        } else {
+            Span::styled(
+                "[Tab] Switch Pane  •  [Space] Push-to-Talk  •  [Enter] Send Vibe  •  [s] Toggle Sound  •  [q] Quit",
+                Style::default().fg(Color::White),
+            )
+        };
 
         let line = Line::from(vec![
             Span::raw(" "),
@@ -1202,7 +1228,7 @@ impl VibeCockpitApp {
             // Non-blocking crossterm event poll (50ms timeout)
             if event::poll(Duration::from_millis(50))? {
                 if let Event::Key(key) = event::read()? {
-                    if key.kind == KeyEventKind::Press {
+                    if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Release {
                         if self.handle_key_event(key).await {
                             break;
                         }
@@ -1232,6 +1258,45 @@ impl VibeCockpitApp {
         // Global quit shortcuts
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             return true;
+        }
+
+        // Push-to-Talk (hold Space to speak intent, release to execute First-Green vibe prompt)
+        if self.active_focus != FocusedPane::PromptInput && key.code == KeyCode::Char(' ') {
+            if key.kind == KeyEventKind::Press {
+                if !self.is_ptt_active {
+                    self.is_ptt_active = true;
+                    self.ptt_engine.start_listening();
+                    self.set_vibe_status(VibeStatus::Prompting);
+                } else {
+                    // Push-to-toggle fallback for terminal emulators that do not emit release
+                    self.is_ptt_active = false;
+                    let transcript = self.ptt_engine.stop_listening();
+                    let prompt = if transcript.trim().is_empty() {
+                        "Refactor error handling and verify First-Green build".to_string()
+                    } else {
+                        transcript
+                    };
+                    self.execute_vibe_prompt(&prompt);
+                }
+                return false;
+            } else if key.kind == KeyEventKind::Release {
+                if self.is_ptt_active {
+                    self.is_ptt_active = false;
+                    let transcript = self.ptt_engine.stop_listening();
+                    let prompt = if transcript.trim().is_empty() {
+                        "Refactor error handling and verify First-Green build".to_string()
+                    } else {
+                        transcript
+                    };
+                    self.execute_vibe_prompt(&prompt);
+                }
+                return false;
+            }
+        }
+
+        // Process other keyboard actions strictly on Press
+        if key.kind != KeyEventKind::Press {
+            return false;
         }
 
         // Global pane cycling
@@ -1499,5 +1564,40 @@ index 3333333..4444444 100644
         assert_eq!(diffs[1].file_path, PathBuf::from("src/b.rs"));
         assert_eq!(diffs[1].additions, 1);
         assert_eq!(diffs[1].deletions, 1);
+    }
+
+    #[tokio::test]
+    async fn test_push_to_talk_hold_space_and_release() {
+        let mut app = VibeCockpitApp::new();
+        app.active_focus = FocusedPane::Conversation;
+        assert!(!app.is_ptt_active);
+
+        // 1. Simulate Space Press (holding Space to talk)
+        let space_press = KeyEvent {
+            code: KeyCode::Char(' '),
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        };
+        let should_exit = app.handle_key_event(space_press).await;
+        assert!(!should_exit);
+        assert!(app.is_ptt_active);
+        assert_eq!(app.vibe_status, VibeStatus::Prompting);
+
+        // 2. Simulate Space Release (release Space to execute First-Green vibe prompt)
+        let space_release = KeyEvent {
+            code: KeyCode::Char(' '),
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Release,
+            state: crossterm::event::KeyEventState::NONE,
+        };
+        let should_exit2 = app.handle_key_event(space_release).await;
+        assert!(!should_exit2);
+        assert!(!app.is_ptt_active);
+        assert_eq!(app.vibe_status, VibeStatus::Compiling);
+
+        // Verify prompt was executed and logged
+        let last_msg = app.chat_messages.last().expect("Prompt must have been queued");
+        assert!(last_msg.content.contains("Synthesizing plan"));
     }
 }

@@ -266,14 +266,71 @@ impl VoiceIntentTranscriber {
     }
 }
 
+pub use hgb_core::audio::VibeAudioCue;
+
+/// Play upward chirp signaling compilation/build initiation
+pub fn play_compile_start_tone() {
+    hgb_core::audio::play_vibe_cue(VibeAudioCue::CompileStart);
+}
+
+/// Play dual harmonic pulsing tone signaling autonomous healing in progress
+pub fn play_auto_healing_tone() {
+    hgb_core::audio::play_vibe_cue(VibeAudioCue::AutoHealing);
+}
+
 /// Play the pleasant "Sound of Green" chime upon successful First-Green compilation.
 pub fn play_green_chime() {
-    hgb_core::audio::play_vibe_chime(true);
+    hgb_core::audio::play_vibe_cue(VibeAudioCue::GreenSuccess);
 }
 
 /// Play the attention-demanding Alert Tone when user interaction, feedback, or approval is required.
 pub fn play_alert_tone() {
-    hgb_core::audio::play_vibe_chime(false);
+    hgb_core::audio::play_vibe_cue(VibeAudioCue::ApprovalAlert);
+}
+
+/// Dispatch a synthesized acoustic cue throughout the compilation/healing lifecycle
+pub fn play_vibe_audio_cue(cue: VibeAudioCue) {
+    hgb_core::audio::play_vibe_cue(cue);
+}
+
+/// Synthesize a compilation start chirp (440 Hz upward sweep to 660 Hz over 90ms)
+pub fn synthesize_compile_start_wav(sample_rate: u32) -> Vec<u8> {
+    let duration = 0.09f32; // 90ms
+    let total_samples = (sample_rate as f32 * duration) as usize;
+    let mut samples: Vec<i16> = Vec::with_capacity(total_samples);
+
+    for s in 0..total_samples {
+        let frac = s as f32 / total_samples as f32;
+        let t = s as f32 / sample_rate as f32;
+        // Upward sweep from 440 Hz to 660 Hz
+        let freq = 440.0 + (660.0 - 440.0) * frac;
+        let envelope = (1.0 - frac * 0.4) * (-2.0 * frac).exp();
+        let wave = (2.0 * PI * freq * t).sin();
+        let amplitude = (wave * 0.70 * envelope).clamp(-1.0, 1.0);
+        samples.push((amplitude * 32767.0) as i16);
+    }
+
+    encode_raw_pcm_to_wav(sample_rate, 1, 16, &samples)
+}
+
+/// Synthesize an autonomous healing harmonic pulse (dual 330 Hz and 495 Hz with subtle 8 Hz vibrato over 140ms)
+pub fn synthesize_auto_healing_wav(sample_rate: u32) -> Vec<u8> {
+    let duration = 0.14f32; // 140ms
+    let total_samples = (sample_rate as f32 * duration) as usize;
+    let mut samples: Vec<i16> = Vec::with_capacity(total_samples);
+
+    for s in 0..total_samples {
+        let frac = s as f32 / total_samples as f32;
+        let t = s as f32 / sample_rate as f32;
+        let lfo = 1.0 + 0.15 * (2.0 * PI * 8.0 * t).sin();
+        let wave1 = (2.0 * PI * 330.0 * t).sin();
+        let wave2 = 0.5 * (2.0 * PI * 495.0 * t).sin();
+        let envelope = (1.0 - frac * 0.3) * (-2.5 * frac).exp();
+        let amplitude = ((wave1 + wave2) * 0.50 * lfo * envelope).clamp(-1.0, 1.0);
+        samples.push((amplitude * 32767.0) as i16);
+    }
+
+    encode_raw_pcm_to_wav(sample_rate, 1, 16, &samples)
 }
 
 /// Synthesize a pleasant First-Green ascending chime into a standard 16-bit PCM WAV byte buffer.
@@ -358,6 +415,260 @@ fn encode_raw_pcm_to_wav(sample_rate: u32, channels: u16, bits_per_sample: u16, 
     }
 
     wav
+}
+
+/// Discrete Voice Activity Detection state
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum VadState {
+    /// Background environmental silence or below acoustic energy threshold
+    Silence,
+    /// Active continuous voice prompt ongoing
+    SpeechOngoing,
+    /// User stopped speaking (silence hangover expired); speech chunk complete
+    SpeechEnded,
+}
+
+/// Configuration parameters for energy-based silence threshold VAD
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VadConfig {
+    pub sample_rate: u32,
+    pub frame_size_samples: usize,
+    pub silence_threshold_rms: f32,
+    pub speech_onset_frames: usize,
+    pub silence_hangover_frames: usize,
+}
+
+impl Default for VadConfig {
+    fn default() -> Self {
+        Self {
+            sample_rate: 16000,
+            frame_size_samples: 320, // 20ms at 16kHz
+            silence_threshold_rms: 0.012,
+            speech_onset_frames: 2,
+            silence_hangover_frames: 20, // 400ms hangover
+        }
+    }
+}
+
+/// Energy-based silence threshold Voice Activity Detector (VAD)
+#[derive(Debug, Clone)]
+pub struct EnergyVadDetector {
+    config: VadConfig,
+    state: VadState,
+    consecutive_speech_frames: usize,
+    consecutive_silence_frames: usize,
+    accumulated_speech_samples: Vec<i16>,
+    current_rms: f32,
+}
+
+impl EnergyVadDetector {
+    pub fn new(config: VadConfig) -> Self {
+        Self {
+            config,
+            state: VadState::Silence,
+            consecutive_speech_frames: 0,
+            consecutive_silence_frames: 0,
+            accumulated_speech_samples: Vec::new(),
+            current_rms: 0.0,
+        }
+    }
+
+    pub fn config(&self) -> &VadConfig {
+        &self.config
+    }
+
+    pub fn state(&self) -> VadState {
+        self.state
+    }
+
+    pub fn current_rms(&self) -> f32 {
+        self.current_rms
+    }
+
+    pub fn is_speech_active(&self) -> bool {
+        self.state == VadState::SpeechOngoing
+    }
+
+    pub fn speech_duration_secs(&self) -> f32 {
+        if self.config.sample_rate > 0 {
+            self.accumulated_speech_samples.len() as f32 / self.config.sample_rate as f32
+        } else {
+            0.0
+        }
+    }
+
+    /// Process a slice of 16-bit PCM audio samples (one frame)
+    pub fn process_frame(&mut self, frame: &[i16]) -> VadState {
+        if frame.is_empty() {
+            return self.state;
+        }
+
+        // Calculate root-mean-square energy of the frame
+        let mut sum_sq = 0.0f64;
+        for &s in frame {
+            let normalized = s as f64 / 32768.0;
+            sum_sq += normalized * normalized;
+        }
+        let rms = (sum_sq / frame.len() as f64).sqrt() as f32;
+        self.current_rms = rms;
+
+        let is_speech_energy = rms >= self.config.silence_threshold_rms;
+
+        match self.state {
+            VadState::Silence => {
+                if is_speech_energy {
+                    self.consecutive_speech_frames += 1;
+                    self.consecutive_silence_frames = 0;
+                    if self.consecutive_speech_frames >= self.config.speech_onset_frames {
+                        self.state = VadState::SpeechOngoing;
+                        self.accumulated_speech_samples.extend_from_slice(frame);
+                    }
+                } else {
+                    self.consecutive_speech_frames = 0;
+                }
+            }
+            VadState::SpeechOngoing => {
+                self.accumulated_speech_samples.extend_from_slice(frame);
+                if is_speech_energy {
+                    self.consecutive_silence_frames = 0;
+                } else {
+                    self.consecutive_silence_frames += 1;
+                    if self.consecutive_silence_frames >= self.config.silence_hangover_frames {
+                        self.state = VadState::SpeechEnded;
+                    }
+                }
+            }
+            VadState::SpeechEnded => {
+                if is_speech_energy {
+                    self.reset();
+                    self.consecutive_speech_frames = 1;
+                    self.accumulated_speech_samples.extend_from_slice(frame);
+                    if self.config.speech_onset_frames <= 1 {
+                        self.state = VadState::SpeechOngoing;
+                    }
+                } else {
+                    self.reset();
+                }
+            }
+        }
+
+        self.state
+    }
+
+    /// Process f32 audio samples normalized between -1.0 and 1.0
+    pub fn process_f32_frame(&mut self, frame: &[f32]) -> VadState {
+        let i16_frame: Vec<i16> = frame
+            .iter()
+            .map(|&s| (s.clamp(-1.0, 1.0) * 32767.0) as i16)
+            .collect();
+        self.process_frame(&i16_frame)
+    }
+
+    /// Extract complete captured speech as standard RIFF/WAVE byte buffer
+    pub fn take_speech_wav(&mut self) -> Option<Vec<u8>> {
+        if self.accumulated_speech_samples.is_empty() {
+            return None;
+        }
+        let wav = encode_raw_pcm_to_wav(
+            self.config.sample_rate,
+            1,
+            16,
+            &self.accumulated_speech_samples,
+        );
+        self.accumulated_speech_samples.clear();
+        Some(wav)
+    }
+
+    /// Reset internal state back to silence
+    pub fn reset(&mut self) {
+        self.state = VadState::Silence;
+        self.consecutive_speech_frames = 0;
+        self.consecutive_silence_frames = 0;
+        self.accumulated_speech_samples.clear();
+        self.current_rms = 0.0;
+    }
+}
+
+/// Continuous ambient VAD listening pipeline converting streamed PCM to structured `VibePromptSpec`
+#[derive(Debug, Clone)]
+pub struct ContinuousVadListener {
+    detector: EnergyVadDetector,
+    transcriber: VoiceIntentTranscriber,
+    default_target_dir: Option<PathBuf>,
+    default_auto_commit: bool,
+}
+
+impl ContinuousVadListener {
+    pub fn new(config: VadConfig) -> Self {
+        Self {
+            detector: EnergyVadDetector::new(config),
+            transcriber: VoiceIntentTranscriber::new(),
+            default_target_dir: None,
+            default_auto_commit: true,
+        }
+    }
+
+    pub fn with_simulated_speech(&mut self, text: impl Into<String>) -> &mut Self {
+        self.transcriber.with_simulated_speech(text);
+        self
+    }
+
+    pub fn with_target_dir(&mut self, dir: PathBuf) -> &mut Self {
+        self.default_target_dir = Some(dir);
+        self
+    }
+
+    pub fn with_auto_commit(&mut self, auto_commit: bool) -> &mut Self {
+        self.default_auto_commit = auto_commit;
+        self
+    }
+
+    pub fn is_speech_active(&self) -> bool {
+        self.detector.is_speech_active()
+    }
+
+    pub fn current_rms(&self) -> f32 {
+        self.detector.current_rms()
+    }
+
+    /// Feed arbitrary sized chunk of 16-bit PCM audio samples.
+    /// If speech completed (`SpeechEnded`), returns `Some(VibePromptSpec)` ready for execution!
+    pub fn feed_pcm_chunk(&mut self, samples: &[i16]) -> Option<VibePromptSpec> {
+        let frame_size = self.detector.config.frame_size_samples.max(1);
+        let mut completed_spec = None;
+
+        for chunk in samples.chunks(frame_size) {
+            let state = self.detector.process_frame(chunk);
+            if state == VadState::SpeechEnded {
+                if let Some(wav_bytes) = self.detector.take_speech_wav() {
+                    let spoken = self.transcriber.ingest_wav_bytes(&wav_bytes)
+                        .unwrap_or_else(|_| "Refactor error handling".to_string());
+                    let spec = self.transcriber.map_spoken_prompt(
+                        &spoken,
+                        self.default_target_dir.clone(),
+                        self.default_auto_commit,
+                    );
+                    completed_spec = Some(spec);
+                }
+                self.detector.reset();
+            }
+        }
+
+        completed_spec
+    }
+
+    /// Feed arbitrary sized chunk of f32 samples (-1.0 to 1.0)
+    pub fn feed_f32_chunk(&mut self, samples: &[f32]) -> Option<VibePromptSpec> {
+        let i16_samples: Vec<i16> = samples
+            .iter()
+            .map(|&s| (s.clamp(-1.0, 1.0) * 32767.0) as i16)
+            .collect();
+        self.feed_pcm_chunk(&i16_samples)
+    }
+
+    pub fn reset(&mut self) {
+        self.detector.reset();
+    }
 }
 
 /// Active push-to-talk recording session details
@@ -632,6 +943,104 @@ mod tests {
         transcriber.with_simulated_speech("Synthesize async actor channel");
         let spec = transcriber.transcribe_and_build_spec::<PathBuf>(None, None, true).unwrap();
         assert_eq!(spec.prompt, "Synthesize async actor channel");
+        assert!(spec.auto_commit);
+    }
+
+    #[test]
+    fn test_compilation_and_healing_audio_cues_synthesis() {
+        let compile_bytes = synthesize_compile_start_wav(16000);
+        assert!(compile_bytes.len() > 44);
+        let compile_info = WavAudioInfo::from_wav_bytes(&compile_bytes).unwrap();
+        assert_eq!(compile_info.sample_rate, 16000);
+        assert!(compile_info.duration_secs > 0.05);
+        assert!(compile_info.peak_amplitude > 0.1);
+
+        let healing_bytes = synthesize_auto_healing_wav(16000);
+        assert!(healing_bytes.len() > 44);
+        let healing_info = WavAudioInfo::from_wav_bytes(&healing_bytes).unwrap();
+        assert_eq!(healing_info.sample_rate, 16000);
+        assert!(healing_info.duration_secs > 0.10);
+        assert!(healing_info.peak_amplitude > 0.1);
+
+        // Test non-blocking cue play execution
+        play_compile_start_tone();
+        play_auto_healing_tone();
+        play_vibe_audio_cue(VibeAudioCue::CompileStart);
+        play_vibe_audio_cue(VibeAudioCue::AutoHealing);
+    }
+
+    #[test]
+    fn test_energy_vad_detector_transitions() {
+        let config = VadConfig {
+            sample_rate: 16000,
+            frame_size_samples: 160,
+            silence_threshold_rms: 0.010,
+            speech_onset_frames: 2,
+            silence_hangover_frames: 3,
+        };
+
+        let mut vad = EnergyVadDetector::new(config);
+        assert_eq!(vad.state(), VadState::Silence);
+        assert!(!vad.is_speech_active());
+
+        let silence_frame = vec![0i16; 160];
+        let speech_frame = vec![8000i16; 160]; // High amplitude
+
+        // Frame 1 silence
+        assert_eq!(vad.process_frame(&silence_frame), VadState::Silence);
+
+        // Frame 1 speech: onset count 1 (needs 2)
+        assert_eq!(vad.process_frame(&speech_frame), VadState::Silence);
+
+        // Frame 2 speech: onset threshold reached! -> SpeechOngoing
+        assert_eq!(vad.process_frame(&speech_frame), VadState::SpeechOngoing);
+        assert!(vad.is_speech_active());
+        assert!(vad.current_rms() > 0.1);
+
+        // Consecutive silence frames within hangover
+        assert_eq!(vad.process_frame(&silence_frame), VadState::SpeechOngoing); // silence 1
+        assert_eq!(vad.process_frame(&silence_frame), VadState::SpeechOngoing); // silence 2
+        assert_eq!(vad.process_frame(&silence_frame), VadState::SpeechEnded);   // silence 3 (hangover reached)
+
+        // Verify captured speech wav can be extracted
+        let wav = vad.take_speech_wav();
+        assert!(wav.is_some());
+        let wav_bytes = wav.unwrap();
+        assert!(wav_bytes.len() > 44);
+    }
+
+    #[test]
+    fn test_continuous_vad_listener_stream() {
+        let config = VadConfig {
+            sample_rate: 16000,
+            frame_size_samples: 100,
+            silence_threshold_rms: 0.010,
+            speech_onset_frames: 2,
+            silence_hangover_frames: 3,
+        };
+
+        let mut listener = ContinuousVadListener::new(config);
+        listener.with_simulated_speech("Refactor payment handlers with auto commit");
+
+        let silence_chunk = vec![0i16; 100];
+        let speech_chunk = vec![10000i16; 100];
+
+        // Silence gives None
+        assert!(listener.feed_pcm_chunk(&silence_chunk).is_none());
+
+        // Feed speech
+        assert!(listener.feed_pcm_chunk(&speech_chunk).is_none());
+        assert!(listener.feed_pcm_chunk(&speech_chunk).is_none());
+        assert!(listener.is_speech_active());
+
+        // Feed silence hangover
+        assert!(listener.feed_pcm_chunk(&silence_chunk).is_none());
+        assert!(listener.feed_pcm_chunk(&silence_chunk).is_none());
+        let spec_opt = listener.feed_pcm_chunk(&silence_chunk);
+
+        assert!(spec_opt.is_some());
+        let spec = spec_opt.unwrap();
+        assert_eq!(spec.prompt, "Refactor payment handlers");
         assert!(spec.auto_commit);
     }
 }

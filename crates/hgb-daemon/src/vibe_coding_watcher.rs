@@ -34,6 +34,8 @@ pub struct VibeWatcherCycleRecord {
     pub llm_prompt_generated: bool,
     pub sandbox_verified: bool,
     pub patch_committed: bool,
+    #[serde(default)]
+    pub ghost_fix_staged: bool,
     pub duration_ms: u64,
     pub timestamp: String,
 }
@@ -46,7 +48,20 @@ pub struct VibeWatcherStatusReport {
     pub failures_detected: u64,
     pub auto_healed_iterations: u64,
     pub dpo_pairs_count: u64,
+    #[serde(default)]
+    pub staged_ghost_fixes_count: usize,
     pub recent_cycles: Vec<VibeWatcherCycleRecord>,
+}
+
+/// A pre-computed surgical ghost-fix staged in RAM for 1-key tab acceptance
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GhostFixCandidate {
+    pub fix_id: String,
+    pub target_path: String,
+    pub patch_content: String,
+    pub diagnostic: String,
+    pub verified_in_sandbox: bool,
+    pub staged_at: String,
 }
 
 /// DPO Distillation training pair exported to `.hgb/distillation/`
@@ -72,6 +87,7 @@ pub struct VibeCodingWatcher {
     auto_healed_iterations: AtomicU64,
     dpo_pairs_count: AtomicU64,
     history: std::sync::RwLock<Vec<VibeWatcherCycleRecord>>,
+    staged_ghost_fixes: std::sync::RwLock<std::collections::HashMap<String, GhostFixCandidate>>,
 }
 
 impl VibeCodingWatcher {
@@ -93,28 +109,17 @@ impl VibeCodingWatcher {
             auto_healed_iterations: AtomicU64::new(0),
             dpo_pairs_count: AtomicU64::new(0),
             history: std::sync::RwLock::new(Vec::new()),
+            staged_ghost_fixes: std::sync::RwLock::new(std::collections::HashMap::new()),
         }
     }
 
     /// Automatically infer the compiler or test command for the target file or workspace
     pub fn detect_check_command(&self, path: &Path) -> (String, Vec<String>) {
-        if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
-            match ext {
-                "rs" => {
-                    // Check if part of a cargo workspace
-                    ("cargo".to_string(), vec!["check".to_string(), "--message-format=short".to_string()])
-                }
-                "zig" => {
-                    ("zig".to_string(), vec!["test".to_string(), path.to_string_lossy().to_string()])
-                }
-                "py" => {
-                    ("python3".to_string(), vec!["-m".to_string(), "py_compile".to_string(), path.to_string_lossy().to_string()])
-                }
-                _ => ("cargo".to_string(), vec!["check".to_string()]),
-            }
-        } else {
-            ("cargo".to_string(), vec!["check".to_string()])
-        }
+        let (_tool, bin, args) = hgb_core::compiler_interceptor::CompilerInterceptor::auto_detect_polyglot_check(
+            &self.workspace_root,
+            Some(path),
+        );
+        (bin, args)
     }
 
     /// Execute an autonomous watch cycle on target path
@@ -154,11 +159,18 @@ impl VibeCodingWatcher {
             Err(e) => (1, String::new(), format!("Failed to spawn {}: {}", bin, e)),
         };
 
-        let compiler_failed = exit_code != 0 || stderr.contains("error[") || stderr.contains("SyntaxError");
+        let compiler_failed = exit_code != 0
+            || stderr.contains("error[")
+            || stderr.contains("SyntaxError")
+            || stderr.contains("error TS")
+            || stderr.contains("syntax error:")
+            || stderr.contains("undefined:")
+            || stderr.contains("✖");
 
         let mut llm_prompt_gen = false;
         let mut sandbox_verified = false;
         let mut patch_committed = false;
+        let mut ghost_fix_staged = false;
 
         if compiler_failed {
             self.failures_detected.fetch_add(1, Ordering::Relaxed);
@@ -183,6 +195,26 @@ impl VibeCodingWatcher {
                 if verified {
                     sandbox_verified = true;
 
+                    // Pre-flight compiler diagnostics stage ghost fixes in RAM for 1-key tab acceptance
+                    let fix_id = format!(
+                        "gf_{:08x}",
+                        blake3::hash(candidate_patch.as_bytes()).as_bytes()[0..4]
+                            .iter()
+                            .fold(0u32, |acc, &b| (acc << 8) | (b as u32))
+                    );
+                    let ghost_candidate = GhostFixCandidate {
+                        fix_id: fix_id.clone(),
+                        target_path: target_path.display().to_string(),
+                        patch_content: candidate_patch.clone(),
+                        diagnostic: stderr.lines().take(5).collect::<Vec<_>>().join("\n"),
+                        verified_in_sandbox: true,
+                        staged_at: chrono::Utc::now().to_rfc3339(),
+                    };
+                    if let Ok(mut lock) = self.staged_ghost_fixes.write() {
+                        lock.insert(fix_id, ghost_candidate);
+                    }
+                    ghost_fix_staged = true;
+
                     // Apply First-Green patch to disk
                     if self.commit_patch_to_disk(&candidate_patch, target_path).is_ok() {
                         patch_committed = true;
@@ -204,6 +236,7 @@ impl VibeCodingWatcher {
             llm_prompt_generated: llm_prompt_gen,
             sandbox_verified,
             patch_committed,
+            ghost_fix_staged,
             duration_ms: start.elapsed().as_millis() as u64,
             timestamp: chrono::Utc::now().to_rfc3339(),
         };
@@ -335,12 +368,14 @@ impl VibeCodingWatcher {
     /// Live telemetry status report
     pub fn status(&self) -> VibeWatcherStatusReport {
         let recent = self.history.read().map(|h| h.clone()).unwrap_or_default();
+        let ghost_count = self.staged_ghost_fixes.read().map(|g| g.len()).unwrap_or(0);
         VibeWatcherStatusReport {
             active: true,
             cycles_executed: self.cycles_executed.load(Ordering::Relaxed),
             failures_detected: self.failures_detected.load(Ordering::Relaxed),
             auto_healed_iterations: self.auto_healed_iterations.load(Ordering::Relaxed),
             dpo_pairs_count: self.dpo_pairs_count.load(Ordering::Relaxed),
+            staged_ghost_fixes_count: ghost_count,
             recent_cycles: recent,
         }
     }
@@ -348,6 +383,36 @@ impl VibeCodingWatcher {
     /// Retrieve full history
     pub fn history(&self) -> Vec<VibeWatcherCycleRecord> {
         self.history.read().map(|h| h.clone()).unwrap_or_default()
+    }
+
+    /// Retrieve currently staged ghost fixes
+    pub fn staged_ghost_fixes(&self) -> Vec<GhostFixCandidate> {
+        self.staged_ghost_fixes.read().map(|g| g.values().cloned().collect()).unwrap_or_default()
+    }
+
+    /// 1-key Tab acceptance of a staged ghost fix
+    pub fn accept_ghost_fix(&self, fix_id: &str) -> Result<bool> {
+        let fix = {
+            let mut lock = self.staged_ghost_fixes.write().map_err(|e| HgbError::Execution(e.to_string()))?;
+            lock.remove(fix_id)
+        };
+
+        if let Some(candidate) = fix {
+            self.commit_patch_to_disk(&candidate.patch_content, Path::new(&candidate.target_path))?;
+            self.auto_healed_iterations.fetch_add(1, Ordering::Relaxed);
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Dismiss a staged ghost fix
+    pub fn dismiss_ghost_fix(&self, fix_id: &str) -> bool {
+        if let Ok(mut lock) = self.staged_ghost_fixes.write() {
+            lock.remove(fix_id).is_some()
+        } else {
+            false
+        }
     }
 }
 
@@ -368,14 +433,31 @@ mod tests {
 
     #[test]
     fn test_detect_check_commands() {
-        let watcher = VibeCodingWatcher::new(".");
-        let (rs_bin, rs_args) = watcher.detect_check_command(Path::new("src/main.rs"));
-        assert_eq!(rs_bin, "cargo");
-        assert!(rs_args.contains(&"check".to_string()));
+        let temp_dir = std::env::temp_dir().join(format!("vibe_detect_test_{:x}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let _ = fs::create_dir_all(&temp_dir);
 
+        let watcher = VibeCodingWatcher::new(&temp_dir);
+
+        // Rust
+        let (rs_bin, rs_args) = watcher.detect_check_command(Path::new("src/main.rs"));
+        assert!(rs_bin == "cargo" || rs_bin == "rustc");
+
+        // Python
         let (py_bin, py_args) = watcher.detect_check_command(Path::new("script.py"));
         assert_eq!(py_bin, "python3");
         assert!(py_args.contains(&"py_compile".to_string()));
+
+        // TypeScript
+        let (ts_bin, ts_args) = watcher.detect_check_command(Path::new("src/App.tsx"));
+        assert_eq!(ts_bin, "tsc");
+        assert_eq!(ts_args, vec!["--noEmit"]);
+
+        // Go
+        let (go_bin, go_args) = watcher.detect_check_command(Path::new("main.go"));
+        assert_eq!(go_bin, "go");
+        assert!(go_args.contains(&"vet".to_string()));
+
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 
     #[test]

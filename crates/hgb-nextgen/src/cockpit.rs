@@ -3888,11 +3888,15 @@ pub async fn execute_prompt_with_history(
         };
         if let Ok(encoded) = bincode::serialize(&req) {
             use tokio::io::{AsyncReadExt, AsyncWriteExt};
-            if stream.write_all(&encoded).await.is_ok() {
-                let mut buf = vec![0u8; 65536];
-                if let Ok(n) = stream.read(&mut buf).await {
-                    if n > 0 {
-                        if let Ok(resp) = bincode::deserialize::<hgb_core::HgbResponse>(&buf[..n]) {
+            let len = (encoded.len() as u32).to_be_bytes();
+            if stream.write_all(&len).await.is_ok() && stream.write_all(&encoded).await.is_ok() {
+                let mut len_buf = [0u8; 4];
+                if stream.read_exact(&mut len_buf).await.is_ok() {
+                    let resp_len = u32::from_be_bytes(len_buf) as usize;
+                    if resp_len <= 64 * 1024 * 1024 {
+                        let mut buf = vec![0u8; resp_len];
+                        if stream.read_exact(&mut buf).await.is_ok() {
+                            if let Ok(resp) = bincode::deserialize::<hgb_core::HgbResponse>(&buf) {
                             match resp {
                                 hgb_core::HgbResponse::Complete { output, tokens_used, duration_ms } => {
                                     let log_msg = format!("[DAEMON] Prompt finished in {}ms ({} tok)", duration_ms, tokens_used);
@@ -3932,6 +3936,7 @@ pub async fn execute_prompt_with_history(
             }
         }
     }
+}
 
     // Common system instructions enabling autonomous ReAct tools across all models
     let system_instructions = "\

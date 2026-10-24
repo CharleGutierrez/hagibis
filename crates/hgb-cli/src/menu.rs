@@ -305,6 +305,34 @@ impl InteractiveCommandCatalog {
                 description: "Fullstack rapid vibe-coding generator: scaffolding frontend, backend, database, and tests in one shot.",
             },
             CommandEntry {
+                name: "new",
+                aliases: &["create"],
+                category: "Scaffolding/App",
+                syntax: "hgb new \"<prompt>\" [--dir <path>] [--framework <name>]",
+                description: "Instant App Scaffolder: parses natural intent to generate Next.js 15, SvelteKit 2, Vite React, Axum, or FastAPI with Tailwind CSS, Lucide icons, Dark/Light mode theme, and Cursor MCP.",
+            },
+            CommandEntry {
+                name: "try",
+                aliases: &["speculative-try"],
+                category: "Speculative/Worktree",
+                syntax: "hgb try \"<intent>\" [--no-check] [--cmd <check-cmd>]",
+                description: "Speculative What-If Prototyper: creates an isolated git worktree branch (.hgb/worktrees/try-<slug>) and runs candidate builds without risking the main workspace.",
+            },
+            CommandEntry {
+                name: "accept",
+                aliases: &["try-accept"],
+                category: "Speculative/Worktree",
+                syntax: "hgb accept",
+                description: "1-Key confirmation: merges the active speculative worktree branch into current workspace and cleans up worktree.",
+            },
+            CommandEntry {
+                name: "discard",
+                aliases: &["try-discard"],
+                category: "Speculative/Worktree",
+                syntax: "hgb discard",
+                description: "1-Key vaporization: destroys and purges active speculative worktree without leaving a trace or dirtying git status.",
+            },
+            CommandEntry {
                 name: "merkle",
                 aliases: &["merkle-index"],
                 category: "Security/Ledger",
@@ -807,6 +835,13 @@ impl InteractiveCommandCatalog {
                 category: "Autonomous/Vibe",
                 syntax: "hgb vibe-heal [--status] [--run] [--target-crate <crate>] [--test-filter <test>]",
                 description: "Autonomous Self-Healing Vibe Loop: test-driven error interception, Ollama heuristic/LLM repair, RAM CoW sandbox verification, and First-Green auto-commit.",
+            },
+            CommandEntry {
+                name: "mirror",
+                aliases: &["tweak-mirror", "cdp-mirror", "cdp-tweak"],
+                category: "DevTools/Visual",
+                syntax: "hgb mirror --selector <sel> [--prop <prop>] --old <val> --new <val> [--file <path>] [--component <name>]",
+                description: "AST/tag-attribute aware JSX/TSX DevTools Click-to-Source sync: surgical DOM-to-code synchronization with component scoping and class collision avoidance.",
             },
         ]
     }

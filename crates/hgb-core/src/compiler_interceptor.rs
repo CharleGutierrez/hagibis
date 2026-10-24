@@ -20,6 +20,9 @@ pub enum CompilerTool {
     Rust,
     Zig,
     Python,
+    TypeScript,
+    Go,
+    JavaScript,
     Unknown,
 }
 
@@ -28,7 +31,10 @@ impl CompilerTool {
         match self {
             Self::Rust => "Rust (cargo/rustc)",
             Self::Zig => "Zig (zig test/build)",
-            Self::Python => "Python (py_compile)",
+            Self::Python => "Python (py_compile/ruff/mypy)",
+            Self::TypeScript => "TypeScript (tsc/bun/biome)",
+            Self::Go => "Go (go vet/test/build)",
+            Self::JavaScript => "JavaScript (biome/eslint/node)",
             Self::Unknown => "Unknown Compiler",
         }
     }
@@ -86,10 +92,175 @@ impl CompilerInterceptor {
             CompilerTool::Rust
         } else if cmd_lower.contains("zig") || ext == "zig" {
             CompilerTool::Zig
-        } else if cmd_lower.contains("python") || cmd_lower.contains("py_compile") || ext == "py" {
+        } else if cmd_lower.contains("go vet") || cmd_lower.contains("go test") || cmd_lower.contains("go build") || cmd_lower.contains("go check") || ext == "go" {
+            CompilerTool::Go
+        } else if ext == "ts" || ext == "tsx" || ext == "mts" || ext == "cts" || cmd_lower.contains("tsc") || (cmd_lower.contains("bun") && (cmd_lower.contains("check") || cmd_lower.contains("test"))) {
+            CompilerTool::TypeScript
+        } else if ext == "js" || ext == "jsx" || ext == "mjs" || ext == "cjs" || cmd_lower.contains("eslint") || cmd_lower.contains("biome") {
+            CompilerTool::JavaScript
+        } else if cmd_lower.contains("python") || cmd_lower.contains("py_compile") || cmd_lower.contains("ruff") || cmd_lower.contains("mypy") || cmd_lower.contains("pytest") || ext == "py" {
             CompilerTool::Python
         } else {
             CompilerTool::Unknown
+        }
+    }
+
+    /// Autonomously detect language runtime and check command based on workspace manifests and target files.
+    /// Supports:
+    /// - `package.json` / `tsconfig.json` -> TypeScript / Bun / Node (`bun run check`, `tsc --noEmit`, `pnpm check`, `biome check`, `vitest run`).
+    /// - `pyproject.toml` / `requirements.txt` -> Python (`ruff check`, `mypy`, `pytest`, `python3 -m py_compile`).
+    /// - `go.mod` -> Go (`go vet ./...`, `go test ./...`).
+    /// - `Cargo.toml` -> Rust (`cargo check --message-format=json`).
+    /// - Fallback inference when editing non-Rust files so non-Rust coders never see `cargo check: could not find Cargo.toml`.
+    pub fn auto_detect_polyglot_check(
+        workspace_root: &Path,
+        target_file: Option<&Path>,
+    ) -> (CompilerTool, String, Vec<String>) {
+        let ext = target_file
+            .and_then(|f| f.extension())
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        let target_str = target_file
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        // 1. Direct file extension priority
+        match ext.as_str() {
+            "ts" | "tsx" | "mts" | "cts" => {
+                if workspace_root.join("bun.lockb").exists() || workspace_root.join("bun.lock").exists() {
+                    return (CompilerTool::TypeScript, "bun".to_string(), vec!["run".to_string(), "check".to_string()]);
+                }
+                if workspace_root.join("biome.json").exists() || workspace_root.join("biome.jsonc").exists() {
+                    return (CompilerTool::TypeScript, "biome".to_string(), vec!["check".to_string()]);
+                }
+                if workspace_root.join("pnpm-lock.yaml").exists() {
+                    return (CompilerTool::TypeScript, "pnpm".to_string(), vec!["check".to_string()]);
+                }
+                if workspace_root.join("tsconfig.json").exists() {
+                    return (CompilerTool::TypeScript, "tsc".to_string(), vec!["--noEmit".to_string()]);
+                }
+                if workspace_root.join("package.json").exists() {
+                    if let Ok(content) = fs::read_to_string(workspace_root.join("package.json")) {
+                        if content.contains("\"check\":") {
+                            return (CompilerTool::TypeScript, "npm".to_string(), vec!["run".to_string(), "check".to_string()]);
+                        }
+                        if content.contains("\"test\":") {
+                            return (CompilerTool::TypeScript, "npm".to_string(), vec!["test".to_string()]);
+                        }
+                    }
+                    return (CompilerTool::TypeScript, "tsc".to_string(), vec!["--noEmit".to_string()]);
+                }
+                return (CompilerTool::TypeScript, "tsc".to_string(), vec!["--noEmit".to_string()]);
+            }
+            "js" | "jsx" | "mjs" | "cjs" => {
+                if workspace_root.join("biome.json").exists() || workspace_root.join("biome.jsonc").exists() {
+                    return (CompilerTool::JavaScript, "biome".to_string(), vec!["check".to_string()]);
+                }
+                if workspace_root.join("package.json").exists() {
+                    if let Ok(content) = fs::read_to_string(workspace_root.join("package.json")) {
+                        if content.contains("\"test\":") {
+                            return (CompilerTool::JavaScript, "npm".to_string(), vec!["test".to_string()]);
+                        }
+                    }
+                }
+                if !target_str.is_empty() {
+                    return (CompilerTool::JavaScript, "node".to_string(), vec!["--check".to_string(), target_str]);
+                }
+                return (CompilerTool::JavaScript, "npm".to_string(), vec!["test".to_string()]);
+            }
+            "go" => {
+                if workspace_root.join("go.mod").exists() {
+                    return (CompilerTool::Go, "go".to_string(), vec!["vet".to_string(), "./...".to_string()]);
+                }
+                if !target_str.is_empty() {
+                    return (CompilerTool::Go, "go".to_string(), vec!["vet".to_string(), target_str]);
+                }
+                return (CompilerTool::Go, "go".to_string(), vec!["vet".to_string(), "./...".to_string()]);
+            }
+            "py" => {
+                let has_pyproject = workspace_root.join("pyproject.toml").exists();
+                let has_requirements = workspace_root.join("requirements.txt").exists();
+                let has_ruff = workspace_root.join("ruff.toml").exists()
+                    || (has_pyproject && fs::read_to_string(workspace_root.join("pyproject.toml")).map(|s| s.contains("[tool.ruff")).unwrap_or(false));
+
+                if has_ruff {
+                    return (CompilerTool::Python, "ruff".to_string(), vec!["check".to_string()]);
+                }
+                if workspace_root.join("tests").is_dir() && (has_pyproject || has_requirements) {
+                    return (CompilerTool::Python, "pytest".to_string(), vec![]);
+                }
+                if !target_str.is_empty() {
+                    return (CompilerTool::Python, "python3".to_string(), vec!["-m".to_string(), "py_compile".to_string(), target_str]);
+                }
+                return (CompilerTool::Python, "python3".to_string(), vec!["-m".to_string(), "py_compile".to_string()]);
+            }
+            "zig" => {
+                if !target_str.is_empty() {
+                    return (CompilerTool::Zig, "zig".to_string(), vec!["test".to_string(), target_str]);
+                }
+                return (CompilerTool::Zig, "zig".to_string(), vec!["build".to_string(), "test".to_string()]);
+            }
+            "rs" => {
+                if workspace_root.join("Cargo.toml").exists() {
+                    return (CompilerTool::Rust, "cargo".to_string(), vec!["check".to_string(), "--message-format=json".to_string()]);
+                }
+                if !target_str.is_empty() {
+                    return (CompilerTool::Rust, "rustc".to_string(), vec!["--crate-type=lib".to_string(), target_str]);
+                }
+                return (CompilerTool::Rust, "cargo".to_string(), vec!["check".to_string(), "--message-format=json".to_string()]);
+            }
+            _ => {}
+        }
+
+        // 2. Workspace manifest detection when extension is generic or None
+        if workspace_root.join("Cargo.toml").exists() {
+            return (CompilerTool::Rust, "cargo".to_string(), vec!["check".to_string(), "--message-format=json".to_string()]);
+        }
+        if workspace_root.join("go.mod").exists() {
+            return (CompilerTool::Go, "go".to_string(), vec!["vet".to_string(), "./...".to_string()]);
+        }
+        if workspace_root.join("bun.lockb").exists() || workspace_root.join("bun.lock").exists() {
+            return (CompilerTool::TypeScript, "bun".to_string(), vec!["run".to_string(), "check".to_string()]);
+        }
+        if workspace_root.join("biome.json").exists() || workspace_root.join("biome.jsonc").exists() {
+            return (CompilerTool::TypeScript, "biome".to_string(), vec!["check".to_string()]);
+        }
+        if workspace_root.join("pnpm-lock.yaml").exists() {
+            return (CompilerTool::TypeScript, "pnpm".to_string(), vec!["check".to_string()]);
+        }
+        if workspace_root.join("tsconfig.json").exists() {
+            return (CompilerTool::TypeScript, "tsc".to_string(), vec!["--noEmit".to_string()]);
+        }
+        if workspace_root.join("package.json").exists() {
+            if let Ok(content) = fs::read_to_string(workspace_root.join("package.json")) {
+                if content.contains("\"check\":") {
+                    return (CompilerTool::TypeScript, "npm".to_string(), vec!["run".to_string(), "check".to_string()]);
+                }
+                if content.contains("\"typescript\"") {
+                    return (CompilerTool::TypeScript, "tsc".to_string(), vec!["--noEmit".to_string()]);
+                }
+            }
+            return (CompilerTool::JavaScript, "npm".to_string(), vec!["test".to_string()]);
+        }
+        if workspace_root.join("pyproject.toml").exists() || workspace_root.join("requirements.txt").exists() {
+            if workspace_root.join("ruff.toml").exists() || (workspace_root.join("pyproject.toml").exists() && fs::read_to_string(workspace_root.join("pyproject.toml")).map(|s| s.contains("[tool.ruff")).unwrap_or(false)) {
+                return (CompilerTool::Python, "ruff".to_string(), vec!["check".to_string()]);
+            }
+            if workspace_root.join("tests").is_dir() {
+                return (CompilerTool::Python, "pytest".to_string(), vec![]);
+            }
+            if !target_str.is_empty() {
+                return (CompilerTool::Python, "python3".to_string(), vec!["-m".to_string(), "py_compile".to_string(), target_str]);
+            }
+            return (CompilerTool::Python, "python3".to_string(), vec!["-m".to_string(), "py_compile".to_string()]);
+        }
+
+        // 3. Fallback when NO manifests exist: never invoke cargo check on non-rust files!
+        if !target_str.is_empty() {
+            (CompilerTool::Unknown, "test".to_string(), vec!["-f".to_string(), target_str])
+        } else {
+            (CompilerTool::Unknown, "true".to_string(), vec![])
         }
     }
 
@@ -99,14 +270,26 @@ impl CompilerInterceptor {
             CompilerTool::Rust => Self::parse_rust_diagnostics(stderr, stdout),
             CompilerTool::Zig => Self::parse_zig_diagnostics(stderr),
             CompilerTool::Python => Self::parse_python_diagnostics(stderr),
+            CompilerTool::TypeScript => Self::parse_typescript_diagnostics(stderr, stdout),
+            CompilerTool::Go => Self::parse_go_diagnostics(stderr, stdout),
+            CompilerTool::JavaScript => Self::parse_biome_eslint_diagnostics(stderr, stdout),
             CompilerTool::Unknown => {
-                // Heuristic inspection across Rust, Zig, Python formats
+                // Heuristic inspection across Rust, TypeScript, Go, Biome, Python, Zig formats
                 let mut diags = Self::parse_rust_diagnostics(stderr, stdout);
                 if diags.is_empty() {
-                    diags = Self::parse_zig_diagnostics(stderr);
+                    diags = Self::parse_typescript_diagnostics(stderr, stdout);
+                }
+                if diags.is_empty() {
+                    diags = Self::parse_go_diagnostics(stderr, stdout);
+                }
+                if diags.is_empty() {
+                    diags = Self::parse_biome_eslint_diagnostics(stderr, stdout);
                 }
                 if diags.is_empty() {
                     diags = Self::parse_python_diagnostics(stderr);
+                }
+                if diags.is_empty() {
+                    diags = Self::parse_zig_diagnostics(stderr);
                 }
                 diags
             }
@@ -360,6 +543,329 @@ impl CompilerInterceptor {
         diags
     }
 
+    /// Parse TypeScript compiler diagnostics (tsc, bun test, bun check)
+    /// Examples:
+    /// `src/index.ts:15:7 - error TS2322: Type 'string' is not assignable to type 'number'.`
+    /// `src/components/Button.tsx(24,10): error TS2304: Cannot find name 'foo'.`
+    /// `src/utils.ts:42:1: error TS1005: ';' expected.`
+    /// `src/app.ts:10:5 - error: Cannot find module './foo'`
+    pub fn parse_typescript_diagnostics(stderr: &str, stdout: &str) -> Vec<CompilerDiagnostic> {
+        let mut diags = Vec::new();
+        static TS_RE1: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+        let re1 = TS_RE1.get_or_init(|| {
+            regex::Regex::new(r#"^([^\s(:]+):(\d+):(\d+)\s*-\s*(error|warning)\s*(?:(TS\d+):\s*)?(.+)$"#).unwrap()
+        });
+
+        static TS_RE2: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+        let re2 = TS_RE2.get_or_init(|| {
+            regex::Regex::new(r#"^([^\s(:]+)\((\d+),(\d+)\):\s*(error|warning)\s*(?:(TS\d+):\s*)?(.+)$"#).unwrap()
+        });
+
+        static TS_RE3: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+        let re3 = TS_RE3.get_or_init(|| {
+            regex::Regex::new(r#"^([^\s(:]+):(\d+):(\d+):\s*(error|warning)\s*(?:(TS\d+):\s*)?(.+)$"#).unwrap()
+        });
+
+        for line in stdout.lines().chain(stderr.lines()) {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            let captures = re1.captures(trimmed)
+                .or_else(|| re2.captures(trimmed))
+                .or_else(|| re3.captures(trimmed));
+
+            if let Some(caps) = captures {
+                let file = PathBuf::from(&caps[1]);
+                let line_num: usize = caps[2].parse().unwrap_or(0);
+                let col_num: usize = caps[3].parse().unwrap_or(0);
+                let is_error = &caps[4] == "error";
+                let severity = if is_error {
+                    DiagnosticSeverity::Error
+                } else {
+                    DiagnosticSeverity::Warning
+                };
+                let error_code = caps.get(5).map(|m| m.as_str().to_string());
+                let message = caps[6].trim().to_string();
+
+                let suggested_fix = if message.contains("expected ';'") || message.contains("';' expected") || error_code.as_deref() == Some("TS1005") {
+                    Some("Insert missing semicolon ';'".to_string())
+                } else if message.contains("expected '}'") || message.contains("'}' expected") {
+                    Some("Insert missing closing brace '}'".to_string())
+                } else if message.contains("Cannot find name") || error_code.as_deref() == Some("TS2304") {
+                    Some("Import or declare the missing identifier".to_string())
+                } else if message.contains("Type") && message.contains("not assignable to type") {
+                    Some("Correct the expression type to match the expected type".to_string())
+                } else {
+                    None
+                };
+
+                diags.push(CompilerDiagnostic {
+                    tool: CompilerTool::TypeScript,
+                    severity,
+                    file,
+                    line: line_num,
+                    column: col_num,
+                    error_code,
+                    message,
+                    suggested_fix,
+                });
+            }
+        }
+
+        diags
+    }
+
+    /// Parse Go compiler and vet diagnostics (go vet, go build, go test)
+    /// Examples:
+    /// `./main.go:12:2: undefined: fmt.Printl`
+    /// `main.go:15:6: missing return at end of function`
+    /// `pkg/service.go:28:14: syntax error: unexpected newline, expecting comma or }`
+    /// `server.go:45:10: cannot use "hello" (untyped string constant) as int value in variable declaration`
+    /// `cmd/app/main.go:20: imported and not used: "os"`
+    pub fn parse_go_diagnostics(stderr: &str, stdout: &str) -> Vec<CompilerDiagnostic> {
+        let mut diags = Vec::new();
+        static GO_RE1: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+        let re1 = GO_RE1.get_or_init(|| {
+            regex::Regex::new(r#"^(?:\./)?([^\s:]+\.go):(\d+):(\d+):\s*(?:(syntax error|error):\s*)?(.+)$"#).unwrap()
+        });
+
+        static GO_RE2: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+        let re2 = GO_RE2.get_or_init(|| {
+            regex::Regex::new(r#"^(?:\./)?([^\s:]+\.go):(\d+):\s*(?:(syntax error|error):\s*)?(.+)$"#).unwrap()
+        });
+
+        for line in stderr.lines().chain(stdout.lines()) {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+
+            if let Some(caps) = re1.captures(trimmed) {
+                let file = PathBuf::from(&caps[1]);
+                let line_num: usize = caps[2].parse().unwrap_or(0);
+                let col_num: usize = caps[3].parse().unwrap_or(0);
+                let explicit_err = caps.get(4).map(|m| m.as_str());
+                let msg = caps[5].trim().to_string();
+
+                let error_code = if let Some(e) = explicit_err {
+                    Some(e.to_string())
+                } else if let Some(colon) = msg.find(':') {
+                    let prefix = msg[..colon].trim();
+                    if prefix.contains(' ') && !prefix.starts_with("undefined") && !prefix.starts_with("cannot use") {
+                        None
+                    } else {
+                        Some(prefix.to_string())
+                    }
+                } else {
+                    None
+                };
+
+                let suggested_fix = if msg.contains("expecting comma") || msg.contains("unexpected newline, expecting comma") {
+                    Some("Insert missing comma ',' at end of line".to_string())
+                } else if msg.contains("missing return") {
+                    Some("Add missing return statement".to_string())
+                } else if msg.contains("imported and not used") {
+                    Some("Remove unused import or use blank identifier '_'".to_string())
+                } else if msg.contains("expected ';'") {
+                    Some("Insert missing semicolon ';'".to_string())
+                } else {
+                    None
+                };
+
+                diags.push(CompilerDiagnostic {
+                    tool: CompilerTool::Go,
+                    severity: DiagnosticSeverity::Error,
+                    file,
+                    line: line_num,
+                    column: col_num,
+                    error_code,
+                    message: msg,
+                    suggested_fix,
+                });
+            } else if let Some(caps) = re2.captures(trimmed) {
+                let file = PathBuf::from(&caps[1]);
+                let line_num: usize = caps[2].parse().unwrap_or(0);
+                let explicit_err = caps.get(3).map(|m| m.as_str());
+                let msg = caps[4].trim().to_string();
+
+                let error_code = explicit_err.map(|s| s.to_string());
+                let suggested_fix = if msg.contains("imported and not used") {
+                    Some("Remove unused import or use blank identifier '_'".to_string())
+                } else {
+                    None
+                };
+
+                diags.push(CompilerDiagnostic {
+                    tool: CompilerTool::Go,
+                    severity: DiagnosticSeverity::Error,
+                    file,
+                    line: line_num,
+                    column: 1,
+                    error_code,
+                    message: msg,
+                    suggested_fix,
+                });
+            }
+        }
+
+        diags
+    }
+
+    /// Parse Biome and ESLint diagnostics
+    /// Examples Biome:
+    /// `src/index.ts:10:5 lint/suspicious/noExplicitAny: Unexpected any. Specify a different type.`
+    /// `src/App.tsx:12:3 parse ✖ Expected a semicolon or an implicit semicolon after a statement, but found none`
+    /// `src/index.ts:10:5 error[lint/suspicious/noExplicitAny]: Unexpected any.`
+    /// Examples ESLint:
+    /// `src/index.js:10:5: Unexpected var, use let or const instead. [Error/no-var]`
+    /// `src/index.ts:12:1: 'foo' is defined but never used. [Warning/@typescript-eslint/no-unused-vars]`
+    /// `/path/to/file.js`
+    /// `  10:5  error  Unexpected var, use let or const instead  no-var`
+    pub fn parse_biome_eslint_diagnostics(stderr: &str, stdout: &str) -> Vec<CompilerDiagnostic> {
+        let mut diags = Vec::new();
+
+        static BIOME_RE1: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+        let b_re1 = BIOME_RE1.get_or_init(|| {
+            regex::Regex::new(r#"^([^\s:]+\.[a-zA-Z0-9]+):(\d+):(\d+)\s+(?:(error|warning)(?:\[([^\]]+)\])?:\s*|([a-zA-Z0-9_\-/]+)(?:\s+✖\s*|:\s*))(.+)$"#).unwrap()
+        });
+
+        static ESLINT_RE1: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+        let es_re1 = ESLINT_RE1.get_or_init(|| {
+            regex::Regex::new(r#"^([^\s:]+\.[a-zA-Z0-9]+):(\d+):(\d+):\s*(.+?)\s*\[(Error|Warning)/([^\]]+)\]$"#).unwrap()
+        });
+
+        static ESLINT_STYLISH_LINE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+        let es_stylish = ESLINT_STYLISH_LINE.get_or_init(|| {
+            regex::Regex::new(r#"^\s*(\d+):(\d+)\s+(error|warning)\s+(.+?)\s+([a-zA-Z0-9_\-/@]+)$"#).unwrap()
+        });
+
+        let mut current_file = PathBuf::new();
+
+        for line in stderr.lines().chain(stdout.lines()) {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            // Check if this line is a file path header (ESLint stylish)
+            if (trimmed.ends_with(".js") || trimmed.ends_with(".ts") || trimmed.ends_with(".jsx") || trimmed.ends_with(".tsx"))
+                && !trimmed.contains(':') && !trimmed.contains(' ') {
+                current_file = PathBuf::from(trimmed);
+                continue;
+            }
+
+            // 1. ESLint compact format: file:line:col: message [Severity/rule]
+            if let Some(caps) = es_re1.captures(trimmed) {
+                let file = PathBuf::from(&caps[1]);
+                let line_num: usize = caps[2].parse().unwrap_or(0);
+                let col_num: usize = caps[3].parse().unwrap_or(0);
+                let message = caps[4].trim().to_string();
+                let severity_str = &caps[5];
+                let rule_id = caps[6].trim().to_string();
+
+                let severity = if severity_str.eq_ignore_ascii_case("error") {
+                    DiagnosticSeverity::Error
+                } else {
+                    DiagnosticSeverity::Warning
+                };
+
+                let tool = if file.extension().map(|e| e == "ts" || e == "tsx").unwrap_or(false) {
+                    CompilerTool::TypeScript
+                } else {
+                    CompilerTool::JavaScript
+                };
+
+                diags.push(CompilerDiagnostic {
+                    tool,
+                    severity,
+                    file,
+                    line: line_num,
+                    column: col_num,
+                    error_code: Some(rule_id),
+                    message,
+                    suggested_fix: None,
+                });
+                continue;
+            }
+
+            // 2. Biome compact format
+            if let Some(caps) = b_re1.captures(trimmed) {
+                let file = PathBuf::from(&caps[1]);
+                let line_num: usize = caps[2].parse().unwrap_or(0);
+                let col_num: usize = caps[3].parse().unwrap_or(0);
+                let explicit_sev = caps.get(4).map(|m| m.as_str());
+                let bracket_rule = caps.get(5).map(|m| m.as_str());
+                let inline_rule = caps.get(6).map(|m| m.as_str());
+                let message = caps[7].trim().to_string();
+
+                let severity = if let Some(s) = explicit_sev {
+                    if s.eq_ignore_ascii_case("warning") {
+                        DiagnosticSeverity::Warning
+                    } else {
+                        DiagnosticSeverity::Error
+                    }
+                } else {
+                    DiagnosticSeverity::Error
+                };
+
+                let error_code = bracket_rule.or(inline_rule).map(|s| s.to_string());
+                let tool = if file.extension().map(|e| e == "ts" || e == "tsx").unwrap_or(false) {
+                    CompilerTool::TypeScript
+                } else {
+                    CompilerTool::JavaScript
+                };
+
+                diags.push(CompilerDiagnostic {
+                    tool,
+                    severity,
+                    file,
+                    line: line_num,
+                    column: col_num,
+                    error_code: Some(error_code.unwrap_or_default()),
+                    message,
+                    suggested_fix: None,
+                });
+                continue;
+            }
+
+            // 3. ESLint stylish line format under current_file
+            if let Some(caps) = es_stylish.captures(line) {
+                if !current_file.as_os_str().is_empty() {
+                    let line_num: usize = caps[1].parse().unwrap_or(0);
+                    let col_num: usize = caps[2].parse().unwrap_or(0);
+                    let severity = if &caps[3] == "warning" {
+                        DiagnosticSeverity::Warning
+                    } else {
+                        DiagnosticSeverity::Error
+                    };
+                    let message = caps[4].trim().to_string();
+                    let rule = caps[5].trim().to_string();
+
+                    let tool = if current_file.extension().map(|e| e == "ts" || e == "tsx").unwrap_or(false) {
+                        CompilerTool::TypeScript
+                    } else {
+                        CompilerTool::JavaScript
+                    };
+
+                    diags.push(CompilerDiagnostic {
+                        tool,
+                        severity,
+                        file: current_file.clone(),
+                        line: line_num,
+                        column: col_num,
+                        error_code: Some(rule),
+                        message,
+                        suggested_fix: None,
+                    });
+                }
+            }
+        }
+
+        diags
+    }
+
     /// Rule-based AST/Syntax Healer:
     /// Autonomously generates a candidate patch for syntax errors, missing semicolons, missing imports,
     /// unbalanced delimiters, and language-specific syntax conventions.
@@ -496,6 +1002,83 @@ impl CompilerInterceptor {
                     }
                 }
 
+                CompilerTool::TypeScript => {
+                    let msg_lower = diag.message.to_lowercase();
+                    // Missing semicolon
+                    if msg_lower.contains("';' expected") || msg_lower.contains("expected ';'") || diag.error_code.as_deref() == Some("TS1005") {
+                        let target_line = if diag.line > 0 && diag.line <= lines.len() {
+                            diag.line - 1
+                        } else if !lines.is_empty() {
+                            lines.len() - 1
+                        } else {
+                            continue;
+                        };
+                        let check_line = if target_line > 0 && lines[target_line].trim().starts_with('}') {
+                            target_line - 1
+                        } else {
+                            target_line
+                        };
+                        if !lines[check_line].trim().ends_with(';') && !lines[check_line].trim().ends_with('{') {
+                            lines[check_line].push(';');
+                            mutated = true;
+                        }
+                    }
+                    // Unclosed curly brace
+                    if msg_lower.contains("'}' expected") || msg_lower.contains("expected '}'") {
+                        let open_braces = source_code.chars().filter(|&c| c == '{').count();
+                        let close_braces = source_code.chars().filter(|&c| c == '}').count();
+                        if open_braces > close_braces {
+                            for _ in 0..(open_braces - close_braces) {
+                                lines.push("}".to_string());
+                                mutated = true;
+                            }
+                        }
+                    }
+                }
+
+                CompilerTool::Go => {
+                    let msg_lower = diag.message.to_lowercase();
+                    // Missing comma in composite literal or arg list
+                    if msg_lower.contains("expecting comma") || msg_lower.contains("unexpected newline, expecting comma") {
+                        let target_line = if diag.line > 0 && diag.line <= lines.len() {
+                            diag.line - 1
+                        } else {
+                            continue;
+                        };
+                        let l = lines[target_line].trim_end();
+                        if !l.ends_with(',') {
+                            lines[target_line] = format!("{},", l);
+                            mutated = true;
+                        }
+                    }
+                    if msg_lower.contains("expected ';'") {
+                        let target_line = if diag.line > 0 && diag.line <= lines.len() {
+                            diag.line - 1
+                        } else {
+                            continue;
+                        };
+                        if !lines[target_line].trim().ends_with(';') {
+                            lines[target_line].push(';');
+                            mutated = true;
+                        }
+                    }
+                }
+
+                CompilerTool::JavaScript => {
+                    let msg_lower = diag.message.to_lowercase();
+                    if msg_lower.contains("expected a semicolon") || msg_lower.contains("missing semicolon") {
+                        let target_line = if diag.line > 0 && diag.line <= lines.len() {
+                            diag.line - 1
+                        } else {
+                            continue;
+                        };
+                        if !lines[target_line].trim().ends_with(';') && !lines[target_line].trim().ends_with('{') {
+                            lines[target_line].push(';');
+                            mutated = true;
+                        }
+                    }
+                }
+
                 CompilerTool::Unknown => {}
             }
         }
@@ -537,7 +1120,19 @@ impl CompilerInterceptor {
         };
 
         let mut sandbox = OverlaySandbox::new(effective_workspace)?;
-        let tool = Self::detect_tool(custom_command.unwrap_or(""), target_rel_path);
+        let (auto_tool, auto_bin, auto_args) = Self::auto_detect_polyglot_check(effective_workspace, Some(target_rel_path));
+        let tool = if let Some(cmd) = custom_command {
+            Self::detect_tool(cmd, target_rel_path)
+        } else {
+            auto_tool
+        };
+
+        let auto_cmd = if auto_args.is_empty() {
+            auto_bin.clone()
+        } else {
+            format!("{} {}", auto_bin, auto_args.join(" "))
+        };
+        let full_cmd_to_use = custom_command.unwrap_or(&auto_cmd);
 
         let mut current_code = candidate_code.to_string();
         let target_str = target_rel_path.to_string_lossy().to_string();
@@ -553,22 +1148,7 @@ impl CompilerInterceptor {
         for iter in 0..retries {
             iterations = iter + 1;
 
-            // Determine command to execute inside sandbox
-            let default_cmd = match tool {
-                CompilerTool::Rust => {
-                    // Check if Cargo.toml exists in workspace
-                    if effective_workspace.join("Cargo.toml").exists() {
-                        "cargo check --message-format=json".to_string()
-                    } else {
-                        format!("rustc --crate-type=lib {}", target_str)
-                    }
-                }
-                CompilerTool::Zig => format!("zig test {}", target_str),
-                CompilerTool::Python => format!("python3 -m py_compile {}", target_str),
-                CompilerTool::Unknown => format!("cargo check"),
-            };
-
-            let full_cmd = custom_command.unwrap_or(&default_cmd);
+            let full_cmd = full_cmd_to_use;
             let parts: Vec<&str> = full_cmd.split_whitespace().collect();
             if parts.is_empty() {
                 if let Some(ref dir) = isolated_dir {

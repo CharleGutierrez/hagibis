@@ -347,12 +347,16 @@ async fn test_full_client_daemon_ipc_roundtrip_all_requests() {
     let send_ipc = |req: HgbRequest, sock: PathBuf| async move {
         let mut stream = UnixStream::connect(&sock).await.expect("connect stream");
         let encoded = bincode::serialize(&req).expect("serialize req");
+        let len = (encoded.len() as u32).to_be_bytes();
+        stream.write_all(&len).await.expect("write req len");
         stream.write_all(&encoded).await.expect("write req");
 
-        let mut buf = vec![0u8; 65536];
-        let n = stream.read(&mut buf).await.expect("read resp");
-        assert!(n > 0, "Empty response from daemon");
-        bincode::deserialize::<HgbResponse>(&buf[..n]).expect("deserialize resp")
+        let mut len_buf = [0u8; 4];
+        stream.read_exact(&mut len_buf).await.expect("read resp len");
+        let resp_len = u32::from_be_bytes(len_buf) as usize;
+        let mut buf = vec![0u8; resp_len];
+        stream.read_exact(&mut buf).await.expect("read resp");
+        bincode::deserialize::<HgbResponse>(&buf).expect("deserialize resp")
     };
 
     // 1. ModelSwitch

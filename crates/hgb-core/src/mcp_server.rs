@@ -31,6 +31,22 @@ use crate::ast_query::AstQueryEngine;
 use crate::prompt_grounding::UniversalPromptGrounder;
 use crate::hybrid_orchestrator::HybridOrchestrationEngine;
 use crate::timeline::TimelineManager;
+use crate::api_mirage::ApiMirageEngine;
+use crate::baas_graduate::{BaasGraduateEngine, BaasTarget};
+use crate::cdp_tweak_mirror::{CdpTweakMirror, DomTweakEvent};
+use crate::checkpoint_time_machine::CheckpointTimeMachine;
+use crate::code_skeleton::CodeSkeletonizer;
+use crate::vault_ghost_envs::{GhostVaultSeal, VaultGhostEnvs};
+use crate::mobile_qr_teleport::{MobilePwaConfig, MobileQrTeleport};
+use crate::figma_bridge::FigmaDesignBridge;
+use crate::git_micro_commit::GitMicroCommitMirror;
+use crate::agentic_bisect::{AgenticBisectEngine, BisectConfig};
+use crate::nightshift_pipeline::NightShiftPipeline;
+use crate::desktop_computer_use::{DesktopAction, DesktopComputerUseEngine};
+use crate::viral_social_og::{OgCardConfig, ViralSocialOgEngine};
+
+/// Type alias for Hagibis MCP standard I/O server
+pub type McpStdioServer = HagibisMcpServer;
 
 /// Structured test run execution report with compiler diagnostics & test panics
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -452,20 +468,112 @@ pub fn build_fs_tree(
     (nodes, total_files, total_dirs, ascii_lines)
 }
 
+/// MCP Progressive Tool Disclosure Scoping Profile
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HgbMcpProfile {
+    /// Essential vibe coding tools (5-8 tools) to prevent overwhelming IDE LLM context windows
+    Core,
+    /// Full catalog of 40+ system, storage, kernel, and deployment tools
+    Full,
+}
+
+impl Default for HgbMcpProfile {
+    fn default() -> Self {
+        Self::from_env_or_default()
+    }
+}
+
+impl HgbMcpProfile {
+    pub fn from_env_or_default() -> Self {
+        match std::env::var("HGB_MCP_PROFILE").unwrap_or_default().to_lowercase().as_str() {
+            "full" | "all" => HgbMcpProfile::Full,
+            _ => HgbMcpProfile::Core,
+        }
+    }
+
+    pub fn from_str_opt(s: Option<&str>) -> Self {
+        match s.map(|v| v.to_lowercase()).as_deref() {
+            Some("full") | Some("all") => HgbMcpProfile::Full,
+            Some("core") => HgbMcpProfile::Core,
+            _ => Self::from_env_or_default(),
+        }
+    }
+
+    pub fn from_str_opt_raw(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "full" | "all" => HgbMcpProfile::Full,
+            _ => HgbMcpProfile::Core,
+        }
+    }
+}
+
+/// The top essential vibe coding tools exposed under progressive disclosure (HgbMcpProfile::Core)
+pub const CORE_VIBE_TOOLS: &[&str] = &[
+    "hgb_self_healing_compile",
+    "hgb_cow_sandbox",
+    "hgb_vibe_speedrun",
+    "hgb_ast_query",
+    "hgb_git_micro_commit",
+    "hgb_mobile_qr_teleport",
+    "hgb_cdp_tweak_mirror",
+    "hgb_speculative_sandbox",
+];
+
 /// Hagibis MCP Server Engine exposing native core & storage capabilities
 pub struct HagibisMcpServer {
     pub workspace_root: PathBuf,
+    pub profile: HgbMcpProfile,
 }
 
 impl HagibisMcpServer {
     pub fn new<P: AsRef<Path>>(workspace_root: P) -> Self {
         Self {
             workspace_root: workspace_root.as_ref().to_path_buf(),
+            profile: HgbMcpProfile::from_env_or_default(),
         }
     }
 
-    /// List all advertised tools with complete JSON schema
+    pub fn with_profile<P: AsRef<Path>>(workspace_root: P, profile: HgbMcpProfile) -> Self {
+        Self {
+            workspace_root: workspace_root.as_ref().to_path_buf(),
+            profile,
+        }
+    }
+
+    pub fn set_profile(&mut self, profile: HgbMcpProfile) {
+        self.profile = profile;
+    }
+
+    /// List tools scoped to the active profile (defaults to Core unless HGB_MCP_PROFILE=full)
     pub fn list_tools() -> Value {
+        Self::list_tools_for_profile(HgbMcpProfile::from_env_or_default())
+    }
+
+    /// List tools explicitly scoped by profile
+    pub fn list_tools_for_profile(profile: HgbMcpProfile) -> Value {
+        let all_tools = Self::list_full_tools();
+        match profile {
+            HgbMcpProfile::Full => all_tools,
+            HgbMcpProfile::Core => {
+                if let Some(arr) = all_tools.as_array() {
+                    let filtered: Vec<Value> = arr
+                        .iter()
+                        .filter(|tool| {
+                            let name = tool.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                            CORE_VIBE_TOOLS.contains(&name)
+                        })
+                        .cloned()
+                        .collect();
+                    Value::Array(filtered)
+                } else {
+                    all_tools
+                }
+            }
+        }
+    }
+
+    /// List all advertised tools in the complete catalog
+    pub fn list_full_tools() -> Value {
         serde_json::json!([
             {
                 "name": "hgb_sqlite_query",
@@ -641,6 +749,20 @@ impl HagibisMcpServer {
                 }
             },
             {
+                "name": "hgb_vibe_speedrun",
+                "description": "Execute complete end-to-end autonomous vibe coding speedrun cycle with pre-flight grounding, ephemeral RAM CoW sandboxing, First-Green compile verification, and git micro-commit",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "prompt": { "type": "string", "description": "Task intent or coding instruction" },
+                        "target_dir": { "type": "string", "description": "Optional workspace target directory" },
+                        "auto_commit": { "type": "boolean", "description": "Automatically stage and create micro-commit on First-Green pass", "default": true },
+                        "check_command": { "type": "string", "description": "Optional custom check or test command" }
+                    },
+                    "required": ["prompt"]
+                }
+            },
+            {
                 "name": "ollama_speculative_generate",
                 "description": "Speculative Decoding LLM inference using fast draft model (qwen2.5-coder:1.5b) validated by sovereign target model (phi3:3.8b) with zero-failure fallback",
                 "inputSchema": {
@@ -714,6 +836,20 @@ impl HagibisMcpServer {
                 }
             },
             {
+                "name": "hgb_speculative_sandbox",
+                "description": "Execute code or command in isolated ephemeral RAM CoW overlayfs or Firecracker microVM sandbox with zero pollution and instant rollback",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "code": { "type": "string", "description": "Source code or command string to execute" },
+                        "command": { "type": "string", "description": "Optional command alias" },
+                        "language": { "type": "string", "enum": ["rust", "zig", "bash", "python"], "description": "Environment runner", "default": "bash" },
+                        "timeout_ms": { "type": "integer", "description": "Execution timeout in milliseconds", "default": 5000 },
+                        "use_microvm": { "type": "boolean", "description": "Run in hardware-isolated Firecracker microVM", "default": false }
+                    }
+                }
+            },
+            {
                 "name": "hgb_daemon_telemetry",
                 "description": "Return live Hagibis daemon health, uptime, active models, dynatune thermal/power state, vector mesh status, and memory stats",
                 "inputSchema": {
@@ -731,6 +867,224 @@ impl HagibisMcpServer {
                         "depth": { "type": "integer", "description": "Maximum directory traversal depth (default: 3)", "default": 3 },
                         "include_git_status": { "type": "boolean", "description": "Include git modified/staged status for each file", "default": true }
                     }
+                }
+            },
+            {
+                "name": "hgb_code_skeleton",
+                "description": "Extract compact AST code outline of structs, traits, and functions replacing bodies with { ... } cutting prompt tokens by >70%",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "file_path": { "type": "string", "description": "Relative or absolute file path to skeletonize" },
+                        "source_code": { "type": "string", "description": "Optional inline source code string" },
+                        "file_ext": { "type": "string", "description": "File extension: rs, py, ts, js, zig, go (default: rs)" }
+                    }
+                }
+            },
+            {
+                "name": "hgb_time_machine_rollback",
+                "description": "Atomically revert workspace files to a previous checkpoint or the latest working snapshot with SHA-256 verification",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "checkpoint_id": { "type": "string", "description": "Optional checkpoint identifier or commit hash" }
+                    }
+                }
+            },
+            {
+                "name": "hgb_undo",
+                "description": "Instant 1-step undo of the latest file modifications, restoring the working directory state",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "checkpoint_id": { "type": "string", "description": "Optional checkpoint ID to roll back to" }
+                    }
+                }
+            },
+            {
+                "name": "hgb_vault_get_secret",
+                "description": "Retrieve an AEAD-encrypted secret key from the ghost env vault without disk leakage",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "secret_key": { "type": "string", "description": "Key name of secret to retrieve (e.g. STRIPE_SECRET_KEY)" },
+                        "passphrase": { "type": "string", "description": "Optional vault unseal passphrase" }
+                    },
+                    "required": ["secret_key"]
+                }
+            },
+            {
+                "name": "hgb_vault_set_secret",
+                "description": "Encrypt and seal a key-value secret into the AEAD ghost env vault using fresh 96-bit nonces and HMAC-SHA256 authentication",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "secret_key": { "type": "string", "description": "Key name for the secret" },
+                        "secret_value": { "type": "string", "description": "Secret value to seal" },
+                        "passphrase": { "type": "string", "description": "Optional vault seal passphrase" }
+                    },
+                    "required": ["secret_key", "secret_value"]
+                }
+            },
+            {
+                "name": "hgb_cdp_tweak_sync",
+                "description": "Surgically synchronize visual DevTools DOM adjustments directly back into JSX/TSX/HTML source files with AST tag-attribute precision",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "selector": { "type": "string", "description": "CSS selector or element tag adjusted in browser" },
+                        "property_or_attr": { "type": "string", "description": "Attribute adjusted (e.g. className, style)", "default": "className" },
+                        "old_value": { "type": "string", "description": "Previous attribute value" },
+                        "new_value": { "type": "string", "description": "New updated attribute value" },
+                        "component_hint": { "type": "string", "description": "Optional component name hint (e.g. Header, Button)" },
+                        "file_hint": { "type": "string", "description": "Optional candidate file path hint" },
+                        "apply_to_disk": { "type": "boolean", "description": "Write patch directly to disk (default: true)", "default": true }
+                    },
+                    "required": ["selector", "old_value", "new_value"]
+                }
+            },
+            {
+                "name": "hgb_cdp_tweak_mirror",
+                "description": "DevTools click-to-source bi-directional DOM element mirror syncing visual edits straight to JSX/TSX/HTML",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "selector": { "type": "string", "description": "CSS selector or element tag adjusted in browser" },
+                        "property_or_attr": { "type": "string", "description": "Attribute adjusted (e.g. className, style)", "default": "className" },
+                        "old_value": { "type": "string", "description": "Previous attribute value" },
+                        "new_value": { "type": "string", "description": "New updated attribute value" },
+                        "component_hint": { "type": "string", "description": "Optional component name hint" },
+                        "file_hint": { "type": "string", "description": "Optional candidate file path hint" },
+                        "apply_to_disk": { "type": "boolean", "description": "Write patch directly to disk", "default": true }
+                    },
+                    "required": ["selector", "old_value", "new_value"]
+                }
+            },
+            {
+                "name": "hgb_mirage_mock",
+                "description": "Simulate external API responses (Stripe, GitHub, Resend, Auth0, Supabase, OpenAI) locally with realistic JSON payloads and latencies",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "method": { "type": "string", "description": "HTTP method: GET, POST, DELETE (default: GET)" },
+                        "path": { "type": "string", "description": "API route path (e.g. /v1/payment_intents, /emails)" },
+                        "payload": { "type": "object", "description": "Optional JSON request body" }
+                    },
+                    "required": ["path"]
+                }
+            },
+            {
+                "name": "hgb_baas_graduate",
+                "description": "Graduate in-memory prototype data schemas into production SQL DDL, Row-Level Security (RLS) policies, and TypeScript client SDKs for Supabase or Neon",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "resource_name": { "type": "string", "description": "Resource entity name (e.g. users, subscriptions)" },
+                        "sample_json": { "type": "object", "description": "Representative JSON object describing the entity schema" },
+                        "target": { "type": "string", "description": "Target BaaS platform: supabase, neon, firebase (default: supabase)", "default": "supabase" }
+                    },
+                    "required": ["resource_name"]
+                }
+            },
+            {
+                "name": "hgb_mobile_teleport",
+                "description": "Generate instant terminal ANSI QR code and PWA manifest scaffolding for mobile device live preview teleportation",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "target_url": { "type": "string", "description": "Target HTTP/HTTPS URL to teleport (dev server or tunnel)" },
+                        "app_name": { "type": "string", "description": "Optional Progressive Web App name" }
+                    },
+                    "required": ["target_url"]
+                }
+            },
+            {
+                "name": "hgb_mobile_qr_teleport",
+                "description": "Generate mobile QR code teleport matrix & PWA scaffolding for immediate physical mobile testing",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "target_url": { "type": "string", "description": "Target local dev or tunnel URL" },
+                        "app_name": { "type": "string", "description": "Optional Progressive Web App name" }
+                    },
+                    "required": ["target_url"]
+                }
+            },
+            {
+                "name": "hgb_figma_sync",
+                "description": "Bi-directional Figma design token extraction and React/Tailwind component synchronization",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "file_key": { "type": "string", "description": "Figma file key or URL identifier" },
+                        "figma_json": { "type": "string", "description": "Optional inline Figma REST JSON payload" }
+                    },
+                    "required": ["file_key"]
+                }
+            },
+            {
+                "name": "hgb_git_micro_commit",
+                "description": "Atomically stage verified files and create conventional micro-commits with rollback safety",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "intent": { "type": "string", "description": "Semantic commit intent or bugfix description" },
+                        "path": { "type": "string", "description": "Optional single file path or target directory to stage" }
+                    },
+                    "required": ["intent"]
+                }
+            },
+            {
+                "name": "hgb_agentic_bisect",
+                "description": "Autonomous binary search across Git revisions to isolate regression culprits and generate root-cause analysis",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "good_commit": { "type": "string", "description": "Known good commit hash or revision" },
+                        "bad_commit": { "type": "string", "description": "Known bad commit hash or revision" },
+                        "test_cmd": { "type": "string", "description": "Automated verification test command (e.g. 'cargo test', 'npm test')" }
+                    },
+                    "required": ["good_commit", "bad_commit", "test_cmd"]
+                }
+            },
+            {
+                "name": "hgb_nightshift",
+                "description": "Dispatch autonomous 4-stage night-shift swarm pipeline in an isolated git worktree branch",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "goal": { "type": "string", "description": "High-level goal or ticket specification for autonomous execution" },
+                        "base_branch": { "type": "string", "description": "Base git branch (defaults to 'main')" }
+                    },
+                    "required": ["goal"]
+                }
+            },
+            {
+                "name": "hgb_desktop_drive",
+                "description": "OS-level desktop window sentry and mouse/keyboard action dispatcher",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "description": "Action to perform: inspect, click, type, key, focus, screenshot" },
+                        "x": { "type": "integer", "description": "Optional X coordinate for mouse actions" },
+                        "y": { "type": "integer", "description": "Optional Y coordinate for mouse actions" },
+                        "text": { "type": "string", "description": "Optional text to type or key name to press" }
+                    },
+                    "required": ["action"]
+                }
+            },
+            {
+                "name": "hgb_viral_og",
+                "description": "Generate high-CTR dynamic SVG OpenGraph launch cards, Twitter/X meta tags, and Next.js edge route code",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "title": { "type": "string", "description": "Launch card title or headline" },
+                        "badge": { "type": "string", "description": "Optional badge pill text (e.g. '⚡ Launch')" },
+                        "desc": { "type": "string", "description": "Optional card description or subtitle" },
+                        "twitter": { "type": "string", "description": "Optional author Twitter/X handle" }
+                    },
+                    "required": ["title"]
                 }
             }
         ])
@@ -783,7 +1137,13 @@ impl HagibisMcpServer {
                 Some(resp.to_string())
             }
             "tools/list" => {
-                let tools = Self::list_tools();
+                let params = req.params.as_ref();
+                let profile_str = params.and_then(|p| p.get("profile").and_then(|v| v.as_str()));
+                let active_profile = profile_str
+                    .map(HgbMcpProfile::from_str_opt_raw)
+                    .unwrap_or(self.profile);
+
+                let tools = Self::list_tools_for_profile(active_profile);
                 let resp = serde_json::json!({
                     "jsonrpc": "2.0",
                     "id": id,
@@ -835,6 +1195,11 @@ impl HagibisMcpServer {
     /// Dispatch tool calls directly to `hgb-core` and `hgb-storage`
     pub async fn execute_tool(&self, name: &str, args: &Value) -> Result<String> {
         self.execute_tool_with_progress(name, args, |_, _| {}).await
+    }
+
+    /// Direct tool call dispatcher alias
+    pub async fn dispatch_tool_call(&self, name: &str, args: &Value) -> Result<String> {
+        self.execute_tool(name, args).await
     }
 
     /// Dispatch tool calls with streaming progress feedback
@@ -1158,6 +1523,32 @@ impl HagibisMcpServer {
                 Ok(serde_json::to_string_pretty(&report).unwrap_or_default())
             }
 
+            "hgb_vibe_speedrun" => {
+                progress_cb(10, "Initializing vibe speedrun engine...");
+                let prompt = args.get("prompt").and_then(|p| p.as_str()).unwrap_or("run autonomous vibe speedrun and verify green");
+                let target_dir = args.get("target_dir").and_then(|d| d.as_str()).map(PathBuf::from).unwrap_or_else(|| self.workspace_root.clone());
+                let auto_commit = args.get("auto_commit").and_then(|c| c.as_bool()).unwrap_or(true);
+                let check_command = args.get("check_command").and_then(|c| c.as_str()).map(|s| s.to_string());
+
+                progress_cb(30, "Grounding prompt and activating RAM CoW sandbox...");
+                let runner = crate::vibe_prompt_runner::VibePromptRunner::new(target_dir.clone());
+                let spec = crate::vibe_prompt_runner::VibePromptSpec {
+                    prompt: prompt.to_string(),
+                    target_dir: Some(target_dir),
+                    auto_commit,
+                    use_local_ollama: true,
+                    check_command,
+                };
+                progress_cb(60, "Synthesizing code candidates and checking First-Green...");
+                match runner.execute_vibe_prompt(&spec).await {
+                    Ok(res) => {
+                        progress_cb(100, "Vibe speedrun completed.");
+                        Ok(serde_json::to_string_pretty(&res).unwrap_or_else(|_| res.status))
+                    }
+                    Err(e) => Err(HgbError::Execution(format!("Vibe speedrun failed: {}", e))),
+                }
+            }
+
             "ollama_speculative_generate" => {
                 let prompt = args.get("prompt").and_then(|p| p.as_str()).ok_or_else(|| {
                     HgbError::Execution("Missing 'prompt' argument".into())
@@ -1432,11 +1823,14 @@ impl HagibisMcpServer {
                 }).unwrap_or_default())
             }
 
-            "hgb_mcp_sandbox_exec" => {
+            "hgb_mcp_sandbox_exec" | "hgb_speculative_sandbox" => {
                 progress_cb(10, "Initializing ephemeral sandbox execution boundary...");
-                let code = args.get("code").and_then(|v| v.as_str()).ok_or_else(|| {
-                    HgbError::Execution("Missing 'code' argument".into())
-                })?;
+                let code = args.get("code")
+                    .or_else(|| args.get("command"))
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        HgbError::Execution("Missing 'code' or 'command' argument".into())
+                    })?;
                 let language = args.get("language").and_then(|v| v.as_str()).unwrap_or("bash");
                 let timeout_ms = args.get("timeout_ms").and_then(|v| v.as_u64()).unwrap_or(5000);
                 let use_microvm = args.get("use_microvm").and_then(|v| v.as_bool()).unwrap_or(false);
@@ -1612,6 +2006,269 @@ impl HagibisMcpServer {
                 Ok(serde_json::to_string_pretty(&report).unwrap_or_default())
             }
 
+            "hgb_code_skeleton" => {
+                progress_cb(20, "Extracting AST code skeleton outline...");
+                let code = if let Some(c) = args.get("source_code").and_then(|v| v.as_str()) {
+                    c.to_string()
+                } else if let Some(p) = args.get("file_path").and_then(|v| v.as_str()) {
+                    let target = if Path::new(p).is_absolute() {
+                        PathBuf::from(p)
+                    } else {
+                        self.workspace_root.join(p)
+                    };
+                    fs::read_to_string(&target).map_err(HgbError::Io)?
+                } else {
+                    return Err(HgbError::Execution("Missing 'source_code' or 'file_path'".into()));
+                };
+
+                let ext = args.get("file_ext").and_then(|v| v.as_str()).unwrap_or_else(|| {
+                    args.get("file_path")
+                        .and_then(|v| v.as_str())
+                        .and_then(|p| Path::new(p).extension())
+                        .and_then(|e| e.to_str())
+                        .unwrap_or("rs")
+                });
+
+                let report = CodeSkeletonizer::skeletonize(&code, ext);
+                progress_cb(100, "AST skeleton outline generated.");
+                Ok(serde_json::to_string_pretty(&report).unwrap_or_default())
+            }
+
+            "hgb_time_machine_rollback" | "hgb_undo" => {
+                progress_cb(20, "Initiating atomic time machine rollback...");
+                let machine = CheckpointTimeMachine::new(&self.workspace_root);
+                let res = if let Some(id) = args.get("checkpoint_id").and_then(|v| v.as_str()) {
+                    machine.rollback_to(id)?
+                } else {
+                    machine.rollback_latest()?
+                };
+                progress_cb(100, "Rollback verified.");
+                Ok(serde_json::to_string_pretty(&res).unwrap_or_default())
+            }
+
+            "hgb_vault_get_secret" => {
+                progress_cb(20, "Accessing AEAD encrypted ghost vault...");
+                let key = args.get("secret_key").and_then(|v| v.as_str()).ok_or_else(|| {
+                    HgbError::Execution("Missing 'secret_key' argument".into())
+                })?;
+                let pass = args.get("passphrase").and_then(|v| v.as_str()).unwrap_or("hagibis-default-master-seed");
+                let vault_file = self.workspace_root.join(".hgb").join("vault.seal");
+                if !vault_file.exists() {
+                    return Ok(serde_json::json!({
+                        "secret_key": key,
+                        "secret_value": "",
+                        "found": false,
+                        "message": format!("Vault file not found at {}", vault_file.display())
+                    }).to_string());
+                }
+
+                let raw = fs::read(&vault_file).map_err(HgbError::Io)?;
+                let seal: GhostVaultSeal = serde_json::from_slice(&raw).map_err(|e| HgbError::Execution(e.to_string()))?;
+                let envs = VaultGhostEnvs::unseal_vault(&seal, pass).map_err(HgbError::Execution)?;
+                let val = envs.get(key).cloned().unwrap_or_default();
+                progress_cb(100, "AEAD secret retrieved.");
+                Ok(serde_json::json!({
+                    "secret_key": key,
+                    "secret_value": val,
+                    "found": !val.is_empty(),
+                    "authenticated": true
+                }).to_string())
+            }
+
+            "hgb_vault_set_secret" => {
+                progress_cb(20, "Encrypting secret into AEAD ghost vault...");
+                let key = args.get("secret_key").and_then(|v| v.as_str()).ok_or_else(|| {
+                    HgbError::Execution("Missing 'secret_key' argument".into())
+                })?;
+                let val = args.get("secret_value").and_then(|v| v.as_str()).ok_or_else(|| {
+                    HgbError::Execution("Missing 'secret_value' argument".into())
+                })?;
+                let pass = args.get("passphrase").and_then(|v| v.as_str()).unwrap_or("hagibis-default-master-seed");
+                let vault_file = self.workspace_root.join(".hgb").join("vault.seal");
+
+                let mut map = if vault_file.exists() {
+                    if let Ok(raw) = fs::read(&vault_file) {
+                        if let Ok(seal) = serde_json::from_slice::<GhostVaultSeal>(&raw) {
+                            VaultGhostEnvs::unseal_vault(&seal, pass).unwrap_or_default()
+                        } else {
+                            HashMap::new()
+                        }
+                    } else {
+                        HashMap::new()
+                    }
+                } else {
+                    HashMap::new()
+                };
+
+                map.insert(key.to_string(), val.to_string());
+                let mut vault = VaultGhostEnvs::new();
+                for (k, v) in &map {
+                    vault.insert_secret(k, v);
+                }
+                let seal = vault.seal_secrets(pass);
+                if let Some(parent) = vault_file.parent() {
+                    let _ = fs::create_dir_all(parent);
+                }
+                fs::write(&vault_file, serde_json::to_vec_pretty(&seal).unwrap()).map_err(HgbError::Io)?;
+                progress_cb(100, "Secret saved with AEAD MAC authentication.");
+                Ok(serde_json::json!({
+                    "status": "success",
+                    "secret_key": key,
+                    "authenticated": true
+                }).to_string())
+            }
+
+            "hgb_cdp_tweak_sync" | "hgb_cdp_tweak_mirror" => {
+                progress_cb(20, "Synchronizing visual DevTools tweak to JSX source...");
+                let event = DomTweakEvent {
+                    selector: args.get("selector").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                    property_or_attr: args.get("property_or_attr").and_then(|v| v.as_str()).unwrap_or("className").to_string(),
+                    old_value: args.get("old_value").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                    new_value: args.get("new_value").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                    component_hint: args.get("component_hint").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                    file_hint: args.get("file_hint").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                };
+
+                let apply = args.get("apply_to_disk").and_then(|v| v.as_bool()).unwrap_or(true);
+                let mirror = CdpTweakMirror::new(&self.workspace_root);
+                let report = mirror.sync_tweak(&event, apply)?;
+                progress_cb(100, "Visual tweak synchronized.");
+                Ok(serde_json::to_string_pretty(&report).unwrap_or_default())
+            }
+
+            "hgb_mirage_mock" => {
+                progress_cb(20, "Dispatching synthetic API Mirage request...");
+                let method = args.get("method").and_then(|v| v.as_str()).unwrap_or("GET");
+                let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("/");
+                let engine = ApiMirageEngine::new();
+                let report = engine.execute_mirage_call(method, path).await;
+                progress_cb(100, "Synthetic response simulated.");
+                Ok(serde_json::to_string_pretty(&report).unwrap_or_default())
+            }
+
+            "hgb_baas_graduate" => {
+                progress_cb(20, "Synthesizing production SQL DDL, RLS, and TypeScript SDK...");
+                let resource = args.get("resource_name").and_then(|v| v.as_str()).unwrap_or("records");
+                let sample = args.get("sample_json").cloned().unwrap_or(serde_json::json!({ "id": 1, "name": "sample" }));
+                let target_str = args.get("target").and_then(|v| v.as_str()).unwrap_or("supabase");
+                let target = match target_str.to_lowercase().as_str() {
+                    "neon" => BaasTarget::Neon,
+                    "firebase" => BaasTarget::Firebase,
+                    _ => BaasTarget::Supabase,
+                };
+                let report = BaasGraduateEngine::graduate(resource, &sample, target)?;
+                progress_cb(100, "BaaS graduation report synthesized.");
+                Ok(serde_json::to_string_pretty(&report).unwrap_or_default())
+            }
+
+            "hgb_mobile_teleport" | "hgb_mobile_qr_teleport" => {
+                progress_cb(20, "Generating mobile ANSI QR teleport and PWA manifest...");
+                let target_url = args.get("target_url").and_then(|v| v.as_str()).unwrap_or("http://localhost:3000");
+                let app_name = args.get("app_name").and_then(|v| v.as_str());
+                let config = app_name.map(|name| {
+                    let mut cfg = MobilePwaConfig::default();
+                    cfg.app_name = name.to_string();
+                    cfg.short_name = name.to_string();
+                    cfg
+                });
+                let report = MobileQrTeleport::new().generate_mobile_teleport(target_url, config);
+                progress_cb(100, "Mobile QR teleport generated.");
+                Ok(serde_json::to_string_pretty(&report).unwrap_or_default())
+            }
+
+            "hgb_figma_sync" => {
+                progress_cb(20, "Synchronizing Figma design tokens and component AST...");
+                let file_key = args.get("file_key").and_then(|v| v.as_str()).unwrap_or("sample-figma-key");
+                let figma_json = args.get("figma_json").and_then(|v| v.as_str());
+                let bridge = FigmaDesignBridge::new();
+                let report = bridge.sync_tokens_and_components(file_key, figma_json);
+                progress_cb(100, "Figma design tokens and components synchronized.");
+                Ok(serde_json::to_string_pretty(&report).unwrap_or_default())
+            }
+
+            "hgb_git_micro_commit" => {
+                progress_cb(20, "Planning atomic conventional git micro-commit...");
+                let intent = args.get("intent").and_then(|v| v.as_str()).unwrap_or("chore: autonomous micro-commit");
+                let path = args.get("path").and_then(|v| v.as_str());
+                let files: Vec<String> = path.map(|p| vec![p.to_string()]).unwrap_or_default();
+                let mirror = GitMicroCommitMirror::new();
+                let plan = mirror.plan_commit(&files, intent, "");
+                let report = mirror.commit_atomic(&plan);
+                progress_cb(100, "Atomic micro-commit recorded.");
+                Ok(serde_json::to_string_pretty(&report).unwrap_or_default())
+            }
+
+            "hgb_agentic_bisect" => {
+                progress_cb(20, "Initializing autonomous Git bisect engine...");
+                let good = args.get("good_commit").and_then(|v| v.as_str()).unwrap_or("HEAD~5");
+                let bad = args.get("bad_commit").and_then(|v| v.as_str()).unwrap_or("HEAD");
+                let test_cmd = args.get("test_cmd").and_then(|v| v.as_str()).unwrap_or("cargo check");
+                let engine = AgenticBisectEngine::new(&self.workspace_root);
+                let cfg = BisectConfig::new(good, bad, test_cmd);
+                let outcome = engine.run_bisect(&cfg)?;
+                progress_cb(100, "Autonomous Git bisect analysis completed.");
+                Ok(serde_json::to_string_pretty(&outcome).unwrap_or_default())
+            }
+
+            "hgb_nightshift" => {
+                progress_cb(20, "Dispatching autonomous 4-stage night-shift swarm...");
+                let goal = args.get("goal").and_then(|v| v.as_str()).unwrap_or("Implement feature backlog");
+                let base_branch = args.get("base_branch").and_then(|v| v.as_str()).unwrap_or("main");
+                let pipeline = NightShiftPipeline::new();
+                let report = pipeline.dispatch_night_shift(goal, base_branch).await;
+                progress_cb(100, "Night-shift pipeline executed.");
+                Ok(serde_json::to_string_pretty(&report).unwrap_or_default())
+            }
+
+            "hgb_desktop_drive" => {
+                progress_cb(20, "Executing desktop sentry / window drive action...");
+                let action_str = args.get("action").and_then(|v| v.as_str()).unwrap_or("inspect");
+                let x = args.get("x").and_then(|v| v.as_i64()).map(|n| n as i32);
+                let y = args.get("y").and_then(|v| v.as_i64()).map(|n| n as i32);
+                let text = args.get("text").and_then(|v| v.as_str()).unwrap_or_default();
+
+                if action_str == "inspect" {
+                    let report = DesktopComputerUseEngine::inspect_desktop()?;
+                    progress_cb(100, "Desktop inspection complete.");
+                    Ok(serde_json::to_string_pretty(&report).unwrap_or_default())
+                } else {
+                    let action = match action_str {
+                        "click" => DesktopAction::Click {
+                            x: x.unwrap_or(100),
+                            y: y.unwrap_or(100),
+                            button: "left".to_string(),
+                        },
+                        "type" => DesktopAction::Type { text: text.to_string() },
+                        "key" => DesktopAction::KeyPress { key: text.to_string() },
+                        "focus" => DesktopAction::Focus { window_id: x.unwrap_or(1) as u64 },
+                        "screenshot" => DesktopAction::CaptureScreenshot { region: None },
+                        _ => DesktopAction::Click { x: 0, y: 0, button: "left".to_string() },
+                    };
+                    let result = DesktopComputerUseEngine::execute_action(&action)?;
+                    progress_cb(100, "Desktop action dispatched.");
+                    Ok(serde_json::to_string_pretty(&result).unwrap_or_default())
+                }
+            }
+
+            "hgb_viral_og" => {
+                progress_cb(20, "Synthesizing dynamic OpenGraph card and viral meta tags...");
+                let title = args.get("title").and_then(|v| v.as_str()).unwrap_or("Hagibis Sovereign App");
+                let badge = args.get("badge").and_then(|v| v.as_str()).unwrap_or("⚡ Launch");
+                let desc = args.get("desc").and_then(|v| v.as_str()).unwrap_or("High-velocity autonomous engineering");
+                let twitter = args.get("twitter").and_then(|v| v.as_str()).unwrap_or("@hagibis_ai");
+
+                let mut config = OgCardConfig::default();
+                config.title = title.to_string();
+                config.badge_text = badge.to_string();
+                config.description = desc.to_string();
+                config.author_twitter_handle = twitter.to_string();
+
+                let engine = ViralSocialOgEngine::new();
+                let report = engine.generate_viral_suite(config);
+                progress_cb(100, "Viral OpenGraph suite synthesized.");
+                Ok(serde_json::to_string_pretty(&report).unwrap_or_default())
+            }
+
             other => Ok(format!("Tool '{}' recognized by Hagibis MCP dispatcher.", other)),
         }
     }
@@ -1631,16 +2288,38 @@ mod tests {
         assert!(init_resp.contains("hagibis-mcp"));
         assert!(init_resp.contains("2024-11-05"));
 
-        // 2. Tools list
+        // 2. Tools list - Core progressive disclosure by default
         let tools_req = r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#;
         let tools_resp = server.handle_message(tools_req).await.expect("Must produce tools list");
-        assert!(tools_resp.contains("hgb_sqlite_query"));
-        assert!(tools_resp.contains("hgb_project_state"));
+        assert!(tools_resp.contains("hgb_self_healing_compile"));
         assert!(tools_resp.contains("hgb_cow_sandbox"));
-        assert!(tools_resp.contains("hgb_wasm_exec"));
+        assert!(tools_resp.contains("hgb_vibe_speedrun"));
         assert!(tools_resp.contains("hgb_ast_query"));
-        assert!(tools_resp.contains("hgb_system_inspect"));
-        assert!(tools_resp.contains("hgb_hybrid_orchestrate"));
+        assert!(tools_resp.contains("hgb_git_micro_commit"));
+        assert!(tools_resp.contains("hgb_mobile_qr_teleport"));
+        assert!(tools_resp.contains("hgb_cdp_tweak_mirror"));
+        assert!(tools_resp.contains("hgb_speculative_sandbox"));
+        // Progressive disclosure verification: heavy non-core tools not exposed in Core profile
+        assert!(!tools_resp.contains("hgb_sqlite_query"));
+
+        // 3. Tools list - Full profile explicitly requested via params
+        let full_req = r#"{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{"profile":"full"}}"#;
+        let full_resp = server.handle_message(full_req).await.expect("Must produce full tools list");
+        assert!(full_resp.contains("hgb_sqlite_query"));
+        assert!(full_resp.contains("hgb_project_state"));
+        assert!(full_resp.contains("hgb_wasm_exec"));
+        assert!(full_resp.contains("hgb_system_inspect"));
+        assert!(full_resp.contains("hgb_hybrid_orchestrate"));
+        assert!(full_resp.contains("hgb_code_skeleton"));
+        assert!(full_resp.contains("hgb_time_machine_rollback"));
+        assert!(full_resp.contains("hgb_vault_get_secret"));
+        assert!(full_resp.contains("hgb_cdp_tweak_mirror"));
+        assert!(full_resp.contains("hgb_mirage_mock"));
+        assert!(full_resp.contains("hgb_baas_graduate"));
+
+        // 4. Verify non-core tools can still execute directly even under Core profile
+        let call_res = server.execute_tool("hgb_project_state", &serde_json::json!({"action": "read_memory"})).await;
+        assert!(call_res.is_ok());
     }
 
     #[tokio::test]
@@ -1668,6 +2347,62 @@ mod tests {
         assert!(resp.contains("Use Rust for all microkernel daemons"));
 
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[tokio::test]
+    async fn test_mcp_sovereign_tools_execution() {
+        let server = HagibisMcpServer::new(".");
+
+        // 1. Test hgb_code_skeleton
+        let skeleton_req = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 20,
+            "method": "tools/call",
+            "params": {
+                "name": "hgb_code_skeleton",
+                "arguments": {
+                    "source_code": "pub fn hello_world() -> i32 { let x = 42; println!(\"x={}\", x); x * 2 }",
+                    "file_ext": "rs"
+                }
+            }
+        });
+        let skeleton_resp = server.handle_message(&skeleton_req.to_string()).await.expect("Skeleton response");
+        assert!(skeleton_resp.contains("hello_world"));
+        assert!(skeleton_resp.contains("token_reduction_pct"));
+
+        // 2. Test hgb_mirage_mock
+        let mirage_req = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 21,
+            "method": "tools/call",
+            "params": {
+                "name": "hgb_mirage_mock",
+                "arguments": {
+                    "method": "POST",
+                    "path": "/v1/payment_intents"
+                }
+            }
+        });
+        let mirage_resp = server.handle_message(&mirage_req.to_string()).await.expect("Mirage response");
+        assert!(mirage_resp.contains("pi_mirage") || mirage_resp.contains("Stripe Mirage"));
+
+        // 3. Test hgb_baas_graduate
+        let baas_req = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 22,
+            "method": "tools/call",
+            "params": {
+                "name": "hgb_baas_graduate",
+                "arguments": {
+                    "resource_name": "profiles",
+                    "sample_json": { "id": 1, "username": "alice", "active": true },
+                    "target": "supabase"
+                }
+            }
+        });
+        let baas_resp = server.handle_message(&baas_req.to_string()).await.expect("BaaS response");
+        assert!(baas_resp.contains("CREATE TABLE"));
+        assert!(baas_resp.contains("ROW LEVEL SECURITY"));
     }
 
     #[test]

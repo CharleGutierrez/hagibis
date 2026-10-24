@@ -133,6 +133,64 @@ impl ApiMirageEngine {
             simulated_latency_ms: 25,
         });
 
+        // 5. Resend Email Topology
+        endpoints.push(MirageEndpoint {
+            route_pattern: r"^/emails(/\w+)?$".to_string(),
+            method: "POST".to_string(),
+            service_name: "Resend Mirage".to_string(),
+            sample_response: serde_json::json!({
+                "id": "re_mirage_99482716382",
+                "from": "dev@hagibis.ai",
+                "to": ["user@example.com"],
+                "subject": "Synthetic Mock Verification",
+                "status": "queued",
+                "created_at": "2026-10-24T00:00:00Z"
+            }),
+            simulated_latency_ms: 10,
+        });
+        endpoints.push(MirageEndpoint {
+            route_pattern: r"^/emails/[^/]+$".to_string(),
+            method: "GET".to_string(),
+            service_name: "Resend Mirage".to_string(),
+            sample_response: serde_json::json!({
+                "id": "re_mirage_99482716382",
+                "from": "dev@hagibis.ai",
+                "to": ["user@example.com"],
+                "status": "delivered",
+                "last_event": "delivered"
+            }),
+            simulated_latency_ms: 8,
+        });
+
+        // 6. Auth0 Identity Topology
+        endpoints.push(MirageEndpoint {
+            route_pattern: r"^/oauth/token$".to_string(),
+            method: "POST".to_string(),
+            service_name: "Auth0 Mirage".to_string(),
+            sample_response: serde_json::json!({
+                "access_token": "auth0_mock_token_jwt",
+                "id_token": "auth0_mock_id_jwt",
+                "token_type": "Bearer",
+                "expires_in": 86400,
+                "scope": "openid profile email"
+            }),
+            simulated_latency_ms: 12,
+        });
+        endpoints.push(MirageEndpoint {
+            route_pattern: r"^/userinfo$".to_string(),
+            method: "GET".to_string(),
+            service_name: "Auth0 Mirage".to_string(),
+            sample_response: serde_json::json!({
+                "sub": "auth0|648291047",
+                "nickname": "hagibis-dev",
+                "name": "Hagibis Builder",
+                "email": "dev@hagibis.ai",
+                "email_verified": true,
+                "updated_at": "2026-10-24T00:00:00Z"
+            }),
+            simulated_latency_ms: 10,
+        });
+
         Self {
             endpoints: Arc::new(RwLock::new(endpoints)),
         }
@@ -347,5 +405,22 @@ mod tests {
         assert_eq!(dynamic_call.status, 200);
         assert!(dynamic_call.is_synthetic);
         assert!(dynamic_call.payload_snippet.contains("420"));
+
+        // Verify Resend mock
+        let resend_rep = engine.execute_mirage_call("POST", "/emails").await;
+        assert_eq!(resend_rep.status, 200);
+        assert!(resend_rep.is_synthetic);
+        assert!(resend_rep.payload_snippet.contains("re_mirage_"));
+
+        // Verify Auth0 mock
+        let auth0_rep = engine.execute_mirage_call("POST", "/oauth/token").await;
+        assert_eq!(auth0_rep.status, 200);
+        assert!(auth0_rep.is_synthetic);
+        assert!(auth0_rep.payload_snippet.contains("auth0_mock_token_jwt"));
+
+        let userinfo_rep = engine.execute_mirage_call("GET", "/userinfo").await;
+        assert_eq!(userinfo_rep.status, 200);
+        assert!(userinfo_rep.is_synthetic);
+        assert!(userinfo_rep.payload_snippet.contains("auth0|648291047"));
     }
 }

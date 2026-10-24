@@ -18,11 +18,15 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use crate::audio::play_vibe_chime;
-use crate::compiler_interceptor::{CompilerDiagnostic, CompilerInterceptor, DiagnosticSeverity, SelfHealingReport};
+use crate::compiler_interceptor::{CompilerDiagnostic, CompilerInterceptor, CompilerTool, DiagnosticSeverity};
 use crate::error::{HgbError, Result};
 use crate::overlayfs_sandbox::OverlaySandbox;
 use crate::prompt_grounding::{GroundingContextReport, UniversalPromptGrounder};
+use crate::providers::gemini::GeminiProvider;
+use crate::providers::openai_compatible::{AnthropicProvider, OpenAiCompatibleProvider};
+use crate::traits::HgbProvider;
 use crate::vibe_hardware_governor::{VibeHardwareGovernor, VibeHardwareGuard, VibeThermalState};
+use crate::git_micro_commit::GitMicroCommitMirror;
 
 pub const DEFAULT_OLLAMA_ENDPOINT: &str = "http://127.0.0.1:11434";
 pub const DEFAULT_OLLAMA_SIBLING_DIR: &str = "/home/toshiba/My AI Project/ollama";
@@ -163,10 +167,16 @@ impl VibePromptRunner {
         let standard_candidates = [
             "src/lib.rs",
             "src/main.rs",
+            "src/index.ts",
+            "src/App.tsx",
+            "src/index.tsx",
+            "src/main.go",
+            "main.go",
             "src/index.js",
             "src/worker.js",
             "src/main.zig",
             "src/app.py",
+            "app.py",
         ];
 
         for rel in &standard_candidates {
@@ -176,10 +186,21 @@ impl VibePromptRunner {
             }
         }
 
-        target_dir.join("src/lib.rs")
+        if target_dir.join("tsconfig.json").exists() || target_dir.join("package.json").exists() {
+            target_dir.join("src/App.tsx")
+        } else if target_dir.join("go.mod").exists() {
+            target_dir.join("main.go")
+        } else if target_dir.join("pyproject.toml").exists() || target_dir.join("requirements.txt").exists() {
+            target_dir.join("src/app.py")
+        } else {
+            target_dir.join("src/lib.rs")
+        }
     }
 
-    /// Synthesize code candidate via local Ollama inference or deterministic AST generation
+    /// Synthesize code candidate via 3-tier cascade:
+    /// Tier 1: Local Ollama with adaptive timeout (10-15s)
+    /// Tier 2: Cloud Provider Fallback (OpenAI / DeepSeek / OpenRouter / Anthropic / Gemini)
+    /// Tier 3: Language-aware deterministic AST synthesis
     pub async fn synthesize_code_candidate(
         &self,
         prompt: &str,
@@ -187,20 +208,19 @@ impl VibePromptRunner {
         current_content: &str,
         use_ollama: bool,
     ) -> (String, usize) {
+        let formatted_prompt = format_synthesis_prompt(prompt, target_file, current_content);
+
+        // Tier 1: Local Ollama inference with adaptive timeout
         if use_ollama {
+            let timeout = calculate_adaptive_timeout(prompt, current_content);
             let client = reqwest::Client::builder()
-                .timeout(Duration::from_millis(1500))
+                .timeout(timeout)
                 .build()
                 .unwrap_or_default();
 
             let ollama_req = serde_json::json!({
                 "model": DEFAULT_DRAFT_MODEL,
-                "prompt": format!(
-                    "Task: {}\nFile: {}\nCurrent Content:\n```\n{}\n```\nSynthesize the complete, verified Rust source code for this file. Return ONLY valid source code:",
-                    prompt,
-                    target_file.display(),
-                    current_content
-                ),
+                "prompt": &formatted_prompt,
                 "stream": false,
                 "options": {
                     "temperature": 0.2,
@@ -210,42 +230,28 @@ impl VibePromptRunner {
 
             let url = format!("{}/api/generate", self.ollama_endpoint);
             if let Ok(resp) = client.post(&url).json(&ollama_req).send().await {
-                if let Ok(json) = resp.json::<serde_json::Value>().await {
-                    if let Some(response_str) = json.get("response").and_then(|r| r.as_str()) {
-                        let cleaned = clean_llm_code_fences(response_str);
-                        if !cleaned.trim().is_empty() {
-                            let prompt_tokens = json.get("prompt_eval_count").and_then(|v| v.as_u64()).unwrap_or(120) as usize;
-                            let eval_tokens = json.get("eval_count").and_then(|v| v.as_u64()).unwrap_or(240) as usize;
-                            return (cleaned, prompt_tokens + eval_tokens);
+                if resp.status().is_success() {
+                    if let Ok(json) = resp.json::<serde_json::Value>().await {
+                        if let Some(response_str) = json.get("response").and_then(|r| r.as_str()) {
+                            let cleaned = clean_llm_code_fences(response_str);
+                            if !cleaned.trim().is_empty() {
+                                let prompt_tokens = json.get("prompt_eval_count").and_then(|v| v.as_u64()).unwrap_or(120) as usize;
+                                let eval_tokens = json.get("eval_count").and_then(|v| v.as_u64()).unwrap_or(240) as usize;
+                                return (cleaned, prompt_tokens + eval_tokens);
+                            }
                         }
                     }
                 }
             }
         }
 
-        // Resilient deterministic AST synthesizer when Ollama is offline or unneeded
-        let mut synthesized = if current_content.trim().is_empty() {
-            format!(
-                "//! Synthesized by Hagibis Vibe Prompt Engine\n//! Intent: {}\n\n",
-                prompt.trim()
-            )
-        } else {
-            current_content.to_string()
-        };
-
-        let fn_identifier = sanitize_identifier(prompt);
-        let addition = format!(
-            "\n/// Implements vibe intent: {intent}\npub fn {func_name}() -> &'static str {{\n    \"{intent}\"\n}}\n\n#[cfg(test)]\nmod vibe_tests {{\n    use super::*;\n\n    #[test]\n    fn test_{func_name}() {{\n        assert_eq!({func_name}(), \"{intent}\");\n    }}\n}}\n",
-            intent = prompt.trim(),
-            func_name = fn_identifier
-        );
-
-        if !synthesized.contains(&format!("fn {}()", fn_identifier)) {
-            synthesized.push_str(&addition);
+        // Tier 2: Cloud Provider Fallback (OpenAI, DeepSeek, OpenRouter, Anthropic, Gemini)
+        if let Some((cloud_code, tokens)) = synthesize_via_cloud_fallback(&formatted_prompt).await {
+            return (cloud_code, tokens);
         }
 
-        let estimated_tokens = (prompt.len() + synthesized.len()) / 4;
-        (synthesized, estimated_tokens)
+        // Tier 3: Language-aware deterministic AST synthesis
+        synthesize_deterministic_candidate(prompt, target_file, current_content)
     }
 
     /// Notify daemon hgbd to hot-reload MCP tools or state
@@ -262,6 +268,8 @@ impl VibePromptRunner {
                 use tokio::io::AsyncWriteExt;
                 let req = crate::protocol::HgbRequest::McpHotReloadScan;
                 if let Ok(encoded) = bincode::serialize(&req) {
+                    let len = (encoded.len() as u32).to_be_bytes();
+                    let _ = stream.write_all(&len).await;
                     let _ = stream.write_all(&encoded).await;
                 }
             }
@@ -328,19 +336,11 @@ impl VibePromptRunner {
             .await;
 
         // 6. EPHEMERAL RAM CoW SANDBOX & FIRST-GREEN COMPILATION LOOP
-        let is_cargo = target_dir.join("Cargo.toml").exists();
         let tool = CompilerInterceptor::detect_tool(spec.check_command.as_deref().unwrap_or(""), &rel_target);
 
-        let default_cmd = if let Some(ref c) = spec.check_command {
-            c.clone()
-        } else if is_cargo {
-            "cargo check --message-format=json".to_string()
-        } else {
-            match tool {
-                crate::compiler_interceptor::CompilerTool::Zig => format!("zig test {}", rel_target_str),
-                crate::compiler_interceptor::CompilerTool::Python => format!("python3 -m py_compile {}", rel_target_str),
-                _ => format!("rustc --crate-type=lib {}", rel_target_str),
-            }
+        let default_cmd = match &spec.check_command {
+            Some(cmd) if !cmd.trim().is_empty() => cmd.clone(),
+            _ => resolve_default_check_command(tool, &target_dir, &rel_target),
         };
 
         let mut current_code = synthesized_candidate.clone();
@@ -412,6 +412,17 @@ impl VibePromptRunner {
                     .current_dir(&target_dir)
                     .args(["add", &target_file.to_string_lossy()])
                     .output();
+
+                if spec.auto_commit {
+                    let mirror = GitMicroCommitMirror::new();
+                    let patch = generate_unified_patch(&rel_target, &original_content, &final_code);
+                    let plan = mirror.plan_commit(
+                        &[target_file.to_string_lossy().to_string()],
+                        &spec.prompt,
+                        &patch,
+                    );
+                    let _ = mirror.commit_atomic(&plan);
+                }
             }
 
             // Hot-reload daemon hgbd
@@ -473,25 +484,381 @@ impl VibePromptRunner {
     }
 }
 
-/// Helper function to strip LLM markdown code blocks
-fn clean_llm_code_fences(input: &str) -> String {
-    let trimmed = input.trim();
-    if trimmed.starts_with("```") {
-        let mut lines = trimmed.lines().collect::<Vec<_>>();
-        if !lines.is_empty() {
-            lines.remove(0);
+/// Calculate adaptive timeout for LLM synthesis (10-15 seconds) based on content length
+pub fn calculate_adaptive_timeout(prompt: &str, current_content: &str) -> Duration {
+    if let Ok(val) = std::env::var("HGB_OLLAMA_TIMEOUT_SECS") {
+        if let Ok(secs) = val.parse::<u64>() {
+            return Duration::from_secs(secs);
         }
-        if lines.last().map_or(false, |l| l.trim().starts_with("```")) {
-            lines.pop();
-        }
-        lines.join("\n")
-    } else {
-        trimmed.to_string()
+    }
+    let total_len = prompt.len() + current_content.len();
+    let extra = (total_len / 500).min(5) as u64;
+    Duration::from_secs(10 + extra)
+}
+
+/// Detect target language name from file extension
+pub fn detect_target_language(file: &Path) -> &'static str {
+    let ext = file
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    match ext.as_str() {
+        "rs" => "Rust",
+        "ts" | "tsx" | "mts" | "cts" => "TypeScript",
+        "js" | "jsx" | "mjs" | "cjs" => "JavaScript",
+        "py" | "pyi" => "Python",
+        "go" => "Go",
+        "zig" => "Zig",
+        "html" | "htm" => "HTML",
+        "css" | "scss" | "sass" | "less" => "CSS",
+        _ => "Rust",
     }
 }
 
-/// Sanitize user prompt to a valid Rust snake_case function identifier
-fn sanitize_identifier(prompt: &str) -> String {
+/// Formulate language-specific prompt for code candidate synthesis
+pub fn format_synthesis_prompt(prompt: &str, target_file: &Path, current_content: &str) -> String {
+    let language = detect_target_language(target_file);
+    format!(
+        "Task: {}\nFile: {}\nCurrent Content:\n```\n{}\n```\nSynthesize the complete, verified {} source code for this file. Return ONLY valid source code:",
+        prompt,
+        target_file.display(),
+        current_content,
+        language
+    )
+}
+
+/// Synthesize code candidate via available cloud provider (OpenAI / DeepSeek / OpenRouter / Anthropic / Gemini)
+pub async fn synthesize_via_cloud_fallback(prompt: &str) -> Option<(String, usize)> {
+    // 1. OpenAI / DeepSeek / OpenRouter compatible providers
+    if let Some(provider) = OpenAiCompatibleProvider::auto_discover() {
+        if let Ok(result) = provider.complete(prompt, None).await {
+            let cleaned = clean_llm_code_fences(&result);
+            if !cleaned.trim().is_empty() {
+                let tokens = (prompt.len() + cleaned.len()) / 4;
+                return Some((cleaned, tokens));
+            }
+        }
+    }
+
+    // 2. Anthropic provider
+    if let Some(provider) = AnthropicProvider::auto_discover() {
+        if let Ok(result) = provider.complete(prompt, None).await {
+            let cleaned = clean_llm_code_fences(&result);
+            if !cleaned.trim().is_empty() {
+                let tokens = (prompt.len() + cleaned.len()) / 4;
+                return Some((cleaned, tokens));
+            }
+        }
+    }
+
+    // 3. Gemini provider
+    if let Some(provider) = GeminiProvider::auto_discover() {
+        if let Ok(result) = provider.complete(prompt, None).await {
+            let cleaned = clean_llm_code_fences(&result);
+            if !cleaned.trim().is_empty() {
+                let tokens = (prompt.len() + cleaned.len()) / 4;
+                return Some((cleaned, tokens));
+            }
+        }
+    }
+
+    None
+}
+
+/// Language-aware deterministic AST synthesis (Tier 3 fallback)
+pub fn synthesize_deterministic_candidate(
+    prompt: &str,
+    target_file: &Path,
+    current_content: &str,
+) -> (String, usize) {
+    let ext = target_file
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    let fn_identifier = sanitize_identifier(prompt);
+    let intent_escaped = prompt
+        .trim()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', " ");
+
+    let synthesized = match ext.as_str() {
+        "ts" | "tsx" | "mts" | "cts" => {
+            let mut s = if current_content.trim().is_empty() {
+                format!(
+                    "/**\n * Synthesized by Hagibis Vibe Prompt Engine\n * Intent: {}\n */\n\n",
+                    intent_escaped
+                )
+            } else {
+                current_content.to_string()
+            };
+
+            let addition = if ext == "tsx" {
+                format!(
+                    "\nexport function {func_name}(): string {{\n    return \"{intent}\";\n}}\n\nexport default {func_name};\n",
+                    func_name = fn_identifier,
+                    intent = intent_escaped
+                )
+            } else {
+                format!(
+                    "\nexport function {func_name}(): string {{\n    return \"{intent}\";\n}}\n",
+                    func_name = fn_identifier,
+                    intent = intent_escaped
+                )
+            };
+
+            if !s.contains(&format!("function {}()", fn_identifier)) {
+                s.push_str(&addition);
+            }
+            s
+        }
+        "js" | "jsx" | "mjs" | "cjs" => {
+            let mut s = if current_content.trim().is_empty() {
+                format!(
+                    "/**\n * Synthesized by Hagibis Vibe Prompt Engine\n * Intent: {}\n */\n\n",
+                    intent_escaped
+                )
+            } else {
+                current_content.to_string()
+            };
+
+            let addition = if ext == "jsx" {
+                format!(
+                    "\nexport function {func_name}() {{\n    return \"{intent}\";\n}}\n\nexport default {func_name};\n",
+                    func_name = fn_identifier,
+                    intent = intent_escaped
+                )
+            } else {
+                format!(
+                    "\nexport function {func_name}() {{\n    return \"{intent}\";\n}}\n\nif (typeof module !== 'undefined' && module.exports) {{\n    module.exports = {{ {func_name} }};\n}}\n",
+                    func_name = fn_identifier,
+                    intent = intent_escaped
+                )
+            };
+
+            if !s.contains(&format!("function {}()", fn_identifier)) {
+                s.push_str(&addition);
+            }
+            s
+        }
+        "py" | "pyi" => {
+            let mut s = if current_content.trim().is_empty() {
+                format!(
+                    "\"\"\"\nSynthesized by Hagibis Vibe Prompt Engine\nIntent: {}\n\"\"\"\n\n",
+                    intent_escaped
+                )
+            } else {
+                current_content.to_string()
+            };
+
+            let addition = format!(
+                "\ndef {func_name}() -> str:\n    \"\"\"Implements vibe intent: {intent}\"\"\"\n    return \"{intent}\"\n\n\ndef test_{func_name}():\n    assert {func_name}() == \"{intent}\"\n\n\nif __name__ == \"__main__\":\n    test_{func_name}()\n",
+                func_name = fn_identifier,
+                intent = intent_escaped
+            );
+
+            if !s.contains(&format!("def {}()", fn_identifier)) {
+                s.push_str(&addition);
+            }
+            s
+        }
+        "go" => {
+            let mut s = if current_content.trim().is_empty() {
+                format!(
+                    "// Synthesized by Hagibis Vibe Prompt Engine\n// Intent: {}\n\npackage main\n\n",
+                    intent_escaped
+                )
+            } else {
+                current_content.to_string()
+            };
+
+            let addition = format!(
+                "\n// {func_name} implements vibe intent: {intent}\nfunc {func_name}() string {{\n    return \"{intent}\"\n}}\n",
+                func_name = fn_identifier,
+                intent = intent_escaped
+            );
+
+            if !s.contains(&format!("func {}()", fn_identifier)) {
+                s.push_str(&addition);
+            }
+            s
+        }
+        "zig" => {
+            let mut s = if current_content.trim().is_empty() {
+                format!(
+                    "// Synthesized by Hagibis Vibe Prompt Engine\n// Intent: {}\nconst std = @import(\"std\");\n\n",
+                    intent_escaped
+                )
+            } else {
+                current_content.to_string()
+            };
+
+            let addition = format!(
+                "\n/// Implements vibe intent: {intent}\npub fn {func_name}() []const u8 {{\n    return \"{intent}\";\n}}\n\ntest \"{func_name}\" {{\n    try std.testing.expectEqualStrings(\"{intent}\", {func_name}());\n}}\n",
+                func_name = fn_identifier,
+                intent = intent_escaped
+            );
+
+            if !s.contains(&format!("fn {}()", fn_identifier)) {
+                s.push_str(&addition);
+            }
+            s
+        }
+        "html" | "htm" => {
+            if current_content.trim().is_empty() {
+                format!(
+                    "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n    <meta charset=\"UTF-8\">\n    <title>{intent}</title>\n</head>\n<body>\n    <main id=\"{func_name}\">\n        <h1>{intent}</h1>\n    </main>\n</body>\n</html>\n",
+                    intent = intent_escaped,
+                    func_name = fn_identifier
+                )
+            } else {
+                current_content.to_string()
+            }
+        }
+        "css" | "scss" | "sass" | "less" => {
+            if current_content.trim().is_empty() {
+                format!(
+                    "/* Synthesized by Hagibis Vibe Prompt Engine */\n/* Intent: {intent} */\n\n.{func_name} {{\n    display: block;\n    box-sizing: border-box;\n}}\n",
+                    intent = intent_escaped,
+                    func_name = fn_identifier
+                )
+            } else {
+                current_content.to_string()
+            }
+        }
+        _ => {
+            // Rust default
+            let mut s = if current_content.trim().is_empty() {
+                format!(
+                    "//! Synthesized by Hagibis Vibe Prompt Engine\n//! Intent: {}\n\n",
+                    intent_escaped
+                )
+            } else {
+                current_content.to_string()
+            };
+
+            let addition = format!(
+                "\n/// Implements vibe intent: {intent}\npub fn {func_name}() -> &'static str {{\n    \"{intent}\"\n}}\n\n#[cfg(test)]\nmod vibe_tests {{\n    use super::*;\n\n    #[test]\n    fn test_{func_name}() {{\n        assert_eq!({func_name}(), \"{intent}\");\n    }}\n}}\n",
+                intent = intent_escaped,
+                func_name = fn_identifier
+            );
+
+            if !s.contains(&format!("fn {}()", fn_identifier)) {
+                s.push_str(&addition);
+            }
+            s
+        }
+    };
+
+    let estimated_tokens = (prompt.len() + synthesized.len()) / 4;
+    (synthesized, estimated_tokens)
+}
+
+/// Resolve the default compiler / linter / test check command for a given tool and target
+pub fn resolve_default_check_command(
+    tool: CompilerTool,
+    target_dir: &Path,
+    rel_target: &Path,
+) -> String {
+    let rel_target_str = rel_target.to_string_lossy().to_string();
+    match tool {
+        CompilerTool::TypeScript => {
+            if target_dir.join("bun.lockb").exists() || target_dir.join("bun.lock").exists() {
+                "bun test".to_string()
+            } else if target_dir.join("deno.json").exists() || target_dir.join("deno.jsonc").exists() {
+                format!("deno check {}", rel_target_str)
+            } else if target_dir.join("tsconfig.json").exists() {
+                "tsc --noEmit".to_string()
+            } else if target_dir.join("package.json").exists() {
+                if let Ok(pkg) = fs::read_to_string(target_dir.join("package.json")) {
+                    if pkg.contains("\"test\":") {
+                        "npm test".to_string()
+                    } else {
+                        "npx tsc --noEmit".to_string()
+                    }
+                } else {
+                    "npx tsc --noEmit".to_string()
+                }
+            } else {
+                "tsc --noEmit".to_string()
+            }
+        }
+        CompilerTool::JavaScript => {
+            if target_dir.join("biome.json").exists() || target_dir.join("biome.jsonc").exists() {
+                "biome check".to_string()
+            } else if target_dir.join(".eslintrc").exists()
+                || target_dir.join(".eslintrc.json").exists()
+                || target_dir.join(".eslintrc.js").exists()
+                || target_dir.join("eslint.config.js").exists()
+                || target_dir.join("eslint.config.mjs").exists()
+            {
+                format!("eslint {}", rel_target_str)
+            } else {
+                format!("node --check {}", rel_target_str)
+            }
+        }
+        CompilerTool::Go => {
+            if target_dir.join("go.mod").exists() {
+                "go vet ./...".to_string()
+            } else {
+                format!("go vet {}", rel_target_str)
+            }
+        }
+        CompilerTool::Python => {
+            let has_ruff = target_dir.join("ruff.toml").exists()
+                || (target_dir.join("pyproject.toml").exists()
+                    && fs::read_to_string(target_dir.join("pyproject.toml"))
+                        .map(|s| s.contains("[tool.ruff"))
+                        .unwrap_or(false));
+            if has_ruff {
+                "ruff check".to_string()
+            } else {
+                format!("python3 -m py_compile {}", rel_target_str)
+            }
+        }
+        CompilerTool::Zig => {
+            format!("zig test {}", rel_target_str)
+        }
+        CompilerTool::Rust => {
+            if target_dir.join("Cargo.toml").exists() {
+                "cargo check --message-format=json".to_string()
+            } else {
+                format!("rustc --crate-type=lib {}", rel_target_str)
+            }
+        }
+        CompilerTool::Unknown => {
+            if target_dir.join("Cargo.toml").exists() {
+                "cargo check --message-format=json".to_string()
+            } else {
+                format!("rustc --crate-type=lib {}", rel_target_str)
+            }
+        }
+    }
+}
+
+/// Helper function to strip LLM markdown code blocks
+pub fn clean_llm_code_fences(input: &str) -> String {
+    let trimmed = input.trim();
+    if let Some(start_idx) = trimmed.find("```") {
+        let after_start = &trimmed[start_idx + 3..];
+        let code_start = if let Some(newline_idx) = after_start.find('\n') {
+            &after_start[newline_idx + 1..]
+        } else {
+            after_start
+        };
+        if let Some(end_idx) = code_start.rfind("```") {
+            return code_start[..end_idx].trim().to_string();
+        } else {
+            return code_start.trim().to_string();
+        }
+    }
+    trimmed.to_string()
+}
+
+/// Sanitize user prompt to a valid snake_case function identifier
+pub fn sanitize_identifier(prompt: &str) -> String {
     let mut s = String::new();
     for c in prompt.chars() {
         if c.is_alphanumeric() {
@@ -734,5 +1101,179 @@ mod tests {
         // Workspace file MUST be 100% clean and uncorrupted!
         let content_after = fs::read_to_string(ws_dir.join("src/lib.rs")).unwrap();
         assert_eq!(content_after, pristine_content);
+    }
+
+    #[test]
+    fn test_polyglot_prompt_synthesis() {
+        let rust_file = Path::new("src/lib.rs");
+        let ts_file = Path::new("src/App.tsx");
+        let py_file = Path::new("src/main.py");
+        let go_file = Path::new("main.go");
+        let zig_file = Path::new("src/main.zig");
+
+        let p_rust = format_synthesis_prompt("add sum function", rust_file, "");
+        assert!(p_rust.contains("Synthesize the complete, verified Rust source code for this file."));
+
+        let p_ts = format_synthesis_prompt("add login component", ts_file, "");
+        assert!(p_ts.contains("Synthesize the complete, verified TypeScript source code for this file."));
+
+        let p_py = format_synthesis_prompt("add parse json", py_file, "");
+        assert!(p_py.contains("Synthesize the complete, verified Python source code for this file."));
+
+        let p_go = format_synthesis_prompt("serve http", go_file, "");
+        assert!(p_go.contains("Synthesize the complete, verified Go source code for this file."));
+
+        let p_zig = format_synthesis_prompt("calculate hash", zig_file, "");
+        assert!(p_zig.contains("Synthesize the complete, verified Zig source code for this file."));
+    }
+
+    #[test]
+    fn test_polyglot_fallback_no_rust_bleed() {
+        // TypeScript (.tsx)
+        let (ts_code, _) = synthesize_deterministic_candidate(
+            "render dashboard widget",
+            Path::new("src/components/Dashboard.tsx"),
+            "",
+        );
+        assert!(ts_code.contains("export function render_dashboard_widget"));
+        assert!(ts_code.contains("export default render_dashboard_widget"));
+        assert!(!ts_code.contains("pub fn"));
+        assert!(!ts_code.contains("#[cfg(test)]"));
+        assert!(!ts_code.contains("&'static str"));
+
+        // TypeScript (.ts)
+        let (ts_util, _) = synthesize_deterministic_candidate(
+            "calculate tax rate",
+            Path::new("src/utils/tax.ts"),
+            "",
+        );
+        assert!(ts_util.contains("export function calculate_tax_rate(): string"));
+        assert!(!ts_util.contains("pub fn"));
+        assert!(!ts_util.contains("#[cfg(test)]"));
+
+        // JavaScript (.js)
+        let (js_code, _) = synthesize_deterministic_candidate(
+            "format currency",
+            Path::new("src/format.js"),
+            "",
+        );
+        assert!(js_code.contains("export function format_currency()"));
+        assert!(!js_code.contains(": string")); // No TS types in plain JS
+        assert!(!js_code.contains("pub fn"));
+
+        // Python (.py)
+        let (py_code, _) = synthesize_deterministic_candidate(
+            "parse telemetry",
+            Path::new("src/telemetry.py"),
+            "",
+        );
+        assert!(py_code.contains("def parse_telemetry() -> str:"));
+        assert!(py_code.contains("def test_parse_telemetry():"));
+        assert!(py_code.contains("assert parse_telemetry() =="));
+        assert!(!py_code.contains("pub fn"));
+        assert!(!py_code.contains("#[cfg(test)]"));
+
+        // Go (.go)
+        let (go_code, _) = synthesize_deterministic_candidate(
+            "handle request",
+            Path::new("main.go"),
+            "",
+        );
+        assert!(go_code.contains("package main"));
+        assert!(go_code.contains("func handle_request() string"));
+        assert!(!go_code.contains("pub fn"));
+        assert!(!go_code.contains("#[cfg(test)]"));
+
+        // Zig (.zig)
+        let (zig_code, _) = synthesize_deterministic_candidate(
+            "allocate buffer",
+            Path::new("src/buffer.zig"),
+            "",
+        );
+        assert!(zig_code.contains("pub fn allocate_buffer() []const u8"));
+        assert!(zig_code.contains("test \"allocate_buffer\""));
+        assert!(!zig_code.contains("&'static str"));
+        assert!(!zig_code.contains("#[cfg(test)]"));
+
+        // Rust (.rs)
+        let (rs_code, _) = synthesize_deterministic_candidate(
+            "verify signature",
+            Path::new("src/crypto.rs"),
+            "",
+        );
+        assert!(rs_code.contains("pub fn verify_signature() -> &'static str"));
+        assert!(rs_code.contains("#[cfg(test)]"));
+    }
+
+    #[test]
+    fn test_polyglot_compiler_command_resolution() {
+        let temp = tempdir().unwrap();
+        let ws = temp.path();
+
+        // TypeScript with bun
+        fs::write(ws.join("bun.lockb"), "").unwrap();
+        let bun_cmd = resolve_default_check_command(CompilerTool::TypeScript, ws, Path::new("src/index.ts"));
+        assert_eq!(bun_cmd, "bun test");
+        let _ = fs::remove_file(ws.join("bun.lockb"));
+
+        // TypeScript with tsconfig.json
+        fs::write(ws.join("tsconfig.json"), "{}").unwrap();
+        let tsc_cmd = resolve_default_check_command(CompilerTool::TypeScript, ws, Path::new("src/index.ts"));
+        assert_eq!(tsc_cmd, "tsc --noEmit");
+        let _ = fs::remove_file(ws.join("tsconfig.json"));
+
+        // JavaScript with biome.json
+        fs::write(ws.join("biome.json"), "{}").unwrap();
+        let biome_cmd = resolve_default_check_command(CompilerTool::JavaScript, ws, Path::new("src/index.js"));
+        assert_eq!(biome_cmd, "biome check");
+        let _ = fs::remove_file(ws.join("biome.json"));
+
+        // JavaScript default -> node --check
+        let node_cmd = resolve_default_check_command(CompilerTool::JavaScript, ws, Path::new("src/index.js"));
+        assert_eq!(node_cmd, "node --check src/index.js");
+
+        // Go with go.mod
+        fs::write(ws.join("go.mod"), "module test\n").unwrap();
+        let go_cmd = resolve_default_check_command(CompilerTool::Go, ws, Path::new("main.go"));
+        assert_eq!(go_cmd, "go vet ./...");
+        let _ = fs::remove_file(ws.join("go.mod"));
+
+        // Python with ruff.toml
+        fs::write(ws.join("ruff.toml"), "").unwrap();
+        let ruff_cmd = resolve_default_check_command(CompilerTool::Python, ws, Path::new("app.py"));
+        assert_eq!(ruff_cmd, "ruff check");
+        let _ = fs::remove_file(ws.join("ruff.toml"));
+
+        // Python default -> python3 -m py_compile
+        let py_cmd = resolve_default_check_command(CompilerTool::Python, ws, Path::new("app.py"));
+        assert_eq!(py_cmd, "python3 -m py_compile app.py");
+
+        // Zig -> zig test
+        let zig_cmd = resolve_default_check_command(CompilerTool::Zig, ws, Path::new("main.zig"));
+        assert_eq!(zig_cmd, "zig test main.zig");
+
+        // Rust with Cargo.toml
+        fs::write(ws.join("Cargo.toml"), "[package]\nname=\"foo\"\nversion=\"0.1.0\"\n").unwrap();
+        let cargo_cmd = resolve_default_check_command(CompilerTool::Rust, ws, Path::new("src/lib.rs"));
+        assert_eq!(cargo_cmd, "cargo check --message-format=json");
+        let _ = fs::remove_file(ws.join("Cargo.toml"));
+
+        // Rust without Cargo.toml
+        let rustc_cmd = resolve_default_check_command(CompilerTool::Rust, ws, Path::new("src/lib.rs"));
+        assert_eq!(rustc_cmd, "rustc --crate-type=lib src/lib.rs");
+    }
+
+    #[test]
+    fn test_adaptive_timeout_calculation() {
+        let short_timeout = calculate_adaptive_timeout("short prompt", "");
+        assert_eq!(short_timeout, Duration::from_secs(10));
+
+        let medium_content = "a".repeat(1000);
+        let med_timeout = calculate_adaptive_timeout("medium prompt", &medium_content);
+        assert_eq!(med_timeout, Duration::from_secs(12));
+
+        let long_content = "a".repeat(5000);
+        let long_timeout = calculate_adaptive_timeout("long prompt", &long_content);
+        assert_eq!(long_timeout, Duration::from_secs(15));
     }
 }

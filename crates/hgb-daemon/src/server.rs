@@ -17,6 +17,14 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixListener;
 use tokio::sync::RwLock;
 
+pub fn resolve_workspace() -> PathBuf {
+    if let Ok(custom) = std::env::var("HGB_WORKSPACE") {
+        PathBuf::from(custom)
+    } else {
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    }
+}
+
 pub struct DaemonState {
     pub start_time: std::time::Instant,
     pub socket_path: PathBuf,
@@ -95,13 +103,7 @@ impl DaemonState {
             "gemini-2.5-flash".to_string()
         };
 
-        let ws_dir = if let Ok(custom) = std::env::var("HGB_WORKSPACE") {
-            PathBuf::from(custom)
-        } else if Path::new("/home/toshiba/My AI Project/hagibis").is_dir() {
-            PathBuf::from("/home/toshiba/My AI Project/hagibis")
-        } else {
-            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-        };
+        let ws_dir = resolve_workspace();
         let mcp_orchestrator = Arc::new(hgb_core::McpHostOrchestrator::new(&ws_dir));
 
         let skill_db_path = socket_path.parent().unwrap_or_else(|| Path::new(".")).join("skills.db");
@@ -310,10 +312,27 @@ impl HagibisDaemon {
                 Ok((mut stream, _)) => {
                     let state = Arc::clone(&self.state);
                     tokio::spawn(async move {
-                        let mut buf = vec![0u8; 65536];
-                        if let Ok(n) = stream.read(&mut buf).await {
-                            if n > 0 {
-                                if let Ok(req) = bincode::deserialize::<HgbRequest>(&buf[..n]) {
+                        const MAX_PAYLOAD_SIZE: usize = 64 * 1024 * 1024; // 64 MB
+
+                        loop {
+                            let mut len_buf = [0u8; 4];
+                            if stream.read_exact(&mut len_buf).await.is_err() {
+                                break;
+                            }
+                            let payload_len = u32::from_be_bytes(len_buf) as usize;
+                            if payload_len == 0 || payload_len > MAX_PAYLOAD_SIZE {
+                                eprintln!("Daemon IPC: rejected invalid payload length: {} bytes", payload_len);
+                                break;
+                            }
+
+                            let mut buf = vec![0u8; payload_len];
+                            if stream.read_exact(&mut buf).await.is_err() {
+                                eprintln!("Daemon IPC: failed to read full payload of {} bytes", payload_len);
+                                break;
+                            }
+
+                            match bincode::deserialize::<HgbRequest>(&buf) {
+                                Ok(req) => {
                                     if let HgbRequest::SubscribeEvents { topic_filter } = req {
                                         // Streaming mode over UDS socket
                                         let ack = HgbResponse::EventBusStatusResult(state.event_bus.status());
@@ -337,8 +356,16 @@ impl HagibisDaemon {
 
                                     let resp = Self::handle_request(&state, req).await;
                                     if let Ok(encoded) = bincode::serialize(&resp) {
-                                        let _ = stream.write_all(&encoded).await;
+                                        let resp_len = (encoded.len() as u32).to_be_bytes();
+                                        if stream.write_all(&resp_len).await.is_err() || stream.write_all(&encoded).await.is_err() {
+                                            break;
+                                        }
+                                        let _ = stream.flush().await;
                                     }
+                                }
+                                Err(e) => {
+                                    eprintln!("Daemon IPC: deserialization failed: {}", e);
+                                    break;
                                 }
                             }
                         }
@@ -3030,13 +3057,7 @@ impl HagibisDaemon {
             }
             // 121. Enterprise Distributed Monorepo Hypergraph & Build Cache
             HgbRequest::MonorepoAnalyze => {
-                let ws_dir = if let Ok(custom) = std::env::var("HGB_WORKSPACE") {
-            PathBuf::from(custom)
-        } else if Path::new("/home/toshiba/My AI Project/hagibis").is_dir() {
-            PathBuf::from("/home/toshiba/My AI Project/hagibis")
-        } else {
-            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-        };
+                let ws_dir = resolve_workspace();
                 match hgb_core::MonorepoHypergraphEngine::build_hypergraph(&ws_dir) {
                     Ok(rep) => HgbResponse::MonorepoAnalyzeResult(rep),
                     Err(e) => HgbResponse::Error(e.to_string()),
@@ -3075,13 +3096,7 @@ impl HagibisDaemon {
             }
             // 125. Interactive Visual WYSIWYG Web Canvas Studio
             HgbRequest::StudioStart { port } => {
-                let ws_dir = if let Ok(custom) = std::env::var("HGB_WORKSPACE") {
-            PathBuf::from(custom)
-        } else if Path::new("/home/toshiba/My AI Project/hagibis").is_dir() {
-            PathBuf::from("/home/toshiba/My AI Project/hagibis")
-        } else {
-            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-        };
+                let ws_dir = resolve_workspace();
                 match hgb_core::VisualCanvasStudioEngine::start_session(&ws_dir, port) {
                     Ok(rep) => HgbResponse::StudioStartResult(rep),
                     Err(e) => HgbResponse::Error(e.to_string()),
@@ -3102,13 +3117,7 @@ impl HagibisDaemon {
                 force_codex,
                 consent_given,
             } => {
-                let ws_dir = if let Ok(custom) = std::env::var("HGB_WORKSPACE") {
-            PathBuf::from(custom)
-        } else if Path::new("/home/toshiba/My AI Project/hagibis").is_dir() {
-            PathBuf::from("/home/toshiba/My AI Project/hagibis")
-        } else {
-            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-        };
+                let ws_dir = resolve_workspace();
                 let mut engine = hgb_core::HybridOrchestrationEngine::new(ws_dir);
                 match engine.execute_hybrid_task(
                     &task,
@@ -3123,13 +3132,7 @@ impl HagibisDaemon {
                 }
             }
             HgbRequest::HybridScorecard => {
-                let ws_dir = if let Ok(custom) = std::env::var("HGB_WORKSPACE") {
-            PathBuf::from(custom)
-        } else if Path::new("/home/toshiba/My AI Project/hagibis").is_dir() {
-            PathBuf::from("/home/toshiba/My AI Project/hagibis")
-        } else {
-            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-        };
+                let ws_dir = resolve_workspace();
                 let engine = hgb_core::HybridOrchestrationEngine::new(ws_dir);
                 match engine.get_scorecard() {
                     Ok(scorecard) => HgbResponse::HybridScorecardResult(scorecard),
@@ -3156,13 +3159,7 @@ impl HagibisDaemon {
             }
             // 129. Automated Masterclass CI Pipeline
             HgbRequest::MasterclassGen => {
-                let ws_dir = if let Ok(custom) = std::env::var("HGB_WORKSPACE") {
-            PathBuf::from(custom)
-        } else if Path::new("/home/toshiba/My AI Project/hagibis").is_dir() {
-            PathBuf::from("/home/toshiba/My AI Project/hagibis")
-        } else {
-            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-        };
+                let ws_dir = resolve_workspace();
                 let pipeline = hgb_core::MasterclassPipeline::new(ws_dir);
                 match pipeline.generate_pdf() {
                     Ok(rep) => HgbResponse::MasterclassGenResult(rep),
@@ -3171,13 +3168,7 @@ impl HagibisDaemon {
             }
             // 130. Wasm-Kernel Plugin System
             HgbRequest::WasmPluginRun { wasm_path, input } => {
-                let ws_dir = if let Ok(custom) = std::env::var("HGB_WORKSPACE") {
-            PathBuf::from(custom)
-        } else if Path::new("/home/toshiba/My AI Project/hagibis").is_dir() {
-            PathBuf::from("/home/toshiba/My AI Project/hagibis")
-        } else {
-            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-        };
+                let ws_dir = resolve_workspace();
                 let _governor_guard = hgb_nextgen::GovernorGuard::acquire();
                 let plugin_path = if Path::new(&wasm_path).is_absolute() {
                     PathBuf::from(&wasm_path)
@@ -3194,13 +3185,7 @@ impl HagibisDaemon {
             }
             // 131. Dual-Layer Sandbox Execution
             HgbRequest::DualLayerSandboxRun { workload, shell_command } => {
-                let ws_dir = if let Ok(custom) = std::env::var("HGB_WORKSPACE") {
-            PathBuf::from(custom)
-        } else if Path::new("/home/toshiba/My AI Project/hagibis").is_dir() {
-            PathBuf::from("/home/toshiba/My AI Project/hagibis")
-        } else {
-            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-        };
+                let ws_dir = resolve_workspace();
                 let _governor_guard = hgb_nextgen::GovernorGuard::acquire();
                 let engine = hgb_core::DualLayerSandboxEngine::new(&ws_dir);
                 match engine.execute_workload_auto(&workload, None, shell_command.as_deref(), None) {
@@ -3232,6 +3217,20 @@ impl HagibisDaemon {
             HgbRequest::BareMetalStatus => {
                 let bridge = hgb_nextgen::BareMetalPerformanceBridge::new();
                 let telem = bridge.read_bare_metal_telemetry();
+                let opt_dir = std::env::var("HGB_OPTIMIZER_DIR")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|_| {
+                        let ws = resolve_workspace();
+                        let p = ws.parent().unwrap_or(&ws).join("kernel-optimizer");
+                        if p.exists() { p } else { PathBuf::from("/opt/kernel-optimizer") }
+                    });
+                let dyna_dir = std::env::var("DYNATUNE_DIR")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|_| {
+                        let ws = resolve_workspace();
+                        let p = ws.parent().unwrap_or(&ws).join("dynatune");
+                        if p.exists() { p } else { PathBuf::from("/opt/dynatune") }
+                    });
                 let output = format!(
                     "⚡ [Hagibis Bare-Metal Kernel & Dynatune Telemetry]\n\
                      • CPU Scaling Governor: {}\n\
@@ -3241,8 +3240,8 @@ impl HagibisDaemon {
                      • ZRAM Compression:     {:.2}:1 (zstd)\n\
                      • CPU Package Temp:     {:.1}°C [{}]\n\
                      • Battery Capacity:     {}% ({:.2}W, {})\n\
-                     • Optimizer Suite:      /home/toshiba/My AI Project/kernel-optimizer\n\
-                     • Dynatune Synergy:     /home/toshiba/My AI Project/dynatune",
+                     • Optimizer Suite:      {}\n\
+                     • Dynatune Synergy:     {}",
                     telem.active_governor,
                     telem.energy_perf_preference,
                     if telem.turbo_boost_enabled { "Enabled" } else { "Disabled" },
@@ -3252,7 +3251,9 @@ impl HagibisDaemon {
                     telem.thermal_severity,
                     telem.battery_capacity_pct.map(|c| c.to_string()).unwrap_or_else(|| "N/A".to_string()),
                     telem.power_draw_watts.unwrap_or(0.0),
-                    if telem.is_charging { "Charging / AC" } else { "Discharging / Battery" }
+                    if telem.is_charging { "Charging / AC" } else { "Discharging / Battery" },
+                    opt_dir.display(),
+                    dyna_dir.display()
                 );
                 HgbResponse::BareMetalStatusResult(output)
             }
@@ -3275,13 +3276,7 @@ impl HagibisDaemon {
                 HgbResponse::BareMetalCommandResult(output)
             }
             HgbRequest::WasmDistributedMigrate { target_node, package_bundle } => {
-                let ws_dir = if let Ok(custom) = std::env::var("HGB_WORKSPACE") {
-            PathBuf::from(custom)
-        } else if Path::new("/home/toshiba/My AI Project/hagibis").is_dir() {
-            PathBuf::from("/home/toshiba/My AI Project/hagibis")
-        } else {
-            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-        };
+                let ws_dir = resolve_workspace();
                 let mut comp = hgb_core::StatefulWasmComponent::new("hgbd-daemon-node", 4);
                 let _ = comp.write_memory(0, b"hgbd:distributed-stateful-context");
                 match comp.serialize_snapshot(&target_node) {
@@ -3314,13 +3309,7 @@ impl HagibisDaemon {
                 }
             }
             HgbRequest::VibeAutonomousCycle { auto_patch, run_tests } => {
-                let ws_dir = if let Ok(custom) = std::env::var("HGB_WORKSPACE") {
-            PathBuf::from(custom)
-        } else if Path::new("/home/toshiba/My AI Project/hagibis").is_dir() {
-            PathBuf::from("/home/toshiba/My AI Project/hagibis")
-        } else {
-            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-        };
+                let ws_dir = resolve_workspace();
                 let mut config = hgb_core::VibeLoopConfig::default();
                 config.workspace_root = ws_dir;
                 config.auto_patch = auto_patch;
@@ -3458,13 +3447,7 @@ impl HagibisDaemon {
 
             // Elite Superpower 2: Autonomous Self-Healing Compilation Loops
             HgbRequest::SelfHealingCompile { target_file, code, command, max_retries } => {
-                let ws_dir = if let Ok(custom) = std::env::var("HGB_WORKSPACE") {
-            PathBuf::from(custom)
-        } else if Path::new("/home/toshiba/My AI Project/hagibis").is_dir() {
-            PathBuf::from("/home/toshiba/My AI Project/hagibis")
-        } else {
-            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-        };
+                let ws_dir = resolve_workspace();
                 let retries = max_retries.unwrap_or(3);
                 match hgb_core::CompilerInterceptor::heal_and_verify(
                     &ws_dir,
@@ -3848,25 +3831,13 @@ impl HagibisDaemon {
 
             // Superpower 1: Sibling Ollama Pipeline & Local Mutation Vector Cache
             HgbRequest::SiblingOllamaStatus => {
-                let ws_dir = if let Ok(custom) = std::env::var("HGB_WORKSPACE") {
-                    PathBuf::from(custom)
-                } else if Path::new("/home/toshiba/My AI Project/hagibis").is_dir() {
-                    PathBuf::from("/home/toshiba/My AI Project/hagibis")
-                } else {
-                    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-                };
+                let ws_dir = resolve_workspace();
                 let acc = hgb_core::SiblingOllamaAccelerator::new(&ws_dir);
                 let meta = acc.inspect_sibling_engine().await;
                 HgbResponse::SiblingOllamaStatusResult(meta)
             }
             HgbRequest::SiblingOllamaSync { file_path, content } => {
-                let ws_dir = if let Ok(custom) = std::env::var("HGB_WORKSPACE") {
-                    PathBuf::from(custom)
-                } else if Path::new("/home/toshiba/My AI Project/hagibis").is_dir() {
-                    PathBuf::from("/home/toshiba/My AI Project/hagibis")
-                } else {
-                    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-                };
+                let ws_dir = resolve_workspace();
                 let acc = hgb_core::SiblingOllamaAccelerator::new(&ws_dir);
                 match acc.sync_file_mutation(&file_path, &content).await {
                     Ok(rep) => HgbResponse::SiblingOllamaSyncResult(rep),
@@ -3874,13 +3845,7 @@ impl HagibisDaemon {
                 }
             }
             HgbRequest::SiblingOllamaQuery { query, top_k } => {
-                let ws_dir = if let Ok(custom) = std::env::var("HGB_WORKSPACE") {
-                    PathBuf::from(custom)
-                } else if Path::new("/home/toshiba/My AI Project/hagibis").is_dir() {
-                    PathBuf::from("/home/toshiba/My AI Project/hagibis")
-                } else {
-                    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-                };
+                let ws_dir = resolve_workspace();
                 let acc = hgb_core::SiblingOllamaAccelerator::new(&ws_dir);
                 match acc.query_mutation_vectors(&query, top_k) {
                     Ok(matches) => HgbResponse::SiblingOllamaQueryResult(matches),

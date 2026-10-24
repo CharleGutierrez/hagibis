@@ -128,12 +128,15 @@ pub use terminal_graphics::{
 };
 pub use variant_race::VariantRaceEngine;
 pub use voice_hook::{
-    play_alert_tone, play_green_chime, synthesize_alert_tone_wav, synthesize_green_chime_wav,
-    AudioPromptEngine, VoiceIntentTranscriber, VoicePromptSession, WavAudioInfo,
+    play_alert_tone, play_auto_healing_tone, play_compile_start_tone, play_green_chime,
+    play_vibe_audio_cue, synthesize_alert_tone_wav, synthesize_auto_healing_wav,
+    synthesize_compile_start_wav, synthesize_green_chime_wav, AudioPromptEngine,
+    ContinuousVadListener, EnergyVadDetector, VadConfig, VadState, VibeAudioCue,
+    VoiceIntentTranscriber, VoicePromptSession, WavAudioInfo,
 };
 pub use wattage_governor::{GovernorConfig, RoutingDecision, SessionExpenditure, WattageGovernor};
 pub use wiretap::{ContractDrift, ContractPatch, DriftKind, ExpectedField, WiretapEngine};
-pub use worktree::{AtmosphericWorktreeHandle, SemanticStash, SemanticStashManager};
+pub use worktree::{AtmosphericWorktreeHandle, SemanticStash, SemanticStashManager, SpeculativeWorktree};
 pub use redteam::{RedTeamAuditor, RedTeamCategory, RedTeamFinding, RedTeamReport, RedTeamSeverity, RedTeamVerdict};
 pub use passive_sentinel::{PassiveSentinel, SentinelEvent, SentinelEventKind, SentinelHealthStatus, SentinelTelemetry};
 pub use hallucination_sentry::{HallucinationSentry, ManifestAuditReport, ManifestEcosystem, PackageAuditEntry};

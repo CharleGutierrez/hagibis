@@ -38,6 +38,7 @@ pub const DEFAULT_MCP_SSE_PORT: u16 = 8083;
 pub struct MessageQuery {
     #[serde(rename = "sessionId")]
     pub session_id: Option<String>,
+    pub profile: Option<String>,
 }
 
 /// Status telemetry for the MCP SSE server
@@ -218,7 +219,9 @@ pub async fn handle_client_message(
         }
 
         "tools/list" => {
-            let tools = HagibisMcpServer::list_tools();
+            let profile_str = query.profile.as_deref().or_else(|| params.get("profile").and_then(|p| p.as_str()));
+            let profile = hgb_core::HgbMcpProfile::from_str_opt(profile_str);
+            let tools = HagibisMcpServer::list_tools_for_profile(profile);
             let resp = serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": id,

@@ -35,7 +35,11 @@ impl AtmosphericWorktreeHandle {
             .trim_matches('-')
             .to_string();
 
-        let hagibis_worktrees = repo_root.join(".hagibis").join("worktrees");
+        let hagibis_worktrees = if repo_root.join(".hagibis").join("worktrees").exists() {
+            repo_root.join(".hagibis").join("worktrees")
+        } else {
+            repo_root.join(".hgb").join("worktrees")
+        };
         fs::create_dir_all(&hagibis_worktrees)?;
 
         let worktree_path = hagibis_worktrees.join(&clean_branch);
@@ -313,6 +317,41 @@ impl SemanticStashManager {
     }
 }
 
+pub use hgb_core::speculative_sandbox::{
+    SpeculativeAcceptResult, SpeculativeDiscardResult, SpeculativeSession, SpeculativeTryResult,
+    SpeculativeWorktreeEngine,
+};
+
+/// High-level ergonomic handle to a speculative "what-if" prototype worktree
+pub struct SpeculativeWorktree;
+
+impl SpeculativeWorktree {
+    /// Create an isolated speculative worktree for an intent (e.g. `.hgb/worktrees/try-<slug>`)
+    pub fn try_intent(
+        repo_root: &Path,
+        intent: &str,
+        run_check: bool,
+        check_cmd: Option<&str>,
+    ) -> Result<SpeculativeTryResult> {
+        SpeculativeWorktreeEngine::try_prototype(repo_root, intent, run_check, check_cmd)
+    }
+
+    /// 1-key merge into active workspace
+    pub fn accept(repo_root: &Path) -> Result<SpeculativeAcceptResult> {
+        SpeculativeWorktreeEngine::accept_prototype(repo_root)
+    }
+
+    /// Vaporize speculative worktree cleanly without dirtying git status
+    pub fn discard(repo_root: &Path) -> Result<SpeculativeDiscardResult> {
+        SpeculativeWorktreeEngine::discard_prototype(repo_root)
+    }
+
+    /// Check active speculative session
+    pub fn active_session(repo_root: &Path) -> Result<Option<SpeculativeSession>> {
+        SpeculativeWorktreeEngine::get_active_session(repo_root)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -322,5 +361,61 @@ mod tests {
         let root = Path::new("/tmp/test-repo");
         let dir = SemanticStashManager::stash_dir(root);
         assert_eq!(dir, PathBuf::from("/tmp/test-repo/.hagibis/stashes"));
+    }
+
+    #[test]
+    fn test_speculative_worktree_try_accept_wrapper() {
+        let temp_dir = std::env::temp_dir().join(format!("hgb_wt_wrap_{}", uuid::Uuid::new_v4().simple()));
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let _ = Command::new("git").args(["init"]).current_dir(&temp_dir).output();
+        let _ = Command::new("git").args(["config", "user.email", "test@hagibis.ai"]).current_dir(&temp_dir).output();
+        let _ = Command::new("git").args(["config", "user.name", "HagibisTester"]).current_dir(&temp_dir).output();
+
+        let test_file = temp_dir.join("lib.rs");
+        fs::write(&test_file, "pub fn alpha() -> i32 { 1 }").unwrap();
+        let _ = Command::new("git").args(["add", "lib.rs"]).current_dir(&temp_dir).output();
+        let _ = Command::new("git").args(["commit", "-m", "init"]).current_dir(&temp_dir).output();
+
+        let try_res = SpeculativeWorktree::try_intent(&temp_dir, "Add Beta Function", false, None).unwrap();
+        assert!(try_res.worktree_created);
+        assert!(try_res.session.worktree_path.exists());
+
+        // Modify file in worktree
+        let wt_file = try_res.session.worktree_path.join("lib.rs");
+        fs::write(&wt_file, "pub fn alpha() -> i32 { 1 }\npub fn beta() -> i32 { 2 }").unwrap();
+
+        // Accept
+        let accept_res = SpeculativeWorktree::accept(&temp_dir).unwrap();
+        assert!(accept_res.cleaned_up);
+
+        let merged = fs::read_to_string(&test_file).unwrap();
+        assert!(merged.contains("pub fn beta"));
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_speculative_worktree_discard_wrapper() {
+        let temp_dir = std::env::temp_dir().join(format!("hgb_wt_wrap_disc_{}", uuid::Uuid::new_v4().simple()));
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let _ = Command::new("git").args(["init"]).current_dir(&temp_dir).output();
+        let _ = Command::new("git").args(["config", "user.email", "test@hagibis.ai"]).current_dir(&temp_dir).output();
+        let _ = Command::new("git").args(["config", "user.name", "HagibisTester"]).current_dir(&temp_dir).output();
+
+        let test_file = temp_dir.join("lib.rs");
+        fs::write(&test_file, "pub fn stable() -> bool { true }").unwrap();
+        let _ = Command::new("git").args(["add", "lib.rs"]).current_dir(&temp_dir).output();
+        let _ = Command::new("git").args(["commit", "-m", "init"]).current_dir(&temp_dir).output();
+
+        let try_res = SpeculativeWorktree::try_intent(&temp_dir, "Experimental Spike", false, None).unwrap();
+        assert!(try_res.worktree_created);
+
+        let discard_res = SpeculativeWorktree::discard(&temp_dir).unwrap();
+        assert!(discard_res.worktree_removed);
+        assert!(discard_res.branch_deleted);
+
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 }

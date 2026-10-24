@@ -58,3 +58,38 @@ impl ShareTunnelEngine {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_share_tunnel_session_default_naming() {
+        let session = ShareTunnelEngine::create_share_session(3000, None).expect("session creation");
+        assert_eq!(session.local_port, 3000);
+        assert_eq!(session.public_url, "https://vibe-3000.hgb.live");
+        assert!(session.session_id.starts_with("tunnel_vibe-3000_"));
+        assert!(session.is_active);
+        assert!(!session.qr_terminal_art.is_empty());
+        assert_eq!(session.provider, "Hagibis Ephemeral Edge Tunnel");
+    }
+
+    #[test]
+    fn test_share_tunnel_session_custom_name() {
+        let session = ShareTunnelEngine::create_share_session(8080, Some("my-cool-preview"))
+            .expect("custom session creation");
+        assert_eq!(session.local_port, 8080);
+        assert_eq!(session.public_url, "https://my-cool-preview.hgb.live");
+        assert!(session.session_id.starts_with("tunnel_my-cool-preview_"));
+        assert!(session.is_active);
+        assert!(!session.qr_terminal_art.is_empty());
+    }
+
+    #[test]
+    fn test_generate_ascii_qr() {
+        let qr = ShareTunnelEngine::generate_ascii_qr("https://vibe-5173.hgb.live");
+        assert!(!qr.is_empty());
+        // Dense1x2 renders Unicode blocks
+        assert!(qr.contains('█') || qr.contains('▀') || qr.contains('▄'));
+    }
+}

@@ -1,3 +1,4 @@
+#![recursion_limit = "512"]
 // [Self-Patch 20261020_141157] Verified autonomous stability anchor
 //! Frontier Codex Architecture Solution
 //! Task: add a docstring and comment
@@ -278,6 +279,7 @@ pub use continuous_voice::{
     AcousticEarcon, ContinuousVoiceConfig, ContinuousVoiceDuplex, VoiceDuplexState,
     VoiceSessionReport, VoiceTurnEvent,
 };
+pub type ContinuousVoiceLoop = ContinuousVoiceDuplex;
 pub use figma_bridge::{
     ColorToken, FigmaComponentNode, FigmaDesignBridge, FigmaSyncReport, FigmaTokenSet,
     SpacingToken, TypographyToken, VectorCanvasExportReport,
@@ -433,7 +435,7 @@ pub use shell_hook::{CrashCategory, CrashDiagnosis, CrashInterceptor, CrashRecor
 pub use ambient_ast::{AmbientAstFollower, AmbientContext};
 pub use ast_pruner::{AstPruner, PrunedAstResult};
 pub use ast_rewind::{AstRewindTimeline, SymbolRevision};
-pub use audio::play_vibe_chime;
+pub use audio::{play_vibe_chime, play_vibe_cue, VibeAudioCue};
 pub use auth::{GeminiOAuthManager, GeminiOAuthTokens};
 pub use auto_spec::{GoldenSpec, InvariantType, SpecExecutionReport, SpecViolation, TestVector};
 pub use blueprint::{ArchitectureBlueprint, ComponentKind, ComponentNode, DependencyEdge};
@@ -850,7 +852,7 @@ pub use hybrid_orchestrator::{
 
 // Native Model Context Protocol (MCP) Server exports
 pub mod mcp_server;
-pub use mcp_server::HagibisMcpServer;
+pub use mcp_server::{HagibisMcpServer, HgbMcpProfile, McpStdioServer, CORE_VIBE_TOOLS};
 
 // Lightweight Local Ollama Inference Routing Pipeline exports
 pub mod ollama_inference_router;

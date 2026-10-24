@@ -296,10 +296,25 @@ impl AgenticBisectEngine {
                 "Commit introduced an unchecked `.unwrap()` call that causes panic on None or Err".to_string(),
                 "Replace `.unwrap()` with error propagation (`?`) or safe default handling".to_string(),
             )
+        } else if diff.contains(".expect(") {
+            (
+                "Commit introduced `.expect(...)` call that panics when precondition is violated".to_string(),
+                "Handle the failure branch gracefully or return standard Result<T, E>".to_string(),
+            )
         } else if diff.contains("panic!(") || diff.contains("todo!(") || diff.contains("unimplemented!(") {
             (
                 "Commit introduced explicit panic/todo/unimplemented assertion".to_string(),
                 "Implement the incomplete pathway and return standard Result<T, E>".to_string(),
+            )
+        } else if diff.contains("Cargo.toml") && (diff.contains("[dependencies") || diff.contains("version =")) {
+            (
+                "Dependency modification or version bump in Cargo.toml broke compatibility".to_string(),
+                "Pin to known-compatible dependency version or resolve breaking API changes".to_string(),
+            )
+        } else if diff.contains("unsafe {") {
+            (
+                "Commit introduced unsafe block with potential memory safety or invariant violation".to_string(),
+                "Audit unsafe pointer arithmetic/casting and enforce memory safety invariants".to_string(),
             )
         } else if diff.contains("pub fn") || diff.contains("fn ") {
             (
@@ -313,11 +328,23 @@ impl AgenticBisectEngine {
             )
         }
     }
+
+    /// Synthesize an automated patch recommendation or git command for the culprit commit
+    pub fn recommend_patch(&self, analysis: &CulpritAnalysis) -> String {
+        format!(
+            "// Recommended Remedy for Culprit Commit {}:\n// Root Cause: {}\n// Remedy: {}\n// 1-Key Revert Command: git revert --no-edit {}",
+            analysis.commit_hash,
+            analysis.suspected_cause,
+            analysis.recommended_remedy,
+            analysis.commit_hash
+        )
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
     fn test_binary_search_commits_algorithm() {
@@ -336,6 +363,26 @@ mod tests {
     }
 
     #[test]
+    fn test_binary_search_edge_cases() {
+        // Single commit that is bad
+        let single: Vec<String> = vec!["only_commit".to_string()];
+        let (culprit, steps) = AgenticBisectEngine::binary_search_commits(&single, |_, _| (false, "fail".into(), 1));
+        assert_eq!(culprit, Some("only_commit".to_string()));
+        assert_eq!(steps.len(), 1);
+
+        // Empty commits
+        let empty: Vec<String> = Vec::new();
+        let (culprit_empty, steps_empty) = AgenticBisectEngine::binary_search_commits(&empty, |_, _| (true, "ok".into(), 1));
+        assert_eq!(culprit_empty, None);
+        assert!(steps_empty.is_empty());
+
+        // First commit is culprit
+        let commits: Vec<String> = (0..4).map(|i| format!("c_{}", i)).collect();
+        let (c_first, _) = AgenticBisectEngine::binary_search_commits(&commits, |_, _| (false, "fail".into(), 1));
+        assert_eq!(c_first, Some("c_0".to_string()));
+    }
+
+    #[test]
     fn test_synthesize_cause_and_remedy_unwrap() {
         let diff = "+ let val = data.get(key).unwrap();";
         let (cause, remedy) = AgenticBisectEngine::synthesize_cause_and_remedy(diff, "fix cache");
@@ -349,5 +396,80 @@ mod tests {
         let (cause, remedy) = AgenticBisectEngine::synthesize_cause_and_remedy(diff, "update total fn");
         assert!(cause.contains("Signature or behavioral modification"));
         assert!(remedy.contains("downstream call sites"));
+    }
+
+    #[test]
+    fn test_synthesize_cause_and_remedy_cargo_and_expect() {
+        let diff_expect = "+ let user = db.find_user().expect(\"user not found\");";
+        let (cause_expect, remedy_expect) = AgenticBisectEngine::synthesize_cause_and_remedy(diff_expect, "find user");
+        assert!(cause_expect.contains("expect"));
+        assert!(remedy_expect.contains("gracefully"));
+
+        let diff_cargo = "+++ b/Cargo.toml\n+ tokio = { version = \"2.0\" }";
+        let (cause_cargo, remedy_cargo) = AgenticBisectEngine::synthesize_cause_and_remedy(diff_cargo, "bump tokio");
+        assert!(cause_cargo.contains("Cargo.toml"));
+        assert!(cause_cargo.contains("compatibility"));
+        assert!(remedy_cargo.contains("compatible"));
+
+        let engine = AgenticBisectEngine::new(std::path::PathBuf::from("."));
+        let analysis = CulpritAnalysis {
+            commit_hash: "abcd1234ef".to_string(),
+            author: "Tester".to_string(),
+            commit_message: "bump tokio".to_string(),
+            files_changed: vec!["Cargo.toml".to_string()],
+            diff_snippet: diff_cargo.to_string(),
+            suspected_cause: cause_cargo,
+            recommended_remedy: remedy_cargo,
+        };
+        let recommendation = engine.recommend_patch(&analysis);
+        assert!(recommendation.contains("git revert --no-edit abcd1234ef"));
+    }
+
+    #[test]
+    fn test_agentic_bisect_real_git_workflow() {
+        let temp = tempdir().unwrap();
+        let repo = temp.path();
+
+        // 1. Initialize git repo
+        let _ = Command::new("git").args(["init"]).current_dir(repo).output().unwrap();
+        let _ = Command::new("git").args(["config", "user.email", "bisect@hagibis.ai"]).current_dir(repo).output().unwrap();
+        let _ = Command::new("git").args(["config", "user.name", "BisectBot"]).current_dir(repo).output().unwrap();
+
+        // Commit 0 (good commit)
+        let f = repo.join("test.txt");
+        std::fs::write(&f, "pass\n").unwrap();
+        let _ = Command::new("git").args(["add", "test.txt"]).current_dir(repo).output().unwrap();
+        let _ = Command::new("git").args(["commit", "-m", "commit 0: clean pass"]).current_dir(repo).output().unwrap();
+        let c0 = String::from_utf8_lossy(&Command::new("git").args(["rev-parse", "HEAD"]).current_dir(repo).output().unwrap().stdout).trim().to_string();
+
+        // Commit 1 (good commit)
+        std::fs::write(&f, "pass\nstep 1\n").unwrap();
+        let _ = Command::new("git").args(["add", "test.txt"]).current_dir(repo).output().unwrap();
+        let _ = Command::new("git").args(["commit", "-m", "commit 1: still passing"]).current_dir(repo).output().unwrap();
+
+        // Commit 2 (culprit commit introducing failure)
+        std::fs::write(&f, "FAIL_REGRESSION\n").unwrap();
+        let _ = Command::new("git").args(["add", "test.txt"]).current_dir(repo).output().unwrap();
+        let _ = Command::new("git").args(["commit", "-m", "commit 2: broke feature with unwrap()"]).current_dir(repo).output().unwrap();
+        let c2 = String::from_utf8_lossy(&Command::new("git").args(["rev-parse", "HEAD"]).current_dir(repo).output().unwrap().stdout).trim().to_string();
+
+        // Commit 3 (bad commit)
+        std::fs::write(&f, "FAIL_REGRESSION\nstep 3\n").unwrap();
+        let _ = Command::new("git").args(["add", "test.txt"]).current_dir(repo).output().unwrap();
+        let _ = Command::new("git").args(["commit", "-m", "commit 3: latest bad"]).current_dir(repo).output().unwrap();
+        let c3 = String::from_utf8_lossy(&Command::new("git").args(["rev-parse", "HEAD"]).current_dir(repo).output().unwrap().stdout).trim().to_string();
+
+        // Run bisect with a test script checking that test.txt does not contain FAIL_REGRESSION
+        let engine = AgenticBisectEngine::new(repo);
+        let config = BisectConfig::new(c0, c3, "grep -v 'FAIL_REGRESSION' test.txt");
+
+        let outcome = engine.run_bisect(&config).expect("Bisect should execute successfully");
+        assert!(outcome.success);
+        assert_eq!(outcome.culprit_commit, Some(c2.clone()));
+        assert!(outcome.analysis.is_some());
+
+        let analysis = outcome.analysis.unwrap();
+        assert_eq!(analysis.commit_hash, c2);
+        assert!(analysis.commit_message.contains("commit 2"));
     }
 }

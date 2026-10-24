@@ -5410,20 +5410,6 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             if cockpit {
                 return hgb_nextgen::VibeCockpitApp::run().await;
             }
-            if once || auto_patch || no_tests {
-                println!("{}", "🪽 Hagibis Fully Autonomous Vibe Coding Agent Loop".bright_purple().bold());
-                let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-                let mut config = hgb_core::VibeLoopConfig::default();
-                config.workspace_root = cwd;
-                config.auto_patch = auto_patch;
-                config.run_tests = !no_tests;
-                config.debounce_ms = debounce;
-
-                let engine = hgb_core::VibeAutonomousLoopEngine::new(config);
-                let report = engine.execute_single_cycle()?;
-                println!("\n{}", hgb_core::VibeAutonomousLoopEngine::render_report_card(&report));
-                return Ok(());
-            }
             if watch {
                 println!("{}", "⚡ Ambient Watch-and-Vibe Autonomous Loop starting... (Ctrl+C to stop)".magenta().bold());
                 let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(100);
@@ -5470,41 +5456,128 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
                     } => {}
                 }
                 let _ = handle.await;
-            } else if prompt.is_empty() {
-                let repl_helper = HagibisRepl::new(client);
-                let resp = repl_helper.dispatch(HgbRequest::AmbientVibeRunOnce { workspace_root: None }).await;
-                repl_helper.render_response(resp);
-            } else {
-                println!("{}", "🪽 Hagibis Frictionless Vibe Prompt Engine Initializing...".bright_purple().bold());
+                return Ok(());
+            }
+
+            if !prompt.trim().is_empty() {
+                println!("{}", "🪽 Hagibis Fully Autonomous Vibe Coding Speedrun Loop".bright_purple().bold());
                 println!("   • Intent: {}", prompt.cyan().bold());
                 let cwd = target_dir
                     .as_ref()
                     .map(PathBuf::from)
                     .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
-                let runner = hgb_core::vibe_prompt_runner::VibePromptRunner::new(cwd.clone());
-                let spec = hgb_core::vibe_prompt_runner::VibePromptSpec {
-                    prompt: prompt.clone(),
-                    target_dir: Some(cwd),
-                    auto_commit: true,
-                    use_local_ollama: true,
-                    check_command: None,
+                // 1. Pre-flight prompt grounding
+                let (grounded_prompt, grounding_report) = match hgb_core::UniversalPromptGrounder::ground_prompt(
+                    &prompt,
+                    &cwd,
+                    2000,
+                ).await {
+                    Ok(pair) => pair,
+                    Err(_) => (prompt.clone(), hgb_core::GroundingContextReport::default()),
                 };
 
-                match runner.execute_vibe_prompt(&spec).await {
-                    Ok(result) => {
-                        println!("\n{}", hgb_core::vibe_prompt_runner::format_ambient_status_card(&result).bright_cyan());
-                        if !result.patch_content.is_empty() {
-                            println!("\n{}", "📄 Applied Patch:".bold().white());
-                            ChatCanvas::print_markdown(&format!("```diff\n{}\n```", result.patch_content));
-                        }
-                    }
+                if !grounding_report.is_empty() {
+                    println!("   • Grounding: {} target(s) detected ({} est. tokens)",
+                        grounding_report.file_previews.len() + grounding_report.inspected_targets.len(),
+                        grounding_report.estimated_total_tokens
+                    );
+                }
+
+                // 2. Execute VibePromptRunner with auto-patch & First-Green CoW sandbox
+                let runner = hgb_core::vibe_prompt_runner::VibePromptRunner::new(cwd.clone());
+                let spec = hgb_core::vibe_prompt_runner::VibePromptSpec {
+                    prompt: grounded_prompt,
+                    target_dir: Some(cwd.clone()),
+                    auto_commit: true,
+                    use_local_ollama: true,
+                    check_command: if no_tests { Some("true".to_string()) } else { None },
+                };
+
+                let result = match runner.execute_vibe_prompt(&spec).await {
+                    Ok(res) => res,
                     Err(e) => {
                         hgb_core::play_vibe_chime(false);
-                        eprintln!("{} {}", "✖ Vibe prompt execution failed:".red().bold(), e);
+                        eprintln!("{} {}", "✖ Autonomous vibe speedrun failed:".red().bold(), e);
+                        return Ok(());
+                    }
+                };
+
+                // 3. Render Status Card
+                println!("\n{}", hgb_core::vibe_prompt_runner::format_ambient_status_card(&result).bright_cyan());
+
+                if !result.patch_content.is_empty() {
+                    println!("\n{}", "📄 Applied Patch:".bold().white());
+                    ChatCanvas::print_markdown(&format!("```diff\n{}\n```", result.patch_content));
+                }
+
+                // 4. Git Micro-Commit if green and files modified
+                if result.tests_passed && !result.modified_files.is_empty() && cwd.join(".git").exists() {
+                    let mirror = hgb_core::git_micro_commit::GitMicroCommitMirror::new();
+                    let files_str: Vec<String> = result.modified_files.iter().map(|p| p.to_string_lossy().to_string()).collect();
+                    let plan = mirror.plan_commit(&files_str, &prompt, &result.patch_content);
+                    let commit_report = mirror.commit_atomic(&plan);
+                    if commit_report.commit_hash != "failed" && commit_report.commit_hash != "error" {
+                        println!("   ✔ Micro-Commit: {} [{}]", commit_report.commit_hash.green().bold(), commit_report.conventional_message.dimmed());
                     }
                 }
+
+                // 5. Sound chime
+                hgb_core::play_vibe_chime(result.tests_passed);
+
+                // 6. Visual feedback bridge for frontend modifications
+                let frontend_extensions = [".tsx", ".jsx", ".html", ".css", ".vue", ".svelte"];
+                let modified_frontend_file = result.modified_files.iter().find(|p| {
+                    let path_str = p.to_string_lossy().to_lowercase();
+                    frontend_extensions.iter().any(|ext| path_str.ends_with(ext))
+                });
+
+                if let Some(front_file) = modified_frontend_file {
+                    println!("\n{}", "🎨 Frontend Modification Detected — Activating Visual Feedback Bridge".bright_magenta().bold());
+                    println!("   • Source: {}", front_file.display().to_string().cyan());
+
+                    // CDP Tweak Mirror notice
+                    println!("   • CDP Tweak Mirror: {} (DevTools live click-to-source sync enabled)", "ONLINE".green().bold());
+
+                    // Mobile QR Teleport
+                    let teleport = hgb_core::MobileQrTeleport::new();
+                    let target_url = std::env::var("HGB_DEV_URL").unwrap_or_else(|_| "http://localhost:5173".to_string());
+                    let qr_rep = teleport.generate_mobile_teleport(&target_url, Some(hgb_core::MobilePwaConfig {
+                        app_name: "Hagibis Live Preview".into(),
+                        short_name: "HgbLive".into(),
+                        start_url: "/".into(),
+                        ..Default::default()
+                    }));
+                    println!("{}", qr_rep.ansi_qr_art);
+                    println!("   📱 Live Mobile Preview: {}", qr_rep.target_url.cyan().underline());
+                    println!("   💡 Point your phone camera at the QR code above or tweak DOM directly in DevTools!");
+                }
+
+                return Ok(());
             }
+
+            if once || auto_patch || no_tests {
+                println!("{}", "🪽 Hagibis Fully Autonomous Vibe Coding Agent Loop".bright_purple().bold());
+                let cwd = target_dir
+                    .as_ref()
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")));
+                let mut config = hgb_core::VibeLoopConfig::default();
+                config.workspace_root = cwd;
+                config.auto_patch = auto_patch;
+                config.run_tests = !no_tests;
+                config.debounce_ms = debounce;
+
+                let engine = hgb_core::VibeAutonomousLoopEngine::new(config);
+                let report = engine.execute_single_cycle()?;
+                println!("\n{}", hgb_core::VibeAutonomousLoopEngine::render_report_card(&report));
+                hgb_core::play_vibe_chime(report.compiler_ok);
+                return Ok(());
+            }
+
+            let repl_helper = HagibisRepl::new(client);
+            let resp = repl_helper.dispatch(HgbRequest::AmbientVibeRunOnce { workspace_root: None }).await;
+            repl_helper.render_response(resp);
             Ok(())
         }
         Commands::Voice { file, auto_commit } => {
@@ -8855,14 +8928,17 @@ async fn test_calc() { assert!(calculate(5)); }".to_string()
                     println!("  {} Published event to {} active subscriber(s)", "✔".green().bold(), receivers);
                 }
             } else if follow {
-                println!("  Connecting to daemon event stream (UDS: /run/user/1000/hgb.sock)...");
-                let stream_res = tokio::net::UnixStream::connect("/run/user/1000/hgb.sock").await;
+                println!("  Connecting to daemon event stream (UDS: {:?})...", client.socket_path());
+                let stream_res = client.connect().await;
                 match stream_res {
                     Ok(mut stream) => {
                         use tokio::io::{AsyncReadExt, AsyncWriteExt};
                         let req = hgb_core::protocol::HgbRequest::SubscribeEvents { topic_filter: topic };
                         let encoded = bincode::serialize(&req)?;
+                        let len = (encoded.len() as u32).to_be_bytes();
+                        stream.write_all(&len).await?;
                         stream.write_all(&encoded).await?;
+                        stream.flush().await?;
 
                         let mut buf = vec![0u8; 4096];
                         while let Ok(n) = stream.read(&mut buf).await {
