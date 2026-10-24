@@ -8,6 +8,7 @@
 *.db
 .hagibis/
 .hgb/
+**/.hgb/
 test_app/
 **/test_app/
 

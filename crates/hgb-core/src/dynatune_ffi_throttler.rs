@@ -1,8 +1,8 @@
 //! # UPGRADE 3: Hardware-Aware Autonomous Throttling (`dynatune_ffi_throttler`)
 //!
 //! Direct FFI & sysfs bridge between `hgb-core` and neighboring projects:
-//! - `/home/toshiba/My AI Project/dynatune` (`battery.rs`, `thermal.rs`, `power.rs`)
-//! - `/home/toshiba/My AI Project/kernel-optimizer` (`dynabook-kernel-ctl`, `plugins/cpu-governor.sh`)
+//! - sibling `dynatune` directory (`$DYNATUNE_DIR` or `../dynatune`) (`battery.rs`, `thermal.rs`, `power.rs`)
+//! - sibling `kernel-optimizer` directory (`$KERNEL_OPTIMIZER_DIR` or `../kernel-optimizer`) (`dynabook-kernel-ctl`, `plugins/cpu-governor.sh`)
 //!
 //! Hardware Throttle Arbiter:
 //! 1. Queries real host sensors:
@@ -49,8 +49,42 @@ pub const DYNATUNE_SYSFS_THERMAL_DIR: &str = "/sys/class/thermal";
 pub const DYNATUNE_SYSFS_CPU_DIR: &str = "/sys/devices/system/cpu";
 pub const DYNATUNE_PSI_CPU_FILE: &str = "/proc/pressure/cpu";
 pub const DYNATUNE_PSI_MEM_FILE: &str = "/proc/pressure/memory";
-pub const NEIGHBOR_DYNATUNE_PATH: &str = "/home/toshiba/My AI Project/dynatune";
-pub const NEIGHBOR_KERNEL_OPTIMIZER_PATH: &str = "/home/toshiba/My AI Project/kernel-optimizer";
+pub const NEIGHBOR_DYNATUNE_PATH: &str = "../dynatune";
+pub const NEIGHBOR_KERNEL_OPTIMIZER_PATH: &str = "../kernel-optimizer";
+
+/// Discover neighboring dynatune directory using env override or relative sibling search
+pub fn resolve_dynatune_path() -> PathBuf {
+    std::env::var("DYNATUNE_DIR")
+        .map(PathBuf::from)
+        .ok()
+        .or_else(|| {
+            [
+                PathBuf::from("../dynatune"),
+                PathBuf::from("../../dynatune"),
+                PathBuf::from("dynatune"),
+            ]
+            .into_iter()
+            .find(|p| p.is_dir())
+        })
+        .unwrap_or_else(|| PathBuf::from(NEIGHBOR_DYNATUNE_PATH))
+}
+
+/// Discover neighboring kernel-optimizer directory using env override or relative sibling search
+pub fn resolve_kernel_optimizer_path() -> PathBuf {
+    std::env::var("KERNEL_OPTIMIZER_DIR")
+        .map(PathBuf::from)
+        .ok()
+        .or_else(|| {
+            [
+                PathBuf::from("../kernel-optimizer"),
+                PathBuf::from("../../kernel-optimizer"),
+                PathBuf::from("kernel-optimizer"),
+            ]
+            .into_iter()
+            .find(|p| p.is_dir())
+        })
+        .unwrap_or_else(|| PathBuf::from(NEIGHBOR_KERNEL_OPTIMIZER_PATH))
+}
 
 /// Live telemetry report for the hardware throttling subsystem
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -402,8 +436,8 @@ impl HardwareThrottleArbiter {
             worker_semaphore: Arc::new(Semaphore::new(max_workers)),
             governor_profile: "performance".to_string(),
             baseline_governor: None,
-            dynatune_path: PathBuf::from(NEIGHBOR_DYNATUNE_PATH),
-            kernel_optimizer_path: PathBuf::from(NEIGHBOR_KERNEL_OPTIMIZER_PATH),
+            dynatune_path: resolve_dynatune_path(),
+            kernel_optimizer_path: resolve_kernel_optimizer_path(),
         }
     }
 
@@ -436,8 +470,8 @@ impl HardwareThrottleArbiter {
             worker_semaphore: Arc::new(Semaphore::new(max_w)),
             governor_profile: "powersave".to_string(),
             baseline_governor: None,
-            dynatune_path: PathBuf::from(NEIGHBOR_DYNATUNE_PATH),
-            kernel_optimizer_path: PathBuf::from(NEIGHBOR_KERNEL_OPTIMIZER_PATH),
+            dynatune_path: resolve_dynatune_path(),
+            kernel_optimizer_path: resolve_kernel_optimizer_path(),
         }
     }
 

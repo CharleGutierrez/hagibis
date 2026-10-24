@@ -29,7 +29,33 @@ use crate::vibe_hardware_governor::{VibeHardwareGovernor, VibeHardwareGuard, Vib
 use crate::git_micro_commit::GitMicroCommitMirror;
 
 pub const DEFAULT_OLLAMA_ENDPOINT: &str = "http://127.0.0.1:11434";
-pub const DEFAULT_OLLAMA_SIBLING_DIR: &str = "/home/toshiba/My AI Project/ollama";
+pub const DEFAULT_OLLAMA_SIBLING_DIR: &str = "../ollama";
+
+/// Discover sibling ollama directory using env override or relative sibling search
+pub fn resolve_ollama_sibling_dir(workspace_root: Option<&Path>) -> PathBuf {
+    if let Ok(custom) = std::env::var("HGB_OLLAMA_DIR").or_else(|_| std::env::var("OLLAMA_SIBLING_DIR")) {
+        return PathBuf::from(custom);
+    }
+    if let Some(ws) = workspace_root {
+        if let Some(parent) = ws.parent() {
+            let cand = parent.join("ollama");
+            if cand.is_dir() {
+                return cand;
+            }
+        }
+    }
+    let candidates = [
+        PathBuf::from("../ollama"),
+        PathBuf::from("../../ollama"),
+        PathBuf::from("ollama"),
+    ];
+    for cand in candidates {
+        if cand.is_dir() {
+            return cand;
+        }
+    }
+    PathBuf::from(DEFAULT_OLLAMA_SIBLING_DIR)
+}
 pub const DEFAULT_DRAFT_MODEL: &str = "qwen2.5-coder:1.5b";
 pub const DEFAULT_TARGET_MODEL: &str = "phi3:3.8b";
 
@@ -89,7 +115,7 @@ impl VibePromptRunner {
     pub fn new(workspace_root: PathBuf) -> Self {
         let endpoint = std::env::var("OLLAMA_HOST")
             .unwrap_or_else(|_| DEFAULT_OLLAMA_ENDPOINT.to_string());
-        let sibling_ollama = PathBuf::from(DEFAULT_OLLAMA_SIBLING_DIR);
+        let sibling_ollama = resolve_ollama_sibling_dir(Some(&workspace_root));
 
         Self {
             workspace_root,
@@ -102,7 +128,7 @@ impl VibePromptRunner {
     pub fn with_governor(workspace_root: PathBuf, governor: VibeHardwareGovernor) -> Self {
         let endpoint = std::env::var("OLLAMA_HOST")
             .unwrap_or_else(|_| DEFAULT_OLLAMA_ENDPOINT.to_string());
-        let sibling_ollama = PathBuf::from(DEFAULT_OLLAMA_SIBLING_DIR);
+        let sibling_ollama = resolve_ollama_sibling_dir(Some(&workspace_root));
 
         Self {
             workspace_root,

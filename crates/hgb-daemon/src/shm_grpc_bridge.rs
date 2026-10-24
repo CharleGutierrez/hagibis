@@ -8,15 +8,14 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
-use tokio::net::{UnixListener, UnixStream};
+use tokio::net::UnixListener;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use serde::{Deserialize, Serialize};
 
 use hgb_core::shm_ipc_channel::{
-    run_shm_ipc_benchmark, ShmIpcBenchReport, ShmIpcChannel, ShmIpcHeader, ShmIpcMessage,
+    run_shm_ipc_benchmark, ShmIpcBenchReport, ShmIpcChannel,
     ShmMessageType, ShmRingPool, DEFAULT_SHM_FILE_NAME, DEFAULT_SHM_POOL_CAPACITY,
-    SHM_THRESHOLD_BYTES,
 };
 use hgb_core::{HgbError, Result};
 

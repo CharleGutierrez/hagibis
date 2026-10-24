@@ -5,13 +5,11 @@
 //! Manages `.hgb/dream_journal.json` and Linux systemd user service integration.
 
 use chrono::{DateTime, Utc};
-use colored::Colorize;
-use hgb_core::{AmbientDreamEngine, DreamCycleReport, SystemHeadroom};
+use hgb_core::{AmbientDreamEngine, DreamCycleReport};
 use serde::{Deserialize, Serialize};
-use std::fs::{self, File};
-use std::io::Write;
+use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -237,6 +235,7 @@ WantedBy=default.target
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hgb_core::SystemHeadroom;
 
     struct TestDir(PathBuf);
     impl TestDir {

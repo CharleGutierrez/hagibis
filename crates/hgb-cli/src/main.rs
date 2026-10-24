@@ -5,10 +5,10 @@ pub mod menu;
 pub mod desktop_ide;
 pub mod setup_ide;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use canvas::{ChatCanvas, ToolCallCard, ToolCardStatus};
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use client::HgbClient;
 use colored::Colorize;
 use hgb_core::{HgbRequest, HgbResponse};
@@ -151,6 +151,13 @@ pub enum McpSubcommand {
     },
     /// Run Hagibis as a Model Context Protocol (MCP) stdio server
     Serve,
+    /// Configure Hagibis MCP server in IDE configs (cursor, windsurf, claude, all)
+    #[command(name = "install-ide", alias = "install_ide")]
+    InstallIde {
+        /// Target IDE to configure: cursor, windsurf, claude, or all
+        #[arg(default_value = "all")]
+        target: String,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -769,7 +776,7 @@ enum Commands {
         #[arg(short, long, default_value = "division")]
         invariant: String,
         /// Attempt 3-iteration self-healing loop on invariant failures
-        #[arg(short, long)]
+        #[arg(long)]
         heal: bool,
     },
 
@@ -1186,7 +1193,7 @@ enum Commands {
         #[arg(short, long, default_value_t = 5)]
         seed: usize,
         /// Optional JSON template for entity schema
-        #[arg(short, long)]
+        #[arg(long)]
         schema: Option<String>,
         /// Stop a running proxy server on port
         #[arg(long)]
@@ -1351,6 +1358,13 @@ enum Commands {
     /// 1-Click IDE Onboarding & MCP Configuration (Cursor, VS Code, Windsurf)
     #[command(alias = "ide-setup")]
     Setup(setup_ide::SetupArgs),
+
+    /// Generate shell completion scripts (bash, zsh, fish, powershell, elvish)
+    #[command(name = "completions", alias = "completion")]
+    Completions {
+        /// Shell to generate completions for: bash, zsh, fish, powershell, elvish
+        shell: String,
+    },
 
     /// Universal Model Context Protocol (MCP) Client & Sovereign Stdio Server
     Mcp {
@@ -1634,7 +1648,7 @@ enum Commands {
         #[arg(short, long, default_value_t = 42)]
         seed: u64,
         /// Record scale per organization (default: 5)
-        #[arg(short, long, default_value_t = 5)]
+        #[arg(long, default_value_t = 5)]
         scale: usize,
     },
 
@@ -1906,7 +1920,7 @@ enum Commands {
         #[arg(short, long, default_value = "fullstack-sqlite")]
         stack: String,
         /// Tables to initialize and seed
-        #[arg(short, long, default_values_t = vec!["users".to_string(), "orders".to_string()])]
+        #[arg(long, default_values_t = vec!["users".to_string(), "orders".to_string()])]
         seed: Vec<String>,
     },
 
@@ -2248,10 +2262,10 @@ enum Commands {
         #[arg(default_value = "run")]
         action: String,
         /// System prompt variant A
-        #[arg(short, long, default_value = "Generate code following strict architectural invariants.")]
+        #[arg(long, default_value = "Generate code following strict architectural invariants.")]
         prompt_a: String,
         /// System prompt variant B
-        #[arg(short, long, default_value = "You are an autonomous vibe coding agent. Write real code.")]
+        #[arg(long, default_value = "You are an autonomous vibe coding agent. Write real code.")]
         prompt_b: String,
     },
 
@@ -2942,7 +2956,7 @@ enum Commands {
         #[arg(short, long)]
         code: Option<String>,
         /// Explicit compiler command (e.g. cargo check, zig test, python3 -m py_compile)
-        #[arg(short, long)]
+        #[arg(long)]
         command: Option<String>,
         /// Max autonomous healing retry iterations
         #[arg(short, long, default_value_t = 3)]
@@ -4075,7 +4089,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             println!("{}", "🪽 Instant Linux Copy-on-Write (CoW) Workspace Sandbox".cyan().bold());
             let cwd = std::env::current_dir()?;
             let t0 = std::time::Instant::now();
-            let mut sandbox = hgb_core::OverlaySandbox::new(&cwd)?;
+            let sandbox = hgb_core::OverlaySandbox::new(&cwd)?;
             let clone_us = t0.elapsed().as_micros();
 
             println!("  Workspace:  {}", cwd.display().to_string().yellow());
@@ -6375,9 +6389,79 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             hgb_core::play_vibe_chime(true);
             Ok(())
         }
+        Commands::Completions { shell } => {
+            let shell_type = match shell.to_lowercase().as_str() {
+                "bash" => clap_complete::Shell::Bash,
+                "zsh" => clap_complete::Shell::Zsh,
+                "fish" => clap_complete::Shell::Fish,
+                "powershell" | "pwsh" => clap_complete::Shell::PowerShell,
+                "elvish" => clap_complete::Shell::Elvish,
+                other => {
+                    eprintln!(
+                        "Unknown shell '{}'. Supported shells: bash, zsh, fish, powershell, elvish",
+                        other
+                    );
+                    std::process::exit(1);
+                }
+            };
+            let mut cmd = <Cli as CommandFactory>::command();
+            clap_complete::generate(shell_type, &mut cmd, "hgb", &mut std::io::stdout());
+            Ok(())
+        }
         Commands::Mcp { action } => {
             let repl_helper = HagibisRepl::new(client.clone());
             match action.unwrap_or(McpSubcommand::Serve) {
+                McpSubcommand::InstallIde { target } => {
+                    let ide_target: setup_ide::IdeTarget = match target.parse() {
+                        Ok(t) => t,
+                        Err(e) => {
+                            eprintln!("{} {}", "✖".red().bold(), e);
+                            std::process::exit(1);
+                        }
+                    };
+                    let token = match hgb_daemon::mcp_sse_server::get_or_create_auth_token() {
+                        Ok(t) => t,
+                        Err(e) => {
+                            eprintln!("{} Failed to read or generate auth token: {}", "✖".red().bold(), e);
+                            std::process::exit(1);
+                        }
+                    };
+                    let ws = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                    match setup_ide::install_ide_mcp(ide_target, Some(&ws), &token, None) {
+                        Ok(installed) => {
+                            println!("{}", "⚡ Hagibis MCP IDE Auto-Configuration".cyan().bold());
+                            println!("  Bearer Token: {} (saved at ~/.hgb/mcp_auth_token)", if token.len() > 16 {
+                                format!("{}...{}", &token[..8], &token[token.len()-8..])
+                            } else {
+                                token.clone()
+                            }.dimmed());
+                            println!();
+                            for info in installed {
+                                println!(
+                                    "{} Configured Hagibis MCP for {}:",
+                                    "✔".green().bold(),
+                                    info.name.bold()
+                                );
+                                println!("  Target Path:   {}", info.path.display().to_string().cyan());
+                                println!("  SSE URL:       {}", info.sse_url.yellow());
+                                println!(
+                                    "  Status:        {}",
+                                    if info.created {
+                                        "Created new file and registered 'hagibis' server".green()
+                                    } else {
+                                        "Merged 'hagibis' server into existing config".green()
+                                    }
+                                );
+                                println!("  Instructions:  {}", info.instructions);
+                                println!();
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("{} Failed to install IDE configuration: {}", "✖".red().bold(), e);
+                            std::process::exit(1);
+                        }
+                    }
+                }
                 McpSubcommand::List { config } => {
                     let cfg_path = config.or_else(|| std::env::current_dir().ok().map(|p| p.display().to_string()));
                     let resp = repl_helper.dispatch(HgbRequest::McpListTools { config_path: cfg_path }).await;

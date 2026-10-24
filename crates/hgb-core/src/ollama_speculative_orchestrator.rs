@@ -1,7 +1,7 @@
 //! # Pillar 2: Supercharge Local LLM Orchestration via Ollama Integration
 //!
 //! Provides `OllamaSpeculativeOrchestrator`:
-//! - Deep connection to local Ollama (`http://127.0.0.1:11434` and `/home/toshiba/My AI Project/ollama`).
+//! - Deep connection to local Ollama (`http://127.0.0.1:11434` and sibling ollama directory `$HGB_OLLAMA_DIR` or `../ollama`).
 //! - **Speculative Decoding Pipeline**:
 //!   * Fast small draft model (e.g. `qwen2.5-coder:1.5b` or `jayeshpandit2480/gemma3-UNCENSORED:1b` or `huihui_ai/llama3.2-abliterate:1b`).
 //!   * Target larger model (e.g. `phi3:3.8b` or `frankarenakc/hermes-3-uncensored:latest`).
@@ -75,7 +75,19 @@ impl OllamaSpeculativeOrchestrator {
             .build()
             .unwrap_or_default();
 
-        let sibling = PathBuf::from("/home/toshiba/My AI Project/ollama");
+        let sibling = std::env::var("HGB_OLLAMA_DIR")
+            .map(PathBuf::from)
+            .ok()
+            .or_else(|| {
+                [
+                    PathBuf::from("../ollama"),
+                    PathBuf::from("../../ollama"),
+                    PathBuf::from("ollama"),
+                ]
+                .into_iter()
+                .find(|p| p.is_dir())
+            })
+            .unwrap_or_else(|| PathBuf::from("../ollama"));
 
         Self {
             endpoint: ep,

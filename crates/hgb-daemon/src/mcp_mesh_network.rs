@@ -75,6 +75,7 @@ pub struct MeshSyncReport {
 
 /// Unified MCP Mesh Network Engine
 pub struct McpMeshNetwork {
+    #[allow(dead_code)]
     workspace_root: PathBuf,
     local_node_id: String,
     local_address: String,

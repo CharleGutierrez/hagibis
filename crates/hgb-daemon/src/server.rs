@@ -17,6 +17,11 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixListener;
 use tokio::sync::RwLock;
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
+use tokio::signal::unix::{signal, SignalKind};
+
 /// Thread-safe deduplication cache preventing duplicate execution of state-mutating requests
 pub struct IdempotencyCache {
     entries: tokio::sync::RwLock<HashMap<String, (std::time::Instant, HgbResponse)>>,
@@ -336,16 +341,106 @@ impl HagibisDaemon {
         Self { state }
     }
 
-    pub async fn run(&self) -> Result<()> {
-        let socket_path = &self.state.socket_path;
+    /// Calculate the PID lockfile path next to the socket
+    pub fn pid_path(socket_path: &Path) -> PathBuf {
+        socket_path.with_extension("pid")
+    }
+
+    /// Get the PID lockfile path for this daemon instance
+    pub fn get_pid_path(&self) -> PathBuf {
+        Self::pid_path(&self.state.socket_path)
+    }
+
+    /// Purge temporary /dev/shm sandbox directories created by speculative/overlay runners
+    pub fn purge_shm_sandboxes() {
+        let shm_dir = Path::new("/dev/shm");
+        if shm_dir.is_dir() {
+            if let Ok(entries) = std::fs::read_dir(shm_dir) {
+                for entry in entries.flatten() {
+                    if let Ok(file_type) = entry.file_type() {
+                        if file_type.is_dir() {
+                            let file_name = entry.file_name();
+                            let name_str = file_name.to_string_lossy();
+                            if name_str.starts_with("hgb_run_")
+                                || name_str.starts_with("hgb_sandbox_")
+                                || name_str.starts_with("hgb_")
+                                || name_str.starts_with("vm_")
+                            {
+                                let _ = std::fs::remove_dir_all(entry.path());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Cleanly remove socket and PID lockfile, and purge temporary /dev/shm sandboxes
+    pub fn cleanup_resources(socket_path: &Path, pid_path: &Path) {
         if socket_path.exists() {
             let _ = std::fs::remove_file(socket_path);
         }
+        if pid_path.exists() {
+            let _ = std::fs::remove_file(pid_path);
+        }
+        Self::purge_shm_sandboxes();
+    }
+
+    pub async fn run(&self) -> Result<()> {
+        let socket_path = &self.state.socket_path;
+        let pid_path = Self::pid_path(socket_path);
+
+        if socket_path.exists() {
+            match tokio::net::UnixStream::connect(socket_path).await {
+                Ok(_stream) => {
+                    let pid_str = if pid_path.exists() {
+                        std::fs::read_to_string(&pid_path)
+                            .map(|s| s.trim().to_string())
+                            .unwrap_or_else(|_| "unknown".to_string())
+                    } else {
+                        "unknown".to_string()
+                    };
+                    return Err(HgbError::Ipc(format!(
+                        "Hagibis daemon (hgbd) is already active and listening on {:?} (PID: {}). Stop existing daemon before starting a new one.",
+                        socket_path, pid_str
+                    )));
+                }
+                Err(_) => {
+                    // Stale socket: cleanly remove socket_path and pid_path
+                    let _ = std::fs::remove_file(socket_path);
+                    if pid_path.exists() {
+                        let _ = std::fs::remove_file(&pid_path);
+                    }
+                }
+            }
+        } else if pid_path.exists() {
+            let _ = std::fs::remove_file(&pid_path);
+        }
+
         if let Some(parent) = socket_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
 
         let listener = UnixListener::bind(socket_path)?;
+
+        // Immediately enforce 0600 mode on socket_path
+        #[cfg(unix)]
+        {
+            let mut perms = std::fs::metadata(socket_path)?.permissions();
+            perms.set_mode(0o600);
+            std::fs::set_permissions(socket_path, perms)?;
+        }
+
+        // Write PID lockfile with 0600 permissions
+        let pid = std::process::id();
+        std::fs::write(&pid_path, format!("{}\n", pid))?;
+        #[cfg(unix)]
+        {
+            let mut pid_perms = std::fs::metadata(&pid_path)?.permissions();
+            pid_perms.set_mode(0o600);
+            std::fs::set_permissions(&pid_path, pid_perms)?;
+        }
+
         println!("🚀 Hagibis Daemon (hgbd) listening on {:?}", socket_path);
 
         // Spawn Native MCP Server-Sent Events (SSE) server
@@ -360,75 +455,104 @@ impl HagibisDaemon {
             println!("⚡ Zero-Overhead SHM-IPC Bridge active on {}", self.state.shm_bridge.status().socket_path);
         }
 
+        #[cfg(unix)]
+        let mut sigterm = signal(SignalKind::terminate())?;
+
         loop {
-            match listener.accept().await {
-                Ok((mut stream, _)) => {
-                    let state = Arc::clone(&self.state);
-                    tokio::spawn(async move {
-                        const MAX_PAYLOAD_SIZE: usize = 64 * 1024 * 1024; // 64 MB
+            tokio::select! {
+                accept_res = listener.accept() => {
+                    match accept_res {
+                        Ok((mut stream, _)) => {
+                            let state = Arc::clone(&self.state);
+                            tokio::spawn(async move {
+                                const MAX_PAYLOAD_SIZE: usize = 64 * 1024 * 1024; // 64 MB
 
-                        loop {
-                            let mut len_buf = [0u8; 4];
-                            if stream.read_exact(&mut len_buf).await.is_err() {
-                                break;
-                            }
-                            let payload_len = u32::from_be_bytes(len_buf) as usize;
-                            if payload_len == 0 || payload_len > MAX_PAYLOAD_SIZE {
-                                eprintln!("Daemon IPC: rejected invalid payload length: {} bytes", payload_len);
-                                break;
-                            }
-
-                            let mut buf = vec![0u8; payload_len];
-                            if stream.read_exact(&mut buf).await.is_err() {
-                                eprintln!("Daemon IPC: failed to read full payload of {} bytes", payload_len);
-                                break;
-                            }
-
-                            match bincode::deserialize::<HgbRequest>(&buf) {
-                                Ok(req) => {
-                                    if let HgbRequest::SubscribeEvents { topic_filter } = req {
-                                        // Streaming mode over UDS socket
-                                        let ack = HgbResponse::EventBusStatusResult(state.event_bus.status());
-                                        if let Ok(encoded) = bincode::serialize(&ack) {
-                                            let _ = stream.write_all(&encoded).await;
-                                        }
-                                        let mut rx = state.event_bus.subscribe();
-                                        while let Ok(event) = rx.recv().await {
-                                            if let Some(ref filter) = topic_filter {
-                                                if !event.topic.contains(filter) {
-                                                    continue;
-                                                }
-                                            }
-                                            let line = serde_json::to_string(&event).unwrap_or_default() + "\n";
-                                            if stream.write_all(line.as_bytes()).await.is_err() {
-                                                break;
-                                            }
-                                        }
-                                        return;
+                                loop {
+                                    let mut len_buf = [0u8; 4];
+                                    if stream.read_exact(&mut len_buf).await.is_err() {
+                                        break;
+                                    }
+                                    let payload_len = u32::from_be_bytes(len_buf) as usize;
+                                    if payload_len == 0 || payload_len > MAX_PAYLOAD_SIZE {
+                                        eprintln!("Daemon IPC: rejected invalid payload length: {} bytes", payload_len);
+                                        break;
                                     }
 
-                                    let resp = Self::handle_request(&state, req).await;
-                                    if let Ok(encoded) = bincode::serialize(&resp) {
-                                        let resp_len = (encoded.len() as u32).to_be_bytes();
-                                        if stream.write_all(&resp_len).await.is_err() || stream.write_all(&encoded).await.is_err() {
+                                    let mut buf = vec![0u8; payload_len];
+                                    if stream.read_exact(&mut buf).await.is_err() {
+                                        eprintln!("Daemon IPC: failed to read full payload of {} bytes", payload_len);
+                                        break;
+                                    }
+
+                                    match bincode::deserialize::<HgbRequest>(&buf) {
+                                        Ok(req) => {
+                                            if let HgbRequest::SubscribeEvents { topic_filter } = req {
+                                                // Streaming mode over UDS socket
+                                                let ack = HgbResponse::EventBusStatusResult(state.event_bus.status());
+                                                if let Ok(encoded) = bincode::serialize(&ack) {
+                                                    let _ = stream.write_all(&encoded).await;
+                                                }
+                                                let mut rx = state.event_bus.subscribe();
+                                                while let Ok(event) = rx.recv().await {
+                                                    if let Some(ref filter) = topic_filter {
+                                                        if !event.topic.contains(filter) {
+                                                            continue;
+                                                        }
+                                                    }
+                                                    let line = serde_json::to_string(&event).unwrap_or_default() + "\n";
+                                                    if stream.write_all(line.as_bytes()).await.is_err() {
+                                                        break;
+                                                    }
+                                                }
+                                                return;
+                                            }
+
+                                            let resp = Self::handle_request(&state, req).await;
+                                            if let Ok(encoded) = bincode::serialize(&resp) {
+                                                let resp_len = (encoded.len() as u32).to_be_bytes();
+                                                if stream.write_all(&resp_len).await.is_err() || stream.write_all(&encoded).await.is_err() {
+                                                    break;
+                                                }
+                                                let _ = stream.flush().await;
+                                            }
+                                        }
+                                        Err(e) => {
+                                            eprintln!("Daemon IPC: deserialization failed: {}", e);
                                             break;
                                         }
-                                        let _ = stream.flush().await;
                                     }
                                 }
-                                Err(e) => {
-                                    eprintln!("Daemon IPC: deserialization failed: {}", e);
-                                    break;
-                                }
-                            }
+                            });
                         }
-                    });
+                        Err(e) => {
+                            eprintln!("Daemon accept error: {}", e);
+                        }
+                    }
                 }
-                Err(e) => {
-                    eprintln!("Daemon accept error: {}", e);
+                _ = tokio::signal::ctrl_c() => {
+                    println!("Shutting down Hagibis Daemon gracefully...");
+                    Self::cleanup_resources(socket_path, &pid_path);
+                    break;
+                }
+                _ = async {
+                    #[cfg(unix)]
+                    {
+                        sigterm.recv().await
+                    }
+                    #[cfg(not(unix))]
+                    {
+                        futures_util::future::pending::<Option<()>>().await
+                    }
+                } => {
+                    println!("Shutting down Hagibis Daemon gracefully...");
+                    Self::cleanup_resources(socket_path, &pid_path);
+                    break;
                 }
             }
         }
+
+        Self::cleanup_resources(socket_path, &pid_path);
+        Ok(())
     }
 
     pub async fn handle_request(state: &Arc<DaemonState>, req: HgbRequest) -> HgbResponse {
@@ -3269,7 +3393,7 @@ impl HagibisDaemon {
                     ws_dir.join(&wasm_path)
                 };
                 match hgb_core::WasmPluginInstance::load(&plugin_path) {
-                    Ok(mut instance) => match instance.execute(&input) {
+                    Ok(instance) => match instance.execute(&input) {
                         Ok(res) => HgbResponse::WasmPluginResult(res),
                         Err(e) => HgbResponse::Error(format!("WASM Execution Error: {}", e)),
                     },
@@ -3911,7 +4035,7 @@ impl HagibisDaemon {
             }
             HgbRequest::VibeWatcherTrigger { path, target_command } => {
                 let _kernel_guard = state.hybrid_kernel.boost_workload("vibe_heal").ok();
-                let mut watcher = state.vibe_watcher.write().await;
+                let watcher = state.vibe_watcher.write().await;
                 match watcher.trigger_watch_cycle(Path::new(&path), target_command.as_deref()) {
                     Ok(record) => HgbResponse::VibeWatcherTriggerResult(serde_json::to_string_pretty(&record).unwrap_or_default()),
                     Err(e) => HgbResponse::Error(format!("Failed to run vibe-coding watch cycle: {}", e)),
@@ -4335,5 +4459,200 @@ mod tests {
         assert_eq!(std::fs::read_to_string(tmp.join("idem.txt")).unwrap(), "modified externally");
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[tokio::test]
+    async fn test_pid_lockfile_lifecycle() {
+        let tmp = std::env::temp_dir().join(format!("hgb_test_pid_{}", uuid::Uuid::new_v4().simple()));
+        let _ = std::fs::create_dir_all(&tmp);
+        let socket_path = tmp.join("hgb.sock");
+        let pid_path = HagibisDaemon::pid_path(&socket_path);
+
+        assert_eq!(pid_path, tmp.join("hgb.pid"));
+
+        let daemon = HagibisDaemon::new(socket_path.clone());
+        assert_eq!(daemon.get_pid_path(), pid_path);
+
+        let handle = tokio::spawn(async move {
+            let _ = daemon.run().await;
+        });
+
+        // Wait until daemon starts and creates PID file
+        let mut ready = false;
+        for _ in 0..50 {
+            if socket_path.exists() && pid_path.exists() {
+                ready = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert!(ready, "Daemon must create socket and PID file");
+
+        // Verify PID content
+        let pid_str = std::fs::read_to_string(&pid_path).expect("read pid file");
+        let recorded_pid: u32 = pid_str.trim().parse().expect("valid PID integer");
+        assert_eq!(recorded_pid, std::process::id());
+
+        // Verify PID file permissions (0600)
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::metadata(&pid_path).expect("pid metadata").permissions();
+            assert_eq!(perms.mode() & 0o777, 0o600, "PID file must have 0600 permissions");
+        }
+
+        // Test cleanup_resources removes both socket and pid file
+        handle.abort();
+        HagibisDaemon::cleanup_resources(&socket_path, &pid_path);
+        assert!(!socket_path.exists(), "Socket must be removed on cleanup");
+        assert!(!pid_path.exists(), "PID file must be removed on cleanup");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[tokio::test]
+    async fn test_socket_permissions_mode_0600() {
+        let tmp = std::env::temp_dir().join(format!("hgb_test_perm_{}", uuid::Uuid::new_v4().simple()));
+        let _ = std::fs::create_dir_all(&tmp);
+        let socket_path = tmp.join("hgb.sock");
+        let pid_path = HagibisDaemon::pid_path(&socket_path);
+
+        let daemon = HagibisDaemon::new(socket_path.clone());
+        let handle = tokio::spawn(async move {
+            let _ = daemon.run().await;
+        });
+
+        let mut ready = false;
+        for _ in 0..50 {
+            if socket_path.exists() {
+                ready = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert!(ready, "Daemon must bind socket");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::metadata(&socket_path).expect("socket metadata").permissions();
+            assert_eq!(perms.mode() & 0o777, 0o600, "Socket must have mode 0600 permissions");
+        }
+
+        handle.abort();
+        HagibisDaemon::cleanup_resources(&socket_path, &pid_path);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[tokio::test]
+    async fn test_anti_hijacking_protection() {
+        let tmp = std::env::temp_dir().join(format!("hgb_test_hijack_{}", uuid::Uuid::new_v4().simple()));
+        let _ = std::fs::create_dir_all(&tmp);
+        let socket_path = tmp.join("hgb.sock");
+        let pid_path = HagibisDaemon::pid_path(&socket_path);
+
+        // 1. Start active daemon
+        let daemon1 = HagibisDaemon::new(socket_path.clone());
+        let handle1 = tokio::spawn(async move {
+            let _ = daemon1.run().await;
+        });
+
+        let mut ready = false;
+        for _ in 0..50 {
+            if socket_path.exists() && pid_path.exists() {
+                if tokio::net::UnixStream::connect(&socket_path).await.is_ok() {
+                    ready = true;
+                    break;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert!(ready, "First daemon must be listening");
+
+        // 2. Attempt to start second daemon on same socket path
+        let daemon2 = HagibisDaemon::new(socket_path.clone());
+        let res2 = daemon2.run().await;
+
+        assert!(res2.is_err(), "Second daemon must abort when socket is active");
+        let err = res2.err().unwrap();
+        let err_str = err.to_string();
+        assert!(
+            err_str.contains("already active and listening"),
+            "Error message must notify active daemon: {}",
+            err_str
+        );
+        assert!(
+            err_str.contains(&std::process::id().to_string()),
+            "Error message must include PID: {}",
+            err_str
+        );
+
+        // 3. Verify original daemon socket was not deleted or hijacked
+        assert!(socket_path.exists(), "Original socket must remain intact");
+
+        handle1.abort();
+        HagibisDaemon::cleanup_resources(&socket_path, &pid_path);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[tokio::test]
+    async fn test_stale_socket_recovery() {
+        let tmp = std::env::temp_dir().join(format!("hgb_test_stale_{}", uuid::Uuid::new_v4().simple()));
+        let _ = std::fs::create_dir_all(&tmp);
+        let socket_path = tmp.join("hgb.sock");
+        let pid_path = HagibisDaemon::pid_path(&socket_path);
+
+        // Create a stale socket and dead PID file
+        {
+            let _listener = std::os::unix::net::UnixListener::bind(&socket_path).expect("bind stale socket");
+            std::fs::write(&pid_path, "999999\n").expect("write stale pid");
+        }
+        // Listener is dropped, leaving a stale socket file
+        assert!(socket_path.exists(), "Stale socket file must exist");
+        assert!(pid_path.exists(), "Stale PID file must exist");
+
+        // Starting daemon must recover stale socket and bind successfully
+        let daemon = HagibisDaemon::new(socket_path.clone());
+        let handle = tokio::spawn(async move {
+            let _ = daemon.run().await;
+        });
+
+        let mut recovered = false;
+        for _ in 0..50 {
+            if let Ok(pid_str) = std::fs::read_to_string(&pid_path) {
+                if pid_str.trim() == std::process::id().to_string() {
+                    if tokio::net::UnixStream::connect(&socket_path).await.is_ok() {
+                        recovered = true;
+                        break;
+                    }
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert!(recovered, "Daemon must cleanly recover from stale socket");
+
+        // Clean up
+        handle.abort();
+        HagibisDaemon::cleanup_resources(&socket_path, &pid_path);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_purge_shm_sandboxes() {
+        let shm_dir = Path::new("/dev/shm");
+        if shm_dir.is_dir() {
+            let mock_run = shm_dir.join(format!("hgb_run_test_{}", uuid::Uuid::new_v4().simple()));
+            let mock_sandbox = shm_dir.join(format!("hgb_sandbox_test_{}", uuid::Uuid::new_v4().simple()));
+            let _ = std::fs::create_dir_all(&mock_run);
+            let _ = std::fs::create_dir_all(&mock_sandbox);
+
+            assert!(mock_run.exists());
+            assert!(mock_sandbox.exists());
+
+            HagibisDaemon::purge_shm_sandboxes();
+
+            assert!(!mock_run.exists(), "hgb_run_ sandbox must be purged");
+            assert!(!mock_sandbox.exists(), "hgb_sandbox_ must be purged");
+        }
     }
 }

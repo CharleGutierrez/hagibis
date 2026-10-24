@@ -1,5 +1,7 @@
 **Hagibis: reverse-engineering review and improvement plan**
 
+Historical snapshot: the code has changed since this review. See the [25 October 2026 analysis](HAGIBIS_ANALYSIS_2026-10-25.md) for current findings, completed improvements, and remaining gaps.
+
 Reviewed on 24 October 2026. This review follows the local source code, manifests, command routing, storage, build configuration, and selected tests. It is a structural review of the main execution paths, not an exhaustive audit of every feature or a validation of live external integrations.
 
 Hagibis is an AI-assisted development toolkit built around a Rust CLI (`hgb`), a resident Rust daemon (`hgbd`), and several alternative execution engines. It includes terminal and browser interfaces, cloud/local model integrations, file and command tools, project memory, verification, recovery, MCP connections, and experimental hardware/distributed features. Its strongest next improvement would be to make workspace handling, execution policy, verification, and recovery consistent across those interfaces.

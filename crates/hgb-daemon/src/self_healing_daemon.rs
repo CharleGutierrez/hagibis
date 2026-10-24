@@ -12,13 +12,13 @@
 //! 6. Export DPO distillation pair for recursive learning.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use serde::{Deserialize, Serialize};
 
-use hgb_core::error::{HgbError, Result};
+use hgb_core::error::Result;
 use hgb_core::event_bus::DistributedEventBus;
 use hgb_core::overlayfs_sandbox::OverlaySandbox;
 
@@ -137,7 +137,7 @@ impl SelfHealingDaemonLoop {
         let temp_sandbox_dir = std::env::temp_dir().join(&diag.failure_id);
         let _ = fs::create_dir_all(&temp_sandbox_dir);
 
-        let mut sandbox = OverlaySandbox::new(&temp_sandbox_dir)?;
+        let sandbox = OverlaySandbox::new(&temp_sandbox_dir)?;
         let mut patch_diff = String::new();
         let mut sandbox_passed = false;
         let mut applied = false;

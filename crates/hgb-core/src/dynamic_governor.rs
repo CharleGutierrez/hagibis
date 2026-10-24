@@ -1,6 +1,6 @@
 //! # Pillar 4: Hardware-Aware Dynamic CPU Governor Integration
 //!
-//! Deeply wires into sibling modules in `/home/toshiba/My AI Project`:
+//! Deeply wires into sibling modules (`$KERNEL_OPTIMIZER_DIR` or `../kernel-optimizer`):
 //! - `kernel-optimizer` (`plugins/cpu-governor.sh`, `dynabook-kernel-ctl`)
 //! - `dynatune` (`power.rs`, `thermal.rs`, `battery.rs`)
 //! - Linux sysfs:
@@ -90,7 +90,20 @@ impl Default for DynamicGovernor {
 
 impl DynamicGovernor {
     pub fn new() -> Self {
-        let sibling_script = PathBuf::from("/home/toshiba/My AI Project/kernel-optimizer/plugins/cpu-governor.sh");
+        let sibling_script = std::env::var("KERNEL_OPTIMIZER_DIR")
+            .map(|d| PathBuf::from(d).join("plugins/cpu-governor.sh"))
+            .ok()
+            .or_else(|| {
+                [
+                    PathBuf::from("../kernel-optimizer/plugins/cpu-governor.sh"),
+                    PathBuf::from("../../kernel-optimizer/plugins/cpu-governor.sh"),
+                    PathBuf::from("kernel-optimizer/plugins/cpu-governor.sh"),
+                    PathBuf::from("/usr/lib/dynabook-kernel/plugins/cpu-governor.sh"),
+                ]
+                .into_iter()
+                .find(|p| p.exists())
+            })
+            .unwrap_or_else(|| PathBuf::from("../kernel-optimizer/plugins/cpu-governor.sh"));
 
         Self {
             cpu_sysfs_base: PathBuf::from("/sys/devices/system/cpu"),

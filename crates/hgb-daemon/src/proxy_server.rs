@@ -8,9 +8,8 @@
 //! 4. Superpower injections: passes incoming context through `TokenShredder` for up to 90% token reduction.
 
 use axum::{
-    body::Body,
     extract::State,
-    http::{header, HeaderMap, HeaderValue, StatusCode},
+    http::StatusCode,
     response::{
         sse::{Event, KeepAlive, Sse},
         IntoResponse, Response,

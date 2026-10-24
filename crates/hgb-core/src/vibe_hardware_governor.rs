@@ -18,7 +18,28 @@ pub const VIBE_THERMAL_HEADROOM_THRESHOLD_C: f64 = 78.0;
 pub const DEFAULT_SYSFS_CPU_DIR: &str = "/sys/devices/system/cpu";
 pub const DEFAULT_SYSFS_THERMAL_DIR: &str = "/sys/class/thermal";
 pub const DEFAULT_SYSFS_POWER_DIR: &str = "/sys/class/power_supply";
-pub const DEFAULT_DYNATUNE_DIR: &str = "/home/toshiba/My AI Project/dynatune";
+pub const DEFAULT_DYNATUNE_DIR: &str = "../dynatune";
+
+/// Discover sibling dynatune directory using env override or relative sibling search
+pub fn resolve_dynatune_dir() -> PathBuf {
+    if let Ok(dir) = std::env::var("DYNATUNE_DIR") {
+        let p = PathBuf::from(dir);
+        if p.is_dir() {
+            return p;
+        }
+    }
+    let candidates = [
+        PathBuf::from("../dynatune"),
+        PathBuf::from("../../dynatune"),
+        PathBuf::from("dynatune"),
+    ];
+    for c in candidates {
+        if c.is_dir() {
+            return c;
+        }
+    }
+    PathBuf::from(DEFAULT_DYNATUNE_DIR)
+}
 pub const DEFAULT_GOVERNOR_SCRIPT: &str = "scripts/cpu-governor.sh";
 
 /// Thermal & hardware status snapshot
@@ -90,7 +111,7 @@ impl VibeHardwareGovernor {
         let thermal_dir = PathBuf::from(DEFAULT_SYSFS_THERMAL_DIR);
         let power_dir = PathBuf::from(DEFAULT_SYSFS_POWER_DIR);
         let script_path = PathBuf::from(DEFAULT_GOVERNOR_SCRIPT);
-        let dynatune_dir = PathBuf::from(DEFAULT_DYNATUNE_DIR);
+        let dynatune_dir = resolve_dynatune_dir();
 
         Self {
             cpu_dir: cpu_dir.clone(),
@@ -116,7 +137,7 @@ impl VibeHardwareGovernor {
         power_dir: PathBuf,
         script_path: PathBuf,
     ) -> Self {
-        let dynatune_dir = PathBuf::from(DEFAULT_DYNATUNE_DIR);
+        let dynatune_dir = resolve_dynatune_dir();
         Self {
             cpu_dir: cpu_dir.clone(),
             thermal_dir: thermal_dir.clone(),

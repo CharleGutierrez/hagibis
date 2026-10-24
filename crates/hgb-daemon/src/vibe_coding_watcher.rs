@@ -150,7 +150,7 @@ impl VibeCodingWatcher {
             .current_dir(&self.workspace_root)
             .output();
 
-        let (exit_code, stdout, stderr) = match output {
+        let (exit_code, _stdout, stderr) = match output {
             Ok(out) => (
                 out.status.code().unwrap_or(1),
                 String::from_utf8_lossy(&out.stdout).to_string(),
@@ -289,7 +289,7 @@ impl VibeCodingWatcher {
     /// Verify candidate patch inside an isolated RAM CoW OverlaySandbox
     fn verify_patch_in_sandbox(&self, patch: &str, target_path: &Path, bin: &str, args: &[String]) -> bool {
         let sandbox_res = OverlaySandbox::new(&self.workspace_root);
-        let mut sandbox = match sandbox_res {
+        let sandbox = match sandbox_res {
             Ok(s) => s,
             Err(_) => return true, // zero-failure optimistic pass if sandbox unavailable
         };
@@ -441,6 +441,7 @@ mod tests {
         // Rust
         let (rs_bin, rs_args) = watcher.detect_check_command(Path::new("src/main.rs"));
         assert!(rs_bin == "cargo" || rs_bin == "rustc");
+        assert!(!rs_args.is_empty());
 
         // Python
         let (py_bin, py_args) = watcher.detect_check_command(Path::new("script.py"));

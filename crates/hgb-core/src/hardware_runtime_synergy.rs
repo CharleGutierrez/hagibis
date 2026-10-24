@@ -148,18 +148,33 @@ impl Default for HardwareRuntimeSynergy {
 impl HardwareRuntimeSynergy {
     /// Instantiate hardware synergy engine auto-detecting sibling repositories
     pub fn new() -> Self {
-        let base_ai_project = PathBuf::from("/home/toshiba/My AI Project");
-        let dynatune_dir = if base_ai_project.join("dynatune").is_dir() {
-            base_ai_project.join("dynatune")
-        } else {
-            PathBuf::from("dynatune")
-        };
+        let dynatune_dir = std::env::var("DYNATUNE_DIR")
+            .map(PathBuf::from)
+            .ok()
+            .or_else(|| {
+                [
+                    PathBuf::from("../dynatune"),
+                    PathBuf::from("../../dynatune"),
+                    PathBuf::from("dynatune"),
+                ]
+                .into_iter()
+                .find(|p| p.is_dir())
+            })
+            .unwrap_or_else(|| PathBuf::from("../dynatune"));
 
-        let kernel_optimizer_dir = if base_ai_project.join("kernel-optimizer").is_dir() {
-            base_ai_project.join("kernel-optimizer")
-        } else {
-            PathBuf::from("kernel-optimizer")
-        };
+        let kernel_optimizer_dir = std::env::var("KERNEL_OPTIMIZER_DIR")
+            .map(PathBuf::from)
+            .ok()
+            .or_else(|| {
+                [
+                    PathBuf::from("../kernel-optimizer"),
+                    PathBuf::from("../../kernel-optimizer"),
+                    PathBuf::from("kernel-optimizer"),
+                ]
+                .into_iter()
+                .find(|p| p.is_dir())
+            })
+            .unwrap_or_else(|| PathBuf::from("../kernel-optimizer"));
 
         Self {
             dynatune_dir,

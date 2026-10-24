@@ -365,7 +365,7 @@ impl FolderInspectorEngine {
             }
         }
 
-        // 3. Absolute POSIX paths (/...) with greedy lookahead for spaces (e.g. /home/toshiba/My AI Project)
+        // 3. Absolute POSIX paths (/...) with greedy lookahead for spaces (e.g. /home/user/My AI Project)
         let abs_start_re = Regex::new(r#"(?:^|[\s"'`\(\[\{])(/[^"'`\(\[\{\r\n]+)"#).unwrap();
         for caps in abs_start_re.captures_iter(prompt) {
             let raw_segment = caps[1].trim();

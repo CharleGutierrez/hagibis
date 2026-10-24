@@ -705,7 +705,7 @@ impl HagibisMcpServer {
             },
             {
                 "name": "hgb_ollama_sibling_status",
-                "description": "Inspect direct sibling Ollama engine state (/home/toshiba/My AI Project/ollama), active models, and Dynabook acceleration status",
+                "description": "Inspect direct sibling Ollama engine state ($HGB_OLLAMA_DIR or ../ollama), active models, and Dynabook acceleration status",
                 "inputSchema": {
                     "type": "object"
                 }

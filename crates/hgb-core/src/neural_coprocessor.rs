@@ -111,7 +111,19 @@ impl Default for CoprocessorRouter {
 impl CoprocessorRouter {
     pub fn new() -> Self {
         let ep = std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://127.0.0.1:11434".to_string());
-        let sibling = PathBuf::from("/home/toshiba/My AI Project/ollama");
+        let sibling = std::env::var("HGB_OLLAMA_DIR")
+            .map(PathBuf::from)
+            .ok()
+            .or_else(|| {
+                [
+                    PathBuf::from("../ollama"),
+                    PathBuf::from("../../ollama"),
+                    PathBuf::from("ollama"),
+                ]
+                .into_iter()
+                .find(|p| p.is_dir())
+            })
+            .unwrap_or_else(|| PathBuf::from("../ollama"));
         Self {
             ollama_endpoint: ep,
             sibling_ollama_path: sibling,

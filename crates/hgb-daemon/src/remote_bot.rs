@@ -8,11 +8,10 @@
 use crate::ambient_service::DreamJournal;
 use crate::get_memory_rss_mb;
 use hgb_core::error::{HgbError, Result};
-use reqwest::header::{CONTENT_TYPE, USER_AGENT};
+use reqwest::header::CONTENT_TYPE;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::path::Path;
 use std::time::Duration;
 
 /// Configuration for the Remote Mobile Gateway

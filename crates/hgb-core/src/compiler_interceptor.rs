@@ -1103,7 +1103,9 @@ impl CompilerInterceptor {
         custom_command: Option<&str>,
         max_retries: usize,
     ) -> Result<SelfHealingReport> {
-        let isolated_dir: Option<PathBuf> = if workspace_path == Path::new("/home/toshiba")
+        let is_home = std::env::var("HOME").map(|h| PathBuf::from(h) == workspace_path).unwrap_or(false);
+        let isolated_dir: Option<PathBuf> = if is_home
+            || workspace_path == Path::new("/")
             || (!workspace_path.join("Cargo.toml").exists() && !workspace_path.join("package.json").exists())
         {
             let id = format!("hgb_heal_{:016x}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos());

@@ -6,11 +6,9 @@
 //! 3. Creates an isolated profile at `~/.hgb/desktop_profile/` preventing cookie or extension interference.
 //! 4. Seamless fallback to `xdg-open` on Linux if no Chromium browser binary is located.
 
-use colored::Colorize;
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
-use std::time::Duration;
+use std::path::PathBuf;
+use std::process::Command;
 
 /// Configuration options for the Desktop IDE launcher
 #[derive(Debug, Clone)]

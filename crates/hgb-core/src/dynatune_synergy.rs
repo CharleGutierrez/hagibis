@@ -108,7 +108,19 @@ impl Default for DynatuneSynergyEngine {
 
 impl DynatuneSynergyEngine {
     pub fn new() -> Self {
-        let sibling_dynatune_dir = PathBuf::from("/home/toshiba/My AI Project/dynatune");
+        let sibling_dynatune_dir = std::env::var("DYNATUNE_DIR")
+            .map(PathBuf::from)
+            .ok()
+            .or_else(|| {
+                [
+                    PathBuf::from("../dynatune"),
+                    PathBuf::from("../../dynatune"),
+                    PathBuf::from("dynatune"),
+                ]
+                .into_iter()
+                .find(|p| p.is_dir())
+            })
+            .unwrap_or_else(|| PathBuf::from("../dynatune"));
         Self { sibling_dynatune_dir }
     }
 

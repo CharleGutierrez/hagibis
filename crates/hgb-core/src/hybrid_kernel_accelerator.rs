@@ -1,8 +1,8 @@
 //! # Pillar 1: Hybrid Kernel-Level Acceleration (dynatune & kernel-optimizer Integration)
 //!
 //! Provides deep hardware coupling between Hagibis (`hgbd`, `hgb-core`) and sibling modules:
-//! - `/home/toshiba/My AI Project/dynatune` (`battery.rs`, `power.rs`, `processes.rs`, `thermal.rs`)
-//! - `/home/toshiba/My AI Project/kernel-optimizer` (`dynabook-kernel-ctl`, `plugins/mglru-monitor.sh`, `plugins/cpu-governor.sh`)
+//! - sibling `dynatune` directory (`$DYNATUNE_DIR` or `../dynatune`) (`battery.rs`, `power.rs`, `processes.rs`, `thermal.rs`)
+//! - sibling `kernel-optimizer` directory (`$KERNEL_OPTIMIZER_DIR` or `../kernel-optimizer`) (`dynabook-kernel-ctl`, `plugins/mglru-monitor.sh`, `plugins/cpu-governor.sh`)
 //! - Linux kernel sysfs: `/sys/devices/system/cpu/`, `/sys/kernel/mm/lru_gen/enabled`,
 //!   `/sys/kernel/mm/lru_gen/min_ttl_ms`, `/proc/pressure/memory`, `/proc/vmstat`
 //!
@@ -186,23 +186,41 @@ impl Default for HybridKernelAccelerator {
 impl HybridKernelAccelerator {
     /// Initialize with auto-discovered sibling paths and Linux sysfs mounts
     pub fn new() -> Self {
-        let candidates_ctl = [
-            PathBuf::from("/home/toshiba/My AI Project/kernel-optimizer/dynabook-kernel-ctl"),
+        let mut candidates_ctl = Vec::new();
+        if let Ok(dir) = std::env::var("KERNEL_OPTIMIZER_DIR") {
+            candidates_ctl.push(PathBuf::from(dir).join("dynabook-kernel-ctl"));
+        }
+        candidates_ctl.extend([
+            PathBuf::from("../kernel-optimizer/dynabook-kernel-ctl"),
+            PathBuf::from("../../kernel-optimizer/dynabook-kernel-ctl"),
+            PathBuf::from("kernel-optimizer/dynabook-kernel-ctl"),
             PathBuf::from("/usr/bin/dynabook-kernel-ctl"),
             PathBuf::from("/usr/local/bin/dynabook-kernel-ctl"),
-        ];
+        ]);
         let dynabook_ctl_path = candidates_ctl.into_iter().find(|p| p.exists());
 
-        let candidates_mglru = [
-            PathBuf::from("/home/toshiba/My AI Project/kernel-optimizer/plugins/mglru-monitor.sh"),
+        let mut candidates_mglru = Vec::new();
+        if let Ok(dir) = std::env::var("KERNEL_OPTIMIZER_DIR") {
+            candidates_mglru.push(PathBuf::from(dir).join("plugins/mglru-monitor.sh"));
+        }
+        candidates_mglru.extend([
+            PathBuf::from("../kernel-optimizer/plugins/mglru-monitor.sh"),
+            PathBuf::from("../../kernel-optimizer/plugins/mglru-monitor.sh"),
+            PathBuf::from("kernel-optimizer/plugins/mglru-monitor.sh"),
             PathBuf::from("/usr/lib/dynabook-kernel/plugins/mglru-monitor.sh"),
-        ];
+        ]);
         let mglru_plugin = candidates_mglru.into_iter().find(|p| p.exists());
 
-        let candidates_cpu_gov = [
-            PathBuf::from("/home/toshiba/My AI Project/kernel-optimizer/plugins/cpu-governor.sh"),
+        let mut candidates_cpu_gov = Vec::new();
+        if let Ok(dir) = std::env::var("KERNEL_OPTIMIZER_DIR") {
+            candidates_cpu_gov.push(PathBuf::from(dir).join("plugins/cpu-governor.sh"));
+        }
+        candidates_cpu_gov.extend([
+            PathBuf::from("../kernel-optimizer/plugins/cpu-governor.sh"),
+            PathBuf::from("../../kernel-optimizer/plugins/cpu-governor.sh"),
+            PathBuf::from("kernel-optimizer/plugins/cpu-governor.sh"),
             PathBuf::from("/usr/lib/dynabook-kernel/plugins/cpu-governor.sh"),
-        ];
+        ]);
         let cpu_gov_plugin = candidates_cpu_gov.into_iter().find(|p| p.exists());
 
         Self {

@@ -1,8 +1,8 @@
 //! # Native eBPF & Kernel-Level Telemetry Probe (`hgb-core`)
 //!
 //! Direct kernel probe integration with sibling projects:
-//! - `/home/toshiba/My AI Project/kernel-optimizer` (`dynabook-kernel-ctl`)
-//! - `/home/toshiba/My AI Project/dynatune` (`dynatune` watchdog)
+//! - sibling `kernel-optimizer` directory (`$KERNEL_OPTIMIZER_DIR` or `../kernel-optimizer`) (`dynabook-kernel-ctl`)
+//! - sibling `dynatune` directory (`$DYNATUNE_DIR` or `../dynatune`) (`dynatune` watchdog)
 //!
 //! Features:
 //! 1. Syscall latency measurement (p50, p95, p99 in microseconds) via high-resolution monotonic clock.
@@ -21,9 +21,53 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Known path to sibling kernel optimizer script
-pub const KERNEL_OPTIMIZER_CTL: &str = "/home/toshiba/My AI Project/kernel-optimizer/dynabook-kernel-ctl";
+pub const KERNEL_OPTIMIZER_CTL: &str = "../kernel-optimizer/dynabook-kernel-ctl";
 /// Known path to sibling dynatune binary or project
-pub const DYNATUNE_PROJECT_DIR: &str = "/home/toshiba/My AI Project/dynatune";
+pub const DYNATUNE_PROJECT_DIR: &str = "../dynatune";
+
+/// Resolve sibling kernel optimizer control script path
+pub fn resolve_kernel_optimizer_ctl() -> PathBuf {
+    if let Ok(dir) = std::env::var("KERNEL_OPTIMIZER_DIR") {
+        let p = PathBuf::from(dir).join("dynabook-kernel-ctl");
+        if p.exists() {
+            return p;
+        }
+    }
+    let candidates = [
+        PathBuf::from("../kernel-optimizer/dynabook-kernel-ctl"),
+        PathBuf::from("../../kernel-optimizer/dynabook-kernel-ctl"),
+        PathBuf::from("kernel-optimizer/dynabook-kernel-ctl"),
+        PathBuf::from("/usr/local/bin/dynabook-kernel-ctl"),
+        PathBuf::from("/usr/bin/dynabook-kernel-ctl"),
+    ];
+    for c in candidates {
+        if c.exists() {
+            return c;
+        }
+    }
+    PathBuf::from(KERNEL_OPTIMIZER_CTL)
+}
+
+/// Resolve sibling dynatune project directory path
+pub fn resolve_dynatune_dir() -> PathBuf {
+    if let Ok(dir) = std::env::var("DYNATUNE_DIR") {
+        let p = PathBuf::from(dir);
+        if p.exists() {
+            return p;
+        }
+    }
+    let candidates = [
+        PathBuf::from("../dynatune"),
+        PathBuf::from("../../dynatune"),
+        PathBuf::from("dynatune"),
+    ];
+    for c in candidates {
+        if c.exists() {
+            return c;
+        }
+    }
+    PathBuf::from(DYNATUNE_PROJECT_DIR)
+}
 
 /// Syscall latency metrics measured in microseconds
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -391,8 +435,10 @@ impl EbpfProbeEngine {
         let thermal = self.probe_thermal_metrics();
         let governor = self.probe_governor_state();
 
-        let opt_avail = Path::new(KERNEL_OPTIMIZER_CTL).exists();
-        let dyna_avail = Path::new(DYNATUNE_PROJECT_DIR).exists();
+        let ctl_path = resolve_kernel_optimizer_ctl();
+        let dyna_dir = resolve_dynatune_dir();
+        let opt_avail = ctl_path.exists();
+        let dyna_avail = dyna_dir.exists();
         let tracefs = self.check_tracefs();
 
         let verdict = if thermal.is_throttled {
@@ -425,9 +471,10 @@ impl EbpfProbeEngine {
 
         // 1. Try invoking dynabook-kernel-ctl profile performance
         let mut invoked_cli = false;
-        if Path::new(KERNEL_OPTIMIZER_CTL).exists() {
+        let ctl_path = resolve_kernel_optimizer_ctl();
+        if ctl_path.exists() {
             let res = Command::new("python3")
-                .arg(KERNEL_OPTIMIZER_CTL)
+                .arg(&ctl_path)
                 .arg("profile")
                 .arg("performance")
                 .output();
@@ -462,9 +509,10 @@ impl EbpfProbeEngine {
 
     fn relax_governor_internal(&self, target_gov: &str, target_epp: &str) -> std::io::Result<()> {
         let mut invoked_cli = false;
-        if Path::new(KERNEL_OPTIMIZER_CTL).exists() {
+        let ctl_path = resolve_kernel_optimizer_ctl();
+        if ctl_path.exists() {
             let res = Command::new("python3")
-                .arg(KERNEL_OPTIMIZER_CTL)
+                .arg(&ctl_path)
                 .arg("profile")
                 .arg("balanced")
                 .output();

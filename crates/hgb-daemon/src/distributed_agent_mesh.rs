@@ -394,7 +394,7 @@ impl DistributedAgentMesh {
                 match tier {
                     MeshWorkerTier::FastWasm => {
                         // Fast tier: execute using WASM hot pool or in-memory script transform
-                        let output = if let Some(ref pool) = wasm_pool {
+                        let output = if let Some(ref _pool) = wasm_pool {
                             format!("WasmHotPool: Executed {} in <1ms", task_type)
                         } else {
                             format!("FastWasm: Processed {} payload (len: {})", task_type, payload.len())
@@ -510,7 +510,7 @@ mod tests {
         let mesh = DistributedAgentMesh::new(&tmp, None).unwrap();
 
         // Submit tasks with differing priorities
-        let tid1 = mesh.submit_task("lint", "echo lint", 10, MeshWorkerTier::FastWasm).await.unwrap();
+        let _tid1 = mesh.submit_task("lint", "echo lint", 10, MeshWorkerTier::FastWasm).await.unwrap();
         let tid2 = mesh.submit_task("build", "cargo check", 100, MeshWorkerTier::HeavyMicrovm).await.unwrap();
 
         let status = mesh.get_status().await.unwrap();

@@ -79,9 +79,23 @@ impl Default for AdaptivePowerScheduler {
 impl AdaptivePowerScheduler {
     /// Initialize the adaptive power scheduler
     pub fn new() -> Self {
+        let kernel_optimizer_dir = std::env::var("KERNEL_OPTIMIZER_DIR")
+            .map(PathBuf::from)
+            .ok()
+            .or_else(|| {
+                [
+                    PathBuf::from("../kernel-optimizer"),
+                    PathBuf::from("../../kernel-optimizer"),
+                    PathBuf::from("kernel-optimizer"),
+                ]
+                .into_iter()
+                .find(|p| p.is_dir())
+            })
+            .unwrap_or_else(|| PathBuf::from("../kernel-optimizer"));
+
         Self {
             dynatune: DynatuneSynergyEngine::new(),
-            kernel_optimizer_dir: PathBuf::from("/home/toshiba/My AI Project/kernel-optimizer"),
+            kernel_optimizer_dir,
             total_scheduled: AtomicU64::new(0),
             total_throttled: AtomicU64::new(0),
             total_cooldown_ms: AtomicU64::new(0),

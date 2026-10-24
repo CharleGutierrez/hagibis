@@ -1,10 +1,10 @@
 //! # Direct Local Ollama Pipeline Acceleration & Sibling Integration
 //!
-//! Deeply wires the sibling Ollama engine (`/home/toshiba/My AI Project/ollama`) directly into `hgb-core`
+//! Deeply wires the sibling Ollama engine (`$HGB_OLLAMA_DIR` or `../ollama`) directly into `hgb-core`
 //! and the MCP server (`hagibis.mcp.json`).
 //!
 //! Features:
-//! 1. Sibling Engine Autodiscovery: Detects `/home/toshiba/My AI Project/ollama`, custom Dynabook patches,
+//! 1. Sibling Engine Autodiscovery: Detects sibling ollama directory (`$HGB_OLLAMA_DIR` or `../ollama`), custom Dynabook patches,
 //!    and active inference endpoints.
 //! 2. Zero-Copy Mutation Vector Mesh: Automatically chunks, hashes (BLAKE3), vectorizes, and persists local
 //!    file mutations into SQLite (`.hgb/mutation_vectors.db`), feeding local LLMs instantly without network roundtrips.
@@ -76,17 +76,16 @@ impl SiblingOllamaAccelerator {
         let ws = workspace_root.as_ref().to_path_buf();
 
         // 1. Resolve sibling Ollama directory
-        let sibling_dir = if let Ok(custom) = std::env::var("OLLAMA_SIBLING_DIR") {
+        let sibling_dir = if let Ok(custom) = std::env::var("HGB_OLLAMA_DIR").or_else(|_| std::env::var("OLLAMA_SIBLING_DIR")) {
             PathBuf::from(custom)
+        } else if let Some(parent) = ws.parent().filter(|p| p.join("ollama").is_dir()) {
+            parent.join("ollama")
+        } else if Path::new("../ollama").is_dir() {
+            PathBuf::from("../ollama")
+        } else if Path::new("../../ollama").is_dir() {
+            PathBuf::from("../../ollama")
         } else {
-            let direct = PathBuf::from("/home/toshiba/My AI Project/ollama");
-            if direct.exists() {
-                direct
-            } else if let Some(parent) = ws.parent() {
-                parent.join("ollama")
-            } else {
-                direct
-            }
+            ws.parent().map(|p| p.join("ollama")).unwrap_or_else(|| PathBuf::from("../ollama"))
         };
 
         // 2. Resolve database path in .hgb/mutation_vectors.db

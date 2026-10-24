@@ -3,9 +3,8 @@
 //! Subsystem integrating hardware-aware CPU Governor management, thermal monitoring,
 //! and automatic workload boost / relax cycles into `hgbd`.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::sync::Mutex;
 use serde::{Deserialize, Serialize};
 
@@ -13,7 +12,7 @@ use hgb_core::dynamic_governor::{
     DynamicGovernor, GovernorGuard, GovernorTelemetry, WorkloadKind,
     THERMAL_THROTTLE_THRESHOLD_C,
 };
-use hgb_core::{HgbError, Result};
+use hgb_core::Result;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GovernorWatchdogStatus {
@@ -27,6 +26,7 @@ pub struct GovernorWatchdogStatus {
 pub struct GovernorWatchdog {
     governor: Arc<DynamicGovernor>,
     active_guard: Arc<Mutex<Option<GovernorGuard>>>,
+    #[allow(dead_code)]
     is_running: Arc<AtomicBool>,
 }
 

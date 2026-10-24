@@ -12,4 +12,4 @@ pub use repl::HagibisRepl;
 pub use menu::InteractiveCommandCatalog;
 pub use desktop_ide::{DesktopIdeLauncher, DesktopLaunchConfig, DesktopLaunchReport};
 pub use init_vibe::{AppScaffolder, FrameworkType, ScaffoldReport, VibeOnboardingEngine, VibeOnboardingReport};
-pub use setup_ide::{run_setup, IdeOnboardingEngine, IdeSetupResult, SetupArgs};
+pub use setup_ide::{install_ide_mcp, run_setup, IdeOnboardingEngine, IdeSetupResult, IdeTarget, InstalledIdeInfo, SetupArgs};

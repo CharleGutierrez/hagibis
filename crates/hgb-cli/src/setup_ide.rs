@@ -271,6 +271,178 @@ pub fn run_setup(workspace_root: &Path, args: &SetupArgs) -> std::io::Result<Vec
     Ok(results)
 }
 
+pub const MCP_SSE_DEFAULT_URL: &str = "http://127.0.0.1:8083/sse";
+
+/// Target IDE selection for `hgb mcp install-ide`
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdeTarget {
+    Cursor,
+    Windsurf,
+    Claude,
+    All,
+}
+
+impl std::str::FromStr for IdeTarget {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_lowercase().as_str() {
+            "cursor" => Ok(IdeTarget::Cursor),
+            "windsurf" => Ok(IdeTarget::Windsurf),
+            "claude" | "claude-desktop" | "claudedesktop" => Ok(IdeTarget::Claude),
+            "all" => Ok(IdeTarget::All),
+            other => Err(format!(
+                "Unknown IDE target '{}'. Supported targets: cursor, windsurf, claude, all",
+                other
+            )),
+        }
+    }
+}
+
+/// Metadata and status report of an installed MCP IDE configuration
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InstalledIdeInfo {
+    pub name: String,
+    pub path: PathBuf,
+    pub sse_url: String,
+    pub created: bool,
+    pub instructions: String,
+}
+
+/// Resolve config path for Cursor IDE (.cursor/mcp.json)
+pub fn resolve_cursor_config_path(workspace_root: &Path) -> PathBuf {
+    let ws_path = workspace_root.join(".cursor").join("mcp.json");
+    if ws_path.exists() {
+        return ws_path;
+    }
+    let home = std::env::var("HOME").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("."));
+    let home_path = home.join(".cursor").join("mcp.json");
+    if home_path.exists() {
+        return home_path;
+    }
+    if workspace_root.join(".cursor").is_dir() {
+        return ws_path;
+    }
+    home_path
+}
+
+/// Resolve config path for Windsurf IDE (.codeium/windsurf/mcp_config.json)
+pub fn resolve_windsurf_config_path() -> PathBuf {
+    let home = std::env::var("HOME").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("."));
+    home.join(".codeium").join("windsurf").join("mcp_config.json")
+}
+
+/// Resolve config path for Claude Desktop
+pub fn resolve_claude_config_path() -> PathBuf {
+    let home = std::env::var("HOME").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("."));
+    #[cfg(target_os = "macos")]
+    {
+        let mac_path = home.join("Library").join("Application Support").join("Claude").join("claude_desktop_config.json");
+        if mac_path.exists() || !home.join(".config").join("Claude").join("claude_desktop_config.json").exists() {
+            return mac_path;
+        }
+    }
+    home.join(".config").join("Claude").join("claude_desktop_config.json")
+}
+
+/// Insert or update the `"hagibis"` server definition under `"mcpServers"` in a target JSON file:
+/// ```json
+/// "hagibis": {
+///   "url": "http://127.0.0.1:8083/sse",
+///   "headers": {
+///     "Authorization": "Bearer <TOKEN>"
+///   }
+/// }
+/// ```
+pub fn install_mcp_to_config(config_path: &Path, sse_url: &str, token: &str) -> std::io::Result<(bool, Value)> {
+    let (mut root, created) = load_or_init_json_object(config_path)?;
+    if !root.is_object() {
+        root = json!({});
+    }
+
+    let root_obj = root.as_object_mut().unwrap();
+    let mcp_servers = root_obj
+        .entry("mcpServers")
+        .or_insert_with(|| json!({}));
+
+    if !mcp_servers.is_object() {
+        *mcp_servers = json!({});
+    }
+
+    let server_entry = json!({
+        "url": sse_url,
+        "headers": {
+            "Authorization": format!("Bearer {}", token)
+        }
+    });
+
+    mcp_servers
+        .as_object_mut()
+        .unwrap()
+        .insert("hagibis".to_string(), server_entry);
+
+    write_pretty_json(config_path, &root)?;
+    Ok((created, root))
+}
+
+/// Configure Hagibis MCP SSE endpoint into target IDE configs
+pub fn install_ide_mcp(
+    target: IdeTarget,
+    workspace_root: Option<&Path>,
+    token: &str,
+    sse_url: Option<&str>,
+) -> std::io::Result<Vec<InstalledIdeInfo>> {
+    let url = sse_url.unwrap_or(MCP_SSE_DEFAULT_URL);
+    let ws = workspace_root.unwrap_or_else(|| Path::new("."));
+    let mut results = Vec::new();
+
+    let targets = match target {
+        IdeTarget::All => vec![IdeTarget::Cursor, IdeTarget::Windsurf, IdeTarget::Claude],
+        other => vec![other],
+    };
+
+    for t in targets {
+        match t {
+            IdeTarget::Cursor => {
+                let path = resolve_cursor_config_path(ws);
+                let (created, _) = install_mcp_to_config(&path, url, token)?;
+                results.push(InstalledIdeInfo {
+                    name: "Cursor".to_string(),
+                    path,
+                    sse_url: url.to_string(),
+                    created,
+                    instructions: "Open Cursor Settings > Features > MCP, or restart Cursor to activate Hagibis MCP tools.".to_string(),
+                });
+            }
+            IdeTarget::Windsurf => {
+                let path = resolve_windsurf_config_path();
+                let (created, _) = install_mcp_to_config(&path, url, token)?;
+                results.push(InstalledIdeInfo {
+                    name: "Windsurf".to_string(),
+                    path,
+                    sse_url: url.to_string(),
+                    created,
+                    instructions: "Restart Windsurf or reload Cascade Plugins to establish connection with Hagibis SSE.".to_string(),
+                });
+            }
+            IdeTarget::Claude => {
+                let path = resolve_claude_config_path();
+                let (created, _) = install_mcp_to_config(&path, url, token)?;
+                results.push(InstalledIdeInfo {
+                    name: "Claude Desktop".to_string(),
+                    path,
+                    sse_url: url.to_string(),
+                    created,
+                    instructions: "Fully restart Claude Desktop (Quit from tray/menu and relaunch) to register Hagibis MCP.".to_string(),
+                });
+            }
+            IdeTarget::All => unreachable!(),
+        }
+    }
+
+    Ok(results)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -421,5 +593,63 @@ mod tests {
         assert_eq!(target["nested"]["x"], "keep");
         assert_eq!(target["nested"]["y"], 20);
         assert_eq!(target["nested"]["z"], "new");
+    }
+
+    #[test]
+    fn test_ide_target_parsing() {
+        assert_eq!("cursor".parse::<IdeTarget>().unwrap(), IdeTarget::Cursor);
+        assert_eq!("Cursor".parse::<IdeTarget>().unwrap(), IdeTarget::Cursor);
+        assert_eq!("windsurf".parse::<IdeTarget>().unwrap(), IdeTarget::Windsurf);
+        assert_eq!("claude".parse::<IdeTarget>().unwrap(), IdeTarget::Claude);
+        assert_eq!("claude-desktop".parse::<IdeTarget>().unwrap(), IdeTarget::Claude);
+        assert_eq!("all".parse::<IdeTarget>().unwrap(), IdeTarget::All);
+        assert!("invalid".parse::<IdeTarget>().is_err());
+    }
+
+    #[test]
+    fn test_install_mcp_to_config_creates_fresh_file() {
+        let temp = tempdir().unwrap();
+        let cfg = temp.path().join("sub").join("mcp.json");
+        let token = "a1b2c3d4e5f60718293a4b5c6d7e8f90";
+
+        let (created, val) = install_mcp_to_config(&cfg, "http://127.0.0.1:8083/sse", token).unwrap();
+        assert!(created);
+        assert!(cfg.exists());
+
+        assert_eq!(val["mcpServers"]["hagibis"]["url"], "http://127.0.0.1:8083/sse");
+        assert_eq!(
+            val["mcpServers"]["hagibis"]["headers"]["Authorization"],
+            format!("Bearer {}", token)
+        );
+    }
+
+    #[test]
+    fn test_install_mcp_to_config_preserves_existing_content() {
+        let temp = tempdir().unwrap();
+        let cfg = temp.path().join("mcp.json");
+        let initial = json!({
+            "theme": "dark",
+            "mcpServers": {
+                "sqlite": {
+                    "command": "mcp-sqlite",
+                    "args": ["--db", "test.db"]
+                }
+            }
+        });
+        fs::write(&cfg, serde_json::to_string_pretty(&initial).unwrap()).unwrap();
+
+        let token = "00112233445566778899aabbccddeeff";
+        let (created, val) = install_mcp_to_config(&cfg, "http://127.0.0.1:8083/sse", token).unwrap();
+        assert!(!created);
+
+        // Verify existing servers and top-level fields are intact
+        assert_eq!(val["theme"], "dark");
+        assert_eq!(val["mcpServers"]["sqlite"]["command"], "mcp-sqlite");
+        // Verify hagibis is correctly configured
+        assert_eq!(val["mcpServers"]["hagibis"]["url"], "http://127.0.0.1:8083/sse");
+        assert_eq!(
+            val["mcpServers"]["hagibis"]["headers"]["Authorization"],
+            format!("Bearer {}", token)
+        );
     }
 }

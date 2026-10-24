@@ -62,10 +62,14 @@ impl MasterclassPipeline {
 
     /// Detect uv or python3 with reportlab
     pub fn resolve_runner() -> (String, Vec<String>) {
-        let uv_candidates = [
-            "/home/toshiba/.local/bin/uv",
-            "uv",
-        ];
+        let mut uv_candidates = Vec::new();
+        if let Ok(uv_env) = std::env::var("UV_BIN") {
+            uv_candidates.push(uv_env);
+        }
+        if let Ok(home) = std::env::var("HOME") {
+            uv_candidates.push(format!("{}/.local/bin/uv", home));
+        }
+        uv_candidates.push("uv".to_string());
 
         for cand in &uv_candidates {
             if Path::new(cand).exists() || Command::new(cand).arg("--version").output().is_ok() {

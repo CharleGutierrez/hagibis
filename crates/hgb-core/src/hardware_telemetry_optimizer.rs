@@ -1,8 +1,8 @@
 //! # Pillar 1: Hardware Telemetry Optimizer
 //!
-//! Deeply bridges into sibling modules in `/home/toshiba/My AI Project`:
-//! - `/home/toshiba/My AI Project/dynatune` (`dynatune` binary)
-//! - `/home/toshiba/My AI Project/kernel-optimizer` (`dynabook-kernel-ctl`)
+//! Deeply bridges into sibling modules:
+//! - sibling `dynatune` directory (`$DYNATUNE_DIR` or `../dynatune`) (`dynatune` binary)
+//! - sibling `kernel-optimizer` directory (`$KERNEL_OPTIMIZER_DIR` or `../kernel-optimizer`) (`dynabook-kernel-ctl`)
 //!
 //! Implements real interaction with Linux Multi-Gen LRU (MGLRU) (`/sys/kernel/mm/lru_gen/enabled`),
 //! memory Pressure Stall Information (`/proc/pressure/memory`), Intel P-State CPU governors,
@@ -143,21 +143,36 @@ impl Default for HardwareTelemetryOptimizer {
 
 impl HardwareTelemetryOptimizer {
     pub fn new() -> Self {
-        let dynabook_ctl = if Path::new("/usr/local/bin/dynabook-kernel-ctl").exists() {
-            Some(PathBuf::from("/usr/local/bin/dynabook-kernel-ctl"))
-        } else if Path::new("/home/toshiba/My AI Project/kernel-optimizer/dynabook-kernel-ctl").exists() {
-            Some(PathBuf::from("/home/toshiba/My AI Project/kernel-optimizer/dynabook-kernel-ctl"))
-        } else {
-            None
-        };
+        let mut ctl_candidates = Vec::new();
+        if let Ok(dir) = std::env::var("KERNEL_OPTIMIZER_DIR") {
+            ctl_candidates.push(PathBuf::from(dir).join("dynabook-kernel-ctl"));
+        }
+        ctl_candidates.extend([
+            PathBuf::from("/usr/local/bin/dynabook-kernel-ctl"),
+            PathBuf::from("/usr/bin/dynabook-kernel-ctl"),
+            PathBuf::from("../kernel-optimizer/dynabook-kernel-ctl"),
+            PathBuf::from("../../kernel-optimizer/dynabook-kernel-ctl"),
+            PathBuf::from("kernel-optimizer/dynabook-kernel-ctl"),
+        ]);
+        let dynabook_ctl = ctl_candidates.into_iter().find(|p| p.exists());
 
-        let dynatune = if Path::new("/home/toshiba/.local/bin/dynatune").exists() {
-            Some(PathBuf::from("/home/toshiba/.local/bin/dynatune"))
-        } else if Path::new("/usr/local/bin/dynatune").exists() {
-            Some(PathBuf::from("/usr/local/bin/dynatune"))
-        } else {
-            None
-        };
+        let mut dyna_candidates = Vec::new();
+        if let Ok(dir) = std::env::var("DYNATUNE_DIR") {
+            let p = PathBuf::from(dir);
+            dyna_candidates.push(p.join("target/release/dynatune"));
+            dyna_candidates.push(p.join("dynatune"));
+        }
+        if let Ok(home) = std::env::var("HOME") {
+            dyna_candidates.push(PathBuf::from(home).join(".local/bin/dynatune"));
+        }
+        dyna_candidates.extend([
+            PathBuf::from("/usr/local/bin/dynatune"),
+            PathBuf::from("/usr/bin/dynatune"),
+            PathBuf::from("../dynatune/target/release/dynatune"),
+            PathBuf::from("../../dynatune/target/release/dynatune"),
+            PathBuf::from("dynatune/target/release/dynatune"),
+        ]);
+        let dynatune = dyna_candidates.into_iter().find(|p| p.exists());
 
         Self {
             cpu_sysfs_base: PathBuf::from("/sys/devices/system/cpu"),

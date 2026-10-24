@@ -1,8 +1,8 @@
 //! # JIT GPU/NPU Offloading & Dynatune Resource Allocator (`hgb-core`)
 //!
 //! Deep integration with:
-//! 1. `/home/toshiba/My AI Project/dynatune` (`battery.rs`, `power.rs`, `processes.rs`, `thermal.rs`)
-//! 2. `/home/toshiba/My AI Project/kernel-optimizer` (`dynabook-kernel-ctl`)
+//! 1. sibling `dynatune` directory (`$DYNATUNE_DIR` or `../dynatune`) (`battery.rs`, `power.rs`, `processes.rs`, `thermal.rs`)
+//! 2. sibling `kernel-optimizer` directory (`$KERNEL_OPTIMIZER_DIR` or `../kernel-optimizer`) (`dynabook-kernel-ctl`)
 //!
 //! Subsystems:
 //! - Direct host DRI telemetry query: `/dev/dri/renderD128`, Intel HD Graphics 620 on Dynabook i3-7100U,
@@ -75,8 +75,35 @@ impl Default for JitResourceAllocator {
 
 impl JitResourceAllocator {
     pub fn new() -> Self {
-        let dynabook_ctl_path = PathBuf::from("/home/toshiba/My AI Project/kernel-optimizer/dynabook-kernel-ctl");
-        let dynatune_dir = PathBuf::from("/home/toshiba/My AI Project/dynatune");
+        let dynabook_ctl_path = std::env::var("KERNEL_OPTIMIZER_DIR")
+            .map(|d| PathBuf::from(d).join("dynabook-kernel-ctl"))
+            .ok()
+            .or_else(|| {
+                [
+                    PathBuf::from("../kernel-optimizer/dynabook-kernel-ctl"),
+                    PathBuf::from("../../kernel-optimizer/dynabook-kernel-ctl"),
+                    PathBuf::from("kernel-optimizer/dynabook-kernel-ctl"),
+                    PathBuf::from("/usr/local/bin/dynabook-kernel-ctl"),
+                    PathBuf::from("/usr/bin/dynabook-kernel-ctl"),
+                ]
+                .into_iter()
+                .find(|p| p.exists())
+            })
+            .unwrap_or_else(|| PathBuf::from("../kernel-optimizer/dynabook-kernel-ctl"));
+
+        let dynatune_dir = std::env::var("DYNATUNE_DIR")
+            .map(PathBuf::from)
+            .ok()
+            .or_else(|| {
+                [
+                    PathBuf::from("../dynatune"),
+                    PathBuf::from("../../dynatune"),
+                    PathBuf::from("dynatune"),
+                ]
+                .into_iter()
+                .find(|p| p.is_dir())
+            })
+            .unwrap_or_else(|| PathBuf::from("../dynatune"));
 
         Self {
             dynabook_ctl_path,

@@ -74,17 +74,17 @@ impl Default for FirecrackerEphemeralSandbox {
 
 impl FirecrackerEphemeralSandbox {
     pub fn new(workspace_root: impl Into<PathBuf>) -> Self {
-        let fc_bin = if let Ok(custom) = std::env::var("FIRECRACKER_BIN") {
-            Some(PathBuf::from(custom))
-        } else if Path::new("/home/toshiba/.local/bin/firecracker").exists() {
-            Some(PathBuf::from("/home/toshiba/.local/bin/firecracker"))
-        } else if Path::new("/usr/local/bin/firecracker").exists() {
-            Some(PathBuf::from("/usr/local/bin/firecracker"))
-        } else if Path::new("/usr/bin/firecracker").exists() {
-            Some(PathBuf::from("/usr/bin/firecracker"))
-        } else {
-            None
-        };
+        let mut candidates = Vec::new();
+        if let Ok(custom) = std::env::var("FIRECRACKER_BIN") {
+            candidates.push(PathBuf::from(custom));
+        }
+        if let Ok(home) = std::env::var("HOME") {
+            candidates.push(PathBuf::from(home).join(".local/bin/firecracker"));
+        }
+        candidates.push(PathBuf::from("/usr/local/bin/firecracker"));
+        candidates.push(PathBuf::from("/usr/bin/firecracker"));
+
+        let fc_bin = candidates.into_iter().find(|p| p.exists());
 
         Self {
             workspace_root: workspace_root.into(),
