@@ -19,10 +19,12 @@ use std::sync::Arc;
 use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio::sync::RwLock;
 
-use axum::extract::{Query, State};
+use axum::extract::{Query, Request, State};
+use axum::http::header::AUTHORIZATION;
 use axum::http::StatusCode;
+use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures_util::stream::{self, Stream};
@@ -32,6 +34,95 @@ use hgb_core::HagibisMcpServer;
 
 /// Default port for the Hagibis MCP SSE server
 pub const DEFAULT_MCP_SSE_PORT: u16 = 8083;
+
+/// Resolve the path for the MCP auth token file (~/.hgb/mcp_auth_token)
+pub fn auth_token_path() -> PathBuf {
+    if let Ok(path) = std::env::var("HGB_MCP_AUTH_TOKEN_PATH") {
+        PathBuf::from(path)
+    } else if let Ok(home) = std::env::var("HOME") {
+        PathBuf::from(home).join(".hgb").join("mcp_auth_token")
+    } else {
+        PathBuf::from(".hgb").join("mcp_auth_token")
+    }
+}
+
+/// Generate a 256-bit cryptographically secure hex token (32 bytes = 64 hex characters)
+pub fn generate_256bit_hex_token() -> String {
+    let mut bytes = [0u8; 32];
+    let mut filled = false;
+    if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
+        use std::io::Read;
+        if f.read_exact(&mut bytes).is_ok() {
+            filled = true;
+        }
+    }
+    if !filled {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let h = blake3::hash(&now.to_le_bytes());
+        bytes.copy_from_slice(h.as_bytes());
+    }
+    bytes.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+/// Load existing 256-bit hex token or generate and save with 0600 permissions
+pub fn get_or_create_auth_token() -> std::io::Result<String> {
+    if let Ok(env_token) = std::env::var("HGB_MCP_AUTH_TOKEN") {
+        let trimmed = env_token.trim().to_string();
+        if !trimmed.is_empty() {
+            return Ok(trimmed);
+        }
+    }
+
+    let path = auth_token_path();
+    get_or_create_auth_token_at(&path)
+}
+
+/// Explicit-path token loader/creator (thread-safe and deterministic for testing)
+pub fn get_or_create_auth_token_at(path: &Path) -> std::io::Result<String> {
+    if path.exists() {
+        if let Ok(content) = std::fs::read_to_string(path) {
+            let trimmed = content.trim().to_string();
+            if !trimmed.is_empty() {
+                return Ok(trimmed);
+            }
+        }
+    }
+
+    let token = generate_256bit_hex_token();
+
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        file.write_all(token.as_bytes())?;
+
+        let mut perms = std::fs::metadata(path)?.permissions();
+        perms.set_mode(0o600);
+        let _ = std::fs::set_permissions(path, perms);
+    }
+
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, &token)?;
+    }
+
+    Ok(token)
+}
 
 /// Query parameters for POST /message
 #[derive(Debug, Deserialize)]
@@ -61,10 +152,16 @@ pub struct McpSseState {
     pub total_streamed_events: AtomicU64,
     pub mcp_server: Arc<HagibisMcpServer>,
     pub port: u16,
+    pub auth_token: String,
 }
 
 impl McpSseState {
     pub fn new<P: AsRef<Path>>(workspace_root: P, port: u16) -> Self {
+        let auth_token = get_or_create_auth_token().unwrap_or_else(|_| generate_256bit_hex_token());
+        Self::with_auth_token(workspace_root, port, auth_token)
+    }
+
+    pub fn with_auth_token<P: AsRef<Path>>(workspace_root: P, port: u16, auth_token: impl Into<String>) -> Self {
         let ws = workspace_root.as_ref().to_path_buf();
         Self {
             workspace_root: ws.clone(),
@@ -74,6 +171,7 @@ impl McpSseState {
             total_streamed_events: AtomicU64::new(0),
             mcp_server: Arc::new(HagibisMcpServer::new(ws)),
             port,
+            auth_token: auth_token.into(),
         }
     }
 
@@ -102,24 +200,37 @@ impl McpSseServer {
         }
     }
 
+    pub fn with_auth_token<P: AsRef<Path>>(workspace_root: P, port: u16, auth_token: impl Into<String>) -> Self {
+        Self {
+            state: Arc::new(McpSseState::with_auth_token(workspace_root, port, auth_token)),
+        }
+    }
+
     pub fn state(&self) -> Arc<McpSseState> {
         Arc::clone(&self.state)
     }
 
-    /// Construct Axum router for MCP SSE
+    /// Construct Axum router for MCP SSE with Bearer auth middleware for /sse and /message
     pub fn create_router(state: Arc<McpSseState>) -> Router {
-        Router::new()
+        let protected_routes = Router::new()
             .route("/sse", get(handle_sse_connect))
             .route("/message", post(handle_client_message))
+            .route_layer(middleware::from_fn_with_state(
+                Arc::clone(&state),
+                require_bearer_auth,
+            ));
+
+        Router::new()
+            .merge(protected_routes)
             .route("/status", get(handle_status))
             .with_state(state)
     }
 
-    /// Launch the background MCP SSE HTTP server
+    /// Launch the background MCP SSE HTTP server on localhost (127.0.0.1)
     pub async fn spawn_background(workspace_root: PathBuf, port: u16) -> tokio::task::JoinHandle<()> {
         let server = Self::new(workspace_root, port);
         let router = Self::create_router(server.state());
-        let addr = SocketAddr::from(([0, 0, 0, 0], port));
+        let addr = SocketAddr::from(([127, 0, 0, 1], port));
 
         tokio::spawn(async move {
             if let Ok(listener) = tokio::net::TcpListener::bind(addr).await {
@@ -127,6 +238,24 @@ impl McpSseServer {
             }
         })
     }
+}
+
+/// Axum middleware requiring Bearer token authorization on /sse and /message endpoints
+pub async fn require_bearer_auth(
+    State(state): State<Arc<McpSseState>>,
+    req: Request,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    if let Some(auth_val) = req.headers().get(AUTHORIZATION) {
+        if let Ok(auth_str) = auth_val.to_str() {
+            if let Some(token) = auth_str.strip_prefix("Bearer ") {
+                if token.trim() == state.auth_token.as_str() {
+                    return Ok(next.run(req).await);
+                }
+            }
+        }
+    }
+    Err(StatusCode::UNAUTHORIZED)
 }
 
 /// GET /sse - Establishes Server-Sent Events connection
@@ -339,7 +468,7 @@ mod tests {
     #[tokio::test]
     async fn test_mcp_sse_tools_list_discovery() {
         let state = Arc::new(McpSseState::new(".", 8083));
-        let query = MessageQuery { session_id: None };
+        let query = MessageQuery { session_id: None, profile: Some("full".to_string()) };
         let req = serde_json::json!({
             "jsonrpc": "2.0",
             "id": 1,
@@ -368,7 +497,7 @@ mod tests {
             sess.insert(session_id.clone(), tx);
         }
 
-        let query = MessageQuery { session_id: Some(session_id) };
+        let query = MessageQuery { session_id: Some(session_id), profile: None };
         let req = serde_json::json!({
             "jsonrpc": "2.0",
             "id": 2,
@@ -393,5 +522,98 @@ mod tests {
         let body = serde_json::to_string(&resp.1 .0).expect("Serialize");
         assert!(body.contains("healthy"));
         assert!(body.contains("daemon_health"));
+    }
+
+    #[test]
+    fn test_mcp_auth_token_generation_and_permissions() {
+        let temp_dir = std::env::temp_dir().join(format!("hgb_test_auth_{}", uuid::Uuid::new_v4().simple()));
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let token_file = temp_dir.join("mcp_auth_token");
+
+        let token = get_or_create_auth_token_at(&token_file).expect("get or create token");
+        assert_eq!(token.len(), 64, "256-bit hex token must be 64 hex chars");
+        assert!(token.chars().all(|c| c.is_ascii_hexdigit()));
+
+        // File must exist
+        assert!(token_file.exists());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let meta = std::fs::metadata(&token_file).expect("metadata");
+            let mode = meta.permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "Token file mode must be strictly 0600");
+        }
+
+        // Second call should return the exact same token
+        let token2 = get_or_create_auth_token_at(&token_file).expect("load existing token");
+        assert_eq!(token, token2);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_mcp_bearer_auth_enforcement_on_routes() {
+        let temp_dir = std::env::temp_dir().join(format!("hgb_mcp_test_{}", uuid::Uuid::new_v4().simple()));
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let token = "test_secret_token_1234567890abcdef";
+        let state = Arc::new(McpSseState::with_auth_token(&temp_dir, 8083, token));
+        let app = McpSseServer::create_router(state.clone());
+
+        use axum::body::Body;
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        // 1. Request to /status without auth (public health/telemetry endpoint) -> OK
+        let status_req = Request::builder()
+            .uri("/status")
+            .method("GET")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.clone().oneshot(status_req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // 2. Request to /message without auth -> 401 UNAUTHORIZED
+        let unauth_req = Request::builder()
+            .uri("/message")
+            .method("POST")
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"jsonrpc":"2.0","method":"ping","id":1}"#))
+            .unwrap();
+        let resp = app.clone().oneshot(unauth_req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+        // 3. Request to /message with invalid auth -> 401 UNAUTHORIZED
+        let bad_auth_req = Request::builder()
+            .uri("/message")
+            .method("POST")
+            .header("Content-Type", "application/json")
+            .header("Authorization", "Bearer wrong_token")
+            .body(Body::from(r#"{"jsonrpc":"2.0","method":"ping","id":1}"#))
+            .unwrap();
+        let resp = app.clone().oneshot(bad_auth_req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+        // 4. Request to /message with valid Bearer token -> 200 OK
+        let valid_req = Request::builder()
+            .uri("/message")
+            .method("POST")
+            .header("Content-Type", "application/json")
+            .header("Authorization", format!("Bearer {}", token))
+            .body(Body::from(r#"{"jsonrpc":"2.0","method":"ping","id":1}"#))
+            .unwrap();
+        let resp = app.clone().oneshot(valid_req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // 5. Request to /sse without auth -> 401 UNAUTHORIZED
+        let unauth_sse = Request::builder()
+            .uri("/sse")
+            .method("GET")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.clone().oneshot(unauth_sse).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

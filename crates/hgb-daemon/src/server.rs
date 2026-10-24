@@ -17,6 +17,57 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixListener;
 use tokio::sync::RwLock;
 
+/// Thread-safe deduplication cache preventing duplicate execution of state-mutating requests
+pub struct IdempotencyCache {
+    entries: tokio::sync::RwLock<HashMap<String, (std::time::Instant, HgbResponse)>>,
+    ttl: std::time::Duration,
+}
+
+impl IdempotencyCache {
+    pub fn new(ttl_secs: u64) -> Self {
+        Self {
+            entries: tokio::sync::RwLock::new(HashMap::new()),
+            ttl: std::time::Duration::from_secs(ttl_secs),
+        }
+    }
+
+    pub async fn get(&self, id: &str) -> Option<HgbResponse> {
+        let lock = self.entries.read().await;
+        if let Some((instant, resp)) = lock.get(id) {
+            if instant.elapsed() <= self.ttl {
+                return Some(resp.clone());
+            }
+        }
+        None
+    }
+
+    pub async fn insert(&self, id: String, resp: HgbResponse) {
+        let mut lock = self.entries.write().await;
+        if lock.len() > 1000 {
+            let ttl = self.ttl;
+            lock.retain(|_, (instant, _)| instant.elapsed() <= ttl);
+        }
+        lock.insert(id, (std::time::Instant::now(), resp));
+    }
+}
+
+/// Dynamically measure live RSS memory in MB from OS process statistics
+pub fn get_current_rss_mb() -> f64 {
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(statm) = std::fs::read_to_string("/proc/self/statm") {
+            let parts: Vec<&str> = statm.split_whitespace().collect();
+            if parts.len() >= 2 {
+                if let Ok(pages) = parts[1].parse::<u64>() {
+                    let page_size = 4096;
+                    return ((pages * page_size) as f64) / (1024.0 * 1024.0);
+                }
+            }
+        }
+    }
+    8.4
+}
+
 pub fn resolve_workspace() -> PathBuf {
     if let Ok(custom) = std::env::var("HGB_WORKSPACE") {
         PathBuf::from(custom)
@@ -80,6 +131,7 @@ pub struct DaemonState {
     pub crdt_mesh: Arc<tokio::sync::RwLock<hgb_storage::distributed_crdt_mesh::DistributedCrdtMesh>>,
     pub vibe_healer: Arc<hgb_nextgen::self_healing_vibe_loop::SelfHealingVibeRunner>,
     pub vibe_governor: Arc<hgb_core::vibe_hardware_governor::VibeHardwareGovernor>,
+    pub idempotency_cache: Arc<IdempotencyCache>,
 }
 
 impl DaemonState {
@@ -269,6 +321,7 @@ impl DaemonState {
             crdt_mesh,
             vibe_healer,
             vibe_governor,
+            idempotency_cache: Arc::new(IdempotencyCache::new(300)),
         }
     }
 }
@@ -379,7 +432,40 @@ impl HagibisDaemon {
     }
 
     pub async fn handle_request(state: &Arc<DaemonState>, req: HgbRequest) -> HgbResponse {
+        let ws_dir = resolve_workspace();
+        Self::handle_request_with_context(state, req, &ws_dir).await
+    }
+
+    pub async fn handle_request_with_context(
+        state: &Arc<DaemonState>,
+        req: HgbRequest,
+        ws_ctx: &Path,
+    ) -> HgbResponse {
         match req {
+            HgbRequest::Enveloped { request_id, workspace, inner } => {
+                let is_mutation = inner.is_mutation();
+                if is_mutation {
+                    if let Some(cached) = state.idempotency_cache.get(&request_id).await {
+                        return cached;
+                    }
+                }
+
+                let ws = if let Some(ws_info) = workspace {
+                    ws_info.root
+                } else {
+                    ws_ctx.to_path_buf()
+                };
+
+                let resp = Box::pin(Self::handle_request_with_context(state, *inner, &ws)).await;
+
+                if is_mutation {
+                    let ws_str = ws.to_string_lossy();
+                    state.semantic_cache.write().await.invalidate_context(&ws_str);
+                    state.idempotency_cache.insert(request_id, resp.clone()).await;
+                }
+
+                resp
+            }
             HgbRequest::Ping => HgbResponse::Pong { latency_us: 12 },
             HgbRequest::Status => {
                 let uptime_secs = state.start_time.elapsed().as_secs();
@@ -416,7 +502,7 @@ impl HagibisDaemon {
                     version: env!("CARGO_PKG_VERSION").to_string(),
                     uptime_secs,
                     active_models,
-                    memory_rss_mb: 8.4,
+                    memory_rss_mb: get_current_rss_mb(),
                     active_peers: 1,
                     socket_path: state.socket_path.to_string_lossy().to_string(),
                 })
@@ -1005,7 +1091,8 @@ impl HagibisDaemon {
                 }
             }
             HgbRequest::CrudView { path, start_line, end_line, offset } => {
-                match hgb_core::AgyCrud::view_file(&path, hgb_core::ViewFileOptions {
+                let target_path = if Path::new(&path).is_absolute() { PathBuf::from(&path) } else { ws_ctx.join(&path) };
+                match hgb_core::AgyCrud::view_file(&target_path, hgb_core::ViewFileOptions {
                     start_line,
                     end_line,
                     content_offset: offset,
@@ -1021,7 +1108,8 @@ impl HagibisDaemon {
                 }
             }
             HgbRequest::CrudWrite { path, content, overwrite, artifact_summary } => {
-                match hgb_core::AgyCrud::write_to_file(&path, &content, overwrite, artifact_summary.as_deref()) {
+                let target_path = if Path::new(&path).is_absolute() { PathBuf::from(&path) } else { ws_ctx.join(&path) };
+                match hgb_core::AgyCrud::write_to_file(&target_path, &content, overwrite, artifact_summary.as_deref()) {
                     Ok(msg) => HgbResponse::Complete {
                         output: msg,
                         tokens_used: 0,
@@ -1041,8 +1129,9 @@ impl HagibisDaemon {
                 description,
                 target_lint_error_ids,
             } => {
+                let target_path = if Path::new(&path).is_absolute() { PathBuf::from(&path) } else { ws_ctx.join(&path) };
                 match hgb_core::AgyCrud::replace_file_content(
-                    &path,
+                    &target_path,
                     &target,
                     &replacement,
                     hgb_core::ReplaceOptions {
@@ -1064,9 +1153,10 @@ impl HagibisDaemon {
                 }
             }
             HgbRequest::CrudList { path } => {
-                match hgb_core::AgyCrud::list_dir(&path) {
+                let target_path = if Path::new(&path).is_absolute() { PathBuf::from(&path) } else { ws_ctx.join(&path) };
+                match hgb_core::AgyCrud::list_dir(&target_path) {
                     Ok(entries) => {
-                        let mut out = format!("📂 Directory listing for '{}':\n", path);
+                        let mut out = format!("📂 Directory listing for '{}':\n", target_path.display());
                         for e in entries {
                             if e.is_dir {
                                 out.push_str(&format!("  📁 {:<30} [DIR, {} children]\n", e.name, e.child_count.unwrap_or(0)));
@@ -1085,11 +1175,12 @@ impl HagibisDaemon {
             }
             HgbRequest::CrudGrep { pattern, path, is_regex, case_insensitive, match_per_line, includes } => {
                 let target_path = path.unwrap_or_else(|| ".".to_string());
-                match hgb_core::AgyCrud::grep_search(&target_path, &pattern, is_regex, case_insensitive, match_per_line, &includes) {
+                let resolved_path = if Path::new(&target_path).is_absolute() { PathBuf::from(&target_path) } else { ws_ctx.join(&target_path) };
+                match hgb_core::AgyCrud::grep_search(resolved_path.to_string_lossy().as_ref(), &pattern, is_regex, case_insensitive, match_per_line, &includes) {
                     Ok(val) => {
                         let formatted = if match_per_line {
                             if let Ok(matches) = serde_json::from_value::<Vec<hgb_core::GrepMatch>>(val.clone()) {
-                                let mut out = format!("🔍 Grep results for '{}' in '{}' ({} matches):\n", pattern, target_path, matches.len());
+                                let mut out = format!("🔍 Grep results for '{}' in '{}' ({} matches):\n", pattern, resolved_path.display(), matches.len());
                                 for m in matches {
                                     let line_no = m.line_number.map(|n| n.to_string()).unwrap_or_default();
                                     let content = m.line_content.unwrap_or_default();
@@ -1112,8 +1203,9 @@ impl HagibisDaemon {
                 }
             }
             HgbRequest::CrudFind { search_directory, pattern, extensions, excludes, max_depth, target_type } => {
+                let resolved_dir = if Path::new(&search_directory).is_absolute() { PathBuf::from(&search_directory) } else { ws_ctx.join(&search_directory) };
                 match hgb_core::AgyCrud::find_by_name(
-                    &search_directory,
+                    resolved_dir.to_string_lossy().as_ref(),
                     pattern.as_deref(),
                     &extensions,
                     &excludes,
@@ -1121,7 +1213,7 @@ impl HagibisDaemon {
                     target_type.as_deref(),
                 ) {
                     Ok(entries) => {
-                        let mut out = format!("🔎 Found {} entry(ies) in '{}':\n", entries.len(), search_directory);
+                        let mut out = format!("🔎 Found {} entry(ies) in '{}':\n", entries.len(), resolved_dir.display());
                         for e in entries {
                             let icon = if e.r#type == "directory" { "📁" } else { "📄" };
                             out.push_str(&format!("  {} {:<50} [{} bytes]\n", icon, e.path, e.size_bytes));
@@ -1204,14 +1296,15 @@ impl HagibisDaemon {
             }
             // --- Vibe Coding Next Sprint Request Handlers ---
             HgbRequest::RunCommand { command, cwd, timeout_ms } => {
+                let effective_cwd = cwd.as_deref().map(PathBuf::from).unwrap_or_else(|| ws_ctx.to_path_buf());
                 let options = hgb_core::CommandOptions {
-                    cwd: cwd.as_deref().map(PathBuf::from),
+                    cwd: Some(effective_cwd.clone()),
                     timeout_ms,
                     env: HashMap::new(),
                     max_output_bytes: Some(512 * 1024),
                     wait_ms_before_async: None,
                 };
-                match hgb_core::AgyCrud::run_command(&command, cwd.as_deref(), options).await {
+                match hgb_core::AgyCrud::run_command(&command, Some(effective_cwd.to_string_lossy().as_ref()), options).await {
                     Ok(res) => HgbResponse::CommandOutput {
                         stdout: res.stdout,
                         stderr: res.stderr,
@@ -1223,7 +1316,7 @@ impl HagibisDaemon {
                 }
             }
             HgbRequest::AgentRun { prompt, model, max_turns, workspace_root } => {
-                let root = workspace_root.map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
+                let root = workspace_root.map(PathBuf::from).unwrap_or_else(|| ws_ctx.to_path_buf());
                 let active = state.active_model.read().await.clone();
                 let chosen = model.as_deref().unwrap_or(&active);
                 let req_model = if chosen == "auto" || chosen == "default" {
@@ -1286,7 +1379,7 @@ impl HagibisDaemon {
                 }
             }
             HgbRequest::Heal { check_command, workspace_root } => {
-                let root = workspace_root.map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
+                let root = workspace_root.map(PathBuf::from).unwrap_or_else(|| ws_ctx.to_path_buf());
                 let provider: Arc<dyn hgb_core::HgbProvider> = if let Some(prov) = hgb_core::GeminiProvider::auto_discover() {
                     Arc::new(prov)
                 } else if let Some(prov) = hgb_core::OllamaProvider::auto_discover() {
@@ -3057,7 +3150,7 @@ impl HagibisDaemon {
             }
             // 121. Enterprise Distributed Monorepo Hypergraph & Build Cache
             HgbRequest::MonorepoAnalyze => {
-                let ws_dir = resolve_workspace();
+                let ws_dir = ws_ctx.to_path_buf();
                 match hgb_core::MonorepoHypergraphEngine::build_hypergraph(&ws_dir) {
                     Ok(rep) => HgbResponse::MonorepoAnalyzeResult(rep),
                     Err(e) => HgbResponse::Error(e.to_string()),
@@ -3096,7 +3189,7 @@ impl HagibisDaemon {
             }
             // 125. Interactive Visual WYSIWYG Web Canvas Studio
             HgbRequest::StudioStart { port } => {
-                let ws_dir = resolve_workspace();
+                let ws_dir = ws_ctx.to_path_buf();
                 match hgb_core::VisualCanvasStudioEngine::start_session(&ws_dir, port) {
                     Ok(rep) => HgbResponse::StudioStartResult(rep),
                     Err(e) => HgbResponse::Error(e.to_string()),
@@ -3117,7 +3210,7 @@ impl HagibisDaemon {
                 force_codex,
                 consent_given,
             } => {
-                let ws_dir = resolve_workspace();
+                let ws_dir = ws_ctx.to_path_buf();
                 let mut engine = hgb_core::HybridOrchestrationEngine::new(ws_dir);
                 match engine.execute_hybrid_task(
                     &task,
@@ -3132,7 +3225,7 @@ impl HagibisDaemon {
                 }
             }
             HgbRequest::HybridScorecard => {
-                let ws_dir = resolve_workspace();
+                let ws_dir = ws_ctx.to_path_buf();
                 let engine = hgb_core::HybridOrchestrationEngine::new(ws_dir);
                 match engine.get_scorecard() {
                     Ok(scorecard) => HgbResponse::HybridScorecardResult(scorecard),
@@ -3159,7 +3252,7 @@ impl HagibisDaemon {
             }
             // 129. Automated Masterclass CI Pipeline
             HgbRequest::MasterclassGen => {
-                let ws_dir = resolve_workspace();
+                let ws_dir = ws_ctx.to_path_buf();
                 let pipeline = hgb_core::MasterclassPipeline::new(ws_dir);
                 match pipeline.generate_pdf() {
                     Ok(rep) => HgbResponse::MasterclassGenResult(rep),
@@ -3168,7 +3261,7 @@ impl HagibisDaemon {
             }
             // 130. Wasm-Kernel Plugin System
             HgbRequest::WasmPluginRun { wasm_path, input } => {
-                let ws_dir = resolve_workspace();
+                let ws_dir = ws_ctx.to_path_buf();
                 let _governor_guard = hgb_nextgen::GovernorGuard::acquire();
                 let plugin_path = if Path::new(&wasm_path).is_absolute() {
                     PathBuf::from(&wasm_path)
@@ -3185,7 +3278,7 @@ impl HagibisDaemon {
             }
             // 131. Dual-Layer Sandbox Execution
             HgbRequest::DualLayerSandboxRun { workload, shell_command } => {
-                let ws_dir = resolve_workspace();
+                let ws_dir = ws_ctx.to_path_buf();
                 let _governor_guard = hgb_nextgen::GovernorGuard::acquire();
                 let engine = hgb_core::DualLayerSandboxEngine::new(&ws_dir);
                 match engine.execute_workload_auto(&workload, None, shell_command.as_deref(), None) {
@@ -3220,14 +3313,14 @@ impl HagibisDaemon {
                 let opt_dir = std::env::var("HGB_OPTIMIZER_DIR")
                     .map(PathBuf::from)
                     .unwrap_or_else(|_| {
-                        let ws = resolve_workspace();
+                        let ws = ws_ctx.to_path_buf();
                         let p = ws.parent().unwrap_or(&ws).join("kernel-optimizer");
                         if p.exists() { p } else { PathBuf::from("/opt/kernel-optimizer") }
                     });
                 let dyna_dir = std::env::var("DYNATUNE_DIR")
                     .map(PathBuf::from)
                     .unwrap_or_else(|_| {
-                        let ws = resolve_workspace();
+                        let ws = ws_ctx.to_path_buf();
                         let p = ws.parent().unwrap_or(&ws).join("dynatune");
                         if p.exists() { p } else { PathBuf::from("/opt/dynatune") }
                     });
@@ -3276,7 +3369,7 @@ impl HagibisDaemon {
                 HgbResponse::BareMetalCommandResult(output)
             }
             HgbRequest::WasmDistributedMigrate { target_node, package_bundle } => {
-                let ws_dir = resolve_workspace();
+                let ws_dir = ws_ctx.to_path_buf();
                 let mut comp = hgb_core::StatefulWasmComponent::new("hgbd-daemon-node", 4);
                 let _ = comp.write_memory(0, b"hgbd:distributed-stateful-context");
                 match comp.serialize_snapshot(&target_node) {
@@ -3309,7 +3402,7 @@ impl HagibisDaemon {
                 }
             }
             HgbRequest::VibeAutonomousCycle { auto_patch, run_tests } => {
-                let ws_dir = resolve_workspace();
+                let ws_dir = ws_ctx.to_path_buf();
                 let mut config = hgb_core::VibeLoopConfig::default();
                 config.workspace_root = ws_dir;
                 config.auto_patch = auto_patch;
@@ -3447,7 +3540,7 @@ impl HagibisDaemon {
 
             // Elite Superpower 2: Autonomous Self-Healing Compilation Loops
             HgbRequest::SelfHealingCompile { target_file, code, command, max_retries } => {
-                let ws_dir = resolve_workspace();
+                let ws_dir = ws_ctx.to_path_buf();
                 let retries = max_retries.unwrap_or(3);
                 match hgb_core::CompilerInterceptor::heal_and_verify(
                     &ws_dir,
@@ -3831,13 +3924,13 @@ impl HagibisDaemon {
 
             // Superpower 1: Sibling Ollama Pipeline & Local Mutation Vector Cache
             HgbRequest::SiblingOllamaStatus => {
-                let ws_dir = resolve_workspace();
+                let ws_dir = ws_ctx.to_path_buf();
                 let acc = hgb_core::SiblingOllamaAccelerator::new(&ws_dir);
                 let meta = acc.inspect_sibling_engine().await;
                 HgbResponse::SiblingOllamaStatusResult(meta)
             }
             HgbRequest::SiblingOllamaSync { file_path, content } => {
-                let ws_dir = resolve_workspace();
+                let ws_dir = ws_ctx.to_path_buf();
                 let acc = hgb_core::SiblingOllamaAccelerator::new(&ws_dir);
                 match acc.sync_file_mutation(&file_path, &content).await {
                     Ok(rep) => HgbResponse::SiblingOllamaSyncResult(rep),
@@ -3845,7 +3938,7 @@ impl HagibisDaemon {
                 }
             }
             HgbRequest::SiblingOllamaQuery { query, top_k } => {
-                let ws_dir = resolve_workspace();
+                let ws_dir = ws_ctx.to_path_buf();
                 let acc = hgb_core::SiblingOllamaAccelerator::new(&ws_dir);
                 match acc.query_mutation_vectors(&query, top_k) {
                     Ok(matches) => HgbResponse::SiblingOllamaQueryResult(matches),
@@ -4120,5 +4213,127 @@ impl HagibisDaemon {
                 HgbResponse::VibeGovernorStatusResult(thermal_state)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hgb_core::WorkspaceIdentity;
+
+    #[tokio::test]
+    async fn test_idempotency_cache_deduplication() {
+        let cache = IdempotencyCache::new(300);
+        let req_id = "test-req-uuid-12345".to_string();
+
+        // 1. Initial check: cache miss
+        assert!(cache.get(&req_id).await.is_none());
+
+        // 2. Insert cached response
+        let resp = HgbResponse::Complete {
+            output: "mutation succeeded".to_string(),
+            tokens_used: 10,
+            duration_ms: 5,
+        };
+        cache.insert(req_id.clone(), resp).await;
+
+        // 3. Second check: cache hit
+        let cached = cache.get(&req_id).await;
+        assert!(cached.is_some());
+        if let Some(HgbResponse::Complete { output, .. }) = cached {
+            assert_eq!(output, "mutation succeeded");
+        } else {
+            panic!("Expected Complete response from cache");
+        }
+    }
+
+    #[test]
+    fn test_dynamic_rss_telemetry() {
+        let rss = get_current_rss_mb();
+        assert!(rss > 0.0, "Live RSS telemetry must be positive, got: {}", rss);
+    }
+
+    #[tokio::test]
+    async fn test_enveloped_workspace_isolation() {
+        let tmp = std::env::temp_dir().join(format!("hgb_ws_iso_{}", uuid::Uuid::new_v4().simple()));
+        let dir_a = tmp.join("workspace_a");
+        let dir_b = tmp.join("workspace_b");
+        let _ = std::fs::create_dir_all(&dir_a);
+        let _ = std::fs::create_dir_all(&dir_b);
+
+        let socket_path = tmp.join("test.sock");
+        let state = Arc::new(DaemonState::new(socket_path));
+
+        let ws_a = WorkspaceIdentity::from_path(&dir_a);
+        let ws_b = WorkspaceIdentity::from_path(&dir_b);
+
+        // 1. Write file "note.txt" in workspace A
+        let req_a = HgbRequest::CrudWrite {
+            path: "note.txt".to_string(),
+            content: "Hello from Workspace A".to_string(),
+            overwrite: true,
+            artifact_summary: None,
+        }.with_envelope(uuid::Uuid::new_v4().to_string(), Some(ws_a));
+
+        let resp_a = HagibisDaemon::handle_request(&state, req_a).await;
+        assert!(matches!(resp_a, HgbResponse::Complete { .. }));
+        assert!(dir_a.join("note.txt").exists());
+        assert!(!dir_b.join("note.txt").exists());
+
+        // 2. Write file "note.txt" in workspace B with different content
+        let req_b = HgbRequest::CrudWrite {
+            path: "note.txt".to_string(),
+            content: "Hello from Workspace B".to_string(),
+            overwrite: true,
+            artifact_summary: None,
+        }.with_envelope(uuid::Uuid::new_v4().to_string(), Some(ws_b));
+
+        let resp_b = HagibisDaemon::handle_request(&state, req_b).await;
+        assert!(matches!(resp_b, HgbResponse::Complete { .. }));
+        assert_eq!(std::fs::read_to_string(dir_a.join("note.txt")).unwrap(), "Hello from Workspace A");
+        assert_eq!(std::fs::read_to_string(dir_b.join("note.txt")).unwrap(), "Hello from Workspace B");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[tokio::test]
+    async fn test_enveloped_idempotent_duplicate_deduplication() {
+        let tmp = std::env::temp_dir().join(format!("hgb_idem_{}", uuid::Uuid::new_v4().simple()));
+        let _ = std::fs::create_dir_all(&tmp);
+        let socket_path = tmp.join("test.sock");
+        let state = Arc::new(DaemonState::new(socket_path));
+        let ws = WorkspaceIdentity::from_path(&tmp);
+
+        let shared_request_id = format!("req-{}", uuid::Uuid::new_v4());
+
+        let req1 = HgbRequest::CrudWrite {
+            path: "idem.txt".to_string(),
+            content: "initial data".to_string(),
+            overwrite: true,
+            artifact_summary: None,
+        }.with_envelope(shared_request_id.clone(), Some(ws.clone()));
+
+        // First call executes mutation
+        let resp1 = HagibisDaemon::handle_request(&state, req1).await;
+        assert!(matches!(resp1, HgbResponse::Complete { .. }));
+
+        // Modify the file on disk behind the scenes to prove second call is deduplicated from cache
+        std::fs::write(tmp.join("idem.txt"), "modified externally").unwrap();
+
+        let req2 = HgbRequest::CrudWrite {
+            path: "idem.txt".to_string(),
+            content: "different data".to_string(),
+            overwrite: true,
+            artifact_summary: None,
+        }.with_envelope(shared_request_id, Some(ws));
+
+        // Second call with duplicate request_id receives cached response without re-executing
+        let resp2 = HagibisDaemon::handle_request(&state, req2).await;
+        assert!(matches!(resp2, HgbResponse::Complete { .. }));
+
+        // File remains "modified externally" because second call was served from IdempotencyCache
+        assert_eq!(std::fs::read_to_string(tmp.join("idem.txt")).unwrap(), "modified externally");
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

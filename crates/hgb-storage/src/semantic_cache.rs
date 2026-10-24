@@ -31,6 +31,9 @@ pub struct SemanticCacheEntry {
     pub hit_count: u64,
     /// Cumulative latency saved in milliseconds
     pub latency_saved_ms: u64,
+    /// Optional context or workspace key for granular invalidation
+    #[serde(default)]
+    pub context_key: Option<String>,
 }
 
 /// Result returned when a query hits the semantic cache
@@ -159,6 +162,18 @@ impl SemanticQueryCache {
         response: &str,
         latency_ms: u64,
     ) {
+        self.record_entry_with_context(query, model_id, response, latency_ms, None);
+    }
+
+    /// Record a freshly completed prompt or tool execution with an optional workspace/project context key
+    pub fn record_entry_with_context(
+        &mut self,
+        query: &str,
+        model_id: &str,
+        response: &str,
+        latency_ms: u64,
+        context_key: Option<String>,
+    ) {
         if query.trim().is_empty() || response.trim().is_empty() {
             return;
         }
@@ -168,7 +183,7 @@ impl SemanticQueryCache {
             self.evict_lru_entry();
         }
 
-        let hash_input = format!("{}:{}", model_id, query.trim());
+        let hash_input = format!("{}:{}:{:?}", model_id, query.trim(), context_key);
         let id = blake3::hash(hash_input.as_bytes()).to_hex().to_string();
         let embedding = SimdVectorIndex::generate_deterministic_embedding(query, 64);
         let now = chrono::Utc::now().timestamp() as u64;
@@ -182,10 +197,29 @@ impl SemanticQueryCache {
             created_at_epoch_sec: now,
             hit_count: 0,
             latency_saved_ms: latency_ms,
+            context_key,
         };
 
         self.entries.insert(id, entry);
         let _ = self.save_to_disk();
+    }
+
+    /// Invalidate all cache entries matching the given context/workspace key.
+    /// Returns the number of evicted entries.
+    pub fn invalidate_context(&mut self, context_key: &str) -> usize {
+        let initial_len = self.entries.len();
+        self.entries.retain(|_, entry| {
+            if let Some(ref ck) = entry.context_key {
+                ck != context_key
+            } else {
+                true
+            }
+        });
+        let evicted = initial_len - self.entries.len();
+        if evicted > 0 {
+            let _ = self.save_to_disk();
+        }
+        evicted
     }
 
     /// Evicts the entry with the lowest hit count and oldest timestamp
@@ -363,5 +397,24 @@ mod tests {
         assert_eq!(reloaded.entries.len(), 1);
 
         let _ = fs::remove_dir_all(&tmp_dir);
+    }
+
+    #[test]
+    fn test_context_invalidation() {
+        let mut cache = SemanticQueryCache::new(100, 0.90);
+        cache.record_entry_with_context("query in proj A", "model", "resp A", 50, Some("proj_alpha".to_string()));
+        cache.record_entry_with_context("query in proj B", "model", "resp B", 50, Some("proj_beta".to_string()));
+        cache.record_entry("global query", "model", "resp global", 50);
+
+        assert_eq!(cache.entries.len(), 3);
+
+        // Invalidate proj_alpha
+        let evicted = cache.invalidate_context("proj_alpha");
+        assert_eq!(evicted, 1);
+        assert_eq!(cache.entries.len(), 2);
+
+        // proj_beta and global remain
+        assert!(cache.entries.values().any(|e| e.context_key.as_deref() == Some("proj_beta")));
+        assert!(cache.entries.values().any(|e| e.context_key.is_none()));
     }
 }

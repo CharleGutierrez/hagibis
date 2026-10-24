@@ -100,6 +100,10 @@ impl HgbClient {
     }
 
     pub async fn send(&self, req: HgbRequest) -> Result<HgbResponse> {
+        let req = match req {
+            HgbRequest::Enveloped { .. } => req,
+            other => other.enveloped(),
+        };
         let mut stream = self.connect().await?;
 
         let encoded = bincode::serialize(&req).map_err(|e| HgbError::Serialization(e.to_string()))?;

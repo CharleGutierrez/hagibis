@@ -2010,6 +2010,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.20",
  "tokio",
+ "tower",
  "unicode-width 0.2.0",
  "uuid",
  "wasmtime",

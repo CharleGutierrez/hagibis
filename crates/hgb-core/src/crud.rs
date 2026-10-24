@@ -534,6 +534,11 @@ impl AgyCrud {
             )));
         }
 
+        // Capture durable pre-mutation checkpoint
+        let ws_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let checkpoint_mgr = crate::durable_checkpoint::DurableCheckpointManager::new(&ws_root);
+        let _ = checkpoint_mgr.create_checkpoint(&format!("pre-write: {}", path.display()));
+
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
                 fs::create_dir_all(parent)?;
@@ -666,6 +671,12 @@ impl AgyCrud {
         };
 
         let final_content = format!("{}{}{}", prefix, new_middle, suffix);
+
+        // Capture durable pre-mutation checkpoint before writing modification
+        let ws_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let checkpoint_mgr = crate::durable_checkpoint::DurableCheckpointManager::new(&ws_root);
+        let _ = checkpoint_mgr.create_checkpoint(&format!("pre-edit: {}", path.display()));
+
         fs::write(path, &final_content)?;
 
         // Calculate diff statistics

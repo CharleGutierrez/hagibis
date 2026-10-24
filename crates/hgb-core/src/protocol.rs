@@ -1,8 +1,49 @@
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
+
+/// Explicit workspace identity sent with daemon requests to guarantee project isolation
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceIdentity {
+    pub root: PathBuf,
+    pub canonical_root: PathBuf,
+    pub project_id: String,
+}
+
+impl WorkspaceIdentity {
+    pub fn from_path<P: AsRef<Path>>(path: P) -> Self {
+        let root = path.as_ref().to_path_buf();
+        let canonical_root = root.canonicalize().unwrap_or_else(|_| root.clone());
+        let project_id = blake3::hash(canonical_root.to_string_lossy().as_bytes()).to_hex()[..16].to_string();
+        Self {
+            root,
+            canonical_root,
+            project_id,
+        }
+    }
+
+    pub fn current() -> Option<Self> {
+        std::env::current_dir().ok().map(Self::from_path)
+    }
+
+    pub fn resolve_path<P: AsRef<Path>>(&self, p: P) -> PathBuf {
+        let p = p.as_ref();
+        if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            self.root.join(p)
+        }
+    }
+}
 
 /// Request sent from hgb CLI to hgbd Daemon over Unix Domain Socket
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum HgbRequest {
+    /// Enveloped request providing explicit request ID and caller workspace context
+    Enveloped {
+        request_id: String,
+        workspace: Option<WorkspaceIdentity>,
+        inner: Box<HgbRequest>,
+    },
     Ping,
     Status,
     Doctor,
@@ -1523,6 +1564,45 @@ pub enum HgbRequest {
         auto_commit: bool,
     },
     VibeGovernorStatus,
+}
+
+impl HgbRequest {
+    /// Returns true if this request mutates workspace or daemon state
+    pub fn is_mutation(&self) -> bool {
+        match self {
+            HgbRequest::CrudWrite { .. }
+            | HgbRequest::CrudEdit { .. }
+            | HgbRequest::RunCommand { .. }
+            | HgbRequest::AgentRun { .. }
+            | HgbRequest::Heal { .. }
+            | HgbRequest::Ship { dry_run: false, .. }
+            | HgbRequest::Checkpoint { .. }
+            | HgbRequest::SelfPatchTrigger { .. }
+            | HgbRequest::StudioApplyPatch { .. } => true,
+            HgbRequest::Enveloped { inner, .. } => inner.is_mutation(),
+            _ => false,
+        }
+    }
+
+    /// Wrap request in an Enveloped envelope with a generated UUID and current directory
+    pub fn enveloped(self) -> Self {
+        let req_id = uuid::Uuid::new_v4().to_string();
+        let ws = WorkspaceIdentity::current();
+        HgbRequest::Enveloped {
+            request_id: req_id,
+            workspace: ws,
+            inner: Box::new(self),
+        }
+    }
+
+    /// Wrap request with an explicit request_id and optional workspace
+    pub fn with_envelope(self, request_id: String, workspace: Option<WorkspaceIdentity>) -> Self {
+        HgbRequest::Enveloped {
+            request_id,
+            workspace,
+            inner: Box::new(self),
+        }
+    }
 }
 
 fn default_twenty_u64() -> u64 {

@@ -23,6 +23,7 @@ unicode-width = { workspace = true }
 clap = { workspace = true }
 thiserror = { workspace = true }
 axum = { version = "0.7", features = ["ws"] }
+tower = { version = "0.5", features = ["util"] }
 reqwest = { workspace = true }
 futures-util = "0.3"
 uuid = { version = "1.27.0", features = ["v4"] }

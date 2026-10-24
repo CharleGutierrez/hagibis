@@ -8,6 +8,8 @@
 //! 5. Commits to the real workspace ONLY when 100% green; rolls back cleanly on persistent failure.
 
 use crate::error::{HgbError, Result};
+use crate::path_jail::PathJail;
+pub use crate::path_jail::PathJail as SandboxPathJail;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -79,14 +81,14 @@ pub struct SpeculativeSandbox {
 impl SpeculativeSandbox {
     pub fn new(workspace_root: impl AsRef<Path>) -> Self {
         let ws = workspace_root.as_ref().to_path_buf();
-        let session_id = uuid::Uuid::new_v4().simple().to_string();
+        let session_id = uuid::Uuid::new_v4().to_string();
 
         // Prefer /dev/shm for sub-microsecond RAM disk I/O, fallback to std::env::temp_dir()
         let shm_dir = Path::new("/dev/shm");
         let (sandbox_root, use_shm) = if shm_dir.exists() && shm_dir.is_dir() {
-            (shm_dir.join(format!("hgb_sandbox_{}", session_id)), true)
+            (shm_dir.join(format!("hgb_run_{}", session_id)), true)
         } else {
-            (std::env::temp_dir().join(format!("hgb_sandbox_{}", session_id)), false)
+            (std::env::temp_dir().join(format!("hgb_run_{}", session_id)), false)
         };
 
         Self {
@@ -118,6 +120,9 @@ impl SpeculativeSandbox {
 
     /// Prepares the isolated sandbox by copying target files and build manifests
     pub fn prepare_sandbox(&self, files_to_mirror: &[&str]) -> Result<()> {
+        let ws_jail = PathJail::new(&self.workspace_root)?;
+        let sb_jail = PathJail::new(&self.sandbox_root)?;
+
         fs::create_dir_all(&self.sandbox_root)
             .map_err(|e| HgbError::Storage(format!("Failed to create sandbox directory: {e}")))?;
 
@@ -131,11 +136,10 @@ impl SpeculativeSandbox {
             }
         }
 
-        // Mirror specified files
+        // Mirror specified files with strict PathJail validation
         for rel in files_to_mirror {
-            let clean_rel = rel.trim_start_matches('/');
-            let src = self.workspace_root.join(clean_rel);
-            let dst = self.sandbox_root.join(clean_rel);
+            let src = ws_jail.check_boundary(rel)?;
+            let dst = sb_jail.check_boundary(rel)?;
 
             if let Some(parent) = dst.parent() {
                 fs::create_dir_all(parent)
@@ -144,7 +148,7 @@ impl SpeculativeSandbox {
 
             if src.exists() && src.is_file() {
                 fs::copy(&src, &dst)
-                    .map_err(|e| HgbError::Storage(format!("Failed to copy '{}' to sandbox: {e}", clean_rel)))?;
+                    .map_err(|e| HgbError::Storage(format!("Failed to copy '{}' to sandbox: {e}", rel)))?;
             }
         }
 
@@ -153,12 +157,16 @@ impl SpeculativeSandbox {
 
     /// Applies proposed modifications to files inside the sandbox
     pub fn apply_speculative_patch(&self, patch: &SandboxPatch) -> Result<()> {
-        let clean_rel = patch.relative_path.trim_start_matches('/');
-        let target = self.sandbox_root.join(clean_rel);
+        let sb_jail = PathJail::new(&self.sandbox_root)?;
+        let target = sb_jail.check_boundary(&patch.relative_path)?;
 
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent)
                 .map_err(|e| HgbError::Storage(format!("Failed to create directory for patch: {e}")))?;
+        }
+
+        if target.exists() || target.is_symlink() {
+            let _ = fs::remove_file(&target);
         }
 
         fs::write(&target, &patch.proposed_content)
@@ -249,7 +257,11 @@ impl SpeculativeSandbox {
         }
 
         if changed {
-            let target = self.sandbox_root.join(rel_path.trim_start_matches('/'));
+            let sb_jail = PathJail::new(&self.sandbox_root).ok()?;
+            let target = sb_jail.check_boundary(rel_path).ok()?;
+            if target.exists() || target.is_symlink() {
+                let _ = fs::remove_file(&target);
+            }
             let _ = fs::write(target, &fixed);
             Some(fixed)
         } else {
@@ -259,12 +271,13 @@ impl SpeculativeSandbox {
 
     /// Commits all green files from sandbox to the real workspace
     pub fn commit_to_workspace(&self, patches: &[SandboxPatch]) -> Result<Vec<String>> {
+        let ws_jail = PathJail::new(&self.workspace_root)?;
+        let sb_jail = PathJail::new(&self.sandbox_root)?;
         let mut committed = Vec::new();
 
         for patch in patches {
-            let clean_rel = patch.relative_path.trim_start_matches('/');
-            let src = self.sandbox_root.join(clean_rel);
-            let dst = self.workspace_root.join(clean_rel);
+            let src = sb_jail.check_boundary(&patch.relative_path)?;
+            let dst = ws_jail.check_boundary(&patch.relative_path)?;
 
             if let Some(parent) = dst.parent() {
                 fs::create_dir_all(parent)
@@ -272,9 +285,9 @@ impl SpeculativeSandbox {
             }
 
             fs::copy(&src, &dst)
-                .map_err(|e| HgbError::Storage(format!("Failed to commit '{}' to workspace: {e}", clean_rel)))?;
+                .map_err(|e| HgbError::Storage(format!("Failed to commit '{}' to workspace: {e}", patch.relative_path)))?;
 
-            committed.push(clean_rel.to_string());
+            committed.push(patch.relative_path.clone());
         }
 
         Ok(committed)
@@ -974,6 +987,59 @@ mod tests {
         // 4. Verify main workspace remains completely clean and untouched
         let content = fs::read_to_string(&src_file).unwrap();
         assert_eq!(content, "fn main() { println!(\"stable base\"); }");
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_speculative_sandbox_unique_shm_run_dir_and_drop_cleanup() {
+        let temp_dir = std::env::temp_dir().join(format!("hgb_spec_shm_{}", uuid::Uuid::new_v4().simple()));
+        let _ = fs::create_dir_all(&temp_dir);
+
+        let sandbox_path;
+        {
+            let sandbox = SpeculativeSandbox::new(&temp_dir);
+            sandbox_path = sandbox.sandbox_root().to_path_buf();
+            let path_str = sandbox_path.to_string_lossy();
+            assert!(path_str.contains("hgb_run_"), "Expected path containing hgb_run_: {}", path_str);
+            sandbox.prepare_sandbox(&[]).unwrap();
+            assert!(sandbox_path.exists());
+        }
+        // After RAII drop, sandbox directory must be wiped completely
+        assert!(!sandbox_path.exists(), "Sandbox directory must be wiped on RAII drop");
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_speculative_sandbox_path_jail_traversal_rejection() {
+        let temp_dir = std::env::temp_dir().join(format!("hgb_spec_jail_{}", uuid::Uuid::new_v4().simple()));
+        let _ = fs::create_dir_all(&temp_dir);
+
+        let sandbox = SpeculativeSandbox::new(&temp_dir);
+        sandbox.prepare_sandbox(&[]).unwrap();
+
+        // 1. Path traversal rejected in apply_speculative_patch
+        let traversal_patch = SandboxPatch::new(
+            "../etc/passwd",
+            "root:x:0:0",
+            "hacked",
+        );
+        let res = sandbox.apply_speculative_patch(&traversal_patch);
+        assert!(res.is_err(), "Must reject path traversal with ..");
+
+        // 2. Root path rejected
+        let root_patch = SandboxPatch::new(
+            "/etc/shadow",
+            "root:*",
+            "hacked",
+        );
+        let res2 = sandbox.apply_speculative_patch(&root_patch);
+        assert!(res2.is_err(), "Must reject root path starting with /");
+
+        // 3. Mirroring traversal rejected
+        let res3 = sandbox.prepare_sandbox(&["../../secret.key"]);
+        assert!(res3.is_err(), "Must reject mirroring traversal path");
 
         let _ = fs::remove_dir_all(&temp_dir);
     }

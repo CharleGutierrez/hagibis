@@ -8,6 +8,8 @@
 //! 5. Instant rollback: wipes volatile upperdir in < 2ms without modifying a single byte in lowerdir.
 
 use crate::error::{HgbError, Result};
+use crate::path_jail::PathJail;
+pub use crate::path_jail::PathJail as OverlayPathJail;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs::{self, File};
@@ -95,7 +97,8 @@ impl OverlaySandbox {
     /// Create a new instant CoW sandbox for the target workspace
     pub fn new(workspace_path: impl AsRef<Path>) -> Result<Self> {
         let lowerdir = workspace_path.as_ref().canonicalize()?;
-        let id = format!("hgb_cow_{:016x}", blake3::hash(lowerdir.to_string_lossy().as_bytes()).as_bytes()[0..8].iter().fold(0u64, |acc, &b| (acc << 8) | (b as u64)));
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let id = format!("hgb_run_{}", session_id);
 
         // Prefer in-memory /dev/shm for sub-millisecond I/O if available, else temp_dir
         let base_tmp = if Path::new("/dev/shm").is_dir() {

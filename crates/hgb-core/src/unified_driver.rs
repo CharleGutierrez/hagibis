@@ -26,6 +26,32 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+/// Overall status outcome of a verification run
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum VerificationStatus {
+    Passed,
+    Failed,
+    Healed,
+    Rejected,
+    Unverified,
+}
+
+impl std::fmt::Display for VerificationStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Passed => write!(f, "PASSED"),
+            Self::Failed => write!(f, "FAILED"),
+            Self::Healed => write!(f, "HEALED"),
+            Self::Rejected => write!(f, "REJECTED"),
+            Self::Unverified => write!(f, "UNVERIFIED"),
+        }
+    }
+}
+
+fn default_unverified() -> VerificationStatus {
+    VerificationStatus::Unverified
+}
+
 /// Execution report returned by the `UnifiedAutonomousDriver`
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UnifiedExecutionReport {
@@ -41,12 +67,17 @@ pub struct UnifiedExecutionReport {
     pub diff: SandboxDiff,
     pub dpo_pair_path: Option<PathBuf>,
     pub duration_ms: u64,
+    #[serde(default = "default_unverified")]
+    pub verification_status: VerificationStatus,
+    #[serde(default)]
+    pub verified_blake3_hash: String,
 }
 
 /// The core Unified Autonomous Driver
 pub struct UnifiedAutonomousDriver {
     workspace_root: PathBuf,
     auto_commit: bool,
+    allow_unverified_commit: bool,
     verification_command: Option<String>,
     max_healing_rounds: usize,
     distillation_dir: PathBuf,
@@ -60,6 +91,7 @@ impl UnifiedAutonomousDriver {
         Self {
             workspace_root: ws,
             auto_commit: false,
+            allow_unverified_commit: false,
             verification_command: None,
             max_healing_rounds: 3,
             distillation_dir,
@@ -68,6 +100,11 @@ impl UnifiedAutonomousDriver {
 
     pub fn with_auto_commit(mut self, auto_commit: bool) -> Self {
         self.auto_commit = auto_commit;
+        self
+    }
+
+    pub fn with_allow_unverified_commit(mut self, allow: bool) -> Self {
+        self.allow_unverified_commit = allow;
         self
     }
 
@@ -84,6 +121,40 @@ impl UnifiedAutonomousDriver {
     pub fn with_distillation_dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.distillation_dir = dir.into();
         self
+    }
+
+    /// Auto-detect project check/test command based on manifest files in workspace
+    pub fn auto_detect_verification_command(&self) -> Option<String> {
+        let ws = &self.workspace_root;
+        if ws.join("Cargo.toml").exists() {
+            Some("cargo test".to_string())
+        } else if ws.join("bun.lockb").exists() || ws.join("bun.lock").exists() {
+            Some("bun test".to_string())
+        } else if ws.join("package.json").exists() {
+            Some("npm test".to_string())
+        } else if ws.join("pytest.ini").exists()
+            || ws.join("pyproject.toml").exists()
+            || ws.join("setup.py").exists()
+            || ws.join("requirements.txt").exists()
+            || ws.join("conftest.py").exists()
+        {
+            Some("pytest".to_string())
+        } else if ws.join("go.mod").exists() {
+            Some("go test".to_string())
+        } else {
+            None
+        }
+    }
+
+    /// Resolve effective verification command (explicit or auto-detected)
+    pub fn resolve_verification_command(&self) -> Option<String> {
+        if let Some(ref cmd) = self.verification_command {
+            let trimmed = cmd.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+        self.auto_detect_verification_command()
     }
 
     /// Primary autonomous execution pipeline
@@ -164,9 +235,10 @@ impl UnifiedAutonomousDriver {
         // STEP 3 & 4: Evaluate Branches in CoW Sandboxes & Compute Blast Radius
         // -------------------------------------------------------------------
         let mut total_healed = 0;
+        let mut branch_statuses: HashMap<ThoughtNodeId, VerificationStatus> = HashMap::new();
 
         for branch_id in &branch_ids {
-            let (fitness, exec_output, healed_rounds) = self
+            let (fitness, exec_output, healed_rounds, status) = self
                 .evaluate_and_heal_branch(
                     &target_rel_path,
                     branch_code_map.get(branch_id).unwrap(),
@@ -174,6 +246,7 @@ impl UnifiedAutonomousDriver {
                 )?;
 
             total_healed += healed_rounds;
+            branch_statuses.insert(branch_id.clone(), status);
 
             if let Some(node) = thought_graph.get_node_mut(branch_id) {
                 node.state = ThoughtState::Evaluating;
@@ -191,11 +264,18 @@ impl UnifiedAutonomousDriver {
         let winning_node_id = certificate.winner_node_id.clone();
         let winning_strategy = certificate.winner_strategy.clone();
         let winning_fitness = certificate.fitness.clone();
+        let winning_status = branch_statuses
+            .get(&winning_node_id)
+            .copied()
+            .unwrap_or(VerificationStatus::Unverified);
 
         let winning_code = branch_code_map
             .get(&winning_node_id)
             .cloned()
             .unwrap_or_else(|| existing_code.clone());
+
+        // Compute BLAKE3 of the verified winning code artifact
+        let verified_hash = blake3::hash(winning_code.as_bytes()).to_hex().to_string();
 
         // Find a representative rejected branch for DPO pair construction
         let rejected_code = branch_ids
@@ -216,10 +296,46 @@ impl UnifiedAutonomousDriver {
         // -------------------------------------------------------------------
         let mut commit_sandbox = OverlaySandbox::new(&self.workspace_root)?;
         commit_sandbox.write_file(&target_rel_path, winning_code.as_bytes())?;
+
+        // Cryptographic check: Verify BLAKE3 hash of staged content matches verified code
+        let staged_content = commit_sandbox.read_to_string(&target_rel_path)?;
+        let staged_hash = blake3::hash(staged_content.as_bytes()).to_hex().to_string();
+        if staged_hash != verified_hash {
+            let _ = commit_sandbox.rollback();
+            return Err(HgbError::Verification(format!(
+                "BLAKE3 integrity mismatch before disk commit: verified {}, staged {}",
+                verified_hash, staged_hash
+            )));
+        }
+
         let diff = commit_sandbox.inspect_diff()?;
 
-        let committed = if self.auto_commit {
+        // If no verification command can be inferred and none provided, report
+        // VerificationStatus::Unverified and block auto-commit unless explicitly requested.
+        let should_commit = match winning_status {
+            VerificationStatus::Unverified => {
+                self.auto_commit && self.allow_unverified_commit
+            }
+            VerificationStatus::Passed | VerificationStatus::Healed => {
+                self.auto_commit
+            }
+            VerificationStatus::Failed | VerificationStatus::Rejected => {
+                false
+            }
+        };
+
+        let committed = if should_commit {
             let _ = commit_sandbox.commit()?;
+            // Post-commit disk verification: verify hash before concluding
+            let disk_file = self.workspace_root.join(&target_rel_path);
+            let disk_content = fs::read_to_string(&disk_file)?;
+            let disk_hash = blake3::hash(disk_content.as_bytes()).to_hex().to_string();
+            if disk_hash != verified_hash {
+                return Err(HgbError::Verification(format!(
+                    "BLAKE3 disk verification failed after commit: expected {}, found {}",
+                    verified_hash, disk_hash
+                )));
+            }
             true
         } else {
             let _ = commit_sandbox.rollback();
@@ -256,6 +372,8 @@ impl UnifiedAutonomousDriver {
             diff,
             dpo_pair_path: dpo_path,
             duration_ms,
+            verification_status: winning_status,
+            verified_blake3_hash: verified_hash,
         })
     }
 
@@ -265,7 +383,7 @@ impl UnifiedAutonomousDriver {
         target_path: &str,
         initial_code: &str,
         _node_id: &ThoughtNodeId,
-    ) -> Result<(FitnessScore, BranchExecutionResult, usize)> {
+    ) -> Result<(FitnessScore, BranchExecutionResult, usize, VerificationStatus)> {
         let mut sandbox = OverlaySandbox::new(&self.workspace_root)?;
         let mut current_code = initial_code.to_string();
         let mut healed_rounds = 0;
@@ -279,50 +397,111 @@ impl UnifiedAutonomousDriver {
         let lines_changed = current_code.lines().count();
         let blast_score = ((lines_changed as f32 * 0.3) + (symbols.len() as f32 * 1.5)).clamp(5.0, 95.0);
 
+        let test_cmd_opt = self.resolve_verification_command();
+        let tests_configured = test_cmd_opt.is_some();
+
         // Verification & Self-Healing loop
         let mut last_stdout = String::new();
         let mut last_stderr = String::new();
         let mut last_exit_code = 0;
-        let mut verification_passed = true;
+        let mut check_passed = false;
 
-        for round in 0..=self.max_healing_rounds {
-            let (passed, code, stdout, stderr) = self.run_verification(&sandbox, target_path)?;
-            last_stdout = stdout.clone();
-            last_stderr = stderr.clone();
-            last_exit_code = code;
+        if let Some(ref cmd_str) = test_cmd_opt {
+            for round in 0..=self.max_healing_rounds {
+                let parts: Vec<&str> = cmd_str.split_whitespace().collect();
+                let (passed, code, stdout, stderr) = if parts.is_empty() {
+                    (true, 0, "No command".into(), String::new())
+                } else {
+                    let res = sandbox.execute_command(parts[0], &parts[1..])?;
+                    (res.success, res.exit_code, res.stdout, res.stderr)
+                };
 
-            if passed {
-                verification_passed = true;
+                last_stdout = stdout.clone();
+                last_stderr = stderr.clone();
+                last_exit_code = code;
+
+                if passed {
+                    check_passed = true;
+                    break;
+                }
+
+                // If verification failed and we have healing rounds remaining, self-heal
+                if round < self.max_healing_rounds {
+                    if let Some(healed_code) = self.heal_diagnostics(&current_code, &stderr, target_path) {
+                        current_code = healed_code;
+                        sandbox.write_file(target_path, current_code.as_bytes())?;
+                        healed_rounds += 1;
+                        continue;
+                    }
+                }
+
+                check_passed = false;
                 break;
             }
-
-            // If verification failed and we have healing rounds remaining, self-heal
-            if round < self.max_healing_rounds {
-                if let Some(healed_code) = self.heal_diagnostics(&current_code, &stderr, target_path) {
-                    current_code = healed_code;
-                    sandbox.write_file(target_path, current_code.as_bytes())?;
-                    healed_rounds += 1;
-                    continue;
+        } else {
+            // No verification command inferred and none provided: check baseline AST syntax if Rust
+            if target_path.ends_with(".rs") {
+                if let Ok(content) = sandbox.read_to_string(target_path) {
+                    for round in 0..=self.max_healing_rounds {
+                        match syn::parse_file(&content) {
+                            Ok(_) => {
+                                check_passed = true;
+                                last_stdout = "AST syntax check passed".into();
+                                break;
+                            }
+                            Err(e) => {
+                                let err_str = format!("Syntax error: {}", e);
+                                last_stderr = err_str.clone();
+                                last_exit_code = 1;
+                                if round < self.max_healing_rounds {
+                                    if let Some(healed_code) = self.heal_diagnostics(&current_code, &err_str, target_path) {
+                                        current_code = healed_code;
+                                        sandbox.write_file(target_path, current_code.as_bytes())?;
+                                        healed_rounds += 1;
+                                        continue;
+                                    }
+                                }
+                                check_passed = false;
+                                break;
+                            }
+                        }
+                    }
                 }
+            } else {
+                check_passed = true;
+                last_stdout = "Format inspected".into();
             }
-
-            verification_passed = false;
-            break;
         }
 
         let duration_ms = start.elapsed().as_millis() as u64;
         let _ = sandbox.rollback();
 
-        let test_pass_rate = if verification_passed { 1.0 } else { 0.0 };
+        // Fix Procedure 2.1: Never report 100% test pass rate when tests weren't run!
+        let (test_pass_rate, verification_status) = if tests_configured {
+            if check_passed {
+                let status = if healed_rounds > 0 {
+                    VerificationStatus::Healed
+                } else {
+                    VerificationStatus::Passed
+                };
+                (1.0, status)
+            } else {
+                (0.0, VerificationStatus::Failed)
+            }
+        } else {
+            // No verification command provided or inferred -> Unverified, test_pass_rate is strictly 0.0!
+            (0.0, VerificationStatus::Unverified)
+        };
+
         let composite_score = FitnessScore::compute_composite(
-            verification_passed,
+            check_passed,
             test_pass_rate,
             blast_score,
             duration_ms,
         );
 
         let fitness = FitnessScore {
-            compilation_passed: verification_passed,
+            compilation_passed: check_passed,
             test_pass_rate,
             blast_score,
             execution_latency_ms: duration_ms,
@@ -337,7 +516,7 @@ impl UnifiedAutonomousDriver {
             compiler_diagnostics: Vec::new(),
         };
 
-        Ok((fitness, exec_output, healed_rounds))
+        Ok((fitness, exec_output, healed_rounds, verification_status))
     }
 
     /// Execute verification check command inside the CoW sandbox
@@ -755,6 +934,22 @@ impl UnifiedAutonomousDriver {
         ));
         out.push_str(&format!(
             "│  {:<18} : {:<52} │\n",
+            "Verification".dimmed(),
+            match report.verification_status {
+                VerificationStatus::Passed => "PASSED (All test suites verified)".green().bold(),
+                VerificationStatus::Healed => "HEALED (Self-repaired & test suite verified)".cyan().bold(),
+                VerificationStatus::Unverified => "UNVERIFIED (No test runner detected - commit blocked)".yellow().bold(),
+                VerificationStatus::Failed => "FAILED (Tests or diagnostics failed)".red().bold(),
+                VerificationStatus::Rejected => "REJECTED".red().bold(),
+            }
+        ));
+        out.push_str(&format!(
+            "│  {:<18} : {:<52} │\n",
+            "BLAKE3 Pinning".dimmed(),
+            format!("{} (Verified)", &report.verified_blake3_hash[..16.min(report.verified_blake3_hash.len())]).blue().bold()
+        ));
+        out.push_str(&format!(
+            "│  {:<18} : {:<52} │\n",
             "Self-Healing".dimmed(),
             if report.healed_iterations > 0 {
                 format!("{} iterations applied", report.healed_iterations).yellow().bold()
@@ -869,6 +1064,7 @@ mod tests {
         ).unwrap();
 
         let driver = UnifiedAutonomousDriver::new(ws_path)
+            .with_verification_command("true") // Verified via test runner
             .with_auto_commit(true);
 
         let report = driver
@@ -877,9 +1073,107 @@ mod tests {
             .unwrap();
 
         assert!(report.committed);
+        assert_eq!(report.verification_status, VerificationStatus::Passed);
+        assert_eq!(report.fitness_score.test_pass_rate, 1.0);
         assert!(ws_path.join("src/buffer.rs").exists());
         let written = fs::read_to_string(ws_path.join("src/buffer.rs")).unwrap();
         assert!(written.contains("Buffer"));
+
+        // Verify BLAKE3 pinning matches disk
+        let expected_hash = blake3::hash(written.as_bytes()).to_hex().to_string();
+        assert_eq!(report.verified_blake3_hash, expected_hash);
+    }
+
+    #[test]
+    fn test_auto_detect_project_commands() {
+        // 1. Rust Cargo
+        let tmp_cargo = TempDirGuard::new("test_detect_cargo");
+        fs::write(tmp_cargo.path().join("Cargo.toml"), "[package]").unwrap();
+        let driver_cargo = UnifiedAutonomousDriver::new(tmp_cargo.path());
+        assert_eq!(driver_cargo.auto_detect_verification_command(), Some("cargo test".to_string()));
+
+        // 2. Bun
+        let tmp_bun = TempDirGuard::new("test_detect_bun");
+        fs::write(tmp_bun.path().join("bun.lockb"), "").unwrap();
+        let driver_bun = UnifiedAutonomousDriver::new(tmp_bun.path());
+        assert_eq!(driver_bun.auto_detect_verification_command(), Some("bun test".to_string()));
+
+        // 3. Node/npm
+        let tmp_npm = TempDirGuard::new("test_detect_npm");
+        fs::write(tmp_npm.path().join("package.json"), "{}").unwrap();
+        let driver_npm = UnifiedAutonomousDriver::new(tmp_npm.path());
+        assert_eq!(driver_npm.auto_detect_verification_command(), Some("npm test".to_string()));
+
+        // 4. Python pytest
+        let tmp_py = TempDirGuard::new("test_detect_pytest");
+        fs::write(tmp_py.path().join("pytest.ini"), "[pytest]").unwrap();
+        let driver_py = UnifiedAutonomousDriver::new(tmp_py.path());
+        assert_eq!(driver_py.auto_detect_verification_command(), Some("pytest".to_string()));
+
+        // 5. Go
+        let tmp_go = TempDirGuard::new("test_detect_go");
+        fs::write(tmp_go.path().join("go.mod"), "module test").unwrap();
+        let driver_go = UnifiedAutonomousDriver::new(tmp_go.path());
+        assert_eq!(driver_go.auto_detect_verification_command(), Some("go test".to_string()));
+
+        // 6. Unknown / Unverified
+        let tmp_none = TempDirGuard::new("test_detect_none");
+        let driver_none = UnifiedAutonomousDriver::new(tmp_none.path());
+        assert_eq!(driver_none.auto_detect_verification_command(), None);
+    }
+
+    #[tokio::test]
+    async fn test_unverified_blocks_auto_commit_and_zeroes_pass_rate() {
+        let tmp = TempDirGuard::new("hgb_unverified_block");
+        let ws_path = tmp.path();
+        let src_dir = ws_path.join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+
+        // No Cargo.toml, bun.lock, package.json, pytest, go.mod -> unverified
+        let driver = UnifiedAutonomousDriver::new(ws_path)
+            .with_auto_commit(true); // Attempt auto-commit, should be blocked!
+
+        let report = driver
+            .execute("implement safe buffer", Some("src/buffer.rs"))
+            .await
+            .unwrap();
+
+        // Must report Unverified
+        assert_eq!(report.verification_status, VerificationStatus::Unverified);
+        // Must NOT report 100% test pass rate!
+        assert_eq!(report.fitness_score.test_pass_rate, 0.0);
+        // Auto-commit must be blocked!
+        assert!(!report.committed);
+        // File must NOT exist on disk
+        assert!(!ws_path.join("src/buffer.rs").exists());
+    }
+
+    #[tokio::test]
+    async fn test_explicit_unverified_commit() {
+        let tmp = TempDirGuard::new("hgb_explicit_unverified_commit");
+        let ws_path = tmp.path();
+        let src_dir = ws_path.join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+
+        // Explicitly allow unverified commit
+        let driver = UnifiedAutonomousDriver::new(ws_path)
+            .with_auto_commit(true)
+            .with_allow_unverified_commit(true);
+
+        let report = driver
+            .execute("implement safe buffer", Some("src/buffer.rs"))
+            .await
+            .unwrap();
+
+        assert_eq!(report.verification_status, VerificationStatus::Unverified);
+        assert_eq!(report.fitness_score.test_pass_rate, 0.0);
+        assert!(report.committed);
+        assert!(ws_path.join("src/buffer.rs").exists());
+
+        // BLAKE3 hash must be pinned and match disk content
+        let written = fs::read_to_string(ws_path.join("src/buffer.rs")).unwrap();
+        let expected_hash = blake3::hash(written.as_bytes()).to_hex().to_string();
+        assert_eq!(report.verified_blake3_hash, expected_hash);
     }
 
     #[test]

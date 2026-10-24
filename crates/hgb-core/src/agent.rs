@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
@@ -79,6 +80,7 @@ pub enum AgentEvent {
     Thought(String),
     ToolStarting { call_id: String, tool_name: String, summary: String },
     ToolCompleted { call_id: String, tool_name: String, duration_ms: u64, is_error: bool, output_snippet: String },
+    ApprovalRequired { call_id: String, tool_name: String, summary: String },
     FinalResponse(String),
     Error(String),
 }
@@ -110,6 +112,7 @@ pub struct ReActAgentEngine {
     history: Vec<AgentMessage>,
     system_prompt: Option<String>,
     custom_tools: HashMap<String, Arc<dyn crate::traits::HgbTool>>,
+    approval_hook: Option<Arc<dyn Fn(&AgentToolCall) -> bool + Send + Sync>>,
 }
 
 impl ReActAgentEngine {
@@ -120,7 +123,34 @@ impl ReActAgentEngine {
             history: Vec::new(),
             system_prompt: None,
             custom_tools: HashMap::new(),
+            approval_hook: None,
         }
+    }
+
+    pub fn with_approval_hook<H>(mut self, hook: H) -> Self
+    where
+        H: Fn(&AgentToolCall) -> bool + Send + Sync + 'static,
+    {
+        self.approval_hook = Some(Arc::new(hook));
+        self
+    }
+
+    /// Check whether a tool causes mutations to the workspace or persistent state
+    pub fn is_mutating_tool(tool_name: &str) -> bool {
+        matches!(
+            tool_name,
+            "write_to_file"
+                | "write"
+                | "replace_file_content"
+                | "edit"
+                | "replace"
+                | "run_command"
+                | "exec"
+                | "sh"
+                | "bash"
+                | "record_memory"
+                | "remember"
+        )
     }
 
     pub fn with_system_prompt(mut self, prompt: impl Into<String>) -> Self {
@@ -296,11 +326,31 @@ impl ReActAgentEngine {
         while turn < self.config.max_turns {
             turn += 1;
 
-            // 3. Synthesize prompt history for completion
+            // 3. Synthesize prompt history for completion with turn_timeout_secs enforced
             let aggregated_prompt = self.format_conversation_prompt();
             let model_arg = self.config.model.as_deref();
 
-            let response = self.provider.complete(&aggregated_prompt, model_arg).await?;
+            let timeout_duration = if self.config.turn_timeout_secs > 0 {
+                std::time::Duration::from_secs(self.config.turn_timeout_secs)
+            } else {
+                std::time::Duration::from_secs(120)
+            };
+
+            let response = match tokio::time::timeout(
+                timeout_duration,
+                self.provider.complete(&aggregated_prompt, model_arg),
+            ).await {
+                Ok(Ok(resp)) => resp,
+                Ok(Err(e)) => return Err(e),
+                Err(_) => {
+                    let err_msg = format!(
+                        "Reasoning turn {} timed out after {} seconds (enforced by turn_timeout_secs)",
+                        turn, self.config.turn_timeout_secs
+                    );
+                    event_sink(AgentEvent::Error(err_msg.clone()));
+                    return Err(HgbError::Execution(err_msg));
+                }
+            };
 
             // 4. Parse tool calls
             let tool_calls = Self::extract_tool_calls(&response);
@@ -334,11 +384,73 @@ impl ReActAgentEngine {
             let mut results = Vec::new();
             for call in &tool_calls {
                 let summary = format!("{}({})", call.tool_name, serde_json::to_string(&call.arguments).unwrap_or_default());
+
+                // Enforce auto_approve: if false, check / wait for approval before executing mutating tool calls
+                if !self.config.auto_approve && Self::is_mutating_tool(&call.tool_name) {
+                    event_sink(AgentEvent::ApprovalRequired {
+                        call_id: call.call_id.clone(),
+                        tool_name: call.tool_name.clone(),
+                        summary: summary.clone(),
+                    });
+
+                    let approved = if let Some(ref hook) = self.approval_hook {
+                        hook(call)
+                    } else if std::io::stdin().is_terminal() {
+                        use std::io::Write;
+                        eprint!("Mutating tool execution requires approval: {} [y/N]: ", summary);
+                        let _ = std::io::stdout().flush();
+                        let mut input = String::new();
+                        if std::io::stdin().read_line(&mut input).is_ok() {
+                            let t = input.trim();
+                            t.eq_ignore_ascii_case("y") || t.eq_ignore_ascii_case("yes")
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
+
+                    if !approved {
+                        let err_msg = format!("Tool execution rejected: approval denied for mutating tool '{}'", call.tool_name);
+                        event_sink(AgentEvent::ToolCompleted {
+                            call_id: call.call_id.clone(),
+                            tool_name: call.tool_name.clone(),
+                            duration_ms: 0,
+                            is_error: true,
+                            output_snippet: err_msg.clone(),
+                        });
+
+                        steps.push(AgentStepInfo {
+                            step_index: steps.len() + 1,
+                            tool_name: call.tool_name.clone(),
+                            tool_args: summary,
+                            tool_result: err_msg.clone(),
+                            success: false,
+                            duration_ms: 0,
+                        });
+
+                        results.push(AgentToolResult {
+                            call_id: call.call_id.clone(),
+                            tool_name: call.tool_name.clone(),
+                            output: err_msg,
+                            is_error: true,
+                            duration_ms: 0,
+                        });
+                        continue;
+                    }
+                }
+
                 event_sink(AgentEvent::ToolStarting {
                     call_id: call.call_id.clone(),
                     tool_name: call.tool_name.clone(),
                     summary: summary.clone(),
                 });
+
+                // Pre-mutation durable checkpoint before mutating workspace
+                if Self::is_mutating_tool(&call.tool_name) {
+                    let cp_mgr = crate::durable_checkpoint::DurableCheckpointManager::new(&self.config.workspace_root);
+                    let _ = cp_mgr.create_checkpoint(&format!("pre-mutation agent: {}", call.tool_name));
+                }
 
                 let tool_start = Instant::now();
                 let tool_res = self.execute_tool(&call.tool_name, &call.arguments).await;
@@ -835,6 +947,70 @@ mod tests {
     
 
 
+
+    struct MockSlowProvider {
+        delay_ms: u64,
+        response: String,
+    }
+
+    #[async_trait]
+    impl HgbProvider for MockSlowProvider {
+        fn name(&self) -> &str {
+            "mock_slow"
+        }
+        async fn complete(&self, _prompt: &str, _model: Option<&str>) -> Result<String> {
+            tokio::time::sleep(std::time::Duration::from_millis(self.delay_ms)).await;
+            Ok(self.response.clone())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_turn_timeout_enforcement() {
+        let provider = Arc::new(MockSlowProvider {
+            delay_ms: 1500,
+            response: "Finished".to_string(),
+        });
+        let config = AgentLoopConfig {
+            turn_timeout_secs: 1, // 1 second timeout, provider takes 1.5s
+            ..Default::default()
+        };
+        let mut engine = ReActAgentEngine::new(provider, config);
+        let res = engine.run("Test timeout", |_| {}).await;
+        assert!(res.is_err());
+        let err_str = res.unwrap_err().to_string();
+        assert!(err_str.contains("timed out"));
+    }
+
+    #[tokio::test]
+    async fn test_auto_approve_mutating_tool_rejection() {
+        let tool_response = "```tool_call\n{\n  \"call_id\": \"call_write\",\n  \"tool_name\": \"write_to_file\",\n  \"arguments\": {\"path\": \"/tmp/test_should_not_exist.txt\", \"content\": \"forbidden\"}\n}\n```".to_string();
+        let provider = Arc::new(MockSlowProvider {
+            delay_ms: 10,
+            response: tool_response,
+        });
+
+        let config = AgentLoopConfig {
+            max_turns: 1,
+            auto_approve: false, // Disallow auto-approve!
+            ..Default::default()
+        };
+
+        // Approval hook explicitly denies the mutating action
+        let mut engine = ReActAgentEngine::new(provider, config)
+            .with_approval_hook(|_call| false);
+
+        let approval_requested = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = Arc::clone(&approval_requested);
+        let _ = engine.run("Create file", move |ev| {
+            if let AgentEvent::ApprovalRequired { tool_name, .. } = ev {
+                if tool_name == "write_to_file" {
+                    flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+        }).await;
+
+        assert!(approval_requested.load(std::sync::atomic::Ordering::SeqCst), "Expected ApprovalRequired event to be dispatched");
+    }
 
     #[tokio::test]
     async fn test_extract_and_strip_tool_calls() {

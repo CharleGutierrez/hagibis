@@ -456,8 +456,8 @@ pub use memory::{
     ProjectRoadmapMilestone, TechDebtEntry,
 };
 pub use package_guard::{PackageEcosystem, PackageGuard, PackageStatus, PackageVerificationReport};
-pub use protocol::{DaemonStatus, DevServerEndpointInfo, DoctorPillar, HgbRequest, HgbResponse, SwarmPodResult};
-pub use providers::{GeminiProvider, OllamaModelDetails, OllamaModelTag, OllamaProvider};
+pub use protocol::{DaemonStatus, DevServerEndpointInfo, DoctorPillar, HgbRequest, HgbResponse, SwarmPodResult, WorkspaceIdentity};
+pub use providers::{GeminiProvider, OllamaModelDetails, OllamaModelTag, OllamaProvider, SharedProviderRouter};
 pub use openai_compatible::{
     AnthropicMessage, AnthropicProvider, ChatMessage, OpenAiCompatibleFlavor,
     OpenAiCompatibleProvider, DEFAULT_ANTHROPIC_MODEL,
@@ -683,12 +683,16 @@ pub use enterprise_gateway::{EnterpriseGateway, EnterpriseCompliance, GatewayAut
 pub mod visionary;
 pub mod zig_accelerate;
 
+pub mod path_jail;
+pub use path_jail::PathJail;
+
 pub mod speculative_sandbox;
 pub mod speculative_draft;
 pub mod submarine;
 pub mod blast_radius;
 pub mod adversarial_tournament;
 pub mod checkpoint_time_machine;
+pub mod durable_checkpoint;
 pub mod agentic_bisect;
 
 pub use speculative_sandbox::{
@@ -711,6 +715,9 @@ pub use adversarial_tournament::{
 };
 pub use checkpoint_time_machine::{
     CheckpointMetadata, CheckpointTimeMachine, RollbackReport,
+};
+pub use durable_checkpoint::{
+    DurableCheckpointManager, DurableCheckpointMeta, DurableFileEntry, DurableRollbackReport,
 };
 pub use agentic_bisect::{
     AgenticBisectEngine, BisectConfig, BisectOutcome, BisectStep, CulpritAnalysis,

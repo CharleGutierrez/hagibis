@@ -34,6 +34,9 @@ pub enum HgbError {
 
     #[error("Invalid input: {0}")]
     InvalidInput(String),
+
+    #[error("Verification error: {0}")]
+    Verification(String),
 }
 
 impl HgbError {

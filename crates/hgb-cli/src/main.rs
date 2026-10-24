@@ -5742,12 +5742,12 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Checkpoint { action } => {
             let ws = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-            let time_machine = hgb_core::CheckpointTimeMachine::new(&ws);
+            let mgr = hgb_core::DurableCheckpointManager::new(&ws);
             match action {
                 CheckpointSubcommand::List => {
-                    let list = time_machine.list_checkpoints()?;
+                    let list = mgr.list_checkpoints()?;
                     println!("{}", "═══════════════════════════════════════════════════════════════".cyan());
-                    println!("{}", "  ⏱️  WORKSPACE CHECKPOINT TIME-MACHINE  ⏱️".cyan().bold());
+                    println!("{}", "  ⏱️  WORKSPACE CHECKPOINT TIME-MACHINE (DURABLE)  ⏱️".cyan().bold());
                     println!("{}", "═══════════════════════════════════════════════════════════════".cyan());
                     if list.is_empty() {
                         println!("  No checkpoints recorded yet in .hgb/checkpoints/");
@@ -5763,15 +5763,18 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("{}", "═══════════════════════════════════════════════════════════════".cyan());
                 }
                 CheckpointSubcommand::Create { label } => {
-                    let ckpt = time_machine.create_checkpoint(&label)?;
-                    println!("✔ Checkpoint created: {} ({})", ckpt.id.green().bold(), ckpt.label.white());
+                    let ckpt = mgr.create_checkpoint(&label)?;
+                    println!("✔ Durable checkpoint created: {} ({})", ckpt.id.green().bold(), ckpt.label.white());
                     println!("  Snapshotted {} workspace files ({} bytes) in sub-milliseconds.", ckpt.file_count, ckpt.total_bytes);
                 }
                 CheckpointSubcommand::Rewind { id } => {
-                    let res = time_machine.rollback_to(&id)?;
-                    println!("✔ Workspace successfully restored to checkpoint: {}", res.checkpoint_id.green().bold());
+                    let res = mgr.restore_checkpoint(&id)?;
+                    println!("✔ Workspace successfully restored to durable checkpoint: {}", res.checkpoint_id.green().bold());
                     println!("  Restored files: {}", res.files_restored.len());
                     println!("  Cleaned phantom files: {}", res.files_deleted.len());
+                    if res.git_reset_applied {
+                        println!("  Git staging: reset to HEAD");
+                    }
                     println!("  Latency: {}ms", res.duration_ms);
                 }
             }
@@ -5964,14 +5967,38 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Undo { checkpoint } => {
             let ws = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-            let time_machine = hgb_core::CheckpointTimeMachine::new(&ws);
+            let mgr = hgb_core::DurableCheckpointManager::new(&ws);
             let res = if let Some(ref id) = checkpoint {
-                time_machine.rollback_to(id)?
+                mgr.restore_checkpoint(id)
             } else {
-                time_machine.rollback_latest()?
+                mgr.restore_latest()
             };
+
+            let res = match res {
+                Ok(r) => r,
+                Err(_) => {
+                    // Fallback to legacy time machine if checkpoint was in timestamp format
+                    let tm = hgb_core::CheckpointTimeMachine::new(&ws);
+                    let legacy_res = if let Some(ref id) = checkpoint {
+                        tm.rollback_to(id)?
+                    } else {
+                        tm.rollback_latest()?
+                    };
+                    hgb_core::durable_checkpoint::DurableRollbackReport {
+                        checkpoint_id: legacy_res.checkpoint_id,
+                        label: legacy_res.label,
+                        files_restored: legacy_res.files_restored,
+                        files_deleted: legacy_res.files_deleted,
+                        git_reset_applied: false,
+                        memory_synced: true,
+                        duration_ms: legacy_res.duration_ms,
+                        success: legacy_res.success,
+                    }
+                }
+            };
+
             println!("{}", "═══════════════════════════════════════════════════════════════".green());
-            println!("  ✔ {}", "ATOMIC INSTANT ROLLBACK EXECUTED".green().bold());
+            println!("  ✔ {}", "ATOMIC DURABLE ROLLBACK & CONSOLIDATED UNDO EXECUTED".green().bold());
             println!("{}", "═══════════════════════════════════════════════════════════════".green());
             println!("  Checkpoint:     {}", res.checkpoint_id.cyan().bold());
             println!("  Label:          {}", res.label.white());
@@ -5987,6 +6014,12 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
                 for f in res.files_deleted.iter().take(5) {
                     println!("    ✕ {}", f);
                 }
+            }
+            if res.git_reset_applied {
+                println!("  Git Staging:    {}", "Reset to HEAD (untracked modifications reverted)".green());
+            }
+            if res.memory_synced {
+                println!("  Project Memory: {}", "Synchronized with restored workspace".green());
             }
             println!("  Latency:        {}ms", res.duration_ms);
             println!("{}", "═══════════════════════════════════════════════════════════════".green());
