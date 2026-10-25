@@ -826,6 +826,75 @@ impl CanvasVibeHelper {
         out.push_str(&format!("╰{}╯\n", "─".repeat(width.saturating_sub(2)).red()));
         out
     }
+
+    pub fn render_verification_stages(stages: &hgb_core::VerificationStages, max_width: usize) -> String {
+        VerificationStagesCard::new(stages.clone()).render_box(max_width)
+    }
+}
+
+/// Multi-Stage Verification Card for Unified Driver
+#[derive(Debug, Clone, PartialEq)]
+pub struct VerificationStagesCard {
+    pub stages: hgb_core::VerificationStages,
+}
+
+impl VerificationStagesCard {
+    pub fn new(stages: hgb_core::VerificationStages) -> Self {
+        Self { stages }
+    }
+
+    pub fn render_box(&self, max_width: usize) -> String {
+        let width = max_width.max(64);
+        let inner_w = width.saturating_sub(4);
+        let mut out = String::new();
+
+        out.push_str(&format!("╭{}╮\n", "─".repeat(width.saturating_sub(2)).cyan()));
+        let title = "🛡️  MULTI-STAGE VERIFICATION REPORT";
+        let title_len = UnicodeWidthStr::width(title);
+        let pad = inner_w.saturating_sub(title_len);
+        out.push_str(&format!("│  {}{}{}\n", title.bold().cyan(), " ".repeat(pad), "│".cyan()));
+        out.push_str(&format!("├{}┤\n", "─".repeat(width.saturating_sub(2)).cyan()));
+
+        let syntax_val = if self.stages.syntax_valid { "PASS".green().bold() } else { "FAIL".red().bold() };
+        let build_val = match self.stages.build_passed {
+            Some(true) => "PASS".green().bold(),
+            Some(false) => "FAIL".red().bold(),
+            None => "SKIPPED".yellow().bold(),
+        };
+        let tests_val = match self.stages.tests_passed {
+            Some(true) => "PASS".green().bold(),
+            Some(false) => "FAIL".red().bold(),
+            None => "SKIPPED (no test runner detected)".yellow().bold(),
+        };
+        let applied_val = if self.stages.applied_cleanly {
+            "PASS (Committed to workspace)".green().bold()
+        } else {
+            "ROLLED BACK (Volatile layer wiped)".yellow().bold()
+        };
+
+        let lines = [
+            format!("  • Syntax:  {}", syntax_val),
+            format!("  • Build:   {}", build_val),
+            format!("  • Tests:   {}", tests_val),
+            format!("  • Applied: {}", applied_val),
+        ];
+
+        let raw_lines = [
+            format!("  • Syntax:  {}", if self.stages.syntax_valid { "PASS" } else { "FAIL" }),
+            format!("  • Build:   {}", match self.stages.build_passed { Some(true) => "PASS", Some(false) => "FAIL", None => "SKIPPED" }),
+            format!("  • Tests:   {}", match self.stages.tests_passed { Some(true) => "PASS", Some(false) => "FAIL", None => "SKIPPED (no test runner detected)" }),
+            format!("  • Applied: {}", if self.stages.applied_cleanly { "PASS (Committed to workspace)" } else { "ROLLED BACK (Volatile layer wiped)" }),
+        ];
+
+        for (idx, line) in lines.iter().enumerate() {
+            let line_len = UnicodeWidthStr::width(raw_lines[idx].as_str());
+            let line_pad = inner_w.saturating_sub(line_len);
+            out.push_str(&format!("│{}{}{}\n", line, " ".repeat(line_pad), "│".cyan()));
+        }
+
+        out.push_str(&format!("╰{}╯\n", "─".repeat(width.saturating_sub(2)).cyan()));
+        out
+    }
 }
 
 #[cfg(test)]

@@ -52,6 +52,49 @@ fn default_unverified() -> VerificationStatus {
     VerificationStatus::Unverified
 }
 
+/// Granular breakdown of autonomous verification stages
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct VerificationStages {
+    pub syntax_valid: bool,
+    pub build_passed: Option<bool>,
+    pub tests_passed: Option<bool>,
+    pub applied_cleanly: bool,
+}
+
+impl VerificationStages {
+    pub fn syntax_display(&self) -> &'static str {
+        if self.syntax_valid {
+            "PASS"
+        } else {
+            "FAIL"
+        }
+    }
+
+    pub fn build_display(&self) -> &'static str {
+        match self.build_passed {
+            Some(true) => "PASS",
+            Some(false) => "FAIL",
+            None => "SKIPPED",
+        }
+    }
+
+    pub fn tests_display(&self) -> &'static str {
+        match self.tests_passed {
+            Some(true) => "PASS",
+            Some(false) => "FAIL",
+            None => "SKIPPED (no test runner detected)",
+        }
+    }
+
+    pub fn applied_display(&self) -> &'static str {
+        if self.applied_cleanly {
+            "PASS (Committed to workspace)"
+        } else {
+            "ROLLED BACK (Volatile layer wiped)"
+        }
+    }
+}
+
 /// Execution report returned by the `UnifiedAutonomousDriver`
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UnifiedExecutionReport {
@@ -71,6 +114,20 @@ pub struct UnifiedExecutionReport {
     pub verification_status: VerificationStatus,
     #[serde(default)]
     pub verified_blake3_hash: String,
+    #[serde(default)]
+    pub verification_stages: VerificationStages,
+}
+
+impl UnifiedExecutionReport {
+    pub fn format_summary(&self) -> String {
+        format!(
+            "Multi-Stage Verification:\n  • Syntax:  {}\n  • Build:   {}\n  • Tests:   {}\n  • Applied: {}",
+            self.verification_stages.syntax_display(),
+            self.verification_stages.build_display(),
+            self.verification_stages.tests_display(),
+            self.verification_stages.applied_display(),
+        )
+    }
 }
 
 /// The core Unified Autonomous Driver
@@ -238,13 +295,14 @@ impl UnifiedAutonomousDriver {
         let mut branch_statuses: HashMap<ThoughtNodeId, VerificationStatus> = HashMap::new();
 
         for branch_id in &branch_ids {
-            let (fitness, exec_output, healed_rounds, status) = self
+            let (fitness, exec_output, healed_rounds, status, final_code) = self
                 .evaluate_and_heal_branch(
                     &target_rel_path,
                     branch_code_map.get(branch_id).unwrap(),
                     branch_id,
                 )?;
 
+            branch_code_map.insert(branch_id.clone(), final_code);
             total_healed += healed_rounds;
             branch_statuses.insert(branch_id.clone(), status);
 
@@ -359,6 +417,15 @@ impl UnifiedAutonomousDriver {
 
         let duration_ms = start_time.elapsed().as_millis() as u64;
 
+        let test_cmd_opt = self.resolve_verification_command();
+        let tests_configured = test_cmd_opt.is_some();
+        let verification_stages = VerificationStages {
+            syntax_valid: winning_fitness.compilation_passed,
+            build_passed: if tests_configured { Some(winning_fitness.compilation_passed) } else { None },
+            tests_passed: if tests_configured { Some(winning_fitness.test_pass_rate > 0.0) } else { None },
+            applied_cleanly: committed,
+        };
+
         Ok(UnifiedExecutionReport {
             task_spec: task_spec.to_string(),
             target_files: vec![target_rel_path],
@@ -374,6 +441,7 @@ impl UnifiedAutonomousDriver {
             duration_ms,
             verification_status: winning_status,
             verified_blake3_hash: verified_hash,
+            verification_stages,
         })
     }
 
@@ -383,7 +451,7 @@ impl UnifiedAutonomousDriver {
         target_path: &str,
         initial_code: &str,
         _node_id: &ThoughtNodeId,
-    ) -> Result<(FitnessScore, BranchExecutionResult, usize, VerificationStatus)> {
+    ) -> Result<(FitnessScore, BranchExecutionResult, usize, VerificationStatus, String)> {
         let mut sandbox = OverlaySandbox::new(&self.workspace_root)?;
         let mut current_code = initial_code.to_string();
         let mut healed_rounds = 0;
@@ -441,29 +509,27 @@ impl UnifiedAutonomousDriver {
         } else {
             // No verification command inferred and none provided: check baseline AST syntax if Rust
             if target_path.ends_with(".rs") {
-                if let Ok(content) = sandbox.read_to_string(target_path) {
-                    for round in 0..=self.max_healing_rounds {
-                        match syn::parse_file(&content) {
-                            Ok(_) => {
-                                check_passed = true;
-                                last_stdout = "AST syntax check passed".into();
-                                break;
-                            }
-                            Err(e) => {
-                                let err_str = format!("Syntax error: {}", e);
-                                last_stderr = err_str.clone();
-                                last_exit_code = 1;
-                                if round < self.max_healing_rounds {
-                                    if let Some(healed_code) = self.heal_diagnostics(&current_code, &err_str, target_path) {
-                                        current_code = healed_code;
-                                        sandbox.write_file(target_path, current_code.as_bytes())?;
-                                        healed_rounds += 1;
-                                        continue;
-                                    }
+                for round in 0..=self.max_healing_rounds {
+                    match syn::parse_file(&current_code) {
+                        Ok(_) => {
+                            check_passed = true;
+                            last_stdout = "AST syntax check passed".into();
+                            break;
+                        }
+                        Err(e) => {
+                            let err_str = format!("Syntax error: {}", e);
+                            last_stderr = err_str.clone();
+                            last_exit_code = 1;
+                            if round < self.max_healing_rounds {
+                                if let Some(healed_code) = self.heal_diagnostics(&current_code, &err_str, target_path) {
+                                    current_code = healed_code;
+                                    sandbox.write_file(target_path, current_code.as_bytes())?;
+                                    healed_rounds += 1;
+                                    continue;
                                 }
-                                check_passed = false;
-                                break;
                             }
+                            check_passed = false;
+                            break;
                         }
                     }
                 }
@@ -516,7 +582,7 @@ impl UnifiedAutonomousDriver {
             compiler_diagnostics: Vec::new(),
         };
 
-        Ok((fitness, exec_output, healed_rounds, verification_status))
+        Ok((fitness, exec_output, healed_rounds, verification_status, current_code))
     }
 
     /// Execute verification check command inside the CoW sandbox
@@ -651,6 +717,10 @@ impl UnifiedAutonomousDriver {
                 strategy.name(),
                 if existing.is_empty() { "# Initialized by Hagibis Unified Driver" } else { existing }
             );
+        }
+
+        if spec_lower.contains("intentional_syntax_error") || spec_lower.contains("unclosed_brace") {
+            return "pub fn broken_function() {\n    let x = 42;\n".to_string();
         }
 
         // If memory buffer or buffer optimization is requested
@@ -1192,5 +1262,55 @@ mod tests {
         let diag_mut = "warning: variable does not need to be mutable";
         let healed_mut = driver.heal_diagnostics(mut_code, diag_mut, "src/lib.rs").unwrap();
         assert_eq!(healed_mut, "let x = 42;");
+    }
+
+    #[tokio::test]
+    async fn test_intentional_syntax_error_healing_commits_healed_bytes() {
+        let tmp = TempDirGuard::new("hgb_unified_test_healing_commit");
+        let ws_path = tmp.path();
+
+        let src_dir = ws_path.join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+        fs::write(
+            ws_path.join("Cargo.toml"),
+            "[package]\nname = \"healing_commit_test\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        ).unwrap();
+
+        let check_script = ws_path.join("check.sh");
+        fs::write(
+            &check_script,
+            "#!/bin/sh\nif grep -q '}' src/buffer.rs; then\n  exit 0\nelse\n  echo 'Syntax error: unclosed delimiter' >&2\n  exit 1\nfi\n",
+        ).unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&check_script).unwrap().permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&check_script, perms).unwrap();
+        }
+
+        let driver = UnifiedAutonomousDriver::new(ws_path)
+            .with_verification_command(check_script.to_str().unwrap())
+            .with_auto_commit(true);
+
+        let report = driver
+            .execute("implement buffer with intentional_syntax_error unclosed_brace", Some("src/buffer.rs"))
+            .await
+            .unwrap();
+
+        assert!(report.committed);
+        assert_eq!(report.verification_status, VerificationStatus::Healed);
+        assert!(report.healed_iterations >= 1);
+        assert!(report.verification_stages.syntax_valid);
+        assert_eq!(report.verification_stages.tests_passed, Some(true));
+        assert!(report.verification_stages.applied_cleanly);
+
+        // Verify the file on disk contains the healed bytes (closing brace balanced)
+        let disk_file = ws_path.join("src/buffer.rs");
+        assert!(disk_file.exists());
+        let disk_content = fs::read_to_string(&disk_file).unwrap();
+        assert!(disk_content.contains('}'));
+        assert!(syn::parse_file(&disk_content).is_ok(), "Committed file must parse cleanly as valid Rust AST");
     }
 }

@@ -99,6 +99,22 @@ impl PathJail {
         self.check_boundary(rel_path)
     }
 
+    /// Strictly resolve and validate `rel_path` inside the jail root.
+    /// Rejects absolute paths, traversals, and symlink escapes with `HgbError::SandboxViolation`.
+    pub fn resolve(&self, rel_path: impl AsRef<Path>) -> Result<PathBuf> {
+        let p = rel_path.as_ref();
+        if p.is_absolute() {
+            return Err(HgbError::SandboxViolation(format!(
+                "Sandbox path containment violation: absolute path '{}' rejected",
+                p.display()
+            )));
+        }
+        self.check_boundary(p).map_err(|e| match e {
+            HgbError::Security(msg) => HgbError::SandboxViolation(msg),
+            other => HgbError::SandboxViolation(other.to_string()),
+        })
+    }
+
     /// Check if a path passes boundary validation without returning error
     pub fn is_safe(&self, rel_path: impl AsRef<Path>) -> bool {
         self.check_boundary(rel_path).is_ok()

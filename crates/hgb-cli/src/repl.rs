@@ -3355,14 +3355,24 @@ impl HagibisRepl {
     }
 
     pub async fn dispatch(&self, req: HgbRequest) -> HgbResponse {
-        match self.client.send(req.clone()).await {
-            Ok(resp) => resp,
-            Err(_e) => {
-                // Standalone fallback
-                let state = std::sync::Arc::new(hgb_daemon::server::DaemonState::new(self.client.socket_path().to_path_buf()));
-                hgb_daemon::server::HagibisDaemon::handle_request(&state, req).await
+        let enveloped_req = match req {
+            HgbRequest::Enveloped { .. } => req,
+            other => other.enveloped(),
+        };
+
+        for attempt in 0..3 {
+            if attempt > 0 {
+                tokio::time::sleep(tokio::time::Duration::from_millis(50 * attempt as u64)).await;
+            }
+            match self.client.send(enveloped_req.clone()).await {
+                Ok(resp) => return resp,
+                Err(_e) => {}
             }
         }
+
+        // Standalone fallback: retain exact same enveloped request_id
+        let state = std::sync::Arc::new(hgb_daemon::server::DaemonState::new(self.client.socket_path().to_path_buf()));
+        hgb_daemon::server::HagibisDaemon::handle_request(&state, enveloped_req).await
     }
 
     pub async fn show_models(&self) {

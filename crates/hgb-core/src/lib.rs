@@ -756,7 +756,7 @@ pub mod github_action_runner;
 pub mod gpu_accelerate;
 
 pub use unified_driver::{
-    UnifiedAutonomousDriver, UnifiedExecutionReport,
+    UnifiedAutonomousDriver, UnifiedExecutionReport, VerificationStages,
 };
 pub use github_action_runner::{
     ActionConfig as GitHubActionConfig, ActionReport as GitHubActionReport, GitHubActionRunner,

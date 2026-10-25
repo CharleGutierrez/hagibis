@@ -22,9 +22,22 @@ use std::os::unix::fs::PermissionsExt;
 #[cfg(unix)]
 use tokio::signal::unix::{signal, SignalKind};
 
+#[derive(Debug, Clone)]
+pub enum IdempotencyStatus {
+    InFlight(std::time::Instant),
+    Completed(std::time::Instant, HgbResponse),
+}
+
+#[derive(Debug, Clone)]
+pub enum ClaimResult {
+    Claimed,
+    Hit(HgbResponse),
+    InFlight,
+}
+
 /// Thread-safe deduplication cache preventing duplicate execution of state-mutating requests
 pub struct IdempotencyCache {
-    entries: tokio::sync::RwLock<HashMap<String, (std::time::Instant, HgbResponse)>>,
+    entries: tokio::sync::RwLock<HashMap<String, IdempotencyStatus>>,
     ttl: std::time::Duration,
 }
 
@@ -36,9 +49,67 @@ impl IdempotencyCache {
         }
     }
 
+    pub async fn claim_or_get(&self, request_id: &str) -> ClaimResult {
+        let mut lock = self.entries.write().await;
+        let now = std::time::Instant::now();
+        if lock.len() > 1000 {
+            let ttl = self.ttl;
+            lock.retain(|_, status| match status {
+                IdempotencyStatus::InFlight(inst) => inst.elapsed() <= ttl,
+                IdempotencyStatus::Completed(inst, _) => inst.elapsed() <= ttl,
+            });
+        }
+
+        if let Some(status) = lock.get_mut(request_id) {
+            match status {
+                IdempotencyStatus::Completed(instant, resp) => {
+                    if instant.elapsed() <= self.ttl {
+                        return ClaimResult::Hit(resp.clone());
+                    }
+                    *status = IdempotencyStatus::InFlight(now);
+                    ClaimResult::Claimed
+                }
+                IdempotencyStatus::InFlight(instant) => {
+                    if instant.elapsed() <= self.ttl {
+                        ClaimResult::InFlight
+                    } else {
+                        *status = IdempotencyStatus::InFlight(now);
+                        ClaimResult::Claimed
+                    }
+                }
+            }
+        } else {
+            lock.insert(request_id.to_string(), IdempotencyStatus::InFlight(now));
+            ClaimResult::Claimed
+        }
+    }
+
+    pub async fn complete(&self, request_id: &str, response: HgbResponse) {
+        let mut lock = self.entries.write().await;
+        let now = std::time::Instant::now();
+        if lock.len() > 1000 {
+            let ttl = self.ttl;
+            lock.retain(|_, status| match status {
+                IdempotencyStatus::InFlight(inst) => inst.elapsed() <= ttl,
+                IdempotencyStatus::Completed(inst, _) => inst.elapsed() <= ttl,
+            });
+        }
+        lock.insert(
+            request_id.to_string(),
+            IdempotencyStatus::Completed(now, response),
+        );
+    }
+
+    pub async fn release_inflight(&self, request_id: &str) {
+        let mut lock = self.entries.write().await;
+        if let Some(IdempotencyStatus::InFlight(_)) = lock.get(request_id) {
+            lock.remove(request_id);
+        }
+    }
+
     pub async fn get(&self, id: &str) -> Option<HgbResponse> {
         let lock = self.entries.read().await;
-        if let Some((instant, resp)) = lock.get(id) {
+        if let Some(IdempotencyStatus::Completed(instant, resp)) = lock.get(id) {
             if instant.elapsed() <= self.ttl {
                 return Some(resp.clone());
             }
@@ -47,12 +118,7 @@ impl IdempotencyCache {
     }
 
     pub async fn insert(&self, id: String, resp: HgbResponse) {
-        let mut lock = self.entries.write().await;
-        if lock.len() > 1000 {
-            let ttl = self.ttl;
-            lock.retain(|_, (instant, _)| instant.elapsed() <= ttl);
-        }
-        lock.insert(id, (std::time::Instant::now(), resp));
+        self.complete(&id, resp).await;
     }
 }
 
@@ -137,6 +203,7 @@ pub struct DaemonState {
     pub vibe_healer: Arc<hgb_nextgen::self_healing_vibe_loop::SelfHealingVibeRunner>,
     pub vibe_governor: Arc<hgb_core::vibe_hardware_governor::VibeHardwareGovernor>,
     pub idempotency_cache: Arc<IdempotencyCache>,
+    pub shared_provider_router: Arc<hgb_core::providers::SharedProviderRouter>,
 }
 
 impl DaemonState {
@@ -327,6 +394,7 @@ impl DaemonState {
             vibe_healer,
             vibe_governor,
             idempotency_cache: Arc::new(IdempotencyCache::new(300)),
+            shared_provider_router: Arc::new(hgb_core::providers::SharedProviderRouter::default()),
         }
     }
 }
@@ -351,25 +419,92 @@ impl HagibisDaemon {
         Self::pid_path(&self.state.socket_path)
     }
 
-    /// Purge temporary /dev/shm sandbox directories created by speculative/overlay runners
+    /// Purge temporary /dev/shm sandbox directories created by speculative/overlay runners.
+    /// Scoped to dead processes or the current process, strictly protecting active sandboxes.
     pub fn purge_shm_sandboxes() {
         let shm_dir = Path::new("/dev/shm");
-        if shm_dir.is_dir() {
-            if let Ok(entries) = std::fs::read_dir(shm_dir) {
-                for entry in entries.flatten() {
-                    if let Ok(file_type) = entry.file_type() {
-                        if file_type.is_dir() {
-                            let file_name = entry.file_name();
-                            let name_str = file_name.to_string_lossy();
-                            if name_str.starts_with("hgb_run_")
-                                || name_str.starts_with("hgb_sandbox_")
-                                || name_str.starts_with("hgb_")
-                                || name_str.starts_with("vm_")
-                            {
-                                let _ = std::fs::remove_dir_all(entry.path());
-                            }
+        if !shm_dir.is_dir() {
+            return;
+        }
+
+        let entries = match std::fs::read_dir(shm_dir) {
+            Ok(entries) => entries,
+            Err(_) => return,
+        };
+
+        let current_pid = std::process::id();
+
+        for entry in entries.flatten() {
+            let file_type = match entry.file_type() {
+                Ok(ft) => ft,
+                Err(_) => continue,
+            };
+            if !file_type.is_dir() {
+                continue;
+            }
+
+            let file_name = entry.file_name();
+            let name_str = file_name.to_string_lossy();
+
+            let pid_prefix = if name_str.starts_with("hgb_run_pid") {
+                Some("hgb_run_pid")
+            } else if name_str.starts_with("hgb_sandbox_pid") {
+                Some("hgb_sandbox_pid")
+            } else {
+                None
+            };
+
+            if let Some(prefix) = pid_prefix {
+                let remainder = &name_str[prefix.len()..];
+                let pid_str = remainder.split('_').next().unwrap_or("");
+                if let Ok(pid) = pid_str.parse::<u32>() {
+                    let should_delete = if pid == current_pid {
+                        // Belongs to current process (e.g. exit/cleanup)
+                        true
+                    } else {
+                        // On Linux, verify process liveness via /proc/{pid}
+                        let proc_path = PathBuf::from(format!("/proc/{}", pid));
+                        if proc_path.exists() {
+                            // Active process: DO NOT DELETE!
+                            false
+                        } else {
+                            // Dead process: stale/orphaned sandbox
+                            true
                         }
+                    };
+
+                    if should_delete {
+                        let _ = std::fs::remove_dir_all(entry.path());
                     }
+                    continue;
+                }
+            }
+
+            // Legacy prefixes: hgb_run_, hgb_sandbox_, hgb_, vm_
+            if name_str.starts_with("hgb_run_")
+                || name_str.starts_with("hgb_sandbox_")
+                || name_str.starts_with("hgb_")
+                || name_str.starts_with("vm_")
+            {
+                let should_delete = if name_str.contains("_test_") {
+                    true
+                } else if let Ok(metadata) = entry.metadata() {
+                    let mtime = metadata.modified().or_else(|_| metadata.created());
+                    if let Ok(time) = mtime {
+                        if let Ok(elapsed) = time.elapsed() {
+                            elapsed.as_secs() > 600
+                        } else {
+                            true
+                        }
+                    } else {
+                        true
+                    }
+                } else {
+                    true
+                };
+
+                if should_delete {
+                    let _ = std::fs::remove_dir_all(entry.path());
                 }
             }
         }
@@ -569,8 +704,24 @@ impl HagibisDaemon {
             HgbRequest::Enveloped { request_id, workspace, inner } => {
                 let is_mutation = inner.is_mutation();
                 if is_mutation {
-                    if let Some(cached) = state.idempotency_cache.get(&request_id).await {
-                        return cached;
+                    match state.idempotency_cache.claim_or_get(&request_id).await {
+                        ClaimResult::Hit(cached) => return cached,
+                        ClaimResult::InFlight => {
+                            // Await completion for concurrent in-flight requests (deduplication)
+                            let mut waited_ms = 0;
+                            while waited_ms < 5000 {
+                                tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+                                waited_ms += 50;
+                                if let Some(cached) = state.idempotency_cache.get(&request_id).await {
+                                    return cached;
+                                }
+                            }
+                            return HgbResponse::Error(format!(
+                                "Request {} is currently in-flight; concurrent execution deduplicated",
+                                request_id
+                            ));
+                        }
+                        ClaimResult::Claimed => {}
                     }
                 }
 
@@ -585,7 +736,11 @@ impl HagibisDaemon {
                 if is_mutation {
                     let ws_str = ws.to_string_lossy();
                     state.semantic_cache.write().await.invalidate_context(&ws_str);
-                    state.idempotency_cache.insert(request_id, resp.clone()).await;
+                    if matches!(resp, HgbResponse::Error(_)) {
+                        state.idempotency_cache.release_inflight(&request_id).await;
+                    } else {
+                        state.idempotency_cache.complete(&request_id, resp.clone()).await;
+                    }
                 }
 
                 resp
@@ -715,8 +870,7 @@ impl HagibisDaemon {
 
                 // Universal Prompt Auto-Grounding:
                 // Concurrently inspects web URLs, folders, storage partitions, LAN hosts, local files, and host system specs
-                let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-                if let Ok((augmented, report)) = hgb_core::UniversalPromptGrounder::ground_prompt(&final_prompt, &cwd, 3500).await {
+                if let Ok((augmented, report)) = hgb_core::UniversalPromptGrounder::ground_prompt(&final_prompt, ws_ctx, 3500).await {
                     if report.estimated_total_tokens > 0 {
                         eprintln!(
                             "⚡ [Universal Grounding] Injected {} web source(s), {} inspected target(s), {} file preview(s), specs: {} (est. {} tokens)",
@@ -741,8 +895,7 @@ impl HagibisDaemon {
 
                 // Living Project Memory Auto-Injection:
                 // Inject architectural decisions and notes from .hgb/memory.json if present
-                let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-                if let Ok(ledger) = hgb_core::ProjectMemoryLedger::load_or_init(&cwd) {
+                if let Ok(ledger) = hgb_core::ProjectMemoryLedger::load_or_init(ws_ctx) {
                     let anchor = ledger.render_llm_anchor(400);
                     if !anchor.is_empty() {
                         final_prompt.push_str("\n\n--- LIVING PROJECT MEMORY ---\n");
@@ -753,7 +906,7 @@ impl HagibisDaemon {
 
                 // Sibling Local Ollama Pipeline Acceleration & Mutation Vector Mesh:
                 // Queries zero-copy local SQLite vector cache for relevant file mutations
-                let sibling_acc = hgb_core::SiblingOllamaAccelerator::new(&cwd);
+                let sibling_acc = hgb_core::SiblingOllamaAccelerator::new(ws_ctx);
                 if let Ok(matches) = sibling_acc.query_mutation_vectors(&final_prompt, 3) {
                     if !matches.is_empty() {
                         final_prompt.push_str("\n\n--- SIBLING OLLAMA MUTATION VECTORS (ZERO-NETWORK-ROUNDTRIP GROUND TRUTH) ---\n");
@@ -780,10 +933,16 @@ impl HagibisDaemon {
                     let _ = hgb_core::persist_active_model(&req_model);
                 }
 
-                // 3. Pillar 3: Semantic Cache Fast-Path (< 1.5ms)
+                // 3. Pillar 3: Revision-Aware Semantic Cache Fast-Path (< 1.5ms)
+                let context_key = hgb_core::providers::SharedProviderRouter::compute_context_key(
+                    &ws_ctx.to_string_lossy(),
+                    &req_model,
+                    &final_prompt,
+                );
+
                 {
                     let mut sem = state.semantic_cache.write().await;
-                    if let Some(hit) = sem.check_semantic_hit(&final_prompt, &req_model, None) {
+                    if let Some(hit) = sem.check_semantic_hit_with_context(&final_prompt, &req_model, None, Some(&context_key)) {
                         let duration_ms = (hit.lookup_latency_us / 1000).max(1);
                         return HgbResponse::Complete {
                             output: format!(
@@ -1140,7 +1299,7 @@ impl HagibisDaemon {
                 if let HgbResponse::Complete { ref output, duration_ms, .. } = prompt_res {
                     if !output.starts_with("🪽 Hagibis Microkernel: No active model") {
                         let mut sem = state.semantic_cache.write().await;
-                        sem.record_entry(&final_prompt, &req_model, output, duration_ms);
+                        sem.record_entry_with_context(&final_prompt, &req_model, output, duration_ms, Some(context_key));
                     }
                 }
 
@@ -1527,17 +1686,17 @@ impl HagibisDaemon {
                 }
             }
             HgbRequest::Undo { checkpoint_id } => {
-                let ckpt_mgr = state.checkpoint_mgr.read().await;
+                let mgr = hgb_core::DurableCheckpointManager::new(ws_ctx);
                 let res = if let Some(ref id) = checkpoint_id {
-                    ckpt_mgr.restore_files_from_checkpoint(id)
+                    mgr.restore_checkpoint(id)
                 } else {
-                    ckpt_mgr.rollback_latest_files()
+                    mgr.restore_latest()
                 };
                 match res {
                     Ok(rep) => HgbResponse::UndoResult {
                         checkpoint_id: rep.checkpoint_id,
-                        files_restored: rep.files_restored.into_iter().map(|p| p.to_string_lossy().to_string()).collect(),
-                        files_deleted: rep.files_deleted.into_iter().map(|p| p.to_string_lossy().to_string()).collect(),
+                        files_restored: rep.files_restored,
+                        files_deleted: rep.files_deleted,
                         duration_ms: rep.duration_ms,
                     },
                     Err(e) => HgbResponse::Error(e.to_string()),
@@ -2482,8 +2641,8 @@ impl HagibisDaemon {
             }
             // 46. Tree-sitter PageRank Symbol Graph & Token Density Repo-Map
             HgbRequest::RepoMapRank { extensions, token_budget } => {
-                let ws_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-                let ranker = hgb_core::RepoMapRanker::new(&ws_dir);
+                let ws_dir = ws_ctx;
+                let ranker = hgb_core::RepoMapRanker::new(ws_dir);
                 let exts: Vec<&str> = if extensions.is_empty() {
                     vec!["rs", "ts", "tsx", "js", "py", "go"]
                 } else {
@@ -2495,8 +2654,8 @@ impl HagibisDaemon {
             }
             // 47. Cursor-Style Silent Pre-Flight Shadow Workspace & Speculative Repair
             HgbRequest::ShadowPreflight { relative_path, candidate_content } => {
-                let ws_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-                let shadow = hgb_core::ShadowWorkspace::new(&ws_dir, None);
+                let ws_dir = ws_ctx;
+                let shadow = hgb_core::ShadowWorkspace::new(ws_dir, None);
                 let rep = shadow.validate_file(std::path::Path::new(&relative_path), &candidate_content)
                     .unwrap_or_else(|e| hgb_core::PreflightResult {
                         is_valid: false,
@@ -2587,8 +2746,8 @@ impl HagibisDaemon {
             }
             // 52. Augment Code-Style Live Graph Watcher & Incremental In-Memory Index
             HgbRequest::LiveGraphSync { extensions } => {
-                let ws_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-                let mut watcher = hgb_core::LiveGraphWatcher::new(&ws_dir);
+                let ws_dir = ws_ctx;
+                let mut watcher = hgb_core::LiveGraphWatcher::new(ws_dir);
                 let exts: Vec<&str> = if extensions.is_empty() {
                     vec!["rs", "ts", "tsx", "js", "py"]
                 } else {
@@ -2605,7 +2764,7 @@ impl HagibisDaemon {
             }
             // 53. Warp Terminal-Style Shell Panic Interceptor & 1-Key Auto-Repair
             HgbRequest::ShellPanicDiagnose { command, exit_code, stderr } => {
-                let ws_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                let ws_dir = ws_ctx;
                 let incident = hgb_core::ShellIncident {
                     command,
                     exit_code,
@@ -2622,8 +2781,8 @@ impl HagibisDaemon {
             }
             // 55. Continue.dev & Roo Code-Style Dynamic @Context Expander
             HgbRequest::DynamicContextExpand { prompt } => {
-                let ws_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-                let res = hgb_core::DynamicAtContext::expand(&ws_dir, &prompt);
+                let ws_dir = ws_ctx;
+                let res = hgb_core::DynamicAtContext::expand(ws_dir, &prompt);
                 HgbResponse::DynamicContextExpandResult(res)
             }
             // 56. Devin & Replit-Style Visual DOM Layout Regression Sentry
@@ -2638,8 +2797,8 @@ impl HagibisDaemon {
             }
             // 58. Windsurf Cascade & Supermaven Next-Edit Anticipator
             HgbRequest::AmbientPredict { file_path, symbol_name, change_kind, old_snippet, new_snippet } => {
-                let ws_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-                let mut watcher = hgb_core::LiveGraphWatcher::new(&ws_dir);
+                let ws_dir = ws_ctx;
+                let mut watcher = hgb_core::LiveGraphWatcher::new(ws_dir);
                 let _ = watcher.sync_workspace(&["rs", "ts", "tsx", "js", "py"]);
                 let predictor = hgb_core::AmbientPredictor::default();
                 let event = hgb_core::AmbientPredictor::create_event(
@@ -2654,8 +2813,8 @@ impl HagibisDaemon {
             }
             // 59. Bolt.new & Devin Bidirectional DevTools Click-to-Source Sync
             HgbRequest::CdpTweakSync { event, apply_to_disk } => {
-                let ws_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-                let mirror = hgb_core::CdpTweakMirror::new(&ws_dir);
+                let ws_dir = ws_ctx;
+                let mirror = hgb_core::CdpTweakMirror::new(ws_dir);
                 match mirror.sync_tweak(&event, apply_to_disk) {
                     Ok(rep) => HgbResponse::CdpTweakSyncResult(rep),
                     Err(e) => HgbResponse::Error(format!("Failed to sync DOM tweak: {}", e)),
@@ -4641,18 +4800,96 @@ mod tests {
     fn test_purge_shm_sandboxes() {
         let shm_dir = Path::new("/dev/shm");
         if shm_dir.is_dir() {
-            let mock_run = shm_dir.join(format!("hgb_run_test_{}", uuid::Uuid::new_v4().simple()));
-            let mock_sandbox = shm_dir.join(format!("hgb_sandbox_test_{}", uuid::Uuid::new_v4().simple()));
-            let _ = std::fs::create_dir_all(&mock_run);
-            let _ = std::fs::create_dir_all(&mock_sandbox);
+            let current_pid = std::process::id();
+            let mock_run_current = shm_dir.join(format!("hgb_run_pid{}_{}", current_pid, uuid::Uuid::new_v4().simple()));
+            let mock_run_dead = shm_dir.join(format!("hgb_run_pid9999999_{}", uuid::Uuid::new_v4().simple()));
+            let mock_run_active = shm_dir.join(format!("hgb_run_pid1_{}", uuid::Uuid::new_v4().simple()));
+            let mock_legacy = shm_dir.join(format!("hgb_run_test_{}", uuid::Uuid::new_v4().simple()));
 
-            assert!(mock_run.exists());
-            assert!(mock_sandbox.exists());
+            let _ = std::fs::create_dir_all(&mock_run_current);
+            let _ = std::fs::create_dir_all(&mock_run_dead);
+            let _ = std::fs::create_dir_all(&mock_run_active);
+            let _ = std::fs::create_dir_all(&mock_legacy);
+
+            assert!(mock_run_current.exists());
+            assert!(mock_run_dead.exists());
+            assert!(mock_run_active.exists());
+            assert!(mock_legacy.exists());
 
             HagibisDaemon::purge_shm_sandboxes();
 
-            assert!(!mock_run.exists(), "hgb_run_ sandbox must be purged");
-            assert!(!mock_sandbox.exists(), "hgb_sandbox_ must be purged");
+            assert!(!mock_run_current.exists(), "Current process sandbox must be purged");
+            assert!(!mock_run_dead.exists(), "Dead PID sandbox must be purged");
+            assert!(mock_run_active.exists(), "Active process PID 1 sandbox MUST NOT be purged");
+            assert!(!mock_legacy.exists(), "Legacy test sandbox must be purged");
+
+            let _ = std::fs::remove_dir_all(&mock_run_active);
         }
+    }
+
+    #[tokio::test]
+    async fn test_idempotency_cache_claim_inflight_and_release() {
+        let cache = IdempotencyCache::new(300);
+        let req_id = format!("req-inflight-{}", uuid::Uuid::new_v4());
+
+        // 1. Initial claim succeeds
+        assert!(matches!(cache.claim_or_get(&req_id).await, ClaimResult::Claimed));
+
+        // 2. Concurrent claim detects InFlight
+        assert!(matches!(cache.claim_or_get(&req_id).await, ClaimResult::InFlight));
+
+        // 3. Error release clears InFlight
+        cache.release_inflight(&req_id).await;
+        assert!(matches!(cache.claim_or_get(&req_id).await, ClaimResult::Claimed));
+
+        // 4. Complete records cached response
+        let resp = HgbResponse::Complete {
+            output: "ok".to_string(),
+            tokens_used: 1,
+            duration_ms: 1,
+        };
+        cache.complete(&req_id, resp.clone()).await;
+
+        // 5. Subsequent claim returns Hit
+        assert!(matches!(cache.claim_or_get(&req_id).await, ClaimResult::Hit(_)));
+    }
+
+    #[tokio::test]
+    async fn test_inflight_concurrent_deduplication() {
+        let tmp = std::env::temp_dir().join(format!("hgb_inflight_{}", uuid::Uuid::new_v4().simple()));
+        let _ = std::fs::create_dir_all(&tmp);
+        let socket_path = tmp.join("test.sock");
+        let state = Arc::new(DaemonState::new(socket_path));
+        let ws = WorkspaceIdentity::from_path(&tmp);
+        let shared_id = format!("concurrent-{}", uuid::Uuid::new_v4());
+
+        let state1 = state.clone();
+        let ws1 = ws.clone();
+        let id1 = shared_id.clone();
+        let handle1 = tokio::spawn(async move {
+            let req = HgbRequest::CrudWrite {
+                path: "concurrent.txt".to_string(),
+                content: "payload 1".to_string(),
+                overwrite: true,
+                artifact_summary: None,
+            }.with_envelope(id1, Some(ws1));
+            HagibisDaemon::handle_request(&state1, req).await
+        });
+
+        let state2 = state.clone();
+        let handle2 = tokio::spawn(async move {
+            let req = HgbRequest::CrudWrite {
+                path: "concurrent.txt".to_string(),
+                content: "payload 2".to_string(),
+                overwrite: true,
+                artifact_summary: None,
+            }.with_envelope(shared_id, Some(ws));
+            HagibisDaemon::handle_request(&state2, req).await
+        });
+
+        let (r1, r2) = tokio::join!(handle1, handle2);
+        assert!(matches!(r1.unwrap(), HgbResponse::Complete { .. }));
+        assert!(matches!(r2.unwrap(), HgbResponse::Complete { .. }));
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

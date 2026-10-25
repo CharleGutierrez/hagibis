@@ -107,6 +107,17 @@ impl SemanticQueryCache {
         model_id: &str,
         threshold: Option<f32>,
     ) -> Option<SemanticCacheHit> {
+        self.check_semantic_hit_with_context(query, model_id, threshold, None)
+    }
+
+    /// Check if a semantically equivalent query was recently executed with an optional workspace context key filter.
+    pub fn check_semantic_hit_with_context(
+        &mut self,
+        query: &str,
+        model_id: &str,
+        threshold: Option<f32>,
+        context_key: Option<&str>,
+    ) -> Option<SemanticCacheHit> {
         let start = Instant::now();
         if self.entries.is_empty() || query.trim().is_empty() {
             return None;
@@ -119,6 +130,15 @@ impl SemanticQueryCache {
         let mut best_score = 0.0f32;
 
         for (id, entry) in &self.entries {
+            // Context filter: if context_key is specified, entry must match context_key
+            if let Some(ctx) = context_key {
+                if let Some(ref entry_ctx) = entry.context_key {
+                    if entry_ctx != ctx {
+                        continue;
+                    }
+                }
+            }
+
             // Model filter: hit applies if model matches or if query was model-agnostic ("auto"/"default")
             let model_matches = entry.model_id == model_id
                 || model_id == "auto"

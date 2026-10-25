@@ -14,6 +14,9 @@ pub enum HgbError {
     #[error("Security violation: {0}")]
     Security(String),
 
+    #[error("Sandbox violation: {0}")]
+    SandboxViolation(String),
+
     #[error("Execution error: {0}")]
     Execution(String),
 
@@ -42,6 +45,10 @@ pub enum HgbError {
 impl HgbError {
     pub fn validation(msg: impl Into<String>) -> Self {
         Self::Execution(msg.into())
+    }
+
+    pub fn sandbox_violation(msg: impl Into<String>) -> Self {
+        Self::SandboxViolation(msg.into())
     }
 
     pub fn syntax(msg: impl Into<String>) -> Self {

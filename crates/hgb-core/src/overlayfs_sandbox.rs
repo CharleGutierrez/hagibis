@@ -1,7 +1,7 @@
 //! # Instant Linux CoW OverlayFS Sandboxing
 //!
 //! Provides zero-cost, sub-millisecond isolated workspaces using Linux Copy-on-Write technology:
-//! 1. Real Linux OverlayFS mounts (`mount -t overlay ...`) or high-speed reflink/hardlink tree mirroring.
+//! 1. Real Linux OverlayFS mounts (`mount -t overlay ...`) or high-speed reflink/copy tree mirroring.
 //! 2. Auto-detects system capabilities: user namespace `unshare`/overlay mount with seamless fallback to userspace CoW.
 //! 3. 0ms instant workspace cloning: lowerdir = workspace (read-only), upperdir = in-memory volatile layer, merged = unified sandboxed view.
 //! 4. Atomic commit: updates real workspace only when speculative verification succeeds.
@@ -12,7 +12,7 @@ use crate::path_jail::PathJail;
 pub use crate::path_jail::PathJail as OverlayPathJail;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::fs::{self, File};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -25,7 +25,7 @@ pub enum SandboxBackend {
     OverlayFs,
     /// Fast userspace reflink zero-copy cloning (Btrfs, XFS, ZFS)
     ReflinkCoW,
-    /// High-performance POSIX hardlink tree mirroring with copy-on-write break-on-write
+    /// High-performance POSIX independent file copy tree mirroring
     HardlinkCoW,
 }
 
@@ -34,7 +34,7 @@ impl SandboxBackend {
         match self {
             Self::OverlayFs => "Linux OverlayFS (Kernel Native)",
             Self::ReflinkCoW => "Btrfs/XFS Reflink (Zero-Copy Extents)",
-            Self::HardlinkCoW => "POSIX Hardlink Tree (Userspace CoW)",
+            Self::HardlinkCoW => "POSIX Independent Copy Tree (Userspace CoW)",
         }
     }
 }
@@ -78,7 +78,7 @@ pub struct SandboxExecutionReport {
     pub success: bool,
 }
 
-/// High-performance Copy-on-Write Sandbox
+/// High-performance Copy-on-Write Sandbox with strict PathJail containment
 pub struct OverlaySandbox {
     id: String,
     backend: SandboxBackend,
@@ -91,6 +91,9 @@ pub struct OverlaySandbox {
     tracked_added: HashSet<String>,
     tracked_modified: HashSet<String>,
     tracked_deleted: HashSet<String>,
+    merged_jail: PathJail,
+    upper_jail: PathJail,
+    lower_jail: PathJail,
 }
 
 impl OverlaySandbox {
@@ -98,7 +101,8 @@ impl OverlaySandbox {
     pub fn new(workspace_path: impl AsRef<Path>) -> Result<Self> {
         let lowerdir = workspace_path.as_ref().canonicalize()?;
         let session_id = uuid::Uuid::new_v4().to_string();
-        let id = format!("hgb_run_{}", session_id);
+        let pid = std::process::id();
+        let id = format!("hgb_run_pid{}_{}", pid, session_id);
 
         // Prefer in-memory /dev/shm for sub-millisecond I/O if available, else temp_dir
         let base_tmp = if Path::new("/dev/shm").is_dir() {
@@ -119,6 +123,10 @@ impl OverlaySandbox {
         fs::create_dir_all(&workdir)?;
         fs::create_dir_all(&merged)?;
 
+        let merged_jail = PathJail::new(&merged)?;
+        let upper_jail = PathJail::new(&upperdir)?;
+        let lower_jail = PathJail::new(&lowerdir)?;
+
         // Capability auto-detection
         let backend = Self::detect_backend(&lowerdir, &upperdir, &workdir, &merged);
 
@@ -134,6 +142,9 @@ impl OverlaySandbox {
             tracked_added: HashSet::new(),
             tracked_modified: HashSet::new(),
             tracked_deleted: HashSet::new(),
+            merged_jail,
+            upper_jail,
+            lower_jail,
         };
 
         sandbox.init_backend()?;
@@ -174,7 +185,7 @@ impl OverlaySandbox {
             }
         }
 
-        // 3. Fallback: High-performance POSIX Hardlink Tree CoW (works everywhere)
+        // 3. Fallback: POSIX Independent Copy Tree (guaranteed separate inodes)
         SandboxBackend::HardlinkCoW
     }
 
@@ -223,7 +234,7 @@ impl OverlaySandbox {
                     .status()?;
 
                 if !status.success() {
-                    // Fall back to HardlinkCoW if mount failed at runtime
+                    // Fall back to userspace independent file copy if mount failed at runtime
                     self.backend = SandboxBackend::HardlinkCoW;
                     self.mirror_tree(false)?;
                 } else {
@@ -240,7 +251,7 @@ impl OverlaySandbox {
         Ok(())
     }
 
-    /// Mirror the lowerdir into merged view using zero-copy reflinks or hardlinks
+    /// Mirror the lowerdir into merged view using zero-copy reflinks or independent file copies
     fn mirror_tree(&self, use_reflink: bool) -> Result<()> {
         fn mirror_dir(src: &Path, dst: &Path, use_reflink: bool) -> std::io::Result<()> {
             if !dst.exists() {
@@ -270,16 +281,13 @@ impl OverlaySandbox {
                             .output()
                             .map(|o| o.status.success())
                             .unwrap_or(false);
-                        if !ok {
-                            let _ = fs::hard_link(&path, &dst_path);
-                        }
-                    } else {
-                        // Hardlink (zero-copy)
-                        if fs::hard_link(&path, &dst_path).is_err() {
-                            // If cross-device hardlink fails, fast copy
-                            let _ = fs::copy(&path, &dst_path);
+                        if ok {
+                            continue;
                         }
                     }
+                    // Independent file copy guarantees separate inode, completely preventing
+                    // in-place writes from mutating lowerdir / real workspace!
+                    fs::copy(&path, &dst_path)?;
                 }
             }
             Ok(())
@@ -305,13 +313,21 @@ impl OverlaySandbox {
         &self.upperdir
     }
 
-    /// Write file in the sandbox: leaves lowerdir completely untouched!
+    /// Write file in the sandbox: strictly contained via PathJail, leaves lowerdir completely untouched!
     pub fn write_file(&mut self, rel_path: impl AsRef<Path>, content: &[u8]) -> Result<()> {
         let rel = rel_path.as_ref();
-        let target_merged = self.merged.join(rel);
-        let target_upper = self.upperdir.join(rel);
+        if rel.is_absolute() {
+            return Err(HgbError::SandboxViolation(format!(
+                "Sandbox path containment violation: absolute path '{}' rejected",
+                rel.display()
+            )));
+        }
 
-        let is_existing_in_lower = self.lowerdir.join(rel).exists();
+        let target_merged = self.merged_jail.resolve(rel)?;
+        let target_upper = self.upper_jail.resolve(rel)?;
+        let target_lower = self.lower_jail.resolve(rel)?;
+
+        let is_existing_in_lower = target_lower.exists();
 
         if let Some(parent) = target_merged.parent() {
             fs::create_dir_all(parent)?;
@@ -321,7 +337,7 @@ impl OverlaySandbox {
         }
 
         if self.backend != SandboxBackend::OverlayFs {
-            // Break hardlink if file already exists in merged view
+            // Unlink target in merged view to break hardlinks or ensure clean write
             if target_merged.exists() {
                 let _ = fs::remove_file(&target_merged);
             }
@@ -344,10 +360,17 @@ impl OverlaySandbox {
         Ok(())
     }
 
-    /// Read file from the unified sandboxed view
+    /// Read file from the unified sandboxed view, strictly contained via PathJail
     pub fn read_file(&self, rel_path: impl AsRef<Path>) -> Result<Vec<u8>> {
         let rel = rel_path.as_ref();
-        let target = self.merged.join(rel);
+        if rel.is_absolute() {
+            return Err(HgbError::SandboxViolation(format!(
+                "Sandbox path containment violation: absolute path '{}' rejected",
+                rel.display()
+            )));
+        }
+
+        let target = self.merged_jail.resolve(rel)?;
         if !target.exists() {
             return Err(HgbError::NotFound(format!(
                 "File '{}' not found in sandboxed workspace",
@@ -357,17 +380,40 @@ impl OverlaySandbox {
         Ok(fs::read(target)?)
     }
 
-    /// Read string from the unified sandboxed view
+    /// Read string from the unified sandboxed view, strictly contained via PathJail
     pub fn read_to_string(&self, rel_path: impl AsRef<Path>) -> Result<String> {
-        let bytes = self.read_file(rel_path)?;
+        let rel = rel_path.as_ref();
+        if rel.is_absolute() {
+            return Err(HgbError::SandboxViolation(format!(
+                "Sandbox path containment violation: absolute path '{}' rejected",
+                rel.display()
+            )));
+        }
+
+        let target = self.merged_jail.resolve(rel)?;
+        if !target.exists() {
+            return Err(HgbError::NotFound(format!(
+                "File '{}' not found in sandboxed workspace",
+                rel.display()
+            )));
+        }
+        let bytes = fs::read(target)?;
         String::from_utf8(bytes).map_err(|e| HgbError::InvalidInput(e.to_string()))
     }
 
-    /// Delete file in the sandbox: lowerdir remains completely intact!
+    /// Delete file in the sandbox: strictly contained via PathJail, lowerdir remains intact!
     pub fn delete_file(&mut self, rel_path: impl AsRef<Path>) -> Result<()> {
         let rel = rel_path.as_ref();
-        let target_merged = self.merged.join(rel);
-        let target_upper = self.upperdir.join(rel);
+        if rel.is_absolute() {
+            return Err(HgbError::SandboxViolation(format!(
+                "Sandbox path containment violation: absolute path '{}' rejected",
+                rel.display()
+            )));
+        }
+
+        let target_merged = self.merged_jail.resolve(rel)?;
+        let target_upper = self.upper_jail.resolve(rel)?;
+        let target_lower = self.lower_jail.resolve(rel)?;
         let rel_str = rel.to_string_lossy().to_string();
 
         if target_merged.exists() {
@@ -382,7 +428,7 @@ impl OverlaySandbox {
             let _ = fs::remove_file(&target_upper);
         }
 
-        if self.lowerdir.join(rel).exists() {
+        if target_lower.exists() {
             self.tracked_deleted.insert(rel_str.clone());
         }
         self.tracked_added.remove(&rel_str);
@@ -434,13 +480,30 @@ impl OverlaySandbox {
         Ok(())
     }
 
-    /// Execute command inside the isolated sandbox
+    /// Execute command inside the isolated sandbox with sanitized environment
     pub fn execute_command(&self, cmd: &str, args: &[&str]) -> Result<SandboxExecutionReport> {
         let start = Instant::now();
-        let output = Command::new(cmd)
-            .args(args)
-            .current_dir(&self.merged)
-            .output()?;
+
+        let mut command = Command::new(cmd);
+        command.args(args);
+        command.current_dir(&self.merged);
+
+        // Sanitize environment variables: clear unsafe environment
+        command.env_clear();
+
+        // Confine HOME and TMPDIR to sandbox workdir subdirectories
+        let sandbox_home = self.workdir.join("home");
+        let sandbox_tmp = self.workdir.join("tmp");
+        let _ = fs::create_dir_all(&sandbox_home);
+        let _ = fs::create_dir_all(&sandbox_tmp);
+
+        command.env("HOME", &sandbox_home);
+        command.env("TMPDIR", &sandbox_tmp);
+        let path = std::env::var("PATH")
+            .unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin".to_string());
+        command.env("PATH", path);
+
+        let output = command.output()?;
 
         let duration_ms = start.elapsed().as_millis() as u64;
         let exit_code = output.status.code().unwrap_or(-1);
@@ -458,7 +521,7 @@ impl OverlaySandbox {
         })
     }
 
-    /// Atomic Commit: propagate verified changes from upperdir back to the real lowerdir workspace
+    /// Atomic Commit: propagate verified changes back to real workspace with strict PathJail containment
     pub fn commit(&mut self) -> Result<CommitReport> {
         let start = Instant::now();
         let diff = self.inspect_diff()?;
@@ -469,8 +532,8 @@ impl OverlaySandbox {
 
         // 1. Process modified and added files atomically using temp-and-rename
         for rel_file in diff.modified_files.iter().chain(diff.added_files.iter()) {
-            let src = self.merged.join(rel_file);
-            let dst = self.lowerdir.join(rel_file);
+            let src = self.merged_jail.resolve(rel_file)?;
+            let dst = self.lower_jail.resolve(rel_file)?;
 
             if let Some(parent) = dst.parent() {
                 fs::create_dir_all(parent)?;
@@ -490,7 +553,8 @@ impl OverlaySandbox {
 
         // 2. Process deleted files
         for rel_file in &diff.deleted_files {
-            let dst = self.lowerdir.join(rel_file);
+            let _src = self.merged_jail.resolve(rel_file)?;
+            let dst = self.lower_jail.resolve(rel_file)?;
             if dst.exists() {
                 if dst.is_dir() {
                     let _ = fs::remove_dir_all(&dst);
@@ -666,5 +730,93 @@ mod tests {
         let report = sandbox.execute_command("ls", &["-la"]).expect("Command failed");
         assert!(report.success);
         assert!(report.stdout.contains("Cargo.toml"));
+    }
+
+    #[test]
+    fn test_path_jail_containment_violation() {
+        let (ws, _tmp) = create_test_workspace();
+        let mut sandbox = OverlaySandbox::new(&ws).expect("Failed to create sandbox");
+
+        // 1. Attempt writing outside workspace via parent traversal
+        let write_traversal = sandbox.write_file("../../etc/passwd", b"evil");
+        assert!(
+            matches!(write_traversal, Err(HgbError::SandboxViolation(_))),
+            "Expected SandboxViolation on write traversal, got {:?}",
+            write_traversal
+        );
+
+        // 2. Attempt writing absolute path
+        let write_abs = sandbox.write_file("/etc/shadow", b"evil");
+        assert!(
+            matches!(write_abs, Err(HgbError::SandboxViolation(_))),
+            "Expected SandboxViolation on write absolute, got {:?}",
+            write_abs
+        );
+
+        // 3. Attempt reading outside workspace via parent traversal
+        let read_traversal = sandbox.read_file("../../etc/passwd");
+        assert!(
+            matches!(read_traversal, Err(HgbError::SandboxViolation(_))),
+            "Expected SandboxViolation on read traversal, got {:?}",
+            read_traversal
+        );
+
+        // 4. Attempt reading to string with absolute path
+        let read_abs = sandbox.read_to_string("/etc/shadow");
+        assert!(
+            matches!(read_abs, Err(HgbError::SandboxViolation(_))),
+            "Expected SandboxViolation on read_to_string absolute, got {:?}",
+            read_abs
+        );
+
+        // 5. Attempt deleting file outside workspace
+        let del_traversal = sandbox.delete_file("../outside.txt");
+        assert!(
+            matches!(del_traversal, Err(HgbError::SandboxViolation(_))),
+            "Expected SandboxViolation on delete traversal, got {:?}",
+            del_traversal
+        );
+    }
+
+    #[test]
+    fn test_sandboxed_command_environment_sanitization() {
+        let (ws, _tmp) = create_test_workspace();
+        let sandbox = OverlaySandbox::new(&ws).expect("Failed to create sandbox");
+
+        // Host variable should be wiped
+        std::env::set_var("HGB_SECRET_TEST_TOKEN", "super_secret_value");
+        let report = sandbox.execute_command("sh", &["-c", "echo -n $HGB_SECRET_TEST_TOKEN"]).expect("Execute sh");
+        assert!(report.success);
+        assert_eq!(report.stdout.trim(), "", "Host secret variable should not leak into sandbox");
+
+        // HOME must be isolated to sandbox workdir
+        let home_report = sandbox.execute_command("sh", &["-c", "echo -n $HOME"]).expect("Execute sh");
+        assert!(home_report.success);
+        assert!(
+            home_report.stdout.contains("work/home") || home_report.stdout.contains("work"),
+            "HOME must be isolated to sandbox workdir, got: {}",
+            home_report.stdout
+        );
+    }
+
+    #[test]
+    fn test_independent_file_copy_isolation() {
+        let (ws, _tmp) = create_test_workspace();
+        let sandbox = OverlaySandbox::new(&ws).expect("Failed to create sandbox");
+
+        let src_file = ws.join("src/main.rs");
+        let merged_file = sandbox.merged_path().join("src/main.rs");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let src_ino = fs::metadata(&src_file).unwrap().ino();
+            let merged_ino = fs::metadata(&merged_file).unwrap().ino();
+
+            // When OverlayFS kernel mount is not active, userspace mirror guarantees different inodes
+            if sandbox.backend() != SandboxBackend::OverlayFs {
+                assert_ne!(src_ino, merged_ino, "Merged file must have independent inode from lowerdir");
+            }
+        }
     }
 }

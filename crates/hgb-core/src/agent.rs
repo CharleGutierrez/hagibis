@@ -449,7 +449,7 @@ impl ReActAgentEngine {
                 // Pre-mutation durable checkpoint before mutating workspace
                 if Self::is_mutating_tool(&call.tool_name) {
                     let cp_mgr = crate::durable_checkpoint::DurableCheckpointManager::new(&self.config.workspace_root);
-                    let _ = cp_mgr.create_checkpoint(&format!("pre-mutation agent: {}", call.tool_name));
+                    cp_mgr.create_checkpoint(&format!("pre-mutation agent: {}", call.tool_name))?;
                 }
 
                 let tool_start = Instant::now();
