@@ -73,6 +73,14 @@ pub use hnsw_vector_index::{
     DistanceMetric, FastRng, HnswConfig, HnswSearchResult, HnswStats, HnswVectorIndex,
 };
 
+// Strategic Upgrade 4: Vector-Native SQLite/DuckDB Edge Indexing
+pub mod vector_native_edge;
+pub use vector_native_edge::{
+    decode_vector_blob, decode_vector_blob_into, encode_vector_blob,
+    EdgeCollection, EdgeDistanceMetric, EdgeSearchBenchmarkReport,
+    EdgeSearchResult, EdgeVectorItem, HybridSearchQuery, VectorNativeEdgeEngine,
+};
+
 
 
 

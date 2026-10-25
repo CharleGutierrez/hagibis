@@ -1109,6 +1109,29 @@ pub use dynatune_bridge::{
     DynatuneBridge, HostPowerState, ScalingGuard, ScalingShiftReport, WorkloadCategory,
 };
 
+// Strategic Upgrade 1: Unified Shared-Memory IPC (Zero-Copy Ring Buffers)
+pub mod shm_ring_buffer;
+pub use shm_ring_buffer::{
+    resolve_shm_path, ShmHeader, ShmRingBenchmarkReport, ShmRingBuffer,
+    ShmRingConsumer, ShmRingProducer, DEFAULT_SHM_CAPACITY, HEADER_SIZE,
+    SHM_MAGIC, SHM_VERSION,
+};
+
+// Strategic Upgrade 2: Distributed MicroVM Swarm Intelligence (Firecracker + WASM Hybrid)
+pub mod microvm_swarm_orchestrator;
+pub use microvm_swarm_orchestrator::{
+    IsolationTier, MicroVmSwarmOrchestrator, SwarmExecutionOutcome, SwarmOrchestratorStatus,
+    SwarmTask, SwarmWorkerType, TaskComplexity,
+};
+
+// Strategic Upgrade 3: Integrated Native GPU / NPU Offloading (dynatune synergy)
+pub mod gpu_npu_offloader;
+pub use gpu_npu_offloader::{
+    DriRenderNodeInfo, HardwareProbeReport, HardwareTarget, HardwareTelemetrySnapshot,
+    NpuDeviceInfo, NvidiaDriverInfo, OffloadEmbeddingResult, OffloadSynthesisResult,
+    OllamaModelTelemetry, RocmKfdInfo, SchedulingDecision, SmartHardwareScheduler,
+};
+
 /// Enterprise high-capacity implementation
 pub fn enterprise_architecture_dispatch() -> bool {
     true
