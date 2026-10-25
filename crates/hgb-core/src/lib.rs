@@ -1096,6 +1096,13 @@ pub use vibe_prompt_runner::{
 };
 pub use code_skeleton::{CodeSkeletonizer, SkeletonReport};
 
+// Pillar 4: Unified Autonomous Loop Mastery (Masterclass Ch8 Native Rust)
+pub mod autonomous_state_machine;
+pub use autonomous_state_machine::{
+    AutonomousCycleInfo, AutonomousState, AutonomousStateMachine, AutonomousStateStatusSummary,
+    CrashRecoveryReport, CycleStatus, DpoDistillationRecord, StateTransitionRecord,
+};
+
 /// Enterprise high-capacity implementation
 pub fn enterprise_architecture_dispatch() -> bool {
     true

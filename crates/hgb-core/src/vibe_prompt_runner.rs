@@ -19,13 +19,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::audio::play_vibe_chime;
 use crate::compiler_interceptor::{CompilerDiagnostic, CompilerInterceptor, CompilerTool, DiagnosticSeverity};
-use crate::error::{HgbError, Result};
+use crate::error::Result;
 use crate::overlayfs_sandbox::OverlaySandbox;
 use crate::prompt_grounding::{GroundingContextReport, UniversalPromptGrounder};
 use crate::providers::gemini::GeminiProvider;
 use crate::providers::openai_compatible::{AnthropicProvider, OpenAiCompatibleProvider};
 use crate::traits::HgbProvider;
-use crate::vibe_hardware_governor::{VibeHardwareGovernor, VibeHardwareGuard, VibeThermalState};
+use crate::vibe_hardware_governor::VibeHardwareGovernor;
 use crate::git_micro_commit::GitMicroCommitMirror;
 
 pub const DEFAULT_OLLAMA_ENDPOINT: &str = "http://127.0.0.1:11434";
@@ -1059,7 +1059,7 @@ mod tests {
             target_dir: Some(ws_dir.clone()),
             auto_commit: true,
             use_local_ollama: false,
-            check_command: None,
+            check_command: Some("rustc --crate-type=lib src/lib.rs".to_string()),
         };
 
         let result = runner.execute_vibe_prompt(&spec).await.expect("Execution should succeed");

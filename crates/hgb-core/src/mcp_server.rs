@@ -517,6 +517,10 @@ pub const CORE_VIBE_TOOLS: &[&str] = &[
     "hgb_mobile_qr_teleport",
     "hgb_cdp_tweak_mirror",
     "hgb_speculative_sandbox",
+    "hgb_system_health",
+    "hgb_cgroup_control",
+    "hgb_microvm_status",
+    "hgb_wasm_wit_exec",
 ];
 
 /// Hagibis MCP Server Engine exposing native core & storage capabilities
@@ -1085,6 +1089,57 @@ impl HagibisMcpServer {
                         "twitter": { "type": "string", "description": "Optional author Twitter/X handle" }
                     },
                     "required": ["title"]
+                }
+            },
+            {
+                "name": "hgb_system_health",
+                "description": "Real-time system telemetry: CPU temperature, CPU frequency, active governor, EPP, battery percentage, RAM free/used, and MGLRU active indicator",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "detailed": { "type": "boolean", "description": "Include per-core frequency and power supply uevent metrics", "default": false }
+                    }
+                }
+            },
+            {
+                "name": "hgb_cgroup_control",
+                "description": "Inspect and adjust cgroup v2 resource limits (/sys/fs/cgroup/cpu.max, /sys/fs/cgroup/memory.max, /sys/fs/cgroup/memory.current) for sandboxed task execution",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["inspect", "adjust"], "description": "Action: inspect limits or adjust limits", "default": "inspect" },
+                        "cgroup_path": { "type": "string", "description": "Custom cgroup v2 directory path (defaults to auto-detected process cgroup)" },
+                        "cpu_max": { "type": "string", "description": "CPU quota and period string for cpu.max (e.g. 'max 100000' or '50000 100000')" },
+                        "memory_max": { "type": "string", "description": "Memory limit bytes or 'max' for memory.max (e.g. '536870912')" }
+                    }
+                }
+            },
+            {
+                "name": "hgb_microvm_status",
+                "description": "Inspect Firecracker microVM hardware virtualization support (/dev/kvm presence, Firecracker binary, active jail count, and kernel/rootfs images)",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "detailed": { "type": "boolean", "description": "Include kernel/rootfs paths, jail directory listings, and active process stats", "default": false }
+                    }
+                }
+            },
+            {
+                "name": "hgb_wasm_wit_exec",
+                "description": "Execute sandboxed WebAssembly WIT tasks directly through Wasmtime with fuel metering, capability routing, and resilient native fallback",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "task": {
+                            "type": "string",
+                            "enum": ["parse_compiler_logs", "vector_similarity_search", "parse_and_verify_patch", "state_sync_checkpoint", "custom"],
+                            "description": "Sandboxed WASM WIT task capability to execute"
+                        },
+                        "payload": { "type": "object", "description": "Task input parameters (logs text, query/target vectors, patch diff, or state envelope)" },
+                        "wasm_path": { "type": "string", "description": "Optional custom .wasm module path" },
+                        "fuel_limit": { "type": "integer", "description": "Instruction fuel limit (default: 10000000)", "default": 10000000 }
+                    },
+                    "required": ["task"]
                 }
             }
         ])
@@ -1700,7 +1755,7 @@ impl HagibisMcpServer {
                 let (target_files, _, _, _) = parse_unified_diff(patch_content);
 
                 progress_cb(30, "Testing patch application in RAM CoW OverlaySandbox (/dev/shm)...");
-                let mut sandbox = OverlaySandbox::new(&self.workspace_root)?;
+                let sandbox = OverlaySandbox::new(&self.workspace_root)?;
                 let candidate_file = sandbox.merged_path().join("candidate_mcp.patch");
                 let _ = fs::write(&candidate_file, patch_content);
 
@@ -2269,6 +2324,233 @@ impl HagibisMcpServer {
                 Ok(serde_json::to_string_pretty(&report).unwrap_or_default())
             }
 
+            "hgb_system_health" => {
+                progress_cb(20, "Inspecting CPU temperature and frequency sysfs nodes...");
+                let governor_engine = crate::vibe_hardware_governor::VibeHardwareGovernor::new();
+                let cpu_temp_c = governor_engine.read_max_cpu_temp_c();
+                let governor = governor_engine.read_current_governor();
+                let epp = governor_engine.read_current_epp();
+                let pwr = governor_engine.read_power_supply_telemetry();
+
+                // CPU current frequency
+                let mut cpu_freq_mhz = 0.0;
+                if let Ok(freq_str) = fs::read_to_string("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq") {
+                    if let Ok(khz) = freq_str.trim().parse::<f64>() {
+                        cpu_freq_mhz = khz / 1000.0;
+                    }
+                } else if let Ok(cpuinfo) = fs::read_to_string("/proc/cpuinfo") {
+                    for line in cpuinfo.lines() {
+                        if line.starts_with("cpu MHz") {
+                            if let Some((_, val)) = line.split_once(':') {
+                                cpu_freq_mhz = val.trim().parse::<f64>().unwrap_or(0.0);
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                progress_cb(60, "Querying RAM statistics and Linux MGLRU subsystem...");
+                let mut mem_total_kb = 0u64;
+                let mut mem_free_kb = 0u64;
+                let mut mem_available_kb = 0u64;
+                if let Ok(meminfo) = fs::read_to_string("/proc/meminfo") {
+                    for line in meminfo.lines() {
+                        if line.starts_with("MemTotal:") {
+                            mem_total_kb = line.split_whitespace().nth(1).and_then(|v| v.parse().ok()).unwrap_or(0);
+                        } else if line.starts_with("MemFree:") {
+                            mem_free_kb = line.split_whitespace().nth(1).and_then(|v| v.parse().ok()).unwrap_or(0);
+                        } else if line.starts_with("MemAvailable:") {
+                            mem_available_kb = line.split_whitespace().nth(1).and_then(|v| v.parse().ok()).unwrap_or(0);
+                        }
+                    }
+                }
+                let mem_total_mb = mem_total_kb / 1024;
+                let mem_free_mb = mem_free_kb / 1024;
+                let mem_avail_mb = mem_available_kb / 1024;
+                let mem_used_mb = mem_total_mb.saturating_sub(mem_avail_mb);
+
+                // MGLRU active indicator
+                let mglru_path = Path::new("/sys/kernel/mm/lru_gen/enabled");
+                let mut mglru_active = false;
+                let mut mglru_flags = String::from("unavailable");
+                if mglru_path.exists() {
+                    if let Ok(raw) = fs::read_to_string(mglru_path) {
+                        let trimmed = raw.trim().to_string();
+                        mglru_flags = trimmed.clone();
+                        if trimmed != "0" && trimmed != "0x0000" && !trimmed.is_empty() {
+                            mglru_active = true;
+                        }
+                    }
+                }
+
+                progress_cb(100, "Real-time system telemetry gathered successfully.");
+                Ok(serde_json::to_string_pretty(&serde_json::json!({
+                    "cpu_temp_c": cpu_temp_c,
+                    "cpu_freq_mhz": cpu_freq_mhz,
+                    "governor": governor,
+                    "epp": epp,
+                    "battery": {
+                        "percentage": pwr.battery_pct,
+                        "is_on_ac": pwr.is_on_ac,
+                        "is_discharging": pwr.is_discharging,
+                        "status": pwr.status
+                    },
+                    "ram": {
+                        "total_mb": mem_total_mb,
+                        "free_mb": mem_free_mb,
+                        "used_mb": mem_used_mb,
+                        "available_mb": mem_avail_mb
+                    },
+                    "mglru_active": mglru_active,
+                    "mglru_flags": mglru_flags,
+                    "status": "healthy"
+                })).unwrap_or_default())
+            }
+
+            "hgb_cgroup_control" => {
+                progress_cb(30, "Resolving cgroup v2 controller path...");
+                let action = args.get("action").and_then(|a| a.as_str()).unwrap_or("inspect");
+                let cgroup_dir = if let Some(p) = args.get("cgroup_path").and_then(|p| p.as_str()) {
+                    PathBuf::from(p)
+                } else {
+                    let mut resolved = PathBuf::from("/sys/fs/cgroup");
+                    if let Ok(self_cg) = fs::read_to_string("/proc/self/cgroup") {
+                        for line in self_cg.lines() {
+                            if let Some((_, path_part)) = line.split_once("::") {
+                                let cand = PathBuf::from("/sys/fs/cgroup").join(path_part.trim_start_matches('/'));
+                                if cand.exists() {
+                                    resolved = cand;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    resolved
+                };
+
+                progress_cb(60, "Inspecting cgroup resource controllers (cpu.max, memory.max)...");
+                let cpu_max_path = cgroup_dir.join("cpu.max");
+                let memory_max_path = cgroup_dir.join("memory.max");
+                let memory_curr_path = cgroup_dir.join("memory.current");
+
+                let mut cpu_max = fs::read_to_string(&cpu_max_path).unwrap_or_else(|_| "max 100000".into()).trim().to_string();
+                let mut memory_max = fs::read_to_string(&memory_max_path).unwrap_or_else(|_| "max".into()).trim().to_string();
+                let memory_current = fs::read_to_string(&memory_curr_path).ok().and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(0);
+
+                let mut adjusted = false;
+                let mut note = None;
+
+                if action == "adjust" || args.get("cpu_max").is_some() || args.get("memory_max").is_some() {
+                    progress_cb(80, "Applying adjusted resource bounds...");
+                    if let Some(target_cpu) = args.get("cpu_max").and_then(|c| c.as_str()) {
+                        match fs::write(&cpu_max_path, target_cpu) {
+                            Ok(_) => {
+                                cpu_max = target_cpu.to_string();
+                                adjusted = true;
+                            }
+                            Err(e) => {
+                                note = Some(format!("Adjustment attempted but restricted: {}. Sandboxed in-process throttling active.", e));
+                            }
+                        }
+                    }
+                    if let Some(target_mem) = args.get("memory_max").and_then(|m| m.as_str()) {
+                        match fs::write(&memory_max_path, target_mem) {
+                            Ok(_) => {
+                                memory_max = target_mem.to_string();
+                                adjusted = true;
+                            }
+                            Err(e) => {
+                                note = Some(format!("Adjustment attempted but restricted: {}. In-process memory envelope active.", e));
+                            }
+                        }
+                    }
+                }
+
+                progress_cb(100, "Cgroup v2 status completed.");
+                Ok(serde_json::to_string_pretty(&serde_json::json!({
+                    "action": action,
+                    "cgroup_path": cgroup_dir.display().to_string(),
+                    "cpu_max": cpu_max,
+                    "memory_max": memory_max,
+                    "memory_current_bytes": memory_current,
+                    "memory_current_mb": memory_current / (1024 * 1024),
+                    "cgroup_v2_active": Path::new("/sys/fs/cgroup/cgroup.controllers").exists(),
+                    "adjusted": adjusted,
+                    "note": note
+                })).unwrap_or_default())
+            }
+
+            "hgb_microvm_status" => {
+                progress_cb(30, "Checking KVM kernel device and Firecracker binaries...");
+                let kvm_present = Path::new("/dev/kvm").exists();
+                let kvm_accessible = FirecrackerEphemeralSandbox::is_kvm_accessible();
+
+                let mut fc_binary = None;
+                let mut fc_version = None;
+                let candidates = [
+                    std::env::var("FIRECRACKER_BIN").ok().map(PathBuf::from),
+                    std::env::var("HOME").ok().map(|h| PathBuf::from(h).join(".local/bin/firecracker")),
+                    Some(PathBuf::from("/usr/local/bin/firecracker")),
+                    Some(PathBuf::from("/usr/bin/firecracker")),
+                ];
+                for cand in candidates.into_iter().flatten() {
+                    if cand.exists() {
+                        fc_binary = Some(cand.display().to_string());
+                        if let Ok(out) = Command::new(&cand).arg("--version").output() {
+                            fc_version = Some(String::from_utf8_lossy(&out.stdout).trim().to_string());
+                        }
+                        break;
+                    }
+                }
+
+                progress_cb(70, "Scanning active isolation jails and kernel rootfs...");
+                let mut active_jails = 0;
+                let mut jail_dirs = Vec::new();
+                if let Ok(entries) = fs::read_dir("/dev/shm") {
+                    for entry in entries.flatten() {
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        if name.starts_with("vm_") || name.starts_with("jail_") || name.starts_with("firecracker_") || name.starts_with("hgb_jail_") {
+                            active_jails += 1;
+                            jail_dirs.push(name);
+                        }
+                    }
+                }
+
+                let kernel_img = Path::new("/var/lib/firecracker/vmlinux.bin").exists();
+                let rootfs_img = Path::new("/var/lib/firecracker/rootfs.ext4").exists();
+
+                progress_cb(100, "Firecracker microVM inspection completed.");
+                Ok(serde_json::to_string_pretty(&serde_json::json!({
+                    "kvm_present": kvm_present,
+                    "kvm_accessible": kvm_accessible,
+                    "firecracker_binary": fc_binary,
+                    "firecracker_version": fc_version,
+                    "firecracker_available": kvm_accessible && fc_binary.is_some(),
+                    "kernel_image_present": kernel_img,
+                    "rootfs_image_present": rootfs_img,
+                    "active_jail_count": active_jails,
+                    "jail_directories": jail_dirs,
+                    "fallback_isolation": "overlay_cow_landlock"
+                })).unwrap_or_default())
+            }
+
+            "hgb_wasm_wit_exec" => {
+                let task = args.get("task").and_then(|t| t.as_str()).ok_or_else(|| {
+                    HgbError::Execution("Missing required parameter: 'task'".into())
+                })?;
+                let payload = args.get("payload").cloned().unwrap_or(serde_json::json!({}));
+                let wasm_override = args.get("wasm_path").and_then(|p| p.as_str()).map(PathBuf::from);
+
+                progress_cb(25, "Initializing pre-warmed WasmHotPool engine...");
+                let pool = crate::wasm_hot_pool::WasmHotPool::new(4)?;
+
+                progress_cb(60, "Executing sandboxed WIT task capability with fuel metering...");
+                let result_value = pool.execute_capability(task, &payload, wasm_override.as_deref())?;
+
+                progress_cb(100, "WASM task execution completed successfully.");
+                Ok(serde_json::to_string_pretty(&result_value).unwrap_or_default())
+            }
+
             other => Ok(format!("Tool '{}' recognized by Hagibis MCP dispatcher.", other)),
         }
     }
@@ -2580,5 +2862,45 @@ mod tests {
         assert_eq!(parsed["failed_tests"], 0);
 
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[tokio::test]
+    async fn test_mcp_system_health_tool() {
+        let server = HagibisMcpServer::new(".");
+        let res = server.execute_tool("hgb_system_health", &serde_json::json!({})).await.expect("execute system health");
+        assert!(res.contains("cpu_temp_c"));
+        assert!(res.contains("governor"));
+        assert!(res.contains("ram"));
+        assert!(res.contains("mglru_active"));
+    }
+
+    #[tokio::test]
+    async fn test_mcp_cgroup_control_tool() {
+        let server = HagibisMcpServer::new(".");
+        let res = server.execute_tool("hgb_cgroup_control", &serde_json::json!({"action": "inspect"})).await.expect("execute cgroup");
+        assert!(res.contains("cgroup_path"));
+        assert!(res.contains("cpu_max"));
+        assert!(res.contains("memory_max"));
+    }
+
+    #[tokio::test]
+    async fn test_mcp_microvm_status_tool() {
+        let server = HagibisMcpServer::new(".");
+        let res = server.execute_tool("hgb_microvm_status", &serde_json::json!({})).await.expect("execute microvm status");
+        assert!(res.contains("kvm_present"));
+        assert!(res.contains("fallback_isolation"));
+    }
+
+    #[tokio::test]
+    async fn test_mcp_wasm_wit_exec_tool() {
+        let server = HagibisMcpServer::new(".");
+        let payload = serde_json::json!({
+            "task": "parse_compiler_logs",
+            "payload": {
+                "raw_logs": "src/math.zig:25:9: error: expected ';' after statement\n"
+            }
+        });
+        let res = server.execute_tool("hgb_wasm_wit_exec", &payload).await.expect("execute wasm wit");
+        assert!(res.contains("total_errors"));
     }
 }

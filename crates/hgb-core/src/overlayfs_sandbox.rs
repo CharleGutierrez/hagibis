@@ -503,6 +503,24 @@ impl OverlaySandbox {
             .unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin".to_string());
         command.env("PATH", path);
 
+        // Preserve toolchain configuration for compiler invocations (rustup/cargo)
+        if let Ok(rustup_home) = std::env::var("RUSTUP_HOME") {
+            command.env("RUSTUP_HOME", rustup_home);
+        } else if let Ok(host_home) = std::env::var("HOME") {
+            let r_home = PathBuf::from(&host_home).join(".rustup");
+            if r_home.exists() {
+                command.env("RUSTUP_HOME", r_home);
+            }
+        }
+        if let Ok(cargo_home) = std::env::var("CARGO_HOME") {
+            command.env("CARGO_HOME", cargo_home);
+        } else if let Ok(host_home) = std::env::var("HOME") {
+            let c_home = PathBuf::from(&host_home).join(".cargo");
+            if c_home.exists() {
+                command.env("CARGO_HOME", c_home);
+            }
+        }
+
         let output = command.output()?;
 
         let duration_ms = start.elapsed().as_millis() as u64;

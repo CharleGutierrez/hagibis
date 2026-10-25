@@ -186,15 +186,16 @@ impl EphemeralSandboxSwarm {
         let startup_start = Instant::now();
         let sandbox_id = format!("microvm_{:016x}", blake3::hash(spec.code.as_bytes()).as_bytes()[0..8].iter().fold(0u64, |acc, &b| (acc << 8) | (b as u64)));
 
-        let has_kvm = Path::new("/dev/kvm").exists();
-        let has_firecracker = Command::new("firecracker")
+        let kvm_accessible = crate::microvm_sandbox_executor::FirecrackerEphemeralSandbox::is_kvm_accessible();
+        let images_ready = Path::new("/var/lib/firecracker/vmlinux.bin").exists() && Path::new("/var/lib/firecracker/rootfs.ext4").exists();
+        let has_firecracker = kvm_accessible && images_ready && Command::new("firecracker")
             .arg("--version")
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false);
 
-        // Attempt real Firecracker if /dev/kvm and binary are ready
-        if has_kvm && has_firecracker {
+        // Attempt real Firecracker if /dev/kvm, kernel/rootfs images, and binary are ready
+        if has_firecracker {
             let fc_dir = std::env::temp_dir().join(&sandbox_id);
             let _ = fs::create_dir_all(&fc_dir);
             let fc_config_path = fc_dir.join("firecracker.json");

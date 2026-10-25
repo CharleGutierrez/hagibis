@@ -159,8 +159,10 @@ impl DualLayerSandboxEngine {
 
         let cwd = working_dir.unwrap_or(&self.workspace_root);
 
-        // Check if firecracker binary is installed and executable
-        let has_firecracker = Command::new("firecracker")
+        // Check if firecracker binary is installed, KVM is accessible, and kernel/rootfs are ready
+        let kvm_accessible = crate::microvm_sandbox_executor::FirecrackerEphemeralSandbox::is_kvm_accessible();
+        let images_ready = Path::new("/var/lib/firecracker/vmlinux.bin").exists() && Path::new("/var/lib/firecracker/rootfs.ext4").exists();
+        let has_firecracker = kvm_accessible && images_ready && Command::new("firecracker")
             .arg("--version")
             .stdout(Stdio::null())
             .stderr(Stdio::null())

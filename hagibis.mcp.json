@@ -184,6 +184,51 @@
         "desc": { "type": "string", "description": "Optional card description or subtitle" },
         "twitter": { "type": "string", "description": "Optional author Twitter/X handle" }
       }
+    },
+    "hgb_system_health": {
+      "description": "Real-time system telemetry: CPU temperature, CPU frequency, active governor, EPP, battery percentage, RAM free/used, and MGLRU active indicator",
+      "parameters": {
+        "detailed": { "type": "boolean", "description": "Include per-core frequency and power supply uevent metrics", "default": false }
+      }
+    },
+    "hgb_cgroup_control": {
+      "description": "Inspect and adjust cgroup v2 resource limits (/sys/fs/cgroup/cpu.max, /sys/fs/cgroup/memory.max, /sys/fs/cgroup/memory.current) for sandboxed tasks",
+      "parameters": {
+        "action": { "type": "string", "enum": ["inspect", "adjust"], "description": "Action: inspect limits or adjust limits", "default": "inspect" },
+        "cgroup_path": { "type": "string", "description": "Custom cgroup v2 directory path (defaults to auto-detected process cgroup)" },
+        "cpu_max": { "type": "string", "description": "CPU quota and period string for cpu.max (e.g. 'max 100000' or '50000 100000')" },
+        "memory_max": { "type": "string", "description": "Memory limit bytes or 'max' for memory.max (e.g. '536870912')" }
+      }
+    },
+    "hgb_microvm_status": {
+      "description": "Inspect Firecracker microVM hardware virtualization support (/dev/kvm presence, Firecracker binary, active jail count, and kernel/rootfs images)",
+      "parameters": {
+        "detailed": { "type": "boolean", "description": "Include kernel/rootfs paths, jail directory listings, and active process stats", "default": false }
+      }
+    },
+    "hgb_wasm_wit_exec": {
+      "description": "Execute sandboxed WebAssembly WIT tasks directly through Wasmtime with fuel metering, capability routing, and resilient native fallback",
+      "parameters": {
+        "task": {
+          "type": "string",
+          "enum": ["parse_compiler_logs", "vector_similarity_search", "parse_and_verify_patch", "state_sync_checkpoint", "custom"],
+          "description": "Sandboxed WASM WIT task capability to execute",
+          "required": true
+        },
+        "payload": {
+          "type": "object",
+          "description": "Task input parameters (logs text, query/target vectors, patch diff, or state envelope)"
+        },
+        "wasm_path": {
+          "type": "string",
+          "description": "Optional custom .wasm module path (defaults to compiled sovereign microkernel)"
+        },
+        "fuel_limit": {
+          "type": "integer",
+          "description": "Instruction fuel limit for sandboxed execution (default: 10000000)",
+          "default": 10000000
+        }
+      }
     }
   },
   "mcpServers": {

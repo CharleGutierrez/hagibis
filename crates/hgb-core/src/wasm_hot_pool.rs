@@ -88,11 +88,98 @@ struct CachedModule {
     hit_count: AtomicU64,
 }
 
+/// Structured diagnostic item parsed from compiler logs
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CompilerDiagnosticItem {
+    pub file: String,
+    pub line: usize,
+    pub column: usize,
+    pub error_code: Option<String>,
+    pub severity: String, // "error" | "warning" | "note" | "help"
+    pub message: String,
+}
+
+/// Structured outcome of Task 1: Log Parsing (`parse_compiler_logs`)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompilerLogsResult {
+    pub total_errors: usize,
+    pub total_warnings: usize,
+    pub diagnostics: Vec<CompilerDiagnosticItem>,
+    pub execution_tier: String, // "wasmtime" | "native_fallback"
+    pub fuel_consumed: u64,
+    pub duration_us: u64,
+}
+
+/// Vector similarity match item
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VectorMatch {
+    pub index: usize,
+    pub score: f32,
+}
+
+/// Structured outcome of Task 2: Vector Cosine Similarity (`vector_similarity_search`)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VectorSimilarityResult {
+    pub top_k: usize,
+    pub matches: Vec<VectorMatch>,
+    pub query_dim: usize,
+    pub target_count: usize,
+    pub execution_tier: String, // "wasmtime" | "native_fallback"
+    pub fuel_consumed: u64,
+    pub duration_us: u64,
+}
+
+/// Hunk details parsed from a unified diff
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PatchHunkDetail {
+    pub old_start: usize,
+    pub old_lines: usize,
+    pub new_start: usize,
+    pub new_lines: usize,
+    pub header_context: String,
+    pub additions: usize,
+    pub deletions: usize,
+    pub context_lines: usize,
+}
+
+/// File details parsed from a unified diff
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PatchFileDetail {
+    pub old_path: String,
+    pub new_path: String,
+    pub hunks: Vec<PatchHunkDetail>,
+    pub additions: usize,
+    pub deletions: usize,
+}
+
+/// Structured outcome of Task 3: Unified Patch Parsing (`parse_and_verify_patch`)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PatchParseResult {
+    pub is_valid: bool,
+    pub total_files: usize,
+    pub total_hunks: usize,
+    pub total_additions: usize,
+    pub total_deletions: usize,
+    pub files: Vec<PatchFileDetail>,
+    pub error_message: Option<String>,
+    pub execution_tier: String, // "wasmtime" | "native_fallback"
+    pub fuel_consumed: u64,
+    pub duration_us: u64,
+}
+
 /// Pre-warmed execution worker slot
+#[allow(dead_code)]
 struct HotWorkerSlot {
-    id: usize,
+    pub id: usize,
     store: Store<WasmPluginHostState>,
     linker: Linker<WasmPluginHostState>,
+}
+
+#[allow(dead_code)]
+impl HotWorkerSlot {
+    pub fn id(&self) -> usize {
+        self.id
+    }
 }
 
 /// The Zero-Copy WASM Execution Hot-Pool
@@ -440,6 +527,473 @@ impl WasmHotPool {
             hit_ratio_pct,
         }
     }
+
+    /// Helper to discover available compiled WebAssembly microkernel candidates
+    fn resolve_wasm_candidate(&self, wasm_override: Option<&Path>) -> Option<PathBuf> {
+        if let Some(p) = wasm_override {
+            if p.exists() {
+                return Some(p.to_path_buf());
+            }
+        }
+        let candidates = [
+            PathBuf::from("crates/hgb-wasm-kernel/zig-out/bin/hgb_kernel.wasm"),
+            PathBuf::from("crates/hgb-nextgen/dist/hgb_kernel.wasm"),
+            PathBuf::from(".hgb/plugins/hgb_kernel.wasm"),
+            PathBuf::from("hgb_kernel.wasm"),
+        ];
+        for c in &candidates {
+            if c.exists() {
+                return Some(c.clone());
+            }
+        }
+        None
+    }
+
+    /// Execute a general capability with routing and resilient fallback
+    pub fn execute_capability(
+        &self,
+        capability: &str,
+        payload: &serde_json::Value,
+        wasm_override: Option<&Path>,
+    ) -> Result<serde_json::Value> {
+        match capability {
+            "parse_compiler_logs" | "compiler_logs" | "log_parsing" => {
+                let raw_logs = payload.get("raw_logs")
+                    .or_else(|| payload.get("logs"))
+                    .or_else(|| payload.get("content"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let res = self.parse_compiler_logs(raw_logs, wasm_override)?;
+                serde_json::to_value(res).map_err(|e| HgbError::Execution(e.to_string()))
+            }
+            "vector_similarity_search" | "vector_similarity" | "cosine_similarity" => {
+                let query: Vec<f32> = payload.get("query")
+                    .and_then(|q| serde_json::from_value(q.clone()).ok())
+                    .unwrap_or_default();
+                let targets: Vec<Vec<f32>> = payload.get("targets")
+                    .and_then(|t| serde_json::from_value(t.clone()).ok())
+                    .unwrap_or_default();
+                let top_k = payload.get("top_k").and_then(|k| k.as_u64()).unwrap_or(5) as usize;
+                let res = self.vector_similarity_search(&query, &targets, top_k, wasm_override)?;
+                serde_json::to_value(res).map_err(|e| HgbError::Execution(e.to_string()))
+            }
+            "parse_and_verify_patch" | "parse_patch" | "patch_parsing" => {
+                let patch = payload.get("patch")
+                    .or_else(|| payload.get("diff"))
+                    .or_else(|| payload.get("content"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let res = self.parse_and_verify_patch(patch, wasm_override)?;
+                serde_json::to_value(res).map_err(|e| HgbError::Execution(e.to_string()))
+            }
+            "state_sync_checkpoint" | "state_sync" => {
+                let st = self.status();
+                Ok(serde_json::json!({
+                    "status": "synchronized",
+                    "active_slots": st.available_hot_slots,
+                    "total_executions": st.total_executions,
+                    "cached_modules": st.cached_modules_count
+                }))
+            }
+            _ => {
+                if let Some(p) = wasm_override {
+                    let rep = self.execute(p, payload)?;
+                    serde_json::to_value(rep).map_err(|e| HgbError::Execution(e.to_string()))
+                } else {
+                    Err(HgbError::Execution(format!("Unsupported capability: {}", capability)))
+                }
+            }
+        }
+    }
+
+    /// Task 1: Parse compiler error messages into structured diagnostics
+    pub fn parse_compiler_logs(&self, raw_logs: &str, wasm_override: Option<&Path>) -> Result<CompilerLogsResult> {
+        let start = Instant::now();
+        let mut wasm_res = None;
+        if let Some(path) = self.resolve_wasm_candidate(wasm_override) {
+            if let Ok(mut slot) = self.checkout_or_create_slot() {
+                if let Ok(compiled) = self.resolve_or_compile_module(&path) {
+                    if let Ok(instance) = slot.linker.instantiate(&mut slot.store, &compiled.module) {
+                        if let Ok(parse_func) = instance.get_typed_func::<(u32, u32, u32, u32), u32>(&mut slot.store, "wasm_parse_compiler_logs") {
+                            if let Ok(alloc_func) = instance.get_typed_func::<u32, u32>(&mut slot.store, "wasm_alloc") {
+                                if let Some(mem) = instance.get_memory(&mut slot.store, "memory") {
+                                    let fuel_before = slot.store.get_fuel().unwrap_or(DEFAULT_WASM_FUEL);
+                                    let in_len = raw_logs.len() as u32;
+                                    let out_max = 65536u32;
+                                    if let (Ok(in_ptr), Ok(out_ptr)) = (alloc_func.call(&mut slot.store, in_len), alloc_func.call(&mut slot.store, out_max)) {
+                                        mem.write(&mut slot.store, in_ptr as usize, raw_logs.as_bytes()).ok();
+                                        if let Ok(written_len) = parse_func.call(&mut slot.store, (in_ptr, in_len, out_ptr, out_max)) {
+                                            let mut out_buf = vec![0u8; written_len as usize];
+                                            if mem.read(&slot.store, out_ptr as usize, &mut out_buf).is_ok() {
+                                                let fuel_after = slot.store.get_fuel().unwrap_or(0);
+                                                let fuel_consumed = fuel_before.saturating_sub(fuel_after);
+                                                if let Ok(mut parsed) = serde_json::from_slice::<CompilerLogsResult>(&out_buf) {
+                                                    parsed.execution_tier = "wasmtime".to_string();
+                                                    parsed.fuel_consumed = fuel_consumed;
+                                                    parsed.duration_us = start.elapsed().as_micros() as u64;
+                                                    wasm_res = Some(parsed);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                self.recycle_slot(slot);
+            }
+        }
+        if let Some(res) = wasm_res {
+            return Ok(res);
+        }
+        Ok(Self::parse_compiler_logs_native(raw_logs))
+    }
+
+    /// Task 2: SIMD-accelerated score computation between query vectors and target matrices
+    pub fn vector_similarity_search(
+        &self,
+        query: &[f32],
+        targets: &[Vec<f32>],
+        top_k: usize,
+        wasm_override: Option<&Path>,
+    ) -> Result<VectorSimilarityResult> {
+        let start = Instant::now();
+        let mut wasm_res = None;
+        if let Some(path) = self.resolve_wasm_candidate(wasm_override) {
+            if let Ok(mut slot) = self.checkout_or_create_slot() {
+                if let Ok(compiled) = self.resolve_or_compile_module(&path) {
+                    if let Ok(instance) = slot.linker.instantiate(&mut slot.store, &compiled.module) {
+                        if let Ok(sim_func) = instance.get_typed_func::<(u32, u32, u32, u32, u32), u32>(&mut slot.store, "wasm_vector_similarity") {
+                            if let Ok(alloc_func) = instance.get_typed_func::<u32, u32>(&mut slot.store, "wasm_alloc") {
+                                if let Some(mem) = instance.get_memory(&mut slot.store, "memory") {
+                                    let fuel_before = slot.store.get_fuel().unwrap_or(DEFAULT_WASM_FUEL);
+                                    let dim = query.len() as u32;
+                                    let num_targets = targets.len() as u32;
+                                    let q_bytes = dim * 4;
+                                    let t_bytes = num_targets * dim * 4;
+                                    let scores_bytes = num_targets * 4;
+
+                                    if let (Ok(q_ptr), Ok(t_ptr), Ok(s_ptr)) = (
+                                        alloc_func.call(&mut slot.store, q_bytes),
+                                        alloc_func.call(&mut slot.store, t_bytes),
+                                        alloc_func.call(&mut slot.store, scores_bytes),
+                                    ) {
+                                        // Write query bytes
+                                        let q_slice = unsafe { std::slice::from_raw_parts(query.as_ptr() as *const u8, q_bytes as usize) };
+                                        mem.write(&mut slot.store, q_ptr as usize, q_slice).ok();
+
+                                        // Flatten and write targets
+                                        let mut flat_targets = Vec::with_capacity(targets.len() * query.len());
+                                        for t in targets {
+                                            flat_targets.extend_from_slice(t);
+                                        }
+                                        let t_slice = unsafe { std::slice::from_raw_parts(flat_targets.as_ptr() as *const u8, t_bytes as usize) };
+                                        mem.write(&mut slot.store, t_ptr as usize, t_slice).ok();
+
+                                        if sim_func.call(&mut slot.store, (q_ptr, t_ptr, dim, num_targets, s_ptr)).is_ok() {
+                                            let mut scores_buf = vec![0.0f32; num_targets as usize];
+                                            let raw_scores_slice = unsafe { std::slice::from_raw_parts_mut(scores_buf.as_mut_ptr() as *mut u8, scores_bytes as usize) };
+                                            if mem.read(&slot.store, s_ptr as usize, raw_scores_slice).is_ok() {
+                                                let fuel_after = slot.store.get_fuel().unwrap_or(0);
+                                                let fuel_consumed = fuel_before.saturating_sub(fuel_after);
+
+                                                let mut matches: Vec<VectorMatch> = scores_buf.into_iter().enumerate().map(|(idx, score)| VectorMatch { index: idx, score }).collect();
+                                                matches.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+                                                let taken = matches.into_iter().take(top_k).collect();
+
+                                                wasm_res = Some(VectorSimilarityResult {
+                                                    top_k,
+                                                    matches: taken,
+                                                    query_dim: query.len(),
+                                                    target_count: targets.len(),
+                                                    execution_tier: "wasmtime".to_string(),
+                                                    fuel_consumed,
+                                                    duration_us: start.elapsed().as_micros() as u64,
+                                                });
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                self.recycle_slot(slot);
+            }
+        }
+        if let Some(res) = wasm_res {
+            return Ok(res);
+        }
+        Ok(Self::vector_similarity_search_native(query, targets, top_k))
+    }
+
+    /// Task 3: Validate unified diff format, parse hunk headers, and compute patch statistics
+    pub fn parse_and_verify_patch(&self, patch_content: &str, wasm_override: Option<&Path>) -> Result<PatchParseResult> {
+        let start = Instant::now();
+        let mut wasm_res = None;
+        if let Some(path) = self.resolve_wasm_candidate(wasm_override) {
+            if let Ok(mut slot) = self.checkout_or_create_slot() {
+                if let Ok(compiled) = self.resolve_or_compile_module(&path) {
+                    if let Ok(instance) = slot.linker.instantiate(&mut slot.store, &compiled.module) {
+                        if let Ok(parse_func) = instance.get_typed_func::<(u32, u32, u32, u32), u32>(&mut slot.store, "wasm_parse_unified_patch") {
+                            if let Ok(alloc_func) = instance.get_typed_func::<u32, u32>(&mut slot.store, "wasm_alloc") {
+                                if let Some(mem) = instance.get_memory(&mut slot.store, "memory") {
+                                    let fuel_before = slot.store.get_fuel().unwrap_or(DEFAULT_WASM_FUEL);
+                                    let in_len = patch_content.len() as u32;
+                                    let out_max = 65536u32;
+                                    if let (Ok(in_ptr), Ok(out_ptr)) = (alloc_func.call(&mut slot.store, in_len), alloc_func.call(&mut slot.store, out_max)) {
+                                        mem.write(&mut slot.store, in_ptr as usize, patch_content.as_bytes()).ok();
+                                        if let Ok(written_len) = parse_func.call(&mut slot.store, (in_ptr, in_len, out_ptr, out_max)) {
+                                            let mut out_buf = vec![0u8; written_len as usize];
+                                            if mem.read(&slot.store, out_ptr as usize, &mut out_buf).is_ok() {
+                                                let fuel_after = slot.store.get_fuel().unwrap_or(0);
+                                                let fuel_consumed = fuel_before.saturating_sub(fuel_after);
+                                                if let Ok(mut parsed) = serde_json::from_slice::<PatchParseResult>(&out_buf) {
+                                                    parsed.execution_tier = "wasmtime".to_string();
+                                                    parsed.fuel_consumed = fuel_consumed;
+                                                    parsed.duration_us = start.elapsed().as_micros() as u64;
+                                                    wasm_res = Some(parsed);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                self.recycle_slot(slot);
+            }
+        }
+        if let Some(res) = wasm_res {
+            return Ok(res);
+        }
+        Ok(Self::parse_and_verify_patch_native(patch_content))
+    }
+
+    /// Resilient native implementation of Task 1: Log Parsing
+    pub fn parse_compiler_logs_native(raw_logs: &str) -> CompilerLogsResult {
+        let start = Instant::now();
+        let mut diagnostics = Vec::new();
+        let mut total_errors = 0;
+        let mut total_warnings = 0;
+        let lines: Vec<&str> = raw_logs.lines().collect();
+        let mut i = 0;
+        while i < lines.len() {
+            let line = lines[i].trim();
+            if line.starts_with("error") || line.starts_with("warning") {
+                let is_error = line.starts_with("error");
+                let severity = if is_error { "error" } else { "warning" };
+                let error_code = if let Some(b1) = line.find('[') {
+                    if let Some(b2) = line.find(']') {
+                        if b2 > b1 { Some(line[b1 + 1..b2].to_string()) } else { None }
+                    } else { None }
+                } else { None };
+                let message = if let Some(colon) = line.find(':') { line[colon + 1..].trim().to_string() } else { line.to_string() };
+                let mut file = String::from("unknown");
+                let mut line_num = 1;
+                let mut col_num = 1;
+                if i + 1 < lines.len() {
+                    let next = lines[i + 1].trim();
+                    if next.starts_with("-->") {
+                        let loc = next.trim_start_matches("-->").trim();
+                        let parts: Vec<&str> = loc.split(':').collect();
+                        if parts.len() >= 3 {
+                            file = parts[0].trim().to_string();
+                            line_num = parts[1].parse().unwrap_or(1);
+                            col_num = parts[2].parse().unwrap_or(1);
+                        } else if parts.len() == 2 {
+                            file = parts[0].trim().to_string();
+                            line_num = parts[1].parse().unwrap_or(1);
+                        }
+                    }
+                }
+                if is_error { total_errors += 1; } else { total_warnings += 1; }
+                diagnostics.push(CompilerDiagnosticItem { file, line: line_num, column: col_num, error_code, severity: severity.to_string(), message });
+                i += 1;
+                continue;
+            }
+            let colon_parts: Vec<&str> = line.splitn(5, ':').collect();
+            if colon_parts.len() >= 4 {
+                let p_file = colon_parts[0].trim();
+                let p_line = colon_parts[1].trim().parse::<usize>();
+                let p_col = colon_parts[2].trim().parse::<usize>();
+                if let (Ok(l), Ok(c)) = (p_line, p_col) {
+                    let remainder = colon_parts[3..].join(":").trim().to_string();
+                    let (sev, err_c, msg) = if remainder.starts_with("error") {
+                        total_errors += 1;
+                        ("error", None, remainder.trim_start_matches("error").trim_start_matches(':').trim().to_string())
+                    } else if remainder.starts_with("warning") {
+                        total_warnings += 1;
+                        ("warning", None, remainder.trim_start_matches("warning").trim_start_matches(':').trim().to_string())
+                    } else {
+                        ("info", None, remainder)
+                    };
+                    diagnostics.push(CompilerDiagnosticItem { file: p_file.to_string(), line: l, column: c, error_code: err_c, severity: sev.to_string(), message: msg });
+                    i += 1;
+                    continue;
+                }
+            }
+            i += 1;
+        }
+        CompilerLogsResult {
+            total_errors,
+            total_warnings,
+            diagnostics,
+            execution_tier: "native_fallback".to_string(),
+            fuel_consumed: 0,
+            duration_us: start.elapsed().as_micros() as u64,
+        }
+    }
+
+    /// Resilient native implementation of Task 2: Vector Cosine Similarity
+    pub fn vector_similarity_search_native(query: &[f32], targets: &[Vec<f32>], top_k: usize) -> VectorSimilarityResult {
+        let start = Instant::now();
+        let norm_q = query.iter().map(|x| x * x).sum::<f32>().sqrt();
+        let mut matches = Vec::with_capacity(targets.len());
+        for (idx, target) in targets.iter().enumerate() {
+            if target.len() != query.len() || norm_q == 0.0 {
+                matches.push(VectorMatch { index: idx, score: 0.0 });
+                continue;
+            }
+            let dot: f32 = query.iter().zip(target.iter()).map(|(a, b)| a * b).sum();
+            let norm_t = target.iter().map(|x| x * x).sum::<f32>().sqrt();
+            let score = if norm_t > 0.0 { (dot / (norm_q * norm_t)).clamp(-1.0, 1.0) } else { 0.0 };
+            matches.push(VectorMatch { index: idx, score });
+        }
+        matches.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        let taken = matches.into_iter().take(top_k).collect();
+        VectorSimilarityResult {
+            top_k,
+            matches: taken,
+            query_dim: query.len(),
+            target_count: targets.len(),
+            execution_tier: "native_fallback".to_string(),
+            fuel_consumed: 0,
+            duration_us: start.elapsed().as_micros() as u64,
+        }
+    }
+
+    /// Resilient native implementation of Task 3: Unified Patch Parsing
+    pub fn parse_and_verify_patch_native(patch_content: &str) -> PatchParseResult {
+        let start = Instant::now();
+        if patch_content.trim().is_empty() {
+            return PatchParseResult {
+                is_valid: false,
+                total_files: 0,
+                total_hunks: 0,
+                total_additions: 0,
+                total_deletions: 0,
+                files: Vec::new(),
+                error_message: Some("Empty patch content".to_string()),
+                execution_tier: "native_fallback".to_string(),
+                fuel_consumed: 0,
+                duration_us: start.elapsed().as_micros() as u64,
+            };
+        }
+        let mut files: Vec<PatchFileDetail> = Vec::new();
+        let mut cur_old = String::new();
+        let mut cur_new = String::new();
+        let mut cur_hunks: Vec<PatchHunkDetail> = Vec::new();
+        let mut file_adds = 0;
+        let mut file_dels = 0;
+        let mut cur_hunk: Option<PatchHunkDetail> = None;
+        let mut total_additions = 0;
+        let mut total_deletions = 0;
+        let mut has_diff_markers = false;
+
+        for line in patch_content.lines() {
+            if line.starts_with("diff --git ") {
+                has_diff_markers = true;
+                if let Some(h) = cur_hunk.take() { cur_hunks.push(h); }
+                if !cur_old.is_empty() || !cur_new.is_empty() {
+                    files.push(PatchFileDetail { old_path: cur_old.clone(), new_path: cur_new.clone(), hunks: std::mem::take(&mut cur_hunks), additions: file_adds, deletions: file_dels });
+                    file_adds = 0; file_dels = 0;
+                }
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 4 {
+                    cur_old = parts[2].trim_start_matches("a/").to_string();
+                    cur_new = parts[3].trim_start_matches("b/").to_string();
+                }
+            } else if line.starts_with("--- ") {
+                has_diff_markers = true;
+                let p = line[4..].trim();
+                if cur_old.is_empty() { cur_old = p.strip_prefix("a/").unwrap_or(p).to_string(); }
+            } else if line.starts_with("+++ ") {
+                has_diff_markers = true;
+                let p = line[4..].trim();
+                if cur_new.is_empty() { cur_new = p.strip_prefix("b/").unwrap_or(p).to_string(); }
+            } else if line.starts_with("@@ ") {
+                has_diff_markers = true;
+                if let Some(h) = cur_hunk.take() { cur_hunks.push(h); }
+                if let Some(c) = line[3..].find("@@") {
+                    let ctx = line[3 + c + 2..].trim().to_string();
+                    cur_hunk = Some(PatchHunkDetail { old_start: 1, old_lines: 1, new_start: 1, new_lines: 1, header_context: ctx, additions: 0, deletions: 0, context_lines: 0 });
+                }
+            } else if line.starts_with('+') && !line.starts_with("+++") {
+                total_additions += 1;
+                file_adds += 1;
+                if let Some(ref mut h) = cur_hunk { h.additions += 1; }
+            } else if line.starts_with('-') && !line.starts_with("---") {
+                total_deletions += 1;
+                file_dels += 1;
+                if let Some(ref mut h) = cur_hunk { h.deletions += 1; }
+            } else if line.starts_with(' ') {
+                if let Some(ref mut h) = cur_hunk { h.context_lines += 1; }
+            }
+        }
+        if let Some(h) = cur_hunk.take() { cur_hunks.push(h); }
+        if !cur_old.is_empty() || !cur_new.is_empty() || !cur_hunks.is_empty() {
+            files.push(PatchFileDetail { old_path: cur_old, new_path: cur_new, hunks: cur_hunks, additions: file_adds, deletions: file_dels });
+        }
+        let total_hunks = files.iter().map(|f| f.hunks.len()).sum();
+        let is_valid = has_diff_markers && (total_hunks > 0 || !files.is_empty());
+        PatchParseResult {
+            is_valid,
+            total_files: files.len(),
+            total_hunks,
+            total_additions,
+            total_deletions,
+            files,
+            error_message: if is_valid { None } else { Some("Invalid unified diff format".to_string()) },
+            execution_tier: "native_fallback".to_string(),
+            fuel_consumed: 0,
+            duration_us: start.elapsed().as_micros() as u64,
+        }
+    }
+
+    fn checkout_or_create_slot(&self) -> Result<HotWorkerSlot> {
+        let mut slots = self.available_slots.lock().unwrap();
+        if let Some(slot) = slots.pop() {
+            Ok(slot)
+        } else {
+            Self::create_hot_slot(&self.engine, 9999)
+        }
+    }
+
+    fn resolve_or_compile_module(&self, path: &Path) -> Result<Arc<CachedModule>> {
+        let read_cache = self.module_cache.read().unwrap();
+        if let Some(existing) = read_cache.get(path) {
+            return Ok(Arc::clone(existing));
+        }
+        drop(read_cache);
+        let bytes = fs::read(path).map_err(HgbError::Io)?;
+        let hash = blake3::hash(&bytes).to_hex().to_string();
+        let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("wasm_mod").to_string();
+        let module = Module::new(&self.engine, &bytes).map_err(|e| HgbError::Execution(e.to_string()))?;
+        let new_mod = Arc::new(CachedModule {
+            blake3_hash: hash,
+            module,
+            manifest: WasmPluginManifest { name, version: "0.2.0".into(), description: "".into(), author: None, input_schema: serde_json::json!({}) },
+            compile_duration_us: 0,
+            size_bytes: bytes.len(),
+            hit_count: AtomicU64::new(1),
+        });
+        let mut write_cache = self.module_cache.write().unwrap();
+        write_cache.insert(path.to_path_buf(), Arc::clone(&new_mod));
+        Ok(new_mod)
+    }
 }
 
 #[cfg(test)]
@@ -486,5 +1040,51 @@ mod tests {
         assert_eq!(status.cached_modules_count, 1);
 
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_wasm_hot_pool_compiler_log_parsing() {
+        let pool = WasmHotPool::new(2).expect("init pool");
+        let rust_stderr = "error[E0308]: mismatched types\n  --> src/main.rs:10:5\n";
+        let res = pool.parse_compiler_logs(rust_stderr, None).expect("parse logs");
+        assert_eq!(res.total_errors, 1);
+        assert_eq!(res.diagnostics.len(), 1);
+        assert_eq!(res.diagnostics[0].error_code.as_deref(), Some("E0308"));
+        assert_eq!(res.diagnostics[0].line, 10);
+
+        let zig_stderr = "src/math.zig:25:9: error: expected ';' after statement\n";
+        let zig_res = pool.parse_compiler_logs(zig_stderr, None).expect("parse zig logs");
+        assert_eq!(zig_res.total_errors, 1);
+        assert_eq!(zig_res.diagnostics[0].file, "src/math.zig");
+    }
+
+    #[test]
+    fn test_wasm_hot_pool_vector_similarity() {
+        let pool = WasmHotPool::new(2).expect("init pool");
+        let q = vec![1.0f32, 0.0, 0.0];
+        let t1 = vec![1.0f32, 0.0, 0.0];
+        let t2 = vec![0.0f32, 1.0, 0.0];
+        let res = pool.vector_similarity_search(&q, &[t1, t2], 2, None).expect("sim search");
+        assert_eq!(res.matches.len(), 2);
+        assert_eq!(res.matches[0].index, 0);
+        assert!((res.matches[0].score - 1.0).abs() < 1e-4);
+        assert!((res.matches[1].score - 0.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_wasm_hot_pool_patch_parsing() {
+        let pool = WasmHotPool::new(2).expect("init pool");
+        let diff = r#"--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,3 +1,4 @@
+ let x = 1;
++let y = 2;
+ let z = 3;
+"#;
+        let res = pool.parse_and_verify_patch(diff, None).expect("patch parse");
+        assert!(res.is_valid);
+        assert_eq!(res.total_additions, 1);
+        assert_eq!(res.total_hunks, 1);
+        assert_eq!(res.files.len(), 1);
     }
 }

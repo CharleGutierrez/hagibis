@@ -76,13 +76,16 @@ impl OllamaSpeculativeOrchestrator {
             .unwrap_or_default();
 
         let sibling = std::env::var("HGB_OLLAMA_DIR")
+            .or_else(|_| std::env::var("OLLAMA_SIBLING_DIR"))
             .map(PathBuf::from)
             .ok()
             .or_else(|| {
                 [
-                    PathBuf::from("../ollama"),
+                    PathBuf::from("../../../ollama"),
                     PathBuf::from("../../ollama"),
+                    PathBuf::from("../ollama"),
                     PathBuf::from("ollama"),
+                    PathBuf::from("/home/toshiba/My AI Project/ollama"),
                 ]
                 .into_iter()
                 .find(|p| p.is_dir())

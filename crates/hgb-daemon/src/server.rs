@@ -174,6 +174,7 @@ pub struct DaemonState {
     pub wasm_shm_pipeline: Arc<tokio::sync::Mutex<hgb_core::WasmSharedMemoryPipeline>>,
     pub neural_coproc: Arc<hgb_core::NeuralCoprocessor>,
     pub shm_ring: Arc<tokio::sync::Mutex<hgb_storage::ShmRingBuffer>>,
+    pub state_machine: Arc<hgb_core::AutonomousStateMachine>,
     pub self_healing_daemon: Arc<crate::self_healing_daemon::SelfHealingDaemonLoop>,
     pub p2p_mesh: Arc<hgb_nextgen::P2pSwarmMesh>,
     pub shm_bridge: Arc<crate::shm_grpc_bridge::ShmGrpcBridge>,
@@ -266,8 +267,13 @@ impl DaemonState {
             hgb_storage::ShmRingBuffer::new("daemon_shared_ring", 16 * 1024 * 1024)
                 .expect("init daemon shm ring"),
         ));
+        let state_machine = Arc::new(
+            hgb_core::AutonomousStateMachine::new(&ws_dir)
+                .unwrap_or_else(|_| hgb_core::AutonomousStateMachine::in_memory().expect("in-memory state machine fallback"))
+        );
         let self_healing_daemon = Arc::new(
             crate::self_healing_daemon::SelfHealingDaemonLoop::new(&ws_dir)
+                .with_state_machine(state_machine.clone())
                 .with_event_bus(event_bus.clone()),
         );
         let p2p_mesh = Arc::new(hgb_nextgen::P2pSwarmMesh::new("local_hgbd_node", "mesh_auth_secret_2026"));
@@ -293,6 +299,7 @@ impl DaemonState {
         ));
         let vibe_watcher = Arc::new(tokio::sync::RwLock::new(
             crate::vibe_coding_watcher::VibeCodingWatcher::new(&ws_dir)
+                .with_state_machine(state_machine.clone())
         ));
         let hardware_synergy = Arc::new(hgb_core::protocol::hardware_runtime_synergy::HardwareRuntimeSynergy::new());
         let agent_mesh = Arc::new(
@@ -365,6 +372,7 @@ impl DaemonState {
             wasm_shm_pipeline,
             neural_coproc,
             shm_ring,
+            state_machine,
             self_healing_daemon,
             p2p_mesh,
             shm_bridge,

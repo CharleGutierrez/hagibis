@@ -16,9 +16,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 use serde::{Deserialize, Serialize};
 
+use hgb_core::autonomous_state_machine::{
+    AutonomousState, AutonomousStateMachine, DpoDistillationRecord,
+};
 use hgb_core::blake3;
 use hgb_core::error::{HgbError, Result};
 use hgb_core::overlayfs_sandbox::OverlaySandbox;
@@ -50,6 +54,8 @@ pub struct VibeWatcherStatusReport {
     pub dpo_pairs_count: u64,
     #[serde(default)]
     pub staged_ghost_fixes_count: usize,
+    #[serde(default)]
+    pub current_state: Option<String>,
     pub recent_cycles: Vec<VibeWatcherCycleRecord>,
 }
 
@@ -82,6 +88,7 @@ pub struct VibeCodingWatcher {
     workspace_root: PathBuf,
     distillation_dir: PathBuf,
     ollama_endpoint: String,
+    state_machine: Arc<AutonomousStateMachine>,
     cycles_executed: AtomicU64,
     failures_detected: AtomicU64,
     auto_healed_iterations: AtomicU64,
@@ -100,10 +107,16 @@ impl VibeCodingWatcher {
         let endpoint = std::env::var("OLLAMA_HOST")
             .unwrap_or_else(|_| "http://127.0.0.1:11434".to_string());
 
+        let sm = Arc::new(
+            AutonomousStateMachine::new(&root)
+                .unwrap_or_else(|_| AutonomousStateMachine::in_memory().expect("in-memory state machine fallback"))
+        );
+
         Self {
             workspace_root: root,
             distillation_dir: dist_dir,
             ollama_endpoint: endpoint,
+            state_machine: sm,
             cycles_executed: AtomicU64::new(0),
             failures_detected: AtomicU64::new(0),
             auto_healed_iterations: AtomicU64::new(0),
@@ -111,6 +124,17 @@ impl VibeCodingWatcher {
             history: std::sync::RwLock::new(Vec::new()),
             staged_ghost_fixes: std::sync::RwLock::new(std::collections::HashMap::new()),
         }
+    }
+
+    /// Provide a custom AutonomousStateMachine
+    pub fn with_state_machine(mut self, sm: Arc<AutonomousStateMachine>) -> Self {
+        self.state_machine = sm;
+        self
+    }
+
+    /// Reference to the inner AutonomousStateMachine
+    pub fn state_machine(&self) -> Arc<AutonomousStateMachine> {
+        self.state_machine.clone()
     }
 
     /// Automatically infer the compiler or test command for the target file or workspace
@@ -175,6 +199,13 @@ impl VibeCodingWatcher {
         if compiler_failed {
             self.failures_detected.fetch_add(1, Ordering::Relaxed);
 
+            // 1. Planning: start durable cycle in AutonomousStateMachine
+            let sm_cycle_id = self.state_machine.start_cycle(
+                None,
+                Some(&target_path.display().to_string()),
+                &format!("Vibe-coding repair: {}", cmd_display),
+            ).ok();
+
             // Construct closed-loop diagnostic prompt
             let diag_prompt = format!(
                 "DIAGNOSTIC COMPILER INTERCEPTION:\nWorkspace: {}\nTarget: {}\nCommand: {}\nExit Code: {}\nDiagnostic Output:\n{}\n\nGenerate minimal surgical fix in unified diff format.",
@@ -186,14 +217,35 @@ impl VibeCodingWatcher {
             );
             llm_prompt_gen = true;
 
+            // 2. BranchSynthesis: speculative code generation
+            let _ = self.state_machine.transition(
+                AutonomousState::BranchSynthesis,
+                serde_json::json!({
+                    "command": cmd_display,
+                    "exit_code": exit_code,
+                    "target": target_path.display().to_string(),
+                }),
+            );
+
             // Generate candidate patch (via Ollama or rule-based fallback)
             let candidate_patch = self.synthesize_repair_patch(&diag_prompt, target_path);
 
             if !candidate_patch.is_empty() {
-                // Verify inside isolated RAM CoW OverlaySandbox
+                // 3. CoWEvaluation: verify inside isolated RAM CoW OverlaySandbox
+                let _ = self.state_machine.transition(
+                    AutonomousState::CoWEvaluation,
+                    serde_json::json!({ "candidate_len": candidate_patch.len() }),
+                );
+
                 let verified = self.verify_patch_in_sandbox(&candidate_patch, target_path, &bin, &args);
                 if verified {
                     sandbox_verified = true;
+
+                    // 4. FirstGreenVerification: enforce strict syntax and build checks
+                    let _ = self.state_machine.transition(
+                        AutonomousState::FirstGreenVerification,
+                        serde_json::json!({ "sandbox_verified": true }),
+                    );
 
                     // Pre-flight compiler diagnostics stage ghost fixes in RAM for 1-key tab acceptance
                     let fix_id = format!(
@@ -215,15 +267,51 @@ impl VibeCodingWatcher {
                     }
                     ghost_fix_staged = true;
 
+                    // 5. CommitDpoDistill: commit verified patch to disk and record DPO distillation pair
+                    let _ = self.state_machine.transition(
+                        AutonomousState::CommitDpoDistill,
+                        serde_json::json!({ "target": target_path.display().to_string() }),
+                    );
+
                     // Apply First-Green patch to disk
                     if self.commit_patch_to_disk(&candidate_patch, target_path).is_ok() {
                         patch_committed = true;
                         self.auto_healed_iterations.fetch_add(1, Ordering::Relaxed);
 
-                        // Export DPO distillation pair
+                        // Export DPO distillation pair to disk and to SQLite WAL database
                         let _ = self.export_dpo_pair(&diag_prompt, &candidate_patch, &stderr, exit_code);
+                        if let Some(ref cid) = sm_cycle_id {
+                            let dpo_record = DpoDistillationRecord {
+                                dpo_id: format!("dpo_{}", blake3::hash(diag_prompt.as_bytes()).to_hex()),
+                                cycle_id: cid.clone(),
+                                prompt: diag_prompt.clone(),
+                                chosen_patch: candidate_patch.clone(),
+                                rejected_patch: stderr.clone(),
+                                score: 1.0,
+                                timestamp: chrono::Utc::now().to_rfc3339(),
+                                metadata_json: Some(serde_json::json!({ "exit_code_before": exit_code, "command": cmd_display }).to_string()),
+                            };
+                            let _ = self.state_machine.record_dpo_pair(&dpo_record);
+                        }
+
+                        // 6. Complete
+                        let _ = self.state_machine.complete_active_cycle(serde_json::json!({
+                            "auto_healed": true,
+                            "command": cmd_display,
+                        }));
+                    } else {
+                        let _ = self.state_machine.rollback_active_cycle("Failed committing patch to disk");
                     }
+                } else {
+                    // Sandbox verification failed, attempt GeneticRepair
+                    let _ = self.state_machine.transition(
+                        AutonomousState::GeneticRepair,
+                        serde_json::json!({ "reason": "Candidate failed sandbox verification" }),
+                    );
+                    let _ = self.state_machine.rollback_active_cycle("Sandbox verification failed");
                 }
+            } else {
+                let _ = self.state_machine.rollback_active_cycle("No candidate repair patch synthesized");
             }
         }
 
@@ -376,6 +464,7 @@ impl VibeCodingWatcher {
             auto_healed_iterations: self.auto_healed_iterations.load(Ordering::Relaxed),
             dpo_pairs_count: self.dpo_pairs_count.load(Ordering::Relaxed),
             staged_ghost_fixes_count: ghost_count,
+            current_state: Some(self.state_machine.current_state().as_str().to_string()),
             recent_cycles: recent,
         }
     }
