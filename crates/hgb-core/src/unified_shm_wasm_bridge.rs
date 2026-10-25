@@ -655,6 +655,57 @@ impl UnifiedShmWasmBridge {
             },
         })
     }
+
+    /// Map payload directly into Wasmtime instance guest memory via `instance.get_memory`
+    pub fn map_instance_memory<T>(
+        &self,
+        header: &UnifiedShmWasmHeader,
+        store: &mut Store<T>,
+        instance: &wasmtime::Instance,
+    ) -> Result<usize> {
+        let memory = instance
+            .get_memory(&mut *store, "memory")
+            .ok_or_else(|| HgbError::Execution("WASM instance does not export linear 'memory'".into()))?;
+        self.map_into_wasmtime_memory(header, store, &memory)
+    }
+
+    /// Direct zero-copy transfer of daemon context buffer into Wasmtime instance linear memory
+    pub fn zero_copy_transfer_to_instance<T>(
+        &self,
+        context: &[u8],
+        guest_target_address: u64,
+        flags: u64,
+        store: &mut Store<T>,
+        instance: &wasmtime::Instance,
+    ) -> Result<UnifiedShmWasmHeader> {
+        let full_flags = flags | FLAG_DIRECT_POINTER_MAP | FLAG_ZERO_COPY_VERIFIED | FLAG_CONTEXT_BUFFER;
+        let header = self.write_frame(context, guest_target_address, full_flags)?;
+        self.map_instance_memory(&header, store, instance)?;
+        Ok(header)
+    }
+
+    /// Read directly from Wasmtime instance linear memory without intermediate allocations
+    pub fn zero_copy_read_instance_memory<T>(
+        &self,
+        guest_address: u64,
+        length: usize,
+        store: &mut Store<T>,
+        instance: &wasmtime::Instance,
+    ) -> Result<Vec<u8>> {
+        let memory = instance
+            .get_memory(&mut *store, "memory")
+            .ok_or_else(|| HgbError::Execution("WASM instance does not export linear 'memory'".into()))?;
+        let data = memory.data(&*store);
+        let start = guest_address as usize;
+        let end = start + length;
+        if end > data.len() {
+            return Err(HgbError::Execution(format!(
+                "Address 0x{:X} + length {} exceeds instance memory bounds ({})",
+                guest_address, length, data.len()
+            )));
+        }
+        Ok(data[start..end].to_vec())
+    }
 }
 
 fn current_time_ns() -> u64 {

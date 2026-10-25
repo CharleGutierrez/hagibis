@@ -229,6 +229,30 @@
           "default": 10000000
         }
       }
+    },
+    "hgb_self_healing_ci": {
+      "description": "Autonomous self-healing CI/CD loop: executes cargo check/test in sandbox, extracts compiler diagnostics, synthesizes surgical diffs, verifies in CoW sandbox, and applies fix",
+      "parameters": {
+        "target_crate": { "type": "string", "description": "Target crate in workspace (e.g. 'hgb-core', 'hgb-daemon')" },
+        "target_file": { "type": "string", "description": "Optional specific source file to heal" },
+        "command": { "type": "string", "description": "Compiler or test command (default: 'cargo check', or 'cargo test')" },
+        "run_tests": { "type": "boolean", "description": "Execute test suite in addition to compiler check", "default": false },
+        "max_retries": { "type": "integer", "description": "Maximum autonomous repair iterations", "default": 3 },
+        "auto_apply": { "type": "boolean", "description": "Atomically apply verified First-Green patch to disk", "default": true }
+      }
+    },
+    "hgb_hot_reload_component": {
+      "description": "Zero-downtime component hot-reloading: dynamically refreshes WASM plugins, pre-warmed WasmHotPool caches, model weights, or daemon configuration",
+      "parameters": {
+        "component_type": {
+          "type": "string",
+          "enum": ["wasm_plugin", "model_weights", "daemon_config", "all"],
+          "description": "Component type to hot-reload",
+          "default": "all"
+        },
+        "target_path": { "type": "string", "description": "Optional target path for WASM module or configuration file" },
+        "force": { "type": "boolean", "description": "Force eviction and re-compilation of cached modules", "default": true }
+      }
     }
   },
   "mcpServers": {
@@ -278,7 +302,9 @@
         "hgb_agentic_bisect",
         "hgb_nightshift",
         "hgb_desktop_drive",
-        "hgb_viral_og"
+        "hgb_viral_og",
+        "hgb_self_healing_ci",
+        "hgb_hot_reload_component"
       ]
     },
     "hagibis_sse": {

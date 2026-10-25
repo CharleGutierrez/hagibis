@@ -40,6 +40,29 @@ interface types {
         compressed-payload: list<u8>,
         state: execution-state,
     }
+
+    /// Zero-Copy Shared Linear Memory Buffer Descriptor
+    record shm-buffer-descriptor {
+        offset: u32,
+        length: u32,
+        capacity: u32,
+        flags: u32,
+        checksum: u64,
+    }
+}
+
+/// Zero-Copy WASM-to-Daemon IPC Interface
+interface zero-copy-ipc {
+    use types.{shm-buffer-descriptor};
+
+    /// Allocate shared linear memory buffer in guest space
+    shm-alloc: func(capacity: u32, flags: u32) -> result<shm-buffer-descriptor, string>;
+
+    /// Read buffer descriptor for linear memory buffer at given guest offset
+    shm-get-descriptor: func(offset: u32) -> result<shm-buffer-descriptor, string>;
+
+    /// Process context buffer in-place with zero memory copy
+    shm-process-context: func(descriptor: shm-buffer-descriptor) -> result<u32, string>;
 }
 
 interface state-sync {
@@ -71,4 +94,5 @@ interface executor {
 world hagibis-wasm-engine {
     export state-sync;
     export executor;
+    export zero-copy-ipc;
 }

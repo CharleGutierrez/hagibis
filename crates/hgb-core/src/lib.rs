@@ -1103,6 +1103,12 @@ pub use autonomous_state_machine::{
     CrashRecoveryReport, CycleStatus, DpoDistillationRecord, StateTransitionRecord,
 };
 
+// Pillar 3: Host-Aware Dynamic Scaling (Dynatune & Kernel Optimizer Bridge)
+pub mod dynatune_bridge;
+pub use dynatune_bridge::{
+    DynatuneBridge, HostPowerState, ScalingGuard, ScalingShiftReport, WorkloadCategory,
+};
+
 /// Enterprise high-capacity implementation
 pub fn enterprise_architecture_dispatch() -> bool {
     true

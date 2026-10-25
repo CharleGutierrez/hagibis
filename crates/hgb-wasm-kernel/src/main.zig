@@ -968,3 +968,112 @@ test "git dag layout lane allocation" {
     try std.testing.expectEqual(@as(u32, 0), d.nodes_ptr[0].x);
     try std.testing.expectEqual(@as(u32, 0), d.nodes_ptr[1].x);
 }
+
+// ============================================================================
+// 7. ZERO-COPY WASM-TO-DAEMON IPC (SHM LINEAR MEMORY DESCRIPTORS)
+// ============================================================================
+
+pub const SHM_MAGIC: u32 = 0x53484D31; // 'SHM1'
+
+pub const ShmBufferDescriptor = extern struct {
+    offset: u32,
+    length: u32,
+    capacity: u32,
+    flags: u32,
+    checksum: u64,
+};
+
+pub const SHM_FLAG_CONTEXT_BUFFER: u32 = 1 << 0;
+pub const SHM_FLAG_AST_REPRESENTATION: u32 = 1 << 1;
+pub const SHM_FLAG_MODEL_TENSOR: u32 = 1 << 2;
+pub const SHM_FLAG_DIRECT_POINTER: u32 = 1 << 3;
+pub const SHM_FLAG_ZERO_COPY_VERIFIED: u32 = 1 << 4;
+
+var shm_descriptors: [64]ShmBufferDescriptor = undefined;
+var shm_descriptors_count: usize = 0;
+
+export fn wasm_shm_alloc(size: usize, flags: u32) callconv(.C) ?[*]u8 {
+    const ptr = allocBytes(size) orelse return null;
+    const offset = @as(u32, @intCast(@intFromPtr(ptr)));
+
+    if (shm_descriptors_count < shm_descriptors.len) {
+        shm_descriptors[shm_descriptors_count] = ShmBufferDescriptor{
+            .offset = offset,
+            .length = 0,
+            .capacity = @as(u32, @intCast(size)),
+            .flags = flags | SHM_FLAG_DIRECT_POINTER,
+            .checksum = 0,
+        };
+        shm_descriptors_count += 1;
+    }
+    return ptr;
+}
+
+export fn wasm_shm_get_ptr(offset: u32) callconv(.C) ?[*]u8 {
+    if (offset == 0) return null;
+    return @ptrFromInt(offset);
+}
+
+export fn wasm_shm_process_context(buf_ptr: [*]const u8, buf_len: u32, flags: u32) callconv(.C) u32 {
+    if (buf_len == 0) return 0;
+
+    // Fast FNV-1a 64-bit checksum computed in-place across linear memory
+    var h: u64 = 0xcbf29ce484222325;
+    for (0..buf_len) |i| {
+        h ^= buf_ptr[i];
+        h = h *% 0x100000001b3;
+    }
+
+    // Update descriptor entry if present
+    const addr = @as(u32, @intCast(@intFromPtr(buf_ptr)));
+    for (0..shm_descriptors_count) |i| {
+        if (shm_descriptors[i].offset == addr) {
+            shm_descriptors[i].length = buf_len;
+            shm_descriptors[i].flags = flags | SHM_FLAG_ZERO_COPY_VERIFIED;
+            shm_descriptors[i].checksum = h;
+            break;
+        }
+    }
+
+    return @as(u32, @truncate(h));
+}
+
+export fn wasm_shm_get_descriptor(offset: u32, out_ptr: [*]u8) callconv(.C) u32 {
+    const desc_size = @sizeOf(ShmBufferDescriptor);
+    for (0..shm_descriptors_count) |i| {
+        if (shm_descriptors[i].offset == offset) {
+            const dest: *ShmBufferDescriptor = @ptrCast(@alignCast(out_ptr));
+            dest.* = shm_descriptors[i];
+            return @as(u32, @intCast(desc_size));
+        }
+    }
+    return 0;
+}
+
+test "zero copy shm allocation and in-place context processing" {
+    const size = 1024;
+    const ptr = wasm_shm_alloc(size, SHM_FLAG_CONTEXT_BUFFER);
+    try std.testing.expect(ptr != null);
+
+    const offset = @as(u32, @intCast(@intFromPtr(ptr.?)));
+    const retrieved_ptr = wasm_shm_get_ptr(offset);
+    try std.testing.expectEqual(ptr, retrieved_ptr);
+
+    // Write context directly into buffer
+    const msg = "Hagibis Zero-Copy WASM-to-Daemon IPC context stream";
+    @memcpy(ptr.?[0..msg.len], msg);
+
+    const token = wasm_shm_process_context(ptr.?, @as(u32, @intCast(msg.len)), SHM_FLAG_CONTEXT_BUFFER);
+    try std.testing.expect(token != 0);
+
+    // Verify descriptor
+    var desc_buf: [@sizeOf(ShmBufferDescriptor)]u8 align(@alignOf(ShmBufferDescriptor)) = undefined;
+    const desc_bytes = wasm_shm_get_descriptor(offset, &desc_buf);
+    try std.testing.expectEqual(@as(u32, @intCast(@sizeOf(ShmBufferDescriptor))), desc_bytes);
+
+    const desc: *ShmBufferDescriptor = @ptrCast(&desc_buf);
+    try std.testing.expectEqual(offset, desc.offset);
+    try std.testing.expectEqual(@as(u32, @intCast(msg.len)), desc.length);
+    try std.testing.expect(desc.flags & SHM_FLAG_ZERO_COPY_VERIFIED != 0);
+    try std.testing.expect(desc.checksum != 0);
+}

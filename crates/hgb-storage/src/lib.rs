@@ -67,5 +67,12 @@ pub use distributed_crdt_mesh::{
     VectorEmbeddingRecord,
 };
 
+// Strategic Upgrade 5: Unified Embedded HNSW Vector Index (Pillar 2)
+pub mod hnsw_vector_index;
+pub use hnsw_vector_index::{
+    DistanceMetric, FastRng, HnswConfig, HnswSearchResult, HnswStats, HnswVectorIndex,
+};
+
+
 
 

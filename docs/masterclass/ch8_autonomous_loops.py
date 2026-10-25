@@ -4,10 +4,23 @@ ch8_autonomous_loops.py - Chapter 8: Autonomous Hyper-Executor Superpowers
 
 from reportlab.platypus import Paragraph, Spacer, Table, TableStyle, KeepTogether
 from reportlab.lib import colors
-from styles import get_masterclass_styles, CodeSnippet
+try:
+    from styles import get_masterclass_styles, CodeSnippet
+except ImportError:
+    from styles import get_masterclass_styles
+    def CodeSnippet(code, lang="Rust"):
+        from styles import make_code_block
+        return make_code_block(code, caption=lang)
 
 def build_autonomous_loops_chapter():
     styles = get_masterclass_styles()
+    if "ChapterTitle" not in styles:
+        styles["ChapterTitle"] = styles.get("ChapterHeading", styles.get("Heading1"))
+    if "ChapterSubtitle" not in styles:
+        styles["ChapterSubtitle"] = styles.get("CoverSubtitle", styles.get("Normal"))
+    if "BodyTextCustom" not in styles:
+        styles["BodyTextCustom"] = styles.get("Body", styles.get("Normal"))
+
     story = []
 
     story.append(Paragraph("Chapter 8: The Four Autonomous Superpowers", styles["ChapterTitle"]))
@@ -261,5 +274,83 @@ def build_autonomous_loops_chapter():
     ))
     story.append(Spacer(1, 15))
 
+    # =========================================================================
+    # PILLAR 5: FULLY AUTONOMOUS SELF-IMPROVING CI/CD & WORKBENCH LOOP
+    # =========================================================================
+    p14_desc = (
+        "<b>5. Fully Autonomous Self-Improving CI/CD & Workbench Loop (Pillar 5):</b><br/>"
+        "Unifies the complete developer feedback cycle into a closed-loop autonomous workbench. "
+        "Integrates real-time compiler interception across workspace crates (<code>hgb-core</code>, <code>hgb-daemon</code>), "
+        "automated test execution, AST diagnostic extraction (Rust E0308/E0425, Zig, Python), speculative branch synthesis, "
+        "and multi-candidate verification within an isolated ephemeral RAM Copy-on-Write (CoW) <code>OverlaySandbox</code> "
+        "in <code>/dev/shm</code>. Only First-Green verified patches are committed back to physical workspace disk with atomic "
+        "timeline checkpoints. Following successful verification, triggers dynamic zero-downtime hot-reloads of <code>WasmHotPool</code> "
+        "modules, model weights, and daemon state via the <code>hgb_hot_reload_component</code> MCP protocol.<br/><br/>"
+        "<b>Autonomous CI/CD & Workbench Loop Architecture:</b><br/>"
+        "&nbsp;&nbsp;[Code Mutation / Build Trigger]<br/>"
+        "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;│<br/>"
+        "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;▼<br/>"
+        "&nbsp;&nbsp;[CompilerInterceptor: Parse stderr / panics / AST locations]<br/>"
+        "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;│<br/>"
+        "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;▼<br/>"
+        "&nbsp;&nbsp;[Branch Synthesis: Ollama Speculative Generation & Rule Mutators]<br/>"
+        "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;│<br/>"
+        "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;▼<br/>"
+        "&nbsp;&nbsp;[RAM CoW OverlaySandbox (/dev/shm): Isolated &lt;2ms Virtualization]<br/>"
+        "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;│<br/>"
+        "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;▼<br/>"
+        "&nbsp;&nbsp;[First-Green Verification: cargo check &amp; cargo test (exit 0)]<br/>"
+        "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;├── Pass ──► [Atomic Disk Commit + DPO Distillation Pair]<br/>"
+        "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;│                  │<br/>"
+        "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;│                  ▼<br/>"
+        "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;│            [Zero-Downtime Hot-Reload (WasmHotPool / Config)]<br/>"
+        "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;└── Fail ──► [Genetic Repair / Clean Rollback (Zero Pollution)]"
+    )
+    story.append(Paragraph(p14_desc, styles["BodyTextCustom"]))
+    story.append(Spacer(1, 10))
+
+    story.append(CodeSnippet(
+        "// Autonomous CI/CD Self-Healing & Hot-Reload Loop (Rust)\n"
+        "let daemon_loop = SelfHealingDaemonLoop::new(workspace_root);\n"
+        "// 1. Run crate-level cargo checks or test suite\n"
+        "let report = daemon_loop.run_crate_ci_check(Some(\"hgb-core\"), true)?;\n"
+        "if report.sandbox_verification_passed && report.applied_to_disk {\n"
+        "    println!(\"Healed crate failure in {}ms; First-Green verified!\", report.duration_ms);\n"
+        "    // 2. Trigger zero-downtime hot-reload of WASM pool and daemon state\n"
+        "    let reload_status = daemon_loop.trigger_hot_reload_hook(\"wasm_plugin\")?;\n"
+        "    assert_eq!(reload_status[\"status\"], \"reloaded\");\n"
+        "}",
+        "Rust"
+    ))
+    story.append(Spacer(1, 10))
+
+    story.append(CodeSnippet(
+        "# Python Autonomous Workbench Runner\n"
+        "import urllib.request, json\n"
+        "\n"
+        "def run_autonomous_ci_heal(target_crate=\"hgb-core\"):\n"
+        "    payload = json.dumps({\n"
+        "        \"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\",\n"
+        "        \"params\": {\n"
+        "            \"name\": \"hgb_self_healing_ci\",\n"
+        "            \"arguments\": {\"target_crate\": target_crate, \"run_tests\": True, \"auto_apply\": True}\n"
+        "        }\n"
+        "    }).encode('utf-8')\n"
+        "    req = urllib.request.Request('http://127.0.0.1:8083/mcp', data=payload, headers={'Content-Type': 'application/json'})\n"
+        "    with urllib.request.urlopen(req) as resp:\n"
+        "        res = json.loads(resp.read().decode('utf-8'))\n"
+        "    print(\"Autonomous CI Status:\", res[\"result\"][\"content\"][0][\"text\"])\n"
+        "\n"
+        "if __name__ == '__main__':\n"
+        "    run_autonomous_ci_heal()",
+        "Python"
+    ))
+    story.append(Spacer(1, 15))
+
     return story
 
+if __name__ == "__main__":
+    from reportlab.platypus import SimpleDocTemplate
+    doc = SimpleDocTemplate("/tmp/test_ch8.pdf")
+    doc.build(build_autonomous_loops_chapter())
+    print("Chapter 8 built successfully!")
