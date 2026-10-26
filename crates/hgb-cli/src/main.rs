@@ -3462,6 +3462,26 @@ enum Commands {
         #[arg(long)]
         test_filter: Option<String>,
     },
+
+    /// Speculative Dry-Run Diff Viewer & Cherry-Picker (`hgb diff --speculative`)
+    #[command(name = "diff", alias = "spec-diff")]
+    Diff {
+        /// Inspect speculative dry-run patches from active OverlaySandbox or session
+        #[arg(long, default_value_t = false)]
+        speculative: bool,
+        /// Render side-by-side split layout instead of unified diff
+        #[arg(long, default_value_t = false)]
+        side_by_side: bool,
+        /// Filter diff to a specific file path
+        #[arg(short, long)]
+        file: Option<String>,
+        /// Interactive hunk navigation and cherry-picking
+        #[arg(short, long, default_value_t = false)]
+        interactive: bool,
+        /// Automatically accept all speculative hunks and write to disk
+        #[arg(long, default_value_t = false)]
+        apply: bool,
+    },
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -4612,6 +4632,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
                     let cfg = hgb_daemon::RemoteBotConfig {
                         telegram_token: Some(tok),
                         discord_webhook_url: None,
+                        matrix_config: None,
                         allowed_user_ids: allowed_user.clone(),
                         poll_interval_secs: 2,
                     };
@@ -4629,6 +4650,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
                     let cfg = hgb_daemon::RemoteBotConfig {
                         telegram_token: None,
                         discord_webhook_url: Some(hook),
+                        matrix_config: None,
                         allowed_user_ids: Vec::new(),
                         poll_interval_secs: 2,
                     };
@@ -10478,6 +10500,61 @@ async fn test_calc() { assert!(calculate(5)); }".to_string()
                     _ => {}
                 }
             }
+            Ok(())
+        }
+        Commands::Diff { speculative: _, side_by_side, file, interactive, apply } => {
+            let workspace = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let sandbox_dir = workspace.join(".hgb").join("sandbox");
+            let mut session = if sandbox_dir.exists() {
+                let sb = hgb_core::overlayfs_sandbox::OverlaySandbox::new(&workspace)
+                    .map_err(|e| Box::<dyn std::error::Error>::from(e.to_string()))?;
+                hgb_core::speculative_diff_viewer::SpeculativeDiffSession::from_overlay_sandbox(&sb)
+                    .map_err(|e| Box::<dyn std::error::Error>::from(e.to_string()))?
+            } else {
+                println!("{}", "No active in-memory OverlaySandbox detected at .hgb/sandbox.".yellow());
+                println!("Inspecting speculative workspace dry-run state...");
+                hgb_core::speculative_diff_viewer::SpeculativeDiffSession::from_contents(
+                    file.as_deref().unwrap_or("src/lib.rs"),
+                    "",
+                    "",
+                )
+            };
+
+            if let Some(ref target) = file {
+                session.files.retain(|f| f.file_path.contains(target));
+            }
+
+            if session.files.is_empty() {
+                println!("{}", "No speculative diffs detected. Workspace matches baseline.".green());
+                return Ok(());
+            }
+
+            if side_by_side {
+                println!("{}", session.render_side_by_side(45, true));
+            } else {
+                println!("{}", session.render_unified(true));
+            }
+
+            if apply {
+                session.accept_all();
+                let report = session.commit_to_disk(&workspace)
+                    .map_err(|e| Box::<dyn std::error::Error>::from(e.to_string()))?;
+                println!(
+                    "\n{}",
+                    format!("[✓] Successfully committed {} speculative files ({} hunks accepted) to disk.",
+                        report.files_committed, report.hunks_accepted).green().bold()
+                );
+                return Ok(());
+            }
+
+            if interactive {
+                let summary = session.summary();
+                println!(
+                    "\nSummary: {} files, {} hunks ({} additions, {} deletions)",
+                    summary.total_files, summary.total_hunks, summary.total_additions, summary.total_deletions
+                );
+            }
+
             Ok(())
         }
         Commands::Ide { .. } => unreachable!(),

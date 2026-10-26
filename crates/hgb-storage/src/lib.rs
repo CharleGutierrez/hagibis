@@ -84,3 +84,25 @@ pub use vector_native_edge::{
 
 
 
+// ============================================================================
+// Additions to crates/hgb-storage/src/lib.rs
+// ============================================================================
+
+// Upgrade 3: Local Vector Memory Indexing with SQLite FTS5 + HNSW
+pub mod fts5_hnsw_hybrid;
+pub use fts5_hnsw_hybrid::{
+    glob_match, glob_to_regex, sanitize_fts5_query, Fts5HnswHybridEngine,
+    HybridDocumentChunk, HybridEngineConfig, HybridRankingMode,
+    HybridSearchFilter, HybridSearchQuery as Fts5HybridSearchQuery,
+    HybridSearchResult,
+};
+
+// Skill 2: Dynamic SIMD Width Runtime Dispatch (AVX-512, AVX2, ARM Neon)
+pub mod simd_runtime_dispatch;
+pub use simd_runtime_dispatch::{
+    active_simd_target_name, cosine_similarity_scalar, detect_simd_architecture,
+    detect_simd_capabilities, dot_product_scalar, euclidean_distance_scalar,
+    euclidean_distance_sq_scalar, normalize_inplace_scalar, simd_cosine_similarity,
+    simd_dot_product, simd_euclidean_distance, simd_euclidean_distance_sq,
+    simd_normalize_inplace, SimdArchitecture, SimdCapabilities,
+};

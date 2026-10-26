@@ -430,6 +430,14 @@ pub use dynamic_tool_hotswap::{
     DynamicToolHotSwapper, DynamicToolRequest, DynamicToolSummary,
 };
 
+// Upgrade 1: Resident Daemon Shared-Memory Heartbeat Watchdog
+pub mod heartbeat_watchdog;
+pub use heartbeat_watchdog::{
+    check_daemon_health, check_daemon_health_at, resolve_heartbeat_path, DaemonLivenessStatus,
+    HeartbeatHeader, HeartbeatStatusSnapshot, HeartbeatWatchdog, DEFAULT_HEARTBEAT_PATH,
+    HEARTBEAT_HEADER_SIZE, HEARTBEAT_MAGIC, HEARTBEAT_VERSION,
+};
+
 
 
 

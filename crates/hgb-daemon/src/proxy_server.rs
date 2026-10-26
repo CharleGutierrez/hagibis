@@ -6,10 +6,11 @@
 //! 2. OpenAI protocol (`POST /v1/chat/completions`) for Cursor, Cline, Codex, Aider, OpenCode.
 //! 3. OpenAI model catalog (`GET /v1/models`).
 //! 4. Superpower injections: passes incoming context through `TokenShredder` for up to 90% token reduction.
+//! 5. Prometheus `/metrics` exporter: exports atomic counters, token savings, and latency histogram buckets.
 
 use axum::{
     extract::State,
-    http::StatusCode,
+    http::{header::HeaderMap, StatusCode},
     response::{
         sse::{Event, KeepAlive, Sse},
         IntoResponse, Response,
@@ -23,8 +24,181 @@ use hgb_core::token_shredder::TokenShredder;
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+/// Atomic Prometheus metrics collector for the proxy server
+#[derive(Debug, Default)]
+pub struct ProxyMetrics {
+    pub requests_cursor: AtomicU64,
+    pub requests_cline: AtomicU64,
+    pub requests_claude_code: AtomicU64,
+    pub requests_other: AtomicU64,
+    pub tokens_received_total: AtomicU64,
+    pub tokens_shredded_total: AtomicU64,
+
+    // Latency histogram buckets (in seconds)
+    pub latency_le_0_005: AtomicU64,
+    pub latency_le_0_01: AtomicU64,
+    pub latency_le_0_025: AtomicU64,
+    pub latency_le_0_05: AtomicU64,
+    pub latency_le_0_1: AtomicU64,
+    pub latency_le_0_25: AtomicU64,
+    pub latency_le_0_5: AtomicU64,
+    pub latency_le_1_0: AtomicU64,
+    pub latency_le_2_5: AtomicU64,
+    pub latency_le_5_0: AtomicU64,
+    pub latency_le_10_0: AtomicU64,
+    pub latency_le_inf: AtomicU64,
+    pub latency_sum_micros: AtomicU64,
+    pub latency_count: AtomicU64,
+}
+
+impl ProxyMetrics {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Atomically records a request for a specific client
+    pub fn record_request(&self, client: &str) {
+        match client {
+            "cursor" => self.requests_cursor.fetch_add(1, Ordering::Relaxed),
+            "cline" => self.requests_cline.fetch_add(1, Ordering::Relaxed),
+            "claude_code" => self.requests_claude_code.fetch_add(1, Ordering::Relaxed),
+            _ => self.requests_other.fetch_add(1, Ordering::Relaxed),
+        };
+    }
+
+    /// Atomically records token usage
+    pub fn record_tokens(&self, received: usize, shredded: usize) {
+        self.tokens_received_total.fetch_add(received as u64, Ordering::Relaxed);
+        self.tokens_shredded_total.fetch_add(shredded as u64, Ordering::Relaxed);
+    }
+
+    /// Atomically records latency in seconds
+    pub fn record_latency(&self, duration_secs: f64) {
+        let micros = (duration_secs * 1_000_000.0) as u64;
+        self.latency_sum_micros.fetch_add(micros, Ordering::Relaxed);
+        self.latency_count.fetch_add(1, Ordering::Relaxed);
+        self.latency_le_inf.fetch_add(1, Ordering::Relaxed);
+
+        if duration_secs <= 0.005 { self.latency_le_0_005.fetch_add(1, Ordering::Relaxed); }
+        if duration_secs <= 0.01 { self.latency_le_0_01.fetch_add(1, Ordering::Relaxed); }
+        if duration_secs <= 0.025 { self.latency_le_0_025.fetch_add(1, Ordering::Relaxed); }
+        if duration_secs <= 0.05 { self.latency_le_0_05.fetch_add(1, Ordering::Relaxed); }
+        if duration_secs <= 0.1 { self.latency_le_0_1.fetch_add(1, Ordering::Relaxed); }
+        if duration_secs <= 0.25 { self.latency_le_0_25.fetch_add(1, Ordering::Relaxed); }
+        if duration_secs <= 0.5 { self.latency_le_0_5.fetch_add(1, Ordering::Relaxed); }
+        if duration_secs <= 1.0 { self.latency_le_1_0.fetch_add(1, Ordering::Relaxed); }
+        if duration_secs <= 2.5 { self.latency_le_2_5.fetch_add(1, Ordering::Relaxed); }
+        if duration_secs <= 5.0 { self.latency_le_5_0.fetch_add(1, Ordering::Relaxed); }
+        if duration_secs <= 10.0 { self.latency_le_10_0.fetch_add(1, Ordering::Relaxed); }
+    }
+
+    /// Renders standard Prometheus exposition text format
+    pub fn render_prometheus(&self) -> String {
+        let req_cursor = self.requests_cursor.load(Ordering::Relaxed);
+        let req_cline = self.requests_cline.load(Ordering::Relaxed);
+        let req_claude = self.requests_claude_code.load(Ordering::Relaxed);
+        let req_other = self.requests_other.load(Ordering::Relaxed);
+
+        let tokens_recv = self.tokens_received_total.load(Ordering::Relaxed);
+        let tokens_shred = self.tokens_shredded_total.load(Ordering::Relaxed);
+
+        let savings_percent = if tokens_recv > 0 && tokens_recv >= tokens_shred {
+            let saved = tokens_recv - tokens_shred;
+            (saved as f64 / tokens_recv as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        let lat_sum_secs = (self.latency_sum_micros.load(Ordering::Relaxed) as f64) / 1_000_000.0;
+        let lat_count = self.latency_count.load(Ordering::Relaxed);
+
+        format!(
+            "# HELP hgb_proxy_requests_total Total number of proxy requests partitioned by client\n\
+             # TYPE hgb_proxy_requests_total counter\n\
+             hgb_proxy_requests_total{{client=\"cursor\"}} {}\n\
+             hgb_proxy_requests_total{{client=\"cline\"}} {}\n\
+             hgb_proxy_requests_total{{client=\"claude_code\"}} {}\n\
+             hgb_proxy_requests_total{{client=\"other\"}} {}\n\
+             \n\
+             # HELP hgb_proxy_tokens_received_total Total tokens received before shredding\n\
+             # TYPE hgb_proxy_tokens_received_total counter\n\
+             hgb_proxy_tokens_received_total {}\n\
+             \n\
+             # HELP hgb_proxy_tokens_shredded_total Total tokens after shredding optimization\n\
+             # TYPE hgb_proxy_tokens_shredded_total counter\n\
+             hgb_proxy_tokens_shredded_total {}\n\
+             \n\
+             # HELP hgb_proxy_token_savings_percent Overall token savings percentage achieved by TokenShredder\n\
+             # TYPE hgb_proxy_token_savings_percent gauge\n\
+             hgb_proxy_token_savings_percent {:.2}\n\
+             \n\
+             # HELP hgb_proxy_latency_seconds_bucket Latency distribution of upstream proxy requests\n\
+             # TYPE hgb_proxy_latency_seconds histogram\n\
+             hgb_proxy_latency_seconds_bucket{{le=\"0.005\"}} {}\n\
+             hgb_proxy_latency_seconds_bucket{{le=\"0.01\"}} {}\n\
+             hgb_proxy_latency_seconds_bucket{{le=\"0.025\"}} {}\n\
+             hgb_proxy_latency_seconds_bucket{{le=\"0.05\"}} {}\n\
+             hgb_proxy_latency_seconds_bucket{{le=\"0.1\"}} {}\n\
+             hgb_proxy_latency_seconds_bucket{{le=\"0.25\"}} {}\n\
+             hgb_proxy_latency_seconds_bucket{{le=\"0.5\"}} {}\n\
+             hgb_proxy_latency_seconds_bucket{{le=\"1.0\"}} {}\n\
+             hgb_proxy_latency_seconds_bucket{{le=\"2.5\"}} {}\n\
+             hgb_proxy_latency_seconds_bucket{{le=\"5.0\"}} {}\n\
+             hgb_proxy_latency_seconds_bucket{{le=\"10.0\"}} {}\n\
+             hgb_proxy_latency_seconds_bucket{{le=\"+Inf\"}} {}\n\
+             hgb_proxy_latency_seconds_sum {:.6}\n\
+             hgb_proxy_latency_seconds_count {}\n",
+            req_cursor,
+            req_cline,
+            req_claude,
+            req_other,
+            tokens_recv,
+            tokens_shred,
+            savings_percent,
+            self.latency_le_0_005.load(Ordering::Relaxed),
+            self.latency_le_0_01.load(Ordering::Relaxed),
+            self.latency_le_0_025.load(Ordering::Relaxed),
+            self.latency_le_0_05.load(Ordering::Relaxed),
+            self.latency_le_0_1.load(Ordering::Relaxed),
+            self.latency_le_0_25.load(Ordering::Relaxed),
+            self.latency_le_0_5.load(Ordering::Relaxed),
+            self.latency_le_1_0.load(Ordering::Relaxed),
+            self.latency_le_2_5.load(Ordering::Relaxed),
+            self.latency_le_5_0.load(Ordering::Relaxed),
+            self.latency_le_10_0.load(Ordering::Relaxed),
+            self.latency_le_inf.load(Ordering::Relaxed),
+            lat_sum_secs,
+            lat_count,
+        )
+    }
+}
+
+/// Helper function to classify incoming client from headers
+pub fn classify_client(headers: &HeaderMap, default_client: &str) -> String {
+    if let Some(client_val) = headers.get("x-client").or_else(|| headers.get("x-client-name")) {
+        if let Ok(c) = client_val.to_str() {
+            let lower = c.to_lowercase();
+            if lower.contains("cursor") { return "cursor".to_string(); }
+            if lower.contains("cline") { return "cline".to_string(); }
+            if lower.contains("claude") { return "claude_code".to_string(); }
+        }
+    }
+
+    if let Some(ua_val) = headers.get("user-agent") {
+        if let Ok(ua) = ua_val.to_str() {
+            let lower = ua.to_lowercase();
+            if lower.contains("cursor") { return "cursor".to_string(); }
+            if lower.contains("cline") { return "cline".to_string(); }
+            if lower.contains("claude") { return "claude_code".to_string(); }
+        }
+    }
+
+    default_client.to_string()
+}
 
 /// Configuration for the Hagibis Proxy Server
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,6 +226,7 @@ pub struct ProxyState {
     pub config: ProxyServerConfig,
     pub fabric: UniversalCloudFabric,
     pub shredder: TokenShredder,
+    pub metrics: Arc<ProxyMetrics>,
 }
 
 // ---------------------------------------------------------------------------
@@ -186,6 +361,7 @@ pub fn build_proxy_router(state: Arc<ProxyState>) -> Router {
         .route("/v1/chat/completions", post(handle_openai_chat_completions))
         .route("/v1/models", get(handle_list_models))
         .route("/health", get(handle_health))
+        .route("/metrics", get(handle_prometheus_metrics))
         .with_state(state)
 }
 
@@ -196,6 +372,18 @@ async fn handle_health() -> impl IntoResponse {
         "service": "hagibis-proxy",
         "version": "0.1.0"
     }))
+}
+
+/// GET /metrics (Prometheus Exporter)
+async fn handle_prometheus_metrics(State(state): State<Arc<ProxyState>>) -> impl IntoResponse {
+    let metrics_text = state.metrics.render_prometheus();
+    (
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
+        metrics_text,
+    )
 }
 
 /// GET /v1/models
@@ -279,15 +467,28 @@ async fn handle_list_models(State(state): State<Arc<ProxyState>>) -> impl IntoRe
 /// POST /v1/messages (Anthropic Protocol)
 async fn handle_anthropic_messages(
     State(state): State<Arc<ProxyState>>,
+    headers: HeaderMap,
     Json(payload): Json<AnthropicMessagesRequest>,
 ) -> Response {
+    let start_time = Instant::now();
+    let client = classify_client(&headers, "claude_code");
+    state.metrics.record_request(&client);
+
     // 1. Extract messages & apply TokenShredder superpower
     let mut fabric_messages = Vec::new();
+    let mut total_tokens_received = 0;
+    let mut total_tokens_shredded = 0;
 
     if let Some(sys) = payload.system {
+        let orig_tokens = TokenShredder::estimate_tokens(&sys);
+        total_tokens_received += orig_tokens;
+
         let shredded_sys = if state.config.shred_tokens {
-            state.shredder.shred(&sys).content
+            let shred_res = state.shredder.shred(&sys);
+            total_tokens_shredded += shred_res.shredded_tokens;
+            shred_res.content
         } else {
+            total_tokens_shredded += orig_tokens;
             sys
         };
         fabric_messages.push(FabricMessage::system(shredded_sys));
@@ -303,9 +504,15 @@ async fn handle_anthropic_messages(
                 .join("\n"),
         };
 
+        let orig_tokens = TokenShredder::estimate_tokens(&raw_text);
+        total_tokens_received += orig_tokens;
+
         let processed_text = if state.config.shred_tokens {
-            state.shredder.shred(&raw_text).content
+            let shred_res = state.shredder.shred(&raw_text);
+            total_tokens_shredded += shred_res.shredded_tokens;
+            shred_res.content
         } else {
+            total_tokens_shredded += orig_tokens;
             raw_text
         };
 
@@ -314,6 +521,8 @@ async fn handle_anthropic_messages(
             content: processed_text,
         });
     }
+
+    state.metrics.record_tokens(total_tokens_received, total_tokens_shredded);
 
     // 2. Build cloud fabric request
     let fabric_req = FabricChatRequest {
@@ -330,6 +539,7 @@ async fn handle_anthropic_messages(
     let completion = match state.fabric.complete_with_failover(&fabric_req, chain_slice).await {
         Ok(c) => c,
         Err(e) => {
+            state.metrics.record_latency(start_time.elapsed().as_secs_f64());
             let err_json = serde_json::json!({
                 "type": "error",
                 "error": {
@@ -341,6 +551,7 @@ async fn handle_anthropic_messages(
         }
     };
 
+    state.metrics.record_latency(start_time.elapsed().as_secs_f64());
     let msg_id = format!("msg_{}", &uuid::Uuid::new_v4().to_string().replace('-', "")[..24]);
 
     // 3. Streaming response: Anthropic SSE events
@@ -466,14 +677,27 @@ fn create_anthropic_sse_stream(
 /// POST /v1/chat/completions (OpenAI Protocol)
 async fn handle_openai_chat_completions(
     State(state): State<Arc<ProxyState>>,
+    headers: HeaderMap,
     Json(payload): Json<OpenAiChatRequest>,
 ) -> Response {
+    let start_time = Instant::now();
+    let client = classify_client(&headers, "cursor");
+    state.metrics.record_request(&client);
+
     let mut fabric_messages = Vec::new();
+    let mut total_tokens_received = 0;
+    let mut total_tokens_shredded = 0;
 
     for msg in payload.messages {
+        let orig_tokens = TokenShredder::estimate_tokens(&msg.content);
+        total_tokens_received += orig_tokens;
+
         let content = if state.config.shred_tokens {
-            state.shredder.shred(&msg.content).content
+            let shred_res = state.shredder.shred(&msg.content);
+            total_tokens_shredded += shred_res.shredded_tokens;
+            shred_res.content
         } else {
+            total_tokens_shredded += orig_tokens;
             msg.content
         };
         fabric_messages.push(FabricMessage {
@@ -481,6 +705,8 @@ async fn handle_openai_chat_completions(
             content,
         });
     }
+
+    state.metrics.record_tokens(total_tokens_received, total_tokens_shredded);
 
     let fabric_req = FabricChatRequest {
         messages: fabric_messages,
@@ -494,6 +720,7 @@ async fn handle_openai_chat_completions(
     let completion = match state.fabric.complete_with_failover(&fabric_req, priority_chain.as_deref()).await {
         Ok(c) => c,
         Err(e) => {
+            state.metrics.record_latency(start_time.elapsed().as_secs_f64());
             let err_json = serde_json::json!({
                 "error": {
                     "message": format!("Hagibis OpenAI Proxy error: {e}"),
@@ -503,6 +730,8 @@ async fn handle_openai_chat_completions(
             return (StatusCode::BAD_GATEWAY, Json(err_json)).into_response();
         }
     };
+
+    state.metrics.record_latency(start_time.elapsed().as_secs_f64());
 
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -605,6 +834,7 @@ pub async fn start_proxy_server(config: ProxyServerConfig) -> Result<(), Box<dyn
         config: config.clone(),
         fabric: UniversalCloudFabric::new(),
         shredder: TokenShredder::default(),
+        metrics: Arc::new(ProxyMetrics::new()),
     });
 
     let app = build_proxy_router(state);
@@ -647,5 +877,50 @@ mod tests {
         let parsed: OpenAiChatRequest = serde_json::from_str(json).unwrap();
         assert_eq!(parsed.model, "gpt-4o");
         assert_eq!(parsed.temperature, Some(0.5));
+    }
+
+    #[test]
+    fn test_prometheus_metrics_format_and_counters() {
+        let metrics = ProxyMetrics::new();
+        metrics.record_request("cursor");
+        metrics.record_request("cursor");
+        metrics.record_request("cline");
+        metrics.record_request("claude_code");
+        metrics.record_request("other");
+
+        metrics.record_tokens(1000, 400); // 60% savings
+        metrics.record_latency(0.045);
+
+        let output = metrics.render_prometheus();
+        assert!(output.contains("hgb_proxy_requests_total{client=\"cursor\"} 2"));
+        assert!(output.contains("hgb_proxy_requests_total{client=\"cline\"} 1"));
+        assert!(output.contains("hgb_proxy_requests_total{client=\"claude_code\"} 1"));
+        assert!(output.contains("hgb_proxy_requests_total{client=\"other\"} 1"));
+
+        assert!(output.contains("hgb_proxy_tokens_received_total 1000"));
+        assert!(output.contains("hgb_proxy_tokens_shredded_total 400"));
+        assert!(output.contains("hgb_proxy_token_savings_percent 60.00"));
+
+        assert!(output.contains("hgb_proxy_latency_seconds_bucket{le=\"0.05\"} 1"));
+        assert!(output.contains("hgb_proxy_latency_seconds_bucket{le=\"+Inf\"} 1"));
+        assert!(output.contains("hgb_proxy_latency_seconds_count 1"));
+    }
+
+    #[test]
+    fn test_client_header_classification() {
+        let mut h1 = HeaderMap::new();
+        h1.insert("user-agent", "Mozilla/5.0 Cursor/0.42.0".parse().unwrap());
+        assert_eq!(classify_client(&h1, "other"), "cursor");
+
+        let mut h2 = HeaderMap::new();
+        h2.insert("x-client", "cline".parse().unwrap());
+        assert_eq!(classify_client(&h2, "other"), "cline");
+
+        let mut h3 = HeaderMap::new();
+        h3.insert("user-agent", "claude-code/1.0".parse().unwrap());
+        assert_eq!(classify_client(&h3, "other"), "claude_code");
+
+        let h4 = HeaderMap::new();
+        assert_eq!(classify_client(&h4, "claude_code"), "claude_code");
     }
 }

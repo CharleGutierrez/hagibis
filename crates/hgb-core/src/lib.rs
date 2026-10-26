@@ -774,7 +774,9 @@ pub mod copilot_oauth;
 pub mod codex_oauth;
 pub mod cloud_fabric;
 
-pub use token_shredder::{ShredResult, TokenShredder};
+pub use token_shredder::{
+    PolicyExecutionMetrics, ShredResult, TokenPolicyConfig, TokenPolicyEngine, TokenShredder,
+};
 pub use copilot_oauth::{
     CopilotAuthEngine, CopilotChatMessage, CopilotChatRequest, CopilotChatResponse,
     CopilotCredentials, DeviceCodeResponse, GitHubTokenResponse,
@@ -1136,6 +1138,29 @@ pub use gpu_npu_offloader::{
 pub fn enterprise_architecture_dispatch() -> bool {
     true
 }
+
+// Upgrade 1: Linux io_uring & Zero-Copy SHM IPC Engine
+pub mod io_uring_ipc;
+pub use io_uring_ipc::{
+    probe_kernel_io_uring, ContextChunk, IpcBackendKind, IpcEngineStats, IpcMessageFrame,
+    IpcMessageKind, IpcRpcCommand, IpcRpcResponse, IoUringIpcConsumer, IoUringIpcEngine,
+    IoUringIpcProducer, NotificationSignaler, TokenStreamChunk, IPC_FRAME_MAGIC,
+};
+
+// Memory-Mapped Crash Dump Recorder
+pub mod shm_panic_dumper;
+pub use shm_panic_dumper::{
+    clear_panic_dump, install_shm_panic_hook, read_last_panic_dump, record_panic_hook_info,
+    resolve_panic_dump_path, write_panic_dump, ShmPanicDump, ShmPanicHeader,
+    SHM_PANIC_FILENAME, SHM_PANIC_HEADER_SIZE, SHM_PANIC_MAGIC, SHM_PANIC_VERSION,
+};
+
+// Skill 4: Speculative Dry-Run Diff Viewer
+pub mod speculative_diff_viewer;
+pub use speculative_diff_viewer::{
+    CherryPickCommitReport, DiffHunk, DiffLine, DiffLineKind, FileDiffStatus,
+    HunkStatus, SpeculativeDiffSession, SpeculativeDiffSummary, SpeculativeFileDiff,
+};
 
 
 

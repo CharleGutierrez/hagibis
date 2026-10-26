@@ -99,6 +99,19 @@ impl HgbClient {
         }
     }
 
+    /// Fetches speculative diff session directly from active workspace or sandbox
+    #[allow(dead_code)]
+    pub async fn get_speculative_diff(&self) -> Result<hgb_core::speculative_diff_viewer::SpeculativeDiffSession> {
+        let workspace = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let sandbox_dir = workspace.join(".hgb").join("sandbox");
+        if sandbox_dir.exists() {
+            let sb = hgb_core::overlayfs_sandbox::OverlaySandbox::new(&workspace)?;
+            hgb_core::speculative_diff_viewer::SpeculativeDiffSession::from_overlay_sandbox(&sb)
+        } else {
+            Ok(hgb_core::speculative_diff_viewer::SpeculativeDiffSession::from_contents("workspace", "", ""))
+        }
+    }
+
     pub async fn send(&self, req: HgbRequest) -> Result<HgbResponse> {
         let req = match req {
             HgbRequest::Enveloped { .. } => req,
