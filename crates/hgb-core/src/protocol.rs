@@ -1564,6 +1564,23 @@ pub enum HgbRequest {
         auto_commit: bool,
     },
     VibeGovernorStatus,
+
+    // Pillar 3: Zero-Copy Shared-Memory Ring Buffer Negotiation & Streaming
+    NegotiateShmRingBuffer {
+        #[serde(default)]
+        client_pid: u32,
+        #[serde(default)]
+        buffer_capacity: Option<usize>,
+    },
+    StreamTokensToShm {
+        client_pid: u32,
+        prompt: String,
+        #[serde(default)]
+        model: Option<String>,
+    },
+    StreamTelemetryToShm {
+        client_pid: u32,
+    },
 }
 
 impl HgbRequest {
@@ -2263,6 +2280,17 @@ pub enum HgbResponse {
     // Frictionless Vibe Prompting & Hardware Governor
     VibePromptResult(crate::vibe_prompt_runner::VibePromptResult),
     VibeGovernorStatusResult(crate::vibe_hardware_governor::VibeThermalState),
+
+    // Pillar 3: Zero-Copy Shared-Memory Ring Buffer Negotiation & Streaming
+    ShmRingNegotiated {
+        ring_name: String,
+        ring_path: String,
+        capacity: usize,
+    },
+    ShmStreamCompleted {
+        total_tokens: usize,
+        duration_ms: u64,
+    },
 }
 
 #[path = "hardware_runtime_synergy.rs"]

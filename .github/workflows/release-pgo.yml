@@ -1,0 +1,121 @@
+name: Release Profile-Guided Optimization (PGO) Hardened Pipeline
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - main
+  pull_request:
+    paths:
+      - 'crates/**'
+      - 'scripts/pgo-optimize.sh'
+      - 'Makefile'
+      - '.github/workflows/release-pgo.yml'
+  workflow_dispatch:
+    inputs:
+      pgo_iterations:
+        description: 'Number of training iterations for PGO benchmark'
+        required: false
+        default: '50'
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  pgo-release:
+    name: Build & Harden PGO Release (Linux x86_64)
+    runs-on: ubuntu-latest
+    env:
+      RUST_BACKTRACE: 1
+      PGO_DATA_DIR: /tmp/pgo-data
+      PGO_BENCHMARK_ITERATIONS: ${{ github.event.inputs.pgo_iterations || '50' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            pkg-config \
+            libssl-dev \
+            llvm \
+            clang
+
+      - name: Install Rust toolchain with LLVM tools
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy, llvm-tools-preview
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Verify workspace compilation & capability sandbox tests
+        run: |
+          make check
+          cargo test -p hgb-core --lib wasm_plugin_sandbox -- --nocapture
+
+      - name: Build instrumented binaries (PGO Step 1)
+        run: |
+          make pgo-build
+
+      - name: Execute representative training workload (PGO Step 2)
+        run: |
+          make pgo-train
+
+      - name: Merge profile data with llvm-profdata (PGO Step 3)
+        run: |
+          make pgo-merge
+
+      - name: Compile hardened release binaries with PGO & Fat LTO (PGO Step 4)
+        run: |
+          make pgo-release
+
+      - name: Verify optimized binary integrity & performance
+        run: |
+          ls -lh target/release/hgb
+          ./target/release/hgb --version || true
+          ./target/release/hgb --help || true
+
+      - name: Run post-optimization validation test suite
+        run: |
+          cargo test -p hgb-core --lib wasm_plugin_sandbox
+
+      - name: Package release archive
+        id: package
+        run: |
+          VERSION=${GITHUB_REF_NAME:-latest}
+          ARCHIVE_NAME="hagibis-${VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          mkdir -p dist
+          cp target/release/hgb dist/
+          if [ -f target/release/hgbd ]; then cp target/release/hgbd dist/; fi
+          cp README.md dist/ 2>/dev/null || true
+          cp LICENSE* dist/ 2>/dev/null || true
+          tar -czvf "${ARCHIVE_NAME}" -C dist .
+          sha256sum "${ARCHIVE_NAME}" > "${ARCHIVE_NAME}.sha256"
+          echo "archive_name=${ARCHIVE_NAME}" >> $GITHUB_OUTPUT
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.archive_name }}
+          path: |
+            ${{ steps.package.outputs.archive_name }}
+            ${{ steps.package.outputs.archive_name }}.sha256
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ steps.package.outputs.archive_name }}
+            ${{ steps.package.outputs.archive_name }}.sha256
+          draft: false
+          prerelease: false
+          generate_release_notes: true

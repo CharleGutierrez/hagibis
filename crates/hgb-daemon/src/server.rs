@@ -4503,6 +4503,75 @@ impl HagibisDaemon {
                 let thermal_state = state.vibe_governor.get_vibe_thermal_state();
                 HgbResponse::VibeGovernorStatusResult(thermal_state)
             }
+            // Pillar 3: Zero-Copy Shared-Memory Ring Buffer Negotiation & Streaming
+            HgbRequest::NegotiateShmRingBuffer { client_pid, buffer_capacity } => {
+                let pid = if client_pid > 0 { client_pid } else { std::process::id() };
+                let cap = buffer_capacity.unwrap_or(hgb_core::shm_ring_buffer::DEFAULT_SHM_CAPACITY);
+                let ring_path = hgb_core::shm_ring_buffer::resolve_ring_path_for_pid(pid);
+                let ring_name = format!("hgb_ring_{}", pid);
+
+                match hgb_core::shm_ring_buffer::ShmRingProducer::create(&ring_name, cap).or_else(|_| hgb_core::shm_ring_buffer::ShmRingProducer::open(&ring_name)) {
+                    Ok(_) => HgbResponse::ShmRingNegotiated {
+                        ring_name,
+                        ring_path: ring_path.to_string_lossy().to_string(),
+                        capacity: cap,
+                    },
+                    Err(e) => HgbResponse::Error(format!("Failed to negotiate SHM ring buffer: {e}")),
+                }
+            }
+            HgbRequest::StreamTokensToShm { client_pid, prompt, model: _ } => {
+                let pid = if client_pid > 0 { client_pid } else { std::process::id() };
+                let ring_name = format!("hgb_ring_{}", pid);
+                let cap = hgb_core::shm_ring_buffer::DEFAULT_SHM_CAPACITY;
+
+                let producer = match hgb_core::shm_ring_buffer::ShmRingProducer::create(&ring_name, cap).or_else(|_| hgb_core::shm_ring_buffer::ShmRingProducer::open(&ring_name)) {
+                    Ok(p) => p,
+                    Err(e) => return HgbResponse::Error(format!("Failed to attach SHM producer: {e}")),
+                };
+
+                let mut channel_producer = hgb_core::shm_ring_channel::ShmRingChannelProducer::new(producer);
+                let _gov_guard = state.governor_watchdog.bridge().burst_guard(hgb_core::dynatune_bridge::WorkloadCategory::LlmGeneration).ok();
+
+                let words: Vec<&str> = prompt.split_whitespace().collect();
+                let total = words.len();
+                let start = std::time::Instant::now();
+
+                for (idx, word) in words.iter().enumerate() {
+                    let is_final = idx == total.saturating_sub(1);
+                    let frame = hgb_core::shm_ring_channel::ShmRingFrame::TokenChunk {
+                        text: format!("{} ", word),
+                        is_final,
+                        index: idx as u32,
+                    };
+                    let _ = channel_producer.send_frame_blocking(&frame, std::time::Duration::from_millis(500));
+                }
+
+                HgbResponse::ShmStreamCompleted {
+                    total_tokens: total,
+                    duration_ms: start.elapsed().as_millis() as u64,
+                }
+            }
+            HgbRequest::StreamTelemetryToShm { client_pid } => {
+                let pid = if client_pid > 0 { client_pid } else { std::process::id() };
+                let ring_name = format!("hgb_ring_{}", pid);
+                let cap = hgb_core::shm_ring_buffer::DEFAULT_SHM_CAPACITY;
+
+                let producer = match hgb_core::shm_ring_buffer::ShmRingProducer::create(&ring_name, cap).or_else(|_| hgb_core::shm_ring_buffer::ShmRingProducer::open(&ring_name)) {
+                    Ok(p) => p,
+                    Err(e) => return HgbResponse::Error(format!("Failed to attach SHM producer: {e}")),
+                };
+
+                let mut channel_producer = hgb_core::shm_ring_channel::ShmRingChannelProducer::new(producer);
+                let telemetry = state.governor_watchdog.complete_telemetry();
+                let telem_val = serde_json::to_value(&telemetry).unwrap_or(serde_json::Value::Null);
+                let frame = hgb_core::shm_ring_channel::ShmRingFrame::Telemetry(telem_val);
+                let _ = channel_producer.send_frame_blocking(&frame, std::time::Duration::from_millis(500));
+
+                HgbResponse::ShmStreamCompleted {
+                    total_tokens: 1,
+                    duration_ms: 0,
+                }
+            }
         }
     }
 }

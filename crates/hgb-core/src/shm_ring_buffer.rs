@@ -99,6 +99,40 @@ pub fn resolve_shm_path(name: &str) -> PathBuf {
     }
 }
 
+/// Helper to resolve the backing path for shared memory ring buffers based on process ID.
+/// Uses `/dev/shm/hgb_ring_<pid>` with automatic fallback to `std::env::temp_dir()`.
+pub fn resolve_ring_path_for_pid(pid: u32) -> PathBuf {
+    let filename = format!("hgb_ring_{}", pid);
+    let shm_dir = Path::new("/dev/shm");
+    if is_dev_shm_writable(shm_dir) {
+        shm_dir.join(filename)
+    } else {
+        std::env::temp_dir().join(filename)
+    }
+}
+
+/// Helper to resolve the backing path for shared memory ring buffers by name or PID.
+pub fn resolve_ring_path(name_or_pid: &str) -> PathBuf {
+    let filename = if name_or_pid.starts_with("hgb_ring_") {
+        name_or_pid.to_string()
+    } else if let Ok(pid) = name_or_pid.parse::<u32>() {
+        format!("hgb_ring_{}", pid)
+    } else {
+        let sanitized: String = name_or_pid
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+            .collect();
+        format!("hgb_ring_{}", sanitized)
+    };
+
+    let shm_dir = Path::new("/dev/shm");
+    if is_dev_shm_writable(shm_dir) {
+        shm_dir.join(filename)
+    } else {
+        std::env::temp_dir().join(filename)
+    }
+}
+
 /// Probe whether /dev/shm is mounted and writable
 fn is_dev_shm_writable(shm_dir: &Path) -> bool {
     if !shm_dir.is_dir() {
@@ -154,6 +188,11 @@ impl ShmRingProducer {
     /// Create a new shared-memory ring buffer producer, initializing the backing file
     pub fn create(name: &str, capacity: usize) -> Result<Self> {
         let path = resolve_shm_path(name);
+        Self::create_with_path(&path, name, capacity)
+    }
+
+    /// Create a new shared-memory ring buffer producer with explicit path
+    pub fn create_with_path(path: &Path, name: &str, capacity: usize) -> Result<Self> {
         let total_size = HEADER_SIZE + capacity;
 
         let file = OpenOptions::new()
@@ -161,7 +200,7 @@ impl ShmRingProducer {
             .write(true)
             .create(true)
             .truncate(false)
-            .open(&path)?;
+            .open(path)?;
 
         file.set_len(total_size as u64)?;
         let mut mmap = unsafe { MmapMut::map_mut(&file)? };
@@ -171,7 +210,7 @@ impl ShmRingProducer {
 
         Ok(Self {
             name: name.to_string(),
-            path,
+            path: path.to_path_buf(),
             mmap,
             capacity,
             unlink_on_drop: false,
@@ -181,6 +220,11 @@ impl ShmRingProducer {
     /// Reconnect to an existing shared-memory ring buffer region as a producer
     pub fn open(name: &str) -> Result<Self> {
         let path = resolve_shm_path(name);
+        Self::open_with_path(&path, name)
+    }
+
+    /// Reconnect to an existing shared-memory ring buffer region with explicit path
+    pub fn open_with_path(path: &Path, name: &str) -> Result<Self> {
         if !path.exists() {
             return Err(HgbError::NotFound(format!(
                 "SHM ring buffer file not found at {:?}",
@@ -188,7 +232,7 @@ impl ShmRingProducer {
             )));
         }
 
-        let file = OpenOptions::new().read(true).write(true).open(&path)?;
+        let file = OpenOptions::new().read(true).write(true).open(path)?;
         let mut mmap = unsafe { MmapMut::map_mut(&file)? };
 
         if mmap.len() < HEADER_SIZE {
@@ -221,7 +265,7 @@ impl ShmRingProducer {
 
         Ok(Self {
             name: name.to_string(),
-            path,
+            path: path.to_path_buf(),
             mmap,
             capacity,
             unlink_on_drop: false,
@@ -373,6 +417,11 @@ impl ShmRingConsumer {
     /// Create a new shared-memory ring buffer consumer
     pub fn create(name: &str, capacity: usize) -> Result<Self> {
         let path = resolve_shm_path(name);
+        Self::create_with_path(&path, name, capacity)
+    }
+
+    /// Create a new shared-memory ring buffer consumer with explicit path
+    pub fn create_with_path(path: &Path, name: &str, capacity: usize) -> Result<Self> {
         let total_size = HEADER_SIZE + capacity;
 
         let file = OpenOptions::new()
@@ -380,7 +429,7 @@ impl ShmRingConsumer {
             .write(true)
             .create(true)
             .truncate(false)
-            .open(&path)?;
+            .open(path)?;
 
         file.set_len(total_size as u64)?;
         let mut mmap = unsafe { MmapMut::map_mut(&file)? };
@@ -393,7 +442,7 @@ impl ShmRingConsumer {
 
         Ok(Self {
             name: name.to_string(),
-            path,
+            path: path.to_path_buf(),
             mmap,
             capacity,
             unlink_on_drop: false,
@@ -403,6 +452,11 @@ impl ShmRingConsumer {
     /// Reconnect to an existing shared-memory ring buffer region as a consumer
     pub fn open(name: &str) -> Result<Self> {
         let path = resolve_shm_path(name);
+        Self::open_with_path(&path, name)
+    }
+
+    /// Reconnect to an existing shared-memory ring buffer region with explicit path
+    pub fn open_with_path(path: &Path, name: &str) -> Result<Self> {
         if !path.exists() {
             return Err(HgbError::NotFound(format!(
                 "SHM ring buffer file not found at {:?}",
@@ -410,7 +464,7 @@ impl ShmRingConsumer {
             )));
         }
 
-        let file = OpenOptions::new().read(true).write(true).open(&path)?;
+        let file = OpenOptions::new().read(true).write(true).open(path)?;
         let mut mmap = unsafe { MmapMut::map_mut(&file)? };
 
         if mmap.len() < HEADER_SIZE {
@@ -443,7 +497,7 @@ impl ShmRingConsumer {
 
         Ok(Self {
             name: name.to_string(),
-            path,
+            path: path.to_path_buf(),
             mmap,
             capacity,
             unlink_on_drop: false,
@@ -662,6 +716,11 @@ impl ShmRingBuffer {
     /// Create a new unified shared memory ring buffer
     pub fn create(name: &str, capacity: usize) -> Result<Self> {
         let path = resolve_shm_path(name);
+        Self::create_with_path(&path, name, capacity)
+    }
+
+    /// Create a new unified shared memory ring buffer with an explicit file path
+    pub fn create_with_path(path: &Path, name: &str, capacity: usize) -> Result<Self> {
         let total_size = HEADER_SIZE + capacity;
 
         let file = OpenOptions::new()
@@ -669,7 +728,7 @@ impl ShmRingBuffer {
             .write(true)
             .create(true)
             .truncate(false)
-            .open(&path)?;
+            .open(path)?;
 
         file.set_len(total_size as u64)?;
         let mut mmap = unsafe { MmapMut::map_mut(&file)? };
@@ -679,7 +738,7 @@ impl ShmRingBuffer {
 
         Ok(Self {
             name: name.to_string(),
-            path,
+            path: path.to_path_buf(),
             mmap,
             capacity,
             unlink_on_drop: false,
@@ -689,6 +748,11 @@ impl ShmRingBuffer {
     /// Open an existing shared memory ring buffer
     pub fn open(name: &str) -> Result<Self> {
         let path = resolve_shm_path(name);
+        Self::open_with_path(&path, name)
+    }
+
+    /// Open an existing shared memory ring buffer with an explicit file path
+    pub fn open_with_path(path: &Path, name: &str) -> Result<Self> {
         if !path.exists() {
             return Err(HgbError::NotFound(format!(
                 "SHM ring buffer file not found at {:?}",
@@ -696,7 +760,7 @@ impl ShmRingBuffer {
             )));
         }
 
-        let file = OpenOptions::new().read(true).write(true).open(&path)?;
+        let file = OpenOptions::new().read(true).write(true).open(path)?;
         let mmap = unsafe { MmapMut::map_mut(&file)? };
 
         if mmap.len() < HEADER_SIZE {
@@ -715,7 +779,7 @@ impl ShmRingBuffer {
 
         Ok(Self {
             name: name.to_string(),
-            path,
+            path: path.to_path_buf(),
             mmap,
             capacity,
             unlink_on_drop: false,

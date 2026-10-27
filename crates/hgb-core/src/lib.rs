@@ -894,6 +894,14 @@ pub use wasm_plugin_kernel::{
     WasmPluginHostState, WasmPluginInstance, WasmPluginManager, WasmPluginManifest, WasmToolAdapter,
 };
 
+// WebAssembly Component Model & Capability Security Sandbox (Pillar 4)
+pub mod wasm_plugin_sandbox;
+pub use wasm_plugin_sandbox::{
+    PluginCapabilities, ReloadReport, SandboxedExecutionResult, SandboxedWasmHostState,
+    SandboxedWasmPlugin, SandboxedWasmToolAdapter, WasmCapabilityViolation,
+    WasmPluginCatalog, WasmPluginRegistry, WasmPluginSandboxEngine,
+};
+
 // Sibling Ollama Pipeline Accelerator & Mutation Vector Mesh exports
 pub mod ollama_sibling_accelerator;
 pub use ollama_sibling_accelerator::{
@@ -1108,15 +1116,26 @@ pub use autonomous_state_machine::{
 // Pillar 3: Host-Aware Dynamic Scaling (Dynatune & Kernel Optimizer Bridge)
 pub mod dynatune_bridge;
 pub use dynatune_bridge::{
-    DynatuneBridge, HostPowerState, ScalingGuard, ScalingShiftReport, WorkloadCategory,
+    BatteryTelemetry, CompleteHardwareTelemetry, DynatuneBridge, HostPowerState,
+    PressureRecordTelemetry, PsiMemoryTelemetry, ScalingGuard, ScalingMode,
+    ScalingShiftReport, ThermalZoneTelemetry, WorkloadCategory,
+    BATTERY_CRITICAL_THRESHOLD_PCT, BURST_MGLRU_MIN_TTL_MS,
+    THERMAL_CRITICAL_TEMP_C, THERMAL_SAFE_HEADROOM_C,
+    compute_concurrency_limit,
 };
 
 // Strategic Upgrade 1: Unified Shared-Memory IPC (Zero-Copy Ring Buffers)
 pub mod shm_ring_buffer;
 pub use shm_ring_buffer::{
-    resolve_shm_path, ShmHeader, ShmRingBenchmarkReport, ShmRingBuffer,
+    resolve_shm_path, resolve_ring_path_for_pid, resolve_ring_path,
+    ShmHeader, ShmRingBenchmarkReport, ShmRingBuffer,
     ShmRingConsumer, ShmRingProducer, DEFAULT_SHM_CAPACITY, HEADER_SIZE,
     SHM_MAGIC, SHM_VERSION,
+};
+
+pub mod shm_ring_channel;
+pub use shm_ring_channel::{
+    ShmRingChannel, ShmRingChannelConsumer, ShmRingChannelProducer, ShmRingFrame,
 };
 
 // Strategic Upgrade 2: Distributed MicroVM Swarm Intelligence (Firecracker + WASM Hybrid)

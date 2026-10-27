@@ -145,4 +145,175 @@ impl HgbClient {
             .map_err(|e| HgbError::Serialization(e.to_string()))?;
         Ok(resp)
     }
+
+    /// Negotiate a zero-copy POSIX shared-memory ring buffer with the daemon
+    pub async fn negotiate_shm_ring(
+        &self,
+        capacity: Option<usize>,
+    ) -> Result<hgb_core::shm_ring_channel::ShmRingChannel> {
+        let client_pid = std::process::id();
+        let resp = self
+            .send(HgbRequest::NegotiateShmRingBuffer {
+                client_pid,
+                buffer_capacity: capacity,
+            })
+            .await?;
+
+        match resp {
+            HgbResponse::ShmRingNegotiated {
+                ring_name,
+                ring_path,
+                capacity: cap,
+            } => {
+                let path = Path::new(&ring_path);
+                hgb_core::shm_ring_channel::ShmRingChannel::open_with_path(path, &ring_name)
+                    .or_else(|_| hgb_core::shm_ring_channel::ShmRingChannel::create_with_path(path, &ring_name, cap))
+            }
+            HgbResponse::Error(e) => Err(HgbError::Ipc(format!("SHM ring negotiation failed: {e}"))),
+            other => Err(HgbError::Ipc(format!("Unexpected response for SHM negotiation: {other:?}"))),
+        }
+    }
+
+    /// Stream LLM tokens from daemon over zero-copy SHM ring buffer
+    pub async fn stream_tokens_shm<F>(
+        &self,
+        prompt: &str,
+        model: Option<&str>,
+        mut on_token: F,
+    ) -> Result<String>
+    where
+        F: FnMut(&str, bool, u32),
+    {
+        let mut channel = self.negotiate_shm_ring(None).await?;
+        let client_pid = std::process::id();
+
+        let this = self.clone();
+        let prompt_str = prompt.to_string();
+        let model_opt = model.map(|s| s.to_string());
+        let send_handle = tokio::spawn(async move {
+            this.send(HgbRequest::StreamTokensToShm {
+                client_pid,
+                prompt: prompt_str,
+                model: model_opt,
+            })
+            .await
+        });
+
+        let mut full_text = String::new();
+        let poll_timeout = std::time::Duration::from_millis(1500);
+
+        loop {
+            match channel.recv_frame_blocking(poll_timeout)? {
+                Some(hgb_core::shm_ring_channel::ShmRingFrame::TokenChunk { text, is_final, index }) => {
+                    full_text.push_str(&text);
+                    on_token(&text, is_final, index);
+                    if is_final {
+                        break;
+                    }
+                }
+                Some(_) => {}
+                None => {
+                    if send_handle.is_finished() {
+                        break;
+                    }
+                }
+            }
+        }
+
+        let resp = send_handle.await.map_err(|e| HgbError::Ipc(e.to_string()))??;
+        match resp {
+            HgbResponse::ShmStreamCompleted { .. } => Ok(full_text),
+            HgbResponse::Error(e) => Err(HgbError::Ipc(format!("Stream tokens failed: {e}"))),
+            _ => Ok(full_text),
+        }
+    }
+
+    /// Fetch hardware & daemon telemetry over zero-copy SHM ring buffer
+    pub async fn stream_telemetry_shm(&self) -> Result<serde_json::Value> {
+        let mut channel = self.negotiate_shm_ring(None).await?;
+        let client_pid = std::process::id();
+
+        let resp = self
+            .send(HgbRequest::StreamTelemetryToShm { client_pid })
+            .await?;
+
+        match resp {
+            HgbResponse::ShmStreamCompleted { .. } => {
+                let frame = channel.recv_frame_blocking(std::time::Duration::from_millis(1000))?;
+                match frame {
+                    Some(hgb_core::shm_ring_channel::ShmRingFrame::Telemetry(val)) => Ok(val),
+                    other => Err(HgbError::Ipc(format!("Expected Telemetry frame, got {other:?}"))),
+                }
+            }
+            HgbResponse::Error(e) => Err(HgbError::Ipc(format!("Stream telemetry failed: {e}"))),
+            other => Err(HgbError::Ipc(format!("Unexpected response: {other:?}"))),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::net::UnixListener;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn test_client_negotiate_and_stream_shm() {
+        let temp_dir = tempdir().expect("tempdir");
+        let sock_path = temp_dir.path().join("test_hgb.sock");
+        let listener = UnixListener::bind(&sock_path).expect("bind unix socket");
+
+        let pid = std::process::id();
+        let ring_name = format!("test_ring_cli_{}", pid);
+        let ring_path = hgb_core::shm_ring_buffer::resolve_shm_path(&ring_name);
+
+        let cap = 512 * 1024;
+        let mut producer = hgb_core::shm_ring_buffer::ShmRingProducer::create_with_path(&ring_path, &ring_name, cap)
+            .expect("create ring producer");
+        producer.set_unlink_on_drop(true);
+
+        let ring_path_str = ring_path.to_string_lossy().to_string();
+        let ring_name_clone = ring_name.clone();
+
+        let srv_handle = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            let mut len_buf = [0u8; 4];
+            stream.read_exact(&mut len_buf).await.expect("read len");
+            let req_len = u32::from_be_bytes(len_buf) as usize;
+            let mut req_buf = vec![0u8; req_len];
+            stream.read_exact(&mut req_buf).await.expect("read req");
+
+            let req: HgbRequest = bincode::deserialize(&req_buf).expect("deserialize req");
+            let unwrapped = match req {
+                HgbRequest::Enveloped { inner, .. } => *inner,
+                other => other,
+            };
+
+            let resp = match unwrapped {
+                HgbRequest::NegotiateShmRingBuffer { .. } => HgbResponse::ShmRingNegotiated {
+                    ring_name: ring_name_clone,
+                    ring_path: ring_path_str,
+                    capacity: cap,
+                },
+                _ => HgbResponse::Error("unexpected request".to_string()),
+            };
+
+            let resp_bytes = bincode::serialize(&resp).expect("serialize resp");
+            let rlen = (resp_bytes.len() as u32).to_be_bytes();
+            stream.write_all(&rlen).await.expect("write rlen");
+            stream.write_all(&resp_bytes).await.expect("write resp");
+            stream.flush().await.expect("flush");
+        });
+
+        let client = HgbClient::with_socket(&sock_path);
+        let mut channel = client.negotiate_shm_ring(Some(cap)).await.expect("negotiate shm");
+
+        let mut chan_prod = hgb_core::shm_ring_channel::ShmRingChannelProducer::new(producer);
+        chan_prod.send_token("Hello from daemon zero-copy!", true, 0).expect("send token");
+
+        let token = channel.recv_token().expect("recv token");
+        assert_eq!(token, Some(("Hello from daemon zero-copy!".to_string(), true, 0)));
+
+        srv_handle.await.expect("server handle");
+    }
 }

@@ -46,6 +46,11 @@ ndarray = "0.15"
 
 [dev-dependencies]
 tempfile = "3.10"
+hgb-storage = { path = "../hgb-storage" }
+
+[[bench]]
+name = "pgo_workload"
+harness = false
 
 [features]
 default = []

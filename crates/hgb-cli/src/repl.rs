@@ -5636,6 +5636,17 @@ impl HagibisRepl {
                 println!("  Mode:          {}", s.vibe_mode.green());
                 println!("  Power:         Charging: {}, Battery: {:?}%", s.is_charging, s.battery_pct);
             }
+            HgbResponse::ShmRingNegotiated { ring_name, ring_path, capacity } => {
+                println!("{}", "⚡ ZERO-COPY SHM RING BUFFER NEGOTIATED ⚡".bold().green());
+                println!("  Ring Name: {}", ring_name.cyan());
+                println!("  Path:      {}", ring_path);
+                println!("  Capacity:  {} bytes ({:.1} MB)", capacity, capacity as f64 / (1024.0 * 1024.0));
+            }
+            HgbResponse::ShmStreamCompleted { total_tokens, duration_ms } => {
+                println!("{}", "⚡ ZERO-COPY SHM STREAM COMPLETED ⚡".bold().green());
+                println!("  Tokens:    {}", total_tokens);
+                println!("  Duration:  {} ms", duration_ms);
+            }
         }
     }
 

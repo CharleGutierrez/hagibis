@@ -1,0 +1,14 @@
+[package]
+name = "hgb-wasm-kernel"
+version = "0.1.0"
+edition = "2021"
+authors = ["Charle Gutierrez"]
+license = "MIT OR Apache-2.0"
+description = "Hagibis WebAssembly Guest Kernel SDK and runtime bindings"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }

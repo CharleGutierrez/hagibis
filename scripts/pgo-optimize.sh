@@ -71,7 +71,9 @@ echo ""
 echo "----------------------------------------------------------------------"
 echo " Step 2/4: Running representative training workload to collect profiles"
 echo "----------------------------------------------------------------------"
-# Execute test suites across storage, vector index, and core modules
+# Execute representative PGO training benchmark suite
+RUSTFLAGS="-Cprofile-generate=$PGO_DATA_DIR" cargo bench -p hgb-core --bench pgo_workload -- --nocapture || true
+RUSTFLAGS="-Cprofile-generate=$PGO_DATA_DIR" cargo test --release -p hgb-core --lib wasm_plugin_sandbox -- --nocapture || true
 RUSTFLAGS="-Cprofile-generate=$PGO_DATA_DIR" cargo test --release -p hgb-storage --lib -- --nocapture || true
 
 # Execute CLI if binary exists
