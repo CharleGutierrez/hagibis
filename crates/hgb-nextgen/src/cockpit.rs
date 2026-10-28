@@ -747,6 +747,21 @@ pub struct PromptAttachment {
     pub content: Option<String>,
 }
 
+/// A wrapped visual line segment within the prompt entry box
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VisualPromptSegment {
+    /// Start index in prompt characters (inclusive)
+    pub start: usize,
+    /// End index in prompt characters (exclusive)
+    pub end: usize,
+    /// Visual line prefix (e.g. "> " or "· ")
+    pub prefix: &'static str,
+    /// Color styling for prefix
+    pub prefix_color: Color,
+    /// Whether prefix should be rendered with BOLD modifier
+    pub prefix_bold: bool,
+}
+
 /// Format byte size into human readable string
 fn format_file_size(bytes: u64) -> String {
     if bytes < 1024 {
@@ -3242,6 +3257,127 @@ impl CockpitState {
         }
     }
 
+    /// Break prompt input into wrapped visual segments according to usable width and cursor position.
+    /// Each segment represents a single visual row in the prompt entry box, guaranteeing that
+    /// long prompt lines wrap cleanly to the next line rather than remaining on one line.
+    pub fn compute_visual_prompt_segments(
+        &self,
+        usable_width: usize,
+    ) -> (Vec<VisualPromptSegment>, usize) {
+        let usable_w = usable_width.max(10);
+        let prompt_chars: Vec<char> = self.prompt_input.chars().collect();
+        let mut logical_lines = Vec::new();
+        let mut line_start = 0;
+        for (i, &ch) in prompt_chars.iter().enumerate() {
+            if ch == '\n' {
+                logical_lines.push((line_start, i));
+                line_start = i + 1;
+            }
+        }
+        logical_lines.push((line_start, prompt_chars.len()));
+
+        let mut segments = Vec::new();
+
+        for (log_idx, &(l_start, l_end)) in logical_lines.iter().enumerate() {
+            if l_start == l_end {
+                segments.push(VisualPromptSegment {
+                    start: l_start,
+                    end: l_end,
+                    prefix: if log_idx == 0 { "> " } else { "· " },
+                    prefix_color: if log_idx == 0 { Color::Cyan } else { Color::DarkGray },
+                    prefix_bold: log_idx == 0,
+                });
+                continue;
+            }
+
+            let mut seg_start = l_start;
+            let mut is_first = true;
+            while seg_start < l_end {
+                let mut cur_w = 0;
+                let mut last_break_point = None;
+                let mut i = seg_start;
+                while i < l_end {
+                    let ch = prompt_chars[i];
+                    let cw = UnicodeWidthChar::width(ch).unwrap_or(1).max(1);
+                    if cur_w + cw > usable_w {
+                        break;
+                    }
+                    cur_w += cw;
+                    if ch.is_whitespace() {
+                        last_break_point = Some(i + 1);
+                    }
+                    i += 1;
+                }
+
+                let seg_end = if i == l_end {
+                    l_end
+                } else if let Some(bp) = last_break_point {
+                    if bp > seg_start && bp <= i {
+                        bp
+                    } else {
+                        i.max(seg_start + 1)
+                    }
+                } else {
+                    i.max(seg_start + 1)
+                };
+
+                segments.push(VisualPromptSegment {
+                    start: seg_start,
+                    end: seg_end,
+                    prefix: if is_first {
+                        if log_idx == 0 { "> " } else { "· " }
+                    } else {
+                        "· "
+                    },
+                    prefix_color: if is_first && log_idx == 0 {
+                        Color::Cyan
+                    } else {
+                        Color::DarkGray
+                    },
+                    prefix_bold: is_first && log_idx == 0,
+                });
+
+                seg_start = seg_end;
+                is_first = false;
+            }
+
+            // If the last segment reached the edge exactly and cursor is at the end of this logical line,
+            // wrap the cursor to a fresh visual line.
+            if let Some(last_seg) = segments.last() {
+                let last_seg_w: usize = prompt_chars[last_seg.start..last_seg.end]
+                    .iter()
+                    .map(|&c| UnicodeWidthChar::width(c).unwrap_or(1).max(1))
+                    .sum();
+                if last_seg_w >= usable_w && self.cursor_position == l_end && log_idx == logical_lines.len() - 1 {
+                    segments.push(VisualPromptSegment {
+                        start: l_end,
+                        end: l_end,
+                        prefix: "· ",
+                        prefix_color: Color::DarkGray,
+                        prefix_bold: false,
+                    });
+                }
+            }
+        }
+
+        // Find the visual segment containing the cursor
+        let mut cursor_seg_idx = 0;
+        let mut found = false;
+        for (idx, seg) in segments.iter().enumerate() {
+            let is_last = idx == segments.len() - 1;
+            if self.cursor_position >= seg.start && (self.cursor_position < seg.end || (self.cursor_position == seg.end && is_last)) {
+                cursor_seg_idx = idx;
+                found = true;
+                break;
+            }
+        }
+        if !found && !segments.is_empty() {
+            cursor_seg_idx = segments.len() - 1;
+        }
+
+        (segments, cursor_seg_idx)
+    }
+
     pub fn attach_path(&mut self, input_path: &str) -> std::result::Result<PromptAttachment, String> {
         let clean = input_path.trim().trim_matches(|c| c == '"' || c == '\'' || c == '`');
         if clean.is_empty() {
@@ -4808,17 +4944,42 @@ impl CockpitState {
             Span::raw("Quit"),
         ]);
 
+        let avail_w = (area.width.saturating_sub(18) as usize).max(10);
         let prompt_cursor = if self.input_mode == CockpitInputMode::Input {
             Span::styled("█", Style::default().fg(Color::Yellow))
         } else {
             Span::raw("")
         };
 
-        let prompt_line = Line::from(vec![
-            Span::styled("hgb-cockpit ❯ ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-            Span::styled(&self.prompt_input, Style::default().fg(Color::White)),
-            prompt_cursor,
-        ]);
+        let prompt_line = if self.prompt_input.chars().count() <= avail_w {
+            Line::from(vec![
+                Span::styled("hgb-cockpit ❯ ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::styled(&self.prompt_input, Style::default().fg(Color::White)),
+                prompt_cursor,
+            ])
+        } else {
+            let chars: Vec<char> = self.prompt_input.chars().collect();
+            let c_pos = self.cursor_position.min(chars.len());
+            let half = avail_w / 2;
+            let win_start = if c_pos > half {
+                (c_pos - half).min(chars.len().saturating_sub(avail_w))
+            } else {
+                0
+            };
+            let win_end = (win_start + avail_w).min(chars.len());
+            let before_cur: String = chars[win_start..c_pos].iter().collect();
+            let after_cur: String = chars[c_pos..win_end].iter().collect();
+            let prefix_dot = if win_start > 0 { "…" } else { "" };
+            let suffix_dot = if win_end < chars.len() { "…" } else { "" };
+            Line::from(vec![
+                Span::styled("hgb-cockpit ❯ ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::styled(prefix_dot, Style::default().fg(Color::DarkGray)),
+                Span::styled(before_cur, Style::default().fg(Color::White)),
+                prompt_cursor,
+                Span::styled(after_cur, Style::default().fg(Color::White)),
+                Span::styled(suffix_dot, Style::default().fg(Color::DarkGray)),
+            ])
+        };
 
         let mode_badge = match self.input_mode {
             CockpitInputMode::Normal => Span::styled(" [MODE: NORMAL - Press 'i' or '/' to type prompt, hotkeys active] ", Style::default().fg(Color::DarkGray)),
@@ -4845,25 +5006,10 @@ impl CockpitState {
     pub fn render_chat_canvas(&self, frame: &mut Frame) {
         let area = frame.area();
 
-        // Dynamic calculation of prompt input box height based on multiline lines + attachments
+        // Dynamic calculation of prompt input box height based on wrapped visual lines + attachments
         let usable_input_width = (area.width.saturating_sub(4) as usize).max(10);
-        let prompt_chars: Vec<char> = self.prompt_input.chars().collect();
-        let mut line_ranges = Vec::new();
-        let mut line_start = 0;
-        for (i, &ch) in prompt_chars.iter().enumerate() {
-            if ch == '\n' {
-                line_ranges.push((line_start, i));
-                line_start = i + 1;
-            }
-        }
-        line_ranges.push((line_start, prompt_chars.len()));
-
-        let mut prompt_visual_lines = 0;
-        for &(start, end) in &line_ranges {
-            let line_len = end.saturating_sub(start);
-            let wrapped = (line_len + usable_input_width - 1) / usable_input_width;
-            prompt_visual_lines += wrapped.max(1);
-        }
+        let (visual_segments, cursor_seg_idx) = self.compute_visual_prompt_segments(usable_input_width);
+        let prompt_visual_lines = visual_segments.len().max(1);
 
         let attachment_rows = if !self.attached_files.is_empty() { 1 } else { 0 };
         let total_content_lines = prompt_visual_lines + attachment_rows;
@@ -6473,40 +6619,33 @@ impl CockpitState {
             input_lines.push(Line::from(att_spans));
         }
 
-        // 4b. Find active cursor line index
-        let mut cursor_line_idx = 0;
-        for (idx, &(_start, end)) in line_ranges.iter().enumerate() {
-            if self.cursor_position <= end || idx == line_ranges.len() - 1 {
-                cursor_line_idx = idx;
-                break;
-            }
-        }
-
-        // 4c. Render each multiline prompt line with accurate cursor placement
-        for (idx, &(start, end)) in line_ranges.iter().enumerate() {
-            let prefix_span = if idx == 0 {
-                Span::styled("> ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+        // 4b. Render each wrapped visual prompt line with accurate cursor placement
+        let prompt_chars: Vec<char> = self.prompt_input.chars().collect();
+        for (idx, seg) in visual_segments.iter().enumerate() {
+            let prefix_style = if seg.prefix_bold {
+                Style::default().fg(seg.prefix_color).add_modifier(Modifier::BOLD)
             } else {
-                Span::styled("· ", Style::default().fg(Color::DarkGray))
+                Style::default().fg(seg.prefix_color)
             };
+            let prefix_span = Span::styled(seg.prefix, prefix_style);
 
-            let line_chars = if start <= end && end <= prompt_chars.len() {
-                &prompt_chars[start..end]
+            let seg_chars = if seg.start <= seg.end && seg.end <= prompt_chars.len() {
+                &prompt_chars[seg.start..seg.end]
             } else {
                 &[]
             };
 
-            if idx == cursor_line_idx {
-                let col = self.cursor_position.saturating_sub(start);
-                if line_chars.is_empty() {
+            if idx == cursor_seg_idx {
+                let col = self.cursor_position.saturating_sub(seg.start);
+                if seg_chars.is_empty() {
                     input_lines.push(Line::from(vec![
                         prefix_span,
                         Span::styled("█", Style::default().fg(Color::Cyan)),
                     ]));
-                } else if col < line_chars.len() {
-                    let before: String = line_chars[..col].iter().collect();
-                    let at_char: String = line_chars[col].to_string();
-                    let after: String = line_chars[col + 1..].iter().collect();
+                } else if col < seg_chars.len() {
+                    let before: String = seg_chars[..col].iter().collect();
+                    let at_char: String = seg_chars[col].to_string();
+                    let after: String = seg_chars[col + 1..].iter().collect();
                     input_lines.push(Line::from(vec![
                         prefix_span,
                         Span::styled(before, Style::default().fg(Color::White)),
@@ -6514,7 +6653,7 @@ impl CockpitState {
                         Span::styled(after, Style::default().fg(Color::White)),
                     ]));
                 } else {
-                    let text: String = line_chars.iter().collect();
+                    let text: String = seg_chars.iter().collect();
                     input_lines.push(Line::from(vec![
                         prefix_span,
                         Span::styled(text, Style::default().fg(Color::White)),
@@ -6522,7 +6661,7 @@ impl CockpitState {
                     ]));
                 }
             } else {
-                let text: String = line_chars.iter().collect();
+                let text: String = seg_chars.iter().collect();
                 input_lines.push(Line::from(vec![
                     prefix_span,
                     Span::styled(text, Style::default().fg(Color::White)),
@@ -6556,7 +6695,7 @@ impl CockpitState {
         };
 
         let inner_height = chunks[3].height.saturating_sub(2) as usize;
-        let cursor_visual_line = attachment_rows + cursor_line_idx;
+        let cursor_visual_line = attachment_rows + cursor_seg_idx;
         let scroll_y = if inner_height > 0 && cursor_visual_line >= inner_height {
             (cursor_visual_line + 1 - inner_height) as u16
         } else {
@@ -8457,5 +8596,24 @@ async fn test_scroll_pill_click_to_bottom() {
         let bad_path = temp_dir.path().join("bad.png");
         std::fs::write(&bad_path, b"not an image").unwrap();
         assert_eq!(detect_image_dimensions(&bad_path), None);
+    }
+
+    #[test]
+    fn test_long_prompt_wraps_to_next_line() {
+        let mut state = CockpitState::new();
+        // Usable input width for an 80-col terminal is 80 - 4 = 76 cols
+        // Set a long prompt of ~150 characters without any newlines
+        state.prompt_input = "The quick brown fox jumps over the lazy dog. Here is a very long instruction that must wrap cleanly to the next line instead of continuing on one line.".to_string();
+        state.cursor_position = state.prompt_input.chars().count();
+
+        let (segments, cursor_idx) = state.compute_visual_prompt_segments(76);
+        assert!(segments.len() >= 2, "Expected prompt to wrap into at least 2 visual segments, got {}", segments.len());
+        assert_eq!(cursor_idx, segments.len() - 1, "Cursor should be positioned on the last visual segment");
+
+        // Verify that in headless render, both segments appear on separate rows in the terminal buffer
+        let rendered = state.render_headless_to_string(80, 30);
+        assert!(rendered.contains("The quick brown fox"));
+        assert!(rendered.contains("instruction that must wrap cleanly"));
+        assert!(rendered.contains("on one line"));
     }
 }

@@ -284,12 +284,11 @@ impl ReplEditor {
         let mut cursor_col = p0_width;
 
         for (i, &c) in buffer.iter().enumerate() {
-            if i == cursor {
-                cursor_row = cur_row;
-                cursor_col = cur_col;
-            }
-
             if c == '\n' {
+                if i == cursor {
+                    cursor_row = cur_row;
+                    cursor_col = cur_col;
+                }
                 output_text.push_str("\r\n");
                 output_text.push_str(continuation_prompt);
                 cur_row += 1;
@@ -297,11 +296,16 @@ impl ReplEditor {
             } else {
                 let cw = unicode_width::UnicodeWidthChar::width(c).unwrap_or(1);
                 if cur_col + cw > term_width {
+                    output_text.push_str("\r\n");
+                    output_text.push_str(continuation_prompt);
                     cur_row += 1;
-                    cur_col = cw;
-                } else {
-                    cur_col += cw;
+                    cur_col = pc_width;
                 }
+                if i == cursor {
+                    cursor_row = cur_row;
+                    cursor_col = cur_col;
+                }
+                cur_col += cw;
                 output_text.push(c);
             }
         }
@@ -5935,5 +5939,21 @@ mod tests {
         let out_files = String::from_utf8_lossy(&buf);
         assert!(out_files.contains("[📄 Cargo.toml]"));
         assert!(out_files.contains("[📁 src/]"));
+    }
+
+    #[test]
+    fn test_compute_layout_long_prompt_wrapping() {
+        let prompt = "hgb> ";
+        let continuation = "... ";
+        let buffer: Vec<char> = "This is a very long prompt line that must wrap to the next line".chars().collect();
+        let term_width = 30;
+
+        let (output_text, cursor_row, cursor_col, end_row, _end_col) =
+            ReplEditor::compute_layout(prompt, continuation, &buffer, buffer.len(), term_width);
+
+        assert!(end_row >= 2, "Expected prompt to span at least 3 visual lines, got end_row = {}", end_row);
+        assert_eq!(cursor_row, end_row);
+        assert!(cursor_col > 0);
+        assert!(output_text.contains("\r\n... "));
     }
 }

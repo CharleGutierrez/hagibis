@@ -756,12 +756,20 @@ impl VibeCockpitApp {
         let left_pane_area = horiz_chunks[0];
         let right_pane_area = horiz_chunks[1];
 
-        // Left Pane vertical split: Conversation Stream (Min) + Prompt Input (Height 3)
+        // Left Pane vertical split: Conversation Stream (Min) + Prompt Input (dynamic height)
+        let usable_prompt_w = (left_pane_area.width.saturating_sub(4) as usize).max(10);
+        let (prompt_segments, _, _) = Self::compute_prompt_segments(
+            &self.state.prompt_input,
+            self.state.prompt_cursor,
+            usable_prompt_w,
+        );
+        let input_pane_h = (prompt_segments.len() as u16 + 2).clamp(3, 8);
+
         let left_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Min(5),
-                Constraint::Length(3),
+                Constraint::Length(input_pane_h),
             ])
             .split(left_pane_area);
 
@@ -879,6 +887,58 @@ impl VibeCockpitApp {
         frame.render_widget(paragraph, area);
     }
 
+    /// Break prompt input into wrapped visual lines and compute cursor row and column.
+    pub fn compute_prompt_segments(
+        prompt: &str,
+        cursor_pos: usize,
+        usable_w: usize,
+    ) -> (Vec<String>, usize, usize) {
+        let usable = usable_w.max(10);
+        let chars: Vec<char> = prompt.chars().collect();
+        if chars.is_empty() {
+            return (vec![String::new()], 0, 0);
+        }
+
+        let mut lines = Vec::new();
+        let mut cur_line = String::new();
+        let mut cur_w = 0;
+        let mut cursor_row = 0;
+        let mut cursor_col = 0;
+        let mut char_idx = 0;
+
+        for (i, &c) in chars.iter().enumerate() {
+            if i == cursor_pos {
+                cursor_row = lines.len();
+                cursor_col = cur_w;
+            }
+
+            if c == '\n' {
+                lines.push(cur_line);
+                cur_line = String::new();
+                cur_w = 0;
+            } else {
+                let cw = unicode_width::UnicodeWidthChar::width(c).unwrap_or(1).max(1);
+                if cur_w + cw > usable {
+                    lines.push(cur_line);
+                    cur_line = String::new();
+                    cur_w = 0;
+                }
+                cur_line.push(c);
+                cur_w += cw;
+            }
+            char_idx = i + 1;
+        }
+
+        if char_idx <= cursor_pos {
+            cursor_row = lines.len();
+            cursor_col = cur_w;
+        }
+
+        lines.push(cur_line);
+
+        (lines, cursor_row, cursor_col)
+    }
+
     /// Render Left Pane Bottom: Interactive Vibe Prompt Input
     fn render_prompt_input_pane(&self, frame: &mut Frame, area: Rect) {
         let is_focused = self.active_focus == FocusedPane::PromptInput;
@@ -907,28 +967,53 @@ impl VibeCockpitApp {
                 },
             ));
 
-        let input_text = if self.state.prompt_input.is_empty() {
-            if is_focused {
+        let usable_w = (area.width.saturating_sub(4) as usize).max(10);
+        let (lines, cursor_row, cursor_col) = Self::compute_prompt_segments(
+            &self.state.prompt_input,
+            self.state.prompt_cursor,
+            usable_w,
+        );
+
+        let inner_height = area.height.saturating_sub(2) as usize;
+        let scroll_y = if inner_height > 0 && cursor_row >= inner_height {
+            (cursor_row + 1 - inner_height) as u16
+        } else {
+            0
+        };
+
+        let mut paragraph_lines = Vec::new();
+        if self.state.prompt_input.is_empty() {
+            let placeholder = if is_focused {
                 Span::styled("Type autonomous vibe instruction...", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC))
             } else {
                 Span::styled("Press [Tab] to enter prompt...", Style::default().fg(Color::DarkGray))
-            }
+            };
+            paragraph_lines.push(Line::from(vec![
+                Span::styled("❯ ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                placeholder,
+            ]));
         } else {
-            Span::styled(&self.state.prompt_input, Style::default().fg(Color::White).add_modifier(Modifier::BOLD))
-        };
+            for (idx, line_str) in lines.iter().enumerate() {
+                let prefix = if idx == 0 {
+                    Span::styled("❯ ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+                } else {
+                    Span::styled("· ", Style::default().fg(Color::DarkGray))
+                };
+                paragraph_lines.push(Line::from(vec![
+                    prefix,
+                    Span::styled(line_str, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                ]));
+            }
+        }
 
-        let content_line = Line::from(vec![
-            Span::styled("❯ ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            input_text,
-        ]);
-
-        let paragraph = Paragraph::new(content_line).block(block);
+        let paragraph = Paragraph::new(paragraph_lines).block(block).scroll((scroll_y, 0));
         frame.render_widget(paragraph, area);
 
         // Position terminal cursor if prompt input is focused
         if is_focused {
-            let cursor_x = area.x + 3 + (self.state.prompt_cursor as u16).min(area.width.saturating_sub(5));
-            let cursor_y = area.y + 1;
+            let visible_row = cursor_row.saturating_sub(scroll_y as usize);
+            let cursor_x = area.x + 3 + (cursor_col as u16).min(area.width.saturating_sub(5));
+            let cursor_y = area.y + 1 + (visible_row as u16).min(area.height.saturating_sub(2));
             frame.set_cursor_position((cursor_x, cursor_y));
         }
     }
@@ -1154,9 +1239,14 @@ impl VibeCockpitApp {
                 "🎙️ [HOLDING SPACE] Speak Vibe Intent... Release [Space] to Execute First-Green!",
                 Style::default().fg(Color::LightRed).add_modifier(Modifier::BOLD),
             )
-        } else {
+        } else if area.width >= 135 {
             Span::styled(
                 "[Tab] Switch Pane  •  [Space] Push-to-Talk  •  [Enter] Send Vibe  •  [s] Toggle Sound  •  [q] Quit",
+                Style::default().fg(Color::White),
+            )
+        } else {
+            Span::styled(
+                "[Tab] Switch Pane • [Enter] Send Vibe • [s] Toggle Sound • [q] Quit",
                 Style::default().fg(Color::White),
             )
         };
@@ -1599,5 +1689,27 @@ index 3333333..4444444 100644
         // Verify prompt was executed and logged
         let last_msg = app.chat_messages.last().expect("Prompt must have been queued");
         assert!(last_msg.content.contains("Synthesizing plan"));
+    }
+
+    #[test]
+    fn test_vibe_cockpit_long_prompt_wrapping() {
+        let mut app = VibeCockpitApp::new();
+        app.active_focus = FocusedPane::PromptInput;
+        app.state.prompt_input = "Here is a very long prompt entry typed into the Vibe Cockpit that must wrap cleanly into multiple lines and update cursor position.".to_string();
+        app.state.prompt_cursor = app.state.prompt_input.len();
+
+        let (segments, cursor_row, cursor_col) = VibeCockpitApp::compute_prompt_segments(
+            &app.state.prompt_input,
+            app.state.prompt_cursor,
+            40,
+        );
+        assert!(segments.len() >= 3, "Expected >= 3 lines, got {}", segments.len());
+        assert_eq!(cursor_row, segments.len() - 1);
+        assert!(cursor_col > 0);
+
+        let buf = app.render_headless(100, 30);
+        let content = buf.as_str();
+        assert!(content.contains("Here is a very long"));
+        assert!(content.contains("Vibe Cockpit"));
     }
 }
