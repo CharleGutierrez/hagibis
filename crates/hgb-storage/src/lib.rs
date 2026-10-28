@@ -106,3 +106,14 @@ pub use simd_runtime_dispatch::{
     simd_dot_product, simd_euclidean_distance, simd_euclidean_distance_sq,
     simd_normalize_inplace, SimdArchitecture, SimdCapabilities,
 };
+
+// Pillar 3: Zero-Copy Shared Memory IPC via hgb-storage
+pub mod shm_zero_copy_storage;
+pub use shm_zero_copy_storage::{
+    resolve_shm_storage_path, ShmStorageHeader, ShmZeroCopyBenchReport,
+    ShmZeroCopyConsumer, ShmZeroCopyProducer, ShmZeroCopyStorage,
+    ShmZeroCopyStorageStatus, TokenStreamChunk, DEFAULT_STORAGE_RING_CAPACITY,
+    SHM_ZERO_COPY_MAGIC, SHM_ZERO_COPY_VERSION, TAG_EMBEDDING, TAG_PROMPT,
+    TAG_RAW, TAG_TOKEN_STREAM, TAG_WASM_MEMORY,
+};
+

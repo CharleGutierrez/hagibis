@@ -1181,5 +1181,12 @@ pub use speculative_diff_viewer::{
     HunkStatus, SpeculativeDiffSession, SpeculativeDiffSummary, SpeculativeFileDiff,
 };
 
+// Pillar 2: Distributed MicroVM Mesh & WASM Swarm Federation
+pub mod p2p_swarm_federation;
+pub use p2p_swarm_federation::{
+    OptimalNodeDecision, SwarmFederationEngine, SwarmFederationResult, SwarmFederationStatusReport,
+    SwarmFederationTask, SwarmPacket, SwarmTaskKind, WorkerNodeAdvertisement, SWARM_FRAME_MAGIC,
+};
+
 
 

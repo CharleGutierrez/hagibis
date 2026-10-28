@@ -175,6 +175,7 @@ pub struct DaemonState {
     pub neural_coproc: Arc<hgb_core::NeuralCoprocessor>,
     pub shm_ring: Arc<tokio::sync::Mutex<hgb_storage::ShmRingBuffer>>,
     pub state_machine: Arc<hgb_core::AutonomousStateMachine>,
+    pub autonomous_watchdog: Arc<crate::autonomous_watchdog::AutonomousWatchdog>,
     pub self_healing_daemon: Arc<crate::self_healing_daemon::SelfHealingDaemonLoop>,
     pub p2p_mesh: Arc<hgb_nextgen::P2pSwarmMesh>,
     pub shm_bridge: Arc<crate::shm_grpc_bridge::ShmGrpcBridge>,
@@ -271,10 +272,16 @@ impl DaemonState {
             hgb_core::AutonomousStateMachine::new(&ws_dir)
                 .unwrap_or_else(|_| hgb_core::AutonomousStateMachine::in_memory().expect("in-memory state machine fallback"))
         );
+        let autonomous_watchdog = Arc::new(
+            crate::autonomous_watchdog::AutonomousWatchdog::new(&ws_dir)
+                .unwrap_or_else(|_| crate::autonomous_watchdog::AutonomousWatchdog::in_memory().expect("in-memory watchdog fallback"))
+                .with_event_bus(event_bus.clone()),
+        );
         let self_healing_daemon = Arc::new(
             crate::self_healing_daemon::SelfHealingDaemonLoop::new(&ws_dir)
                 .with_state_machine(state_machine.clone())
-                .with_event_bus(event_bus.clone()),
+                .with_event_bus(event_bus.clone())
+                .with_watchdog(autonomous_watchdog.clone()),
         );
         let p2p_mesh = Arc::new(hgb_nextgen::P2pSwarmMesh::new("local_hgbd_node", "mesh_auth_secret_2026"));
         let shm_bridge = Arc::new(
@@ -373,6 +380,7 @@ impl DaemonState {
             neural_coproc,
             shm_ring,
             state_machine,
+            autonomous_watchdog,
             self_healing_daemon,
             p2p_mesh,
             shm_bridge,

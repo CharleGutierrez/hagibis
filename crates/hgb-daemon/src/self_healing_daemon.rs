@@ -238,6 +238,8 @@ pub struct SelfHealingDaemonStatus {
     #[serde(default)]
     pub current_state: Option<String>,
     pub recent_reports: Vec<HealingAttemptReport>,
+    #[serde(default)]
+    pub watchdog_status: Option<crate::autonomous_watchdog::WatchdogStatusReport>,
 }
 
 /// Parse compiler stderr and stdout into structured diagnostic telemetry
@@ -487,6 +489,7 @@ pub struct MultiIterationFeedbackLoop {
     state_machine: Arc<AutonomousStateMachine>,
     ollama_endpoint: String,
     event_bus: Option<Arc<DistributedEventBus>>,
+    watchdog: Option<Arc<crate::autonomous_watchdog::AutonomousWatchdog>>,
 }
 
 impl MultiIterationFeedbackLoop {
@@ -498,6 +501,7 @@ impl MultiIterationFeedbackLoop {
             state_machine,
             ollama_endpoint: endpoint,
             event_bus: None,
+            watchdog: None,
         }
     }
 
@@ -508,6 +512,11 @@ impl MultiIterationFeedbackLoop {
 
     pub fn with_ollama_endpoint(mut self, endpoint: impl Into<String>) -> Self {
         self.ollama_endpoint = endpoint.into();
+        self
+    }
+
+    pub fn with_watchdog(mut self, watchdog: Arc<crate::autonomous_watchdog::AutonomousWatchdog>) -> Self {
+        self.watchdog = Some(watchdog);
         self
     }
 
@@ -885,6 +894,19 @@ impl MultiIterationFeedbackLoop {
         let mut previous_patch: Option<String> = None;
         let mut previous_error: Option<String> = None;
 
+        let mut gen_params = crate::autonomous_watchdog::AgentGenerationParams::default();
+        let baseline_snap = if let Some(wd) = &self.watchdog {
+            wd.create_snapshot(
+                &cycle_id,
+                current_failure.stderr.len() / 4,
+                &serde_json::to_string(&vec![&current_failure.stderr]).unwrap_or_default(),
+                &format!("Starting autonomous self-healing for {}", current_failure.command_or_module),
+                &gen_params,
+            ).ok()
+        } else {
+            None
+        };
+
         // 3. Multi-Iteration Feedback Loop
         for iteration in 1..=max_retries {
             iterations_run = iteration;
@@ -930,6 +952,27 @@ impl MultiIterationFeedbackLoop {
             );
             patches_evaluated += 1;
             previous_patch = Some(patch_diff.clone());
+
+            // Watchdog: detect hallucination loop, snapshot state, and dynamically mutate parameters
+            if let Some(wd) = &self.watchdog {
+                if let Some(hall_pat) = wd.detect_hallucination_loop(&cycle_id, &patch_diff) {
+                    if let Some(ref base) = baseline_snap {
+                        let _ = wd.rollback_context(&cycle_id, &base.snapshot_id);
+                    }
+                    let (new_p, _) = wd.mutate_parameters(&gen_params, &hall_pat, iteration);
+                    gen_params = new_p;
+                } else {
+                    wd.record_patch(&cycle_id, &patch_diff);
+                }
+
+                let _ = wd.create_snapshot(
+                    &cycle_id,
+                    diag_prompt.len() / 4,
+                    &serde_json::to_string(&vec![&diag_prompt]).unwrap_or_default(),
+                    &format!("Candidate patch evaluation for iteration {}", iteration),
+                    &gen_params,
+                );
+            }
 
             let _ = self.state_machine.transition(
                 AutonomousState::CoWEvaluation,
@@ -1027,6 +1070,29 @@ impl MultiIterationFeedbackLoop {
                     "duration_ms": start.elapsed().as_millis() as u64,
                 }));
 
+                // Watchdog: record validated recovery story to SQLite
+                if let Some(wd) = &self.watchdog {
+                    let _ = wd.log_recovery_story(&crate::autonomous_watchdog::RecoveryStory {
+                        story_id: format!(
+                            "story_{:012x}",
+                            hgb_core::blake3::hash(format!("{}:{}:{}", cycle_id, iteration, uuid::Uuid::new_v4()).as_bytes())
+                                .as_bytes()[0..6]
+                                .iter()
+                                .fold(0u64, |acc, &b| (acc << 8) | (b as u64))
+                        ),
+                        cycle_id: cycle_id.clone(),
+                        initial_failure: current_failure.stderr.lines().take(2).collect::<Vec<_>>().join(" "),
+                        failure_pattern: "FirstGreenVerified".to_string(),
+                        iterations_taken: iteration,
+                        mutations_applied: vec![format!("First-Green achieved at iteration {} (temperature: {:.2})", iteration, gen_params.temperature)],
+                        final_patch: winning_patch_diff.clone(),
+                        target_file: target_file_str.clone(),
+                        hot_reload_triggered: true,
+                        created_at: chrono::Utc::now().to_rfc3339(),
+                        duration_ms: start.elapsed().as_millis() as u64,
+                    });
+                }
+
                 let _ = self.trigger_hot_reload_hook(spec.target_crate.as_deref().unwrap_or("all"));
                 let _ = sandbox.rollback();
 
@@ -1049,6 +1115,25 @@ impl MultiIterationFeedbackLoop {
 
             let _ = sandbox.rollback();
             previous_error = Some(new_stderr.clone());
+
+            // Watchdog: detect failure pattern and dynamically mutate parameters for next iteration
+            if let Some(wd) = &self.watchdog {
+                if let Some(fail_pat) = wd.detect_failure_pattern(
+                    &cycle_id,
+                    Some(&current_failure.command_or_module),
+                    Some(new_exit_code),
+                    Some(&new_stderr),
+                    None,
+                    None,
+                    Some(&patch_diff),
+                    None,
+                    None,
+                    None,
+                ) {
+                    let (new_p, _) = wd.mutate_parameters(&gen_params, &fail_pat, iteration);
+                    gen_params = new_p;
+                }
+            }
 
             current_failure.stderr = new_stderr;
             current_failure.stdout = new_stdout;
@@ -1093,6 +1178,7 @@ pub struct SelfHealingDaemonLoop {
     workspace_root: PathBuf,
     event_bus: Option<Arc<DistributedEventBus>>,
     state_machine: Arc<AutonomousStateMachine>,
+    autonomous_watchdog: Arc<crate::autonomous_watchdog::AutonomousWatchdog>,
     total_intercepted: AtomicU64,
     total_attempts: AtomicU64,
     successful_fixes: AtomicU64,
@@ -1107,10 +1193,15 @@ impl SelfHealingDaemonLoop {
             AutonomousStateMachine::new(&ws)
                 .unwrap_or_else(|_| AutonomousStateMachine::in_memory().expect("in-memory state machine fallback"))
         );
+        let watchdog = Arc::new(
+            crate::autonomous_watchdog::AutonomousWatchdog::new(&ws)
+                .unwrap_or_else(|_| crate::autonomous_watchdog::AutonomousWatchdog::in_memory().expect("in-memory watchdog fallback"))
+        );
         Self {
             workspace_root: ws,
             event_bus: None,
             state_machine: sm,
+            autonomous_watchdog: watchdog,
             total_intercepted: AtomicU64::new(0),
             total_attempts: AtomicU64::new(0),
             successful_fixes: AtomicU64::new(0),
@@ -1127,6 +1218,15 @@ impl SelfHealingDaemonLoop {
     pub fn with_state_machine(mut self, sm: Arc<AutonomousStateMachine>) -> Self {
         self.state_machine = sm;
         self
+    }
+
+    pub fn with_watchdog(mut self, watchdog: Arc<crate::autonomous_watchdog::AutonomousWatchdog>) -> Self {
+        self.autonomous_watchdog = watchdog;
+        self
+    }
+
+    pub fn watchdog(&self) -> Arc<crate::autonomous_watchdog::AutonomousWatchdog> {
+        self.autonomous_watchdog.clone()
     }
 
     pub fn state_machine(&self) -> Arc<AutonomousStateMachine> {
@@ -1184,7 +1284,8 @@ impl SelfHealingDaemonLoop {
         let mut loop_engine = MultiIterationFeedbackLoop::new(
             self.workspace_root.clone(),
             self.state_machine.clone(),
-        );
+        )
+        .with_watchdog(self.autonomous_watchdog.clone());
         if let Some(bus) = &self.event_bus {
             loop_engine = loop_engine.with_event_bus(bus.clone());
         }
@@ -1332,6 +1433,7 @@ impl SelfHealingDaemonLoop {
 
     pub fn status(&self) -> SelfHealingDaemonStatus {
         let rec = self.recent_history.read().map(|h| h.clone()).unwrap_or_default();
+        let wd_status = self.autonomous_watchdog.status();
         SelfHealingDaemonStatus {
             active: true,
             total_intercepted_errors: self.total_intercepted.load(Ordering::Relaxed),
@@ -1340,6 +1442,7 @@ impl SelfHealingDaemonLoop {
             dpo_pairs_recorded: self.dpo_records.load(Ordering::Relaxed),
             current_state: Some(self.state_machine.current_state().as_str().to_string()),
             recent_reports: rec,
+            watchdog_status: Some(wd_status),
         }
     }
 }
@@ -1648,5 +1751,30 @@ stack backtrace:
         assert!(prompt.contains("E0425"));
         assert!(prompt.contains("PREVIOUS ITERATION FEEDBACK"));
         assert!(prompt.contains("Panic Messages"));
+    }
+
+    #[test]
+    fn test_self_healing_daemon_watchdog_integration() {
+        let temp_dir = std::env::temp_dir().join(format!("hgb_daemon_wd_test_{}", uuid::Uuid::new_v4().simple()));
+        let _ = fs::create_dir_all(&temp_dir);
+
+        let daemon = SelfHealingDaemonLoop::new(&temp_dir);
+        let wd = daemon.watchdog();
+
+        // 1. Verify watchdog presence and initial status
+        let status = daemon.status();
+        assert!(status.active);
+        assert!(status.watchdog_status.is_some());
+        let wd_stat = status.watchdog_status.unwrap();
+        assert!(wd_stat.active);
+
+        // 2. Trigger heal and verify watchdog telemetry
+        let report = daemon.trigger_heal(Some("cargo check"), Some("src/main.rs")).expect("trigger_heal");
+        assert!(!report.attempt_id.is_empty());
+
+        let wd_status_after = wd.status();
+        assert!(wd_status_after.total_snapshots > 0);
+
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 }

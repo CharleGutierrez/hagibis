@@ -438,6 +438,20 @@ pub use heartbeat_watchdog::{
     HEARTBEAT_HEADER_SIZE, HEARTBEAT_MAGIC, HEARTBEAT_VERSION,
 };
 
+// Pillar 4: Autonomous Self-Healing Agent Loops (Autonomous Watchdog, Snapshotting, and Self-Correction)
+pub mod autonomous_watchdog;
+pub use autonomous_watchdog::{
+    AgentContextSnapshot, AgentGenerationParams, AutonomousWatchdog, FailurePattern,
+    RecoveryStory, WatchdogStatusReport,
+};
+
+// Pillar 2: Distributed MicroVM Mesh & WASM Swarm Federation Service
+pub mod swarm_service;
+pub use swarm_service::{
+    SwarmDaemonConfig, SwarmDaemonService, SwarmServiceStatusSnapshot,
+};
+
+
 
 
 
