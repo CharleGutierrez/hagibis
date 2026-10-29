@@ -249,6 +249,82 @@ impl HgbClient {
             other => Err(HgbError::Ipc(format!("Unexpected response: {other:?}"))),
         }
     }
+
+    /// Fetch swarm federation status
+    pub async fn swarm_status(&self) -> Result<hgb_core::p2p_swarm_federation::SwarmFederationStatusReport> {
+        let resp = self.send(HgbRequest::SwarmStatus).await?;
+        match resp {
+            HgbResponse::SwarmStatus(rep) => Ok(rep),
+            HgbResponse::Error(e) => Err(HgbError::Ipc(e)),
+            other => Err(HgbError::Ipc(format!("Unexpected response for SwarmStatus: {other:?}"))),
+        }
+    }
+
+    /// List active peers discovered by swarm federation
+    pub async fn swarm_peers(&self) -> Result<Vec<hgb_core::p2p_swarm_federation::WorkerNodeAdvertisement>> {
+        let resp = self.send(HgbRequest::SwarmListPeers).await?;
+        match resp {
+            HgbResponse::SwarmPeers(peers) => Ok(peers),
+            HgbResponse::Error(e) => Err(HgbError::Ipc(e)),
+            other => Err(HgbError::Ipc(format!("Unexpected response for SwarmListPeers: {other:?}"))),
+        }
+    }
+
+    /// Dispatch task to the federated swarm
+    pub async fn swarm_dispatch(
+        &self,
+        title: &str,
+        kind: &str,
+        code: &str,
+    ) -> Result<hgb_core::p2p_swarm_federation::SwarmFederationResult> {
+        let resp = self
+            .send(HgbRequest::SwarmDispatchTask {
+                title: title.to_string(),
+                task_kind: kind.to_string(),
+                code: code.to_string(),
+            })
+            .await?;
+        match resp {
+            HgbResponse::SwarmTaskResult(res) => Ok(res),
+            HgbResponse::Error(e) => Err(HgbError::Ipc(e)),
+            other => Err(HgbError::Ipc(format!("Unexpected response for SwarmDispatchTask: {other:?}"))),
+        }
+    }
+
+    /// Fetch Autonomous Watchdog status from daemon
+    pub async fn watchdog_status(&self) -> Result<hgb_core::autonomous_watchdog::WatchdogStatusReport> {
+        let resp = self.send(HgbRequest::WatchdogStatus).await?;
+        match resp {
+            HgbResponse::WatchdogStatus(rep) => Ok(rep),
+            HgbResponse::Error(e) => Err(HgbError::Ipc(e)),
+            other => Err(HgbError::Ipc(format!("Unexpected response for WatchdogStatus: {other:?}"))),
+        }
+    }
+
+    /// Fetch agent snapshots from SQLite WAL
+    pub async fn watchdog_snapshots(&self, cycle_id: Option<&str>) -> Result<Vec<hgb_core::autonomous_watchdog::AgentContextSnapshot>> {
+        let resp = self.send(HgbRequest::WatchdogSnapshots {
+            cycle_id: cycle_id.map(|s| s.to_string()),
+        }).await?;
+        match resp {
+            HgbResponse::WatchdogSnapshots(snaps) => Ok(snaps),
+            HgbResponse::Error(e) => Err(HgbError::Ipc(e)),
+            other => Err(HgbError::Ipc(format!("Unexpected response for WatchdogSnapshots: {other:?}"))),
+        }
+    }
+
+    /// Trigger autonomous healing cycle via daemon
+    pub async fn watchdog_heal(&self, target_crate: Option<&str>, max_retries: Option<usize>) -> Result<serde_json::Value> {
+        let resp = self.send(HgbRequest::AutonomousHealTrigger {
+            target_crate: target_crate.map(|s| s.to_string()),
+            max_retries,
+        }).await?;
+        match resp {
+            HgbResponse::AutonomousHealResult(val) => Ok(val),
+            HgbResponse::Error(e) => Err(HgbError::Ipc(e)),
+            other => Err(HgbError::Ipc(format!("Unexpected response for AutonomousHealTrigger: {other:?}"))),
+        }
+    }
 }
 
 #[cfg(test)]

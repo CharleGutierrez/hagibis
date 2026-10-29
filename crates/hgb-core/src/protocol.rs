@@ -1337,6 +1337,18 @@ pub enum HgbRequest {
         target_file: Option<String>,
     },
     DaemonSelfHealStatus,
+    // --- Pillar 4: Autonomous Watchdog & Self-Correction ---
+    WatchdogStatus,
+    WatchdogSnapshots {
+        #[serde(default)]
+        cycle_id: Option<String>,
+    },
+    AutonomousHealTrigger {
+        #[serde(default)]
+        target_crate: Option<String>,
+        #[serde(default)]
+        max_retries: Option<usize>,
+    },
     // --- Pillar 4: Distributed P2P Swarm Mesh ---
     SwarmMeshDelegate {
         task_id: String,
@@ -1580,6 +1592,15 @@ pub enum HgbRequest {
     },
     StreamTelemetryToShm {
         client_pid: u32,
+    },
+
+    // Pillar 2: Distributed MicroVM Mesh & WASM Swarm Federation
+    SwarmStatus,
+    SwarmListPeers,
+    SwarmDispatchTask {
+        title: String,
+        task_kind: String,
+        code: String,
     },
 }
 
@@ -2171,6 +2192,14 @@ pub enum HgbResponse {
     // Pillar 3: Self-Healing Autonomous Daemon Loops
     DaemonSelfHealResult(String),
     DaemonSelfHealStatusResult(String),
+    // Pillar 4: Autonomous Self-Healing Agent Loops (Watchdog & Self-Correction)
+    WatchdogStatus(crate::autonomous_watchdog::WatchdogStatusReport),
+    WatchdogSnapshots(Vec<crate::autonomous_watchdog::AgentContextSnapshot>),
+    AutonomousHealResult(serde_json::Value),
+    // Pillar 2: Distributed MicroVM Mesh & WASM Swarm Federation
+    SwarmStatus(crate::p2p_swarm_federation::SwarmFederationStatusReport),
+    SwarmPeers(Vec<crate::p2p_swarm_federation::WorkerNodeAdvertisement>),
+    SwarmTaskResult(crate::p2p_swarm_federation::SwarmFederationResult),
     // Pillar 4: Distributed P2P Swarm Mesh
     SwarmMeshDelegateResult(String),
     SwarmMeshSyncResult(String),

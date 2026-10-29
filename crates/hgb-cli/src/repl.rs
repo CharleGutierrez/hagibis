@@ -5651,6 +5651,58 @@ impl HagibisRepl {
                 println!("  Tokens:    {}", total_tokens);
                 println!("  Duration:  {} ms", duration_ms);
             }
+            HgbResponse::WatchdogStatus(report) => {
+                println!("{}", "🛡️ AUTONOMOUS WATCHDOG STATUS REPORT 🛡️".bold().cyan());
+                println!("  Intercepted: {} failures", report.total_failures_intercepted);
+                println!("  Rollbacks:   {} cycles", report.total_rollbacks);
+                println!("  Recoveries:  {} First-Green successes", report.total_recoveries_completed);
+                println!("  Snapshots:   {} total persisted", report.total_snapshots);
+                println!("  Active:      {}", report.active);
+            }
+            HgbResponse::WatchdogSnapshots(snaps) => {
+                println!("{}", format!("📸 AUTONOMOUS CONTEXT SNAPSHOTS ({}) 📸", snaps.len()).bold().cyan());
+                for (idx, snap) in snaps.iter().enumerate() {
+                    println!("  [{}] ID: {} | Cycle: {} | Tokens: {} | Created: {}",
+                        idx + 1, snap.snapshot_id.yellow(), snap.cycle_id.cyan(), snap.context_tokens, snap.created_at);
+                }
+            }
+            HgbResponse::AutonomousHealResult(val) => {
+                println!("{}", "🩺 AUTONOMOUS HEALING EXECUTION RESULT 🩺".bold().green());
+                println!("{}", serde_json::to_string_pretty(&val).unwrap_or_else(|_| val.to_string()));
+            }
+            HgbResponse::SwarmStatus(status) => {
+                println!("{}", "🌌 DISTRIBUTED WASM/MICROVM SWARM FEDERATION 🌌".bold().cyan());
+                println!("  Local Node:     {}", status.node_id.yellow());
+                println!("  Active Peers:   {}", status.active_peers_count);
+                println!("  Local Free RAM: {} MB", status.local_free_ram_mb);
+                println!("  Local Load:     {:.2}", status.local_load_score);
+                println!("  Tasks Completed: {}", status.total_tasks_completed);
+            }
+            HgbResponse::SwarmPeers(peers) => {
+                println!("{}", format!("🤝 FEDERATED SWARM PEERS ({}) 🤝", peers.len()).bold().cyan());
+                for (idx, p) in peers.iter().enumerate() {
+                    println!("  [{}] Node: {} | Addr: {} | Cores: {} | Free RAM: {} MB | Load: {:.2} | MicroVM: {} | WASM: {}",
+                        idx + 1, p.node_id.yellow(), p.listen_addr, p.available_cpu_cores, p.free_ram_mb, p.load_score, p.has_firecracker_kvm, p.has_wasm_engine);
+                }
+            }
+            HgbResponse::SwarmTaskResult(res) => {
+                println!("{}", "🚀 SWARM TASK EXECUTION OUTCOME 🚀".bold().green());
+                println!("  Task ID:   {}", res.task_id.cyan());
+                println!("  Worker:    {}", res.executing_node_id.yellow());
+                println!("  Type:      {}", res.worker_type);
+                println!("  Duration:  {} ms", res.duration_ms);
+                println!("  Success:   {}", res.success);
+                if !res.stdout.is_empty() {
+                    println!("  Stdout:\n{}", res.stdout);
+                }
+                if !res.stderr.is_empty() {
+                    println!("  Stderr:\n{}", res.stderr);
+                }
+            }
+            #[allow(unreachable_patterns)]
+            _ => {
+                println!("{}", "✔ Operation completed successfully.".green());
+            }
         }
     }
 

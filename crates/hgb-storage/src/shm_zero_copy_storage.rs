@@ -634,6 +634,16 @@ impl ShmZeroCopyStorage {
         })
     }
 
+    /// Run an end-to-end zero-copy IPC benchmark with the specified iterations and chunk size
+    pub fn run_benchmark(iterations: usize, chunk_size: usize) -> Result<ShmZeroCopyBenchReport> {
+        let name = format!("bench_{}_{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_micros());
+        let capacity = (chunk_size * 8).max(1024 * 1024);
+        let mut storage = Self::create(&name, capacity)?;
+        let report = storage.benchmark(chunk_size, iterations)?;
+        let _ = storage.unlink();
+        Ok(report)
+    }
+
     /// Read live operational status
     pub fn status(&self) -> ShmZeroCopyStorageStatus {
         let head = self.header().head.load(Ordering::Acquire) as usize;

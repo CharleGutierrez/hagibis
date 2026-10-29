@@ -223,6 +223,41 @@ pub enum RemoteSubcommand {
     },
 }
 
+#[derive(Subcommand, Debug, Clone)]
+pub enum SwarmSubcommand {
+    /// Inspect local node status, active peer count, load score, and task dispatch metrics
+    Status,
+    /// List all discovered peer nodes in the local network/swarm
+    Peers,
+    /// Dispatch a task across the federated swarm
+    Dispatch {
+        #[arg(long, default_value = "Swarm Task")]
+        title: String,
+        #[arg(long, default_value = "wasm")]
+        kind: String,
+        #[arg(long, default_value = "pub fn execute() -> usize { 42 }")]
+        code: String,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum WatchdogSubcommand {
+    /// Inspect autonomous watchdog status, active snapshots, and failure patterns
+    Status,
+    /// List agent context snapshots in SQLite WAL
+    Snapshots {
+        #[arg(long)]
+        cycle: Option<String>,
+    },
+    /// Trigger an autonomous self-healing test cycle with First-Green verification
+    Test {
+        #[arg(long)]
+        target_crate: Option<String>,
+        #[arg(long, default_value_t = 3)]
+        max_retries: usize,
+    },
+}
+
 #[derive(Subcommand)]
 enum Commands {
     /// Native Editor Integration & LSP Predictions
@@ -1466,7 +1501,8 @@ enum Commands {
     },
 
     /// Lakandiwa Triple-Model Consensus Swarm: 3-way speculative race and auto-merge
-    Swarm {
+    #[command(name = "lakandiwa-swarm", alias = "consensus-swarm")]
+    LakandiwaSwarm {
         /// Coding intent or prompt
         prompt: String,
         /// Target symbol
@@ -1855,7 +1891,6 @@ enum Commands {
     },
 
     /// Meta SapFix & Qodo-Style Continuous Autonomous Healing Loop
-    #[command(alias = "watchdog")]
     HealWatch {
         /// Error string or test name to heal
         #[arg(short, long)]
@@ -3482,6 +3517,33 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         apply: bool,
     },
+
+    /// Pillar 1: Active Hardware-Aware Memory & Thermal Loop Telemetry (Dynatune Synergy)
+    #[command(name = "hardware", alias = "hw", alias = "telemetry", alias = "dynatune-hw")]
+    Hardware {
+        /// Force direct reading from host sysfs without querying daemon UDS
+        #[arg(long, default_value_t = false)]
+        direct: bool,
+    },
+
+    /// Pillar 3: Zero-Copy Shared Memory IPC Benchmark (hgb-storage & memmap2)
+    #[command(name = "shm-bench", alias = "shm-benchmark", alias = "zc-bench")]
+    ShmBench {
+        /// Benchmark iterations count (default: 100)
+        #[arg(short, long, default_value_t = 100)]
+        iterations: usize,
+        /// Payload chunk size in bytes (default: 65536 = 64KB)
+        #[arg(short, long, default_value_t = 65536)]
+        chunk_size: usize,
+    },
+
+    /// Pillar 2: Distributed MicroVM Mesh & WASM Swarm Federation
+    #[command(subcommand)]
+    Swarm(SwarmSubcommand),
+
+    /// Pillar 4: Autonomous Watchdog & Self-Healing Agent Loops
+    #[command(subcommand)]
+    Watchdog(WatchdogSubcommand),
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -6670,7 +6732,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             repl_helper.render_response(resp);
             Ok(())
         }
-        Commands::Swarm { prompt, symbol, lang } => {
+        Commands::LakandiwaSwarm { prompt, symbol, lang } => {
             let repl_helper = HagibisRepl::new(client);
             let resp = repl_helper.dispatch(HgbRequest::LakandiwaSwarmRace {
                 prompt,
@@ -10557,6 +10619,167 @@ async fn test_calc() { assert!(calculate(5)); }".to_string()
 
             Ok(())
         }
+        Commands::Hardware { direct } => {
+            let bridge = hgb_core::dynatune_bridge::DynatuneBridge::new();
+            let telem = if direct {
+                bridge.read_complete_hardware_telemetry()
+            } else {
+                match client.stream_telemetry_shm().await {
+                    Ok(val) => serde_json::from_value(val).unwrap_or_else(|_| bridge.read_complete_hardware_telemetry()),
+                    Err(_) => bridge.read_complete_hardware_telemetry(),
+                }
+            };
+
+            println!("\n{}", "=== 🪽 Hagibis Hardware Telemetry (Dynatune Synergy) ===".cyan().bold());
+            println!("  • CPU Package Temp:     {:.1}°C (Max Sensor: {:.1}°C)", telem.cpu_pkg_temp_c, telem.max_temp_c);
+            let state_str = if telem.is_thermal_throttled {
+                "⚠️ THROTTLED (>=78°C)".red().bold()
+            } else if telem.cpu_pkg_temp_c >= 70.0 {
+                "WARM (Dev Load)".yellow()
+            } else {
+                "OPTIMAL (Cool)".green()
+            };
+            println!("  • Thermal State:        {}", state_str);
+            println!("  • AC Mains Power:       {}", if telem.ac_connected { "Connected (AC)".green() } else { "Discharging (Battery)".yellow() });
+            if let Some(ref bat) = telem.primary_battery {
+                println!("  • Primary Battery:      {}% ({})", bat.capacity_pct, bat.status);
+            }
+            println!("  • Scaling Governor/EPP: {} / {}", telem.active_governor.yellow(), telem.active_epp.yellow());
+            println!("  • RAM Total / Avail:    {} MB / {} MB ({:.1}% free)", telem.memory_total_mb, telem.memory_available_mb, telem.memory_available_pct);
+            println!("  • Memory PSI (Pressure):some avg10={:.2}%, avg60={:.2}%", telem.psi_memory.some.avg10, telem.psi_memory.some.avg60);
+            if let Some(ref enabled) = telem.mglru_enabled {
+                println!("  • Multi-Gen LRU:        {} (min_ttl_ms: {:?})", enabled.green(), telem.mglru_min_ttl_ms);
+            }
+            println!("  • Safe Worker Limit:    {} concurrent tasks", telem.recommended_concurrency_limit.to_string().cyan().bold());
+            println!();
+            Ok(())
+        }
+        Commands::ShmBench { iterations, chunk_size } => {
+            println!("\n{}", "=== ⚡ Zero-Copy Shared Memory IPC Benchmark (/dev/shm) ===".cyan().bold());
+            println!("  Parameters: {} iterations, {} bytes/chunk", iterations, chunk_size);
+            let report = hgb_storage::shm_zero_copy_storage::ShmZeroCopyStorage::run_benchmark(iterations, chunk_size)
+                .map_err(|e| Box::<dyn std::error::Error>::from(e.to_string()))?;
+            println!("{}", "-------------------------------------------------------------".dimmed());
+            println!("  • Ring Name:            {}", report.ring_name.yellow());
+            println!("  • Total Messages:       {}", report.total_messages);
+            println!("  • Data Transferred:     {:.2} MB", report.total_bytes as f64 / (1024.0 * 1024.0));
+            println!("  • Total Duration:       {:.2} ms", report.elapsed_us as f64 / 1000.0);
+            println!("  • Average Frame Timing: {:.2} ns", report.avg_latency_ns);
+            println!("  • Memory Throughput:    {} ({:.2} GB/s)", format!("{:.2} MB/s", report.throughput_mb_s).green().bold(), report.throughput_mb_s / 1024.0);
+            println!("  • Zero-Copy Status:     {}", report.status.green());
+            println!("{}\n", "-------------------------------------------------------------".dimmed());
+            Ok(())
+        }
+        Commands::Swarm(sub) => match sub {
+            SwarmSubcommand::Status => {
+                match client.swarm_status().await {
+                    Ok(status) => {
+                        println!("\n{}", "=== 🕸️ Hagibis Distributed Swarm Federation Status ===".cyan().bold());
+                        println!("  • Local Node ID:        {}", status.node_id.yellow());
+                        println!("  • Listen Endpoint:      {}", status.listen_addr.to_string().cyan());
+                        println!("  • Discovered Peers:     {} active node(s)", status.active_peers_count);
+                        println!("  • Local Load Score:     {:.2} (nominal < 0.70)", status.local_load_score);
+                        println!("  • Local Free RAM:       {} MB (KVM support: {})", status.local_free_ram_mb, status.local_has_kvm);
+                        println!("  • Tasks Dispatched:     {} local / {} remote", status.total_local_dispatched, status.total_remote_dispatched);
+                        println!("  • Tasks Completed:      {} (avg latency: {:.2} ms)", status.total_tasks_completed, status.avg_latency_ms);
+                        println!();
+                    }
+                    Err(e) => {
+                        eprintln!("[-] Swarm service unavailable (ensure daemon is active with hgbd): {}", e);
+                    }
+                }
+                Ok(())
+            }
+            SwarmSubcommand::Peers => {
+                match client.swarm_peers().await {
+                    Ok(peers) => {
+                        println!("\n{}", format!("=== Active Swarm Peers ({}) ===", peers.len()).cyan().bold());
+                        if peers.is_empty() {
+                            println!("  No remote peers discovered yet (listening on default port 8970).");
+                        } else {
+                            for peer in peers {
+                                println!("  • Node: {} @ {}", peer.node_id.yellow(), peer.listen_addr);
+                                println!("    Cores: {} | Free RAM: {} MB | Load: {:.2} | KVM: {} | WASM: {}",
+                                    peer.available_cpu_cores, peer.free_ram_mb, peer.load_score, peer.has_firecracker_kvm, peer.has_wasm_engine);
+                            }
+                        }
+                        println!();
+                    }
+                    Err(e) => eprintln!("[-] Failed to list peers: {}", e),
+                }
+                Ok(())
+            }
+            SwarmSubcommand::Dispatch { title, kind, code } => {
+                println!("🕸️ Dispatching federated task '{}' (kind: {}) to swarm...", title, kind);
+                match client.swarm_dispatch(&title, &kind, &code).await {
+                    Ok(res) => {
+                        println!("\n{}", format!("[✓] Swarm Task Completed by node '{}'", res.executing_node_id).green().bold());
+                        println!("  • Status:               {}", if res.success { "SUCCESS".green() } else { "FAILED".red() });
+                        println!("  • Worker Tier:          {}", res.worker_type.yellow());
+                        println!("  • Duration:             {} ms", res.duration_ms);
+                        println!("  • Memory Used:          {} MB", res.memory_mb);
+                        if !res.stdout.is_empty() {
+                            println!("  • Output:\n{}", res.stdout);
+                        }
+                        println!();
+                    }
+                    Err(e) => eprintln!("[-] Swarm task dispatch failed: {}", e),
+                }
+                Ok(())
+            }
+        },
+        Commands::Watchdog(sub) => match sub {
+            WatchdogSubcommand::Status => {
+                match client.watchdog_status().await {
+                    Ok(status) => {
+                        println!("\n{}", "=== 🛡️ Hagibis Autonomous Watchdog & Self-Healing Status ===".cyan().bold());
+                        println!("  • Watchdog Active:      {}", if status.active { "ENABLED (SQLite WAL)".green() } else { "DISABLED".yellow() });
+                        println!("  • State DB Path:        {}", status.db_path);
+                        println!("  • Total Snapshots:      {}", status.total_snapshots);
+                        println!("  • Total Rollbacks:      {}", status.total_rollbacks);
+                        println!("  • Intercepted Failures: {}", status.total_failures_intercepted);
+                        println!("  • Completed Recoveries: {}", status.total_recoveries_completed);
+                        if !status.recent_recoveries.is_empty() {
+                            println!("\n{}", "  Recent Self-Healing Recoveries:".bold());
+                            for r in status.recent_recoveries.iter().take(5) {
+                                println!("    • Story {}: [{}] in {} iteration(s) ({} ms)",
+                                    r.story_id.yellow(), r.failure_pattern, r.iterations_taken, r.duration_ms);
+                            }
+                        }
+                        println!();
+                    }
+                    Err(e) => eprintln!("[-] Failed to query watchdog status: {}", e),
+                }
+                Ok(())
+            }
+            WatchdogSubcommand::Snapshots { cycle } => {
+                match client.watchdog_snapshots(cycle.as_deref()).await {
+                    Ok(snaps) => {
+                        println!("\n{}", format!("=== Agent State Snapshots ({}) ===", snaps.len()).cyan().bold());
+                        for s in snaps {
+                            println!("  • Snapshot: {} (cycle: {})", s.snapshot_id.yellow(), s.cycle_id);
+                            println!("    Tokens: {} | Temp: {:.2} | Model: {} | Created: {}",
+                                s.context_tokens, s.generation_params.temperature, s.generation_params.model, s.created_at);
+                        }
+                        println!();
+                    }
+                    Err(e) => eprintln!("[-] Failed to query snapshots: {}", e),
+                }
+                Ok(())
+            }
+            WatchdogSubcommand::Test { target_crate, max_retries } => {
+                println!("🛡️ Triggering autonomous self-healing test cycle (max retries: {})...", max_retries);
+                match client.watchdog_heal(target_crate.as_deref(), Some(max_retries)).await {
+                    Ok(val) => {
+                        println!("\n{}", "[✓] Autonomous Self-Healing Verification Complete".green().bold());
+                        println!("{}", serde_json::to_string_pretty(&val).unwrap_or_default());
+                        println!();
+                    }
+                    Err(e) => eprintln!("[-] Self-healing test failed: {}", e),
+                }
+                Ok(())
+            }
+        },
         Commands::Ide { .. } => unreachable!(),
     }
 }

@@ -1188,5 +1188,11 @@ pub use p2p_swarm_federation::{
     SwarmFederationTask, SwarmPacket, SwarmTaskKind, WorkerNodeAdvertisement, SWARM_FRAME_MAGIC,
 };
 
+// Pillar 4: Autonomous Self-Healing Agent Loops (Autonomous Watchdog, Snapshotting, and Self-Correction)
+pub mod autonomous_watchdog;
+pub use autonomous_watchdog::{
+    AgentContextSnapshot, AgentGenerationParams, FailurePattern, RecoveryStory, WatchdogStatusReport,
+};
+
 
 

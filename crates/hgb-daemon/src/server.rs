@@ -178,6 +178,7 @@ pub struct DaemonState {
     pub autonomous_watchdog: Arc<crate::autonomous_watchdog::AutonomousWatchdog>,
     pub self_healing_daemon: Arc<crate::self_healing_daemon::SelfHealingDaemonLoop>,
     pub p2p_mesh: Arc<hgb_nextgen::P2pSwarmMesh>,
+    pub swarm_service: Arc<crate::swarm_service::SwarmDaemonService>,
     pub shm_bridge: Arc<crate::shm_grpc_bridge::ShmGrpcBridge>,
     pub actor_swarm_coordinator: Arc<hgb_core::actor_swarm::SwarmCoordinator>,
     pub crdt_sync_document: Arc<tokio::sync::RwLock<hgb_core::crdt_edge_sync::CrdtSyncDocument>>,
@@ -283,6 +284,14 @@ impl DaemonState {
                 .with_event_bus(event_bus.clone())
                 .with_watchdog(autonomous_watchdog.clone()),
         );
+        let swarm_port = std::env::var("HGB_SWARM_PORT")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(crate::swarm_service::DEFAULT_SWARM_PORT);
+        let swarm_service = Arc::new(
+            crate::swarm_service::SwarmDaemonService::new(&ws_dir, swarm_port)
+                .unwrap_or_else(|_| crate::swarm_service::SwarmDaemonService::new(".", swarm_port).expect("fallback swarm service"))
+        );
         let p2p_mesh = Arc::new(hgb_nextgen::P2pSwarmMesh::new("local_hgbd_node", "mesh_auth_secret_2026"));
         let shm_bridge = Arc::new(
             crate::shm_grpc_bridge::ShmGrpcBridge::default_bridge()
@@ -383,6 +392,7 @@ impl DaemonState {
             autonomous_watchdog,
             self_healing_daemon,
             p2p_mesh,
+            swarm_service,
             shm_bridge,
             actor_swarm_coordinator,
             crdt_sync_document,
@@ -604,6 +614,13 @@ impl HagibisDaemon {
             eprintln!("⚠️ SHM-IPC Bridge initialization warning: {}", e);
         } else {
             println!("⚡ Zero-Overhead SHM-IPC Bridge active on {}", self.state.shm_bridge.status().socket_path);
+        }
+
+        // Start P2P Swarm Federation Daemon Background Service
+        if let Err(e) = self.state.swarm_service.start().await {
+            eprintln!("⚠️ Swarm Daemon Service initialization warning: {}", e);
+        } else {
+            println!("🕸️ P2P Swarm Federation Service active on port {}", self.state.swarm_service.port());
         }
 
         #[cfg(unix)]
@@ -4578,6 +4595,70 @@ impl HagibisDaemon {
                 HgbResponse::ShmStreamCompleted {
                     total_tokens: 1,
                     duration_ms: 0,
+                }
+            }
+
+            // Pillar 4: Autonomous Watchdog & Self-Correction
+            HgbRequest::WatchdogStatus => {
+                let report = state.autonomous_watchdog.status();
+                HgbResponse::WatchdogStatus(report)
+            }
+            HgbRequest::WatchdogSnapshots { cycle_id } => {
+                let snapshots = if let Some(ref cid) = cycle_id {
+                    state.autonomous_watchdog.get_snapshots_for_cycle(cid).unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+                HgbResponse::WatchdogSnapshots(snapshots)
+            }
+            HgbRequest::AutonomousHealTrigger { target_crate, max_retries } => {
+                let spec = crate::self_healing_daemon::AutonomousFeedbackSpec::new(
+                    None,
+                    None,
+                    target_crate,
+                    max_retries.unwrap_or(3),
+                    true,
+                );
+                match state.self_healing_daemon.run_multi_iteration_feedback_loop(spec) {
+                    Ok(rep) => {
+                        let val = serde_json::to_value(&rep).unwrap_or(serde_json::Value::Null);
+                        HgbResponse::AutonomousHealResult(val)
+                    }
+                    Err(e) => HgbResponse::Error(format!("Autonomous heal trigger failed: {e}")),
+                }
+            }
+
+            // Pillar 2: Distributed MicroVM Mesh & WASM Swarm Federation
+            HgbRequest::SwarmStatus => {
+                let rep = state.swarm_service.status().await;
+                HgbResponse::SwarmStatus(rep)
+            }
+            HgbRequest::SwarmListPeers => {
+                let peers = state.swarm_service.engine().list_peers().await;
+                HgbResponse::SwarmPeers(peers)
+            }
+            HgbRequest::SwarmDispatchTask { title, task_kind, code } => {
+                let task = match task_kind.to_lowercase().as_str() {
+                    "wasm" => hgb_core::p2p_swarm_federation::SwarmFederationTask::new_wasm(
+                        uuid::Uuid::new_v4().to_string(),
+                        title,
+                        code,
+                    ),
+                    "lint" | "ast" => hgb_core::p2p_swarm_federation::SwarmFederationTask::new_lint(
+                        uuid::Uuid::new_v4().to_string(),
+                        title,
+                        code,
+                    ),
+                    _ => hgb_core::p2p_swarm_federation::SwarmFederationTask::new_heavy(
+                        uuid::Uuid::new_v4().to_string(),
+                        title,
+                        "rust",
+                        code,
+                    ),
+                };
+                match state.swarm_service.dispatch_task(task).await {
+                    Ok(res) => HgbResponse::SwarmTaskResult(res),
+                    Err(e) => HgbResponse::Error(format!("Swarm task dispatch failed: {e}")),
                 }
             }
         }
