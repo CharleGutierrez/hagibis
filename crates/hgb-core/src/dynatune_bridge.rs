@@ -109,6 +109,21 @@ pub struct BatteryTelemetry {
     pub capacity_pct: u32,
     pub is_discharging: bool,
     pub is_critical: bool,
+    /// Real-time battery discharge rate in milliwatts (mW)
+    #[serde(default)]
+    pub discharge_rate_mw: Option<f64>,
+    /// Estimated discharge rate in percentage per hour (%/hr)
+    #[serde(default)]
+    pub discharge_rate_pct_per_hr: Option<f64>,
+    /// Instantaneous power in Watts
+    #[serde(default)]
+    pub power_now_w: Option<f64>,
+    /// Current stored energy in Watt-hours (Wh)
+    #[serde(default)]
+    pub energy_now_wh: Option<f64>,
+    /// Full charge energy capacity in Watt-hours (Wh)
+    #[serde(default)]
+    pub energy_full_wh: Option<f64>,
 }
 
 /// Linux Pressure Stall Information (PSI) metric record
@@ -125,6 +140,13 @@ pub struct PressureRecordTelemetry {
 pub struct PsiMemoryTelemetry {
     pub some: PressureRecordTelemetry,
     pub full: PressureRecordTelemetry,
+    pub available: bool,
+}
+
+/// Host CPU Pressure Stall Information (PSI)
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct PsiCpuTelemetry {
+    pub some: PressureRecordTelemetry,
     pub available: bool,
 }
 
@@ -146,6 +168,12 @@ pub struct CompleteHardwareTelemetry {
     pub memory_used_mb: u64,
     pub memory_available_pct: f64,
     pub psi_memory: PsiMemoryTelemetry,
+    #[serde(default)]
+    pub psi_cpu: PsiCpuTelemetry,
+    #[serde(default)]
+    pub battery_discharge_rate_mw: Option<f64>,
+    #[serde(default)]
+    pub battery_discharge_rate_pct_per_hr: Option<f64>,
     pub mglru_enabled: Option<String>,
     pub mglru_min_ttl_ms: Option<u64>,
     pub scaling_driver: String,
@@ -430,16 +458,84 @@ impl DynatuneBridge {
                 let is_discharging = status.eq_ignore_ascii_case("discharging");
                 let is_critical = is_discharging && capacity_pct < BATTERY_CRITICAL_THRESHOLD_PCT;
 
+                // Battery discharge rate & energy telemetry:
+                // Voltage in uV (default to ~7.6V if missing)
+                let voltage_uv = fs::read_to_string(p.join("voltage_now"))
+                    .ok()
+                    .and_then(|s| s.trim().parse::<u64>().ok())
+                    .unwrap_or(7_600_000) as f64;
+
+                let energy_now_wh = if let Some(e) = fs::read_to_string(p.join("energy_now")).ok().and_then(|s| s.trim().parse::<u64>().ok()) {
+                    Some(e as f64 / 1_000_000.0)
+                } else if let Some(c) = fs::read_to_string(p.join("charge_now")).ok().and_then(|s| s.trim().parse::<u64>().ok()) {
+                    Some((c as f64 * voltage_uv) / 1_000_000_000_000.0)
+                } else {
+                    None
+                };
+
+                let energy_full_wh = if let Some(e) = fs::read_to_string(p.join("energy_full")).ok().and_then(|s| s.trim().parse::<u64>().ok()) {
+                    Some(e as f64 / 1_000_000.0)
+                } else if let Some(c) = fs::read_to_string(p.join("charge_full")).ok().and_then(|s| s.trim().parse::<u64>().ok()) {
+                    Some((c as f64 * voltage_uv) / 1_000_000_000_000.0)
+                } else {
+                    None
+                };
+
+                let power_now_w = if let Some(pwr) = fs::read_to_string(p.join("power_now")).ok().and_then(|s| s.trim().parse::<u64>().ok()) {
+                    Some(pwr as f64 / 1_000_000.0)
+                } else if let Some(cur) = fs::read_to_string(p.join("current_now")).ok().and_then(|s| s.trim().parse::<u64>().ok()) {
+                    Some((cur as f64 * voltage_uv) / 1_000_000_000_000.0)
+                } else {
+                    None
+                };
+
+                let discharge_rate_mw = if is_discharging {
+                    power_now_w.map(|w| w * 1000.0)
+                } else {
+                    None
+                };
+
+                let discharge_rate_pct_per_hr = if is_discharging {
+                    if let (Some(w), Some(full_wh)) = (power_now_w, energy_full_wh) {
+                        if full_wh > 0.0 {
+                            Some((w / full_wh) * 100.0)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
                 batteries.push(BatteryTelemetry {
                     name,
                     status,
                     capacity_pct,
                     is_discharging,
                     is_critical,
+                    discharge_rate_mw,
+                    discharge_rate_pct_per_hr,
+                    power_now_w,
+                    energy_now_wh,
+                    energy_full_wh,
                 });
             }
         }
         batteries
+    }
+
+    /// Read primary battery discharge rate in milliwatts (mW) if discharging
+    pub fn read_battery_discharge_rate_mw(&self) -> Option<f64> {
+        let bats = self.read_battery_telemetry();
+        bats.first().and_then(|b| b.discharge_rate_mw)
+    }
+
+    /// Read primary battery discharge rate in percent per hour (%/hr) if discharging
+    pub fn read_battery_discharge_rate_pct_per_hr(&self) -> Option<f64> {
+        let bats = self.read_battery_telemetry();
+        bats.first().and_then(|b| b.discharge_rate_pct_per_hr)
     }
 
     /// Check if primary battery is in critical state (<20% during discharge)
@@ -519,6 +615,46 @@ impl DynatuneBridge {
                 } else if metric == "full" {
                     psi.full = rec;
                 }
+            }
+        }
+        psi
+    }
+
+    /// Read Linux Pressure Stall Information (PSI) for CPU
+    pub fn read_cpu_pressure_psi(&self) -> PsiCpuTelemetry {
+        let path = Path::new("/proc/pressure/cpu");
+        let content = match fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(_) => return PsiCpuTelemetry::default(),
+        };
+        Self::parse_psi_cpu_content(&content)
+    }
+
+    /// Pure parser for /proc/pressure/cpu content
+    pub fn parse_psi_cpu_content(content: &str) -> PsiCpuTelemetry {
+        let mut psi = PsiCpuTelemetry {
+            available: true,
+            ..Default::default()
+        };
+        for line in content.lines() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.is_empty() {
+                continue;
+            }
+            if parts[0] == "some" {
+                let mut rec = PressureRecordTelemetry::default();
+                for part in &parts[1..] {
+                    if let Some((k, v)) = part.split_once('=') {
+                        match k {
+                            "avg10" => rec.avg10 = v.parse::<f64>().unwrap_or(0.0),
+                            "avg60" => rec.avg60 = v.parse::<f64>().unwrap_or(0.0),
+                            "avg300" => rec.avg300 = v.parse::<f64>().unwrap_or(0.0),
+                            "total" => rec.total_us = v.parse::<u64>().unwrap_or(0),
+                            _ => {}
+                        }
+                    }
+                }
+                psi.some = rec;
             }
         }
         psi
@@ -740,9 +876,12 @@ impl DynatuneBridge {
         let batteries = self.read_battery_telemetry();
         let primary_battery = batteries.first().cloned();
         let is_battery_critical = primary_battery.as_ref().map(|b| b.is_critical).unwrap_or(false);
+        let battery_discharge_rate_mw = self.read_battery_discharge_rate_mw();
+        let battery_discharge_rate_pct_per_hr = self.read_battery_discharge_rate_pct_per_hr();
 
         let (memory_total_mb, memory_available_mb, memory_used_mb, memory_available_pct) = self.read_system_memory();
         let psi_memory = self.read_memory_pressure_psi();
+        let psi_cpu = self.read_cpu_pressure_psi();
         let mglru_enabled = self.read_mglru_enabled();
         let mglru_min_ttl_ms = self.read_mglru_min_ttl_ms();
 
@@ -781,11 +920,14 @@ impl DynatuneBridge {
             batteries,
             primary_battery,
             is_battery_critical,
+            battery_discharge_rate_mw,
+            battery_discharge_rate_pct_per_hr,
             memory_total_mb,
             memory_available_mb,
             memory_used_mb,
             memory_available_pct,
             psi_memory,
+            psi_cpu,
             mglru_enabled,
             mglru_min_ttl_ms,
             scaling_driver,

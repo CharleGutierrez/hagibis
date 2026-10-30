@@ -253,6 +253,22 @@
         "target_path": { "type": "string", "description": "Optional target path for WASM module or configuration file" },
         "force": { "type": "boolean", "description": "Force eviction and re-compilation of cached modules", "default": true }
       }
+    },
+    "hgb_p2p_mcp_swarm_delegate": {
+      "description": "Delegate subtasks dynamically across P2P MCP mesh peers with BLAKE3 content-addressed cached state exchange",
+      "parameters": {
+        "tool_name": { "type": "string", "description": "Target tool name to delegate (e.g. hgb_sqlite_query, hgb_wasm_wit_exec)", "required": true },
+        "arguments": { "type": "object", "description": "Tool invocation arguments", "required": true },
+        "input_state_hash": { "type": "string", "description": "Optional cryptographic BLAKE3 content hash of preceding step result" }
+      }
+    },
+    "hgb_wasm_pgo_tier_up": {
+      "description": "Trigger Cranelift profile-guided JIT compilation (OptLevel::SpeedAndSize + SIMD) and hot-swap into WasmHotPool",
+      "parameters": {
+        "module_path": { "type": "string", "description": "Path to target .wasm file", "required": true },
+        "tool_name": { "type": "string", "description": "Subroutine or tool entrypoint to invoke", "default": "run" },
+        "force_tier_up": { "type": "boolean", "description": "Force immediate Cranelift compilation without waiting for threshold", "default": false }
+      }
     }
   },
   "mcpServers": {
@@ -304,7 +320,9 @@
         "hgb_desktop_drive",
         "hgb_viral_og",
         "hgb_self_healing_ci",
-        "hgb_hot_reload_component"
+        "hgb_hot_reload_component",
+        "hgb_p2p_mcp_swarm_delegate",
+        "hgb_wasm_pgo_tier_up"
       ]
     },
     "hagibis_sse": {

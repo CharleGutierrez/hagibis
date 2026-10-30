@@ -17,6 +17,10 @@ use hgb_core::p2p_swarm_federation::{
     SwarmFederationTask, WorkerNodeAdvertisement, DEFAULT_FEDERATION_PORT,
     DEFAULT_HEARTBEAT_INTERVAL_SECS, DEFAULT_STALE_NODE_TIMEOUT_SECS,
 };
+use hgb_core::p2p_mcp_swarm::{
+    P2pMcpSwarmEngine, P2pSubtaskSpec, P2pSubtaskResult, P2pWorkflowSpec, P2pWorkflowResult,
+    P2pMcpSwarmStatusReport,
+};
 
 pub const DEFAULT_SWARM_PORT: u16 = DEFAULT_FEDERATION_PORT;
 
@@ -46,6 +50,7 @@ pub type SwarmServiceStatusSnapshot = SwarmFederationStatusReport;
 /// Resident Swarm Daemon Service
 pub struct SwarmDaemonService {
     engine: Arc<SwarmFederationEngine>,
+    mcp_swarm: Arc<P2pMcpSwarmEngine>,
     listen_port: u16,
     is_running: Arc<AtomicBool>,
     tcp_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
@@ -60,10 +65,12 @@ impl SwarmDaemonService {
             .parse::<SocketAddr>()
             .map_err(|e| HgbError::Execution(e.to_string()))?;
 
-        let engine = Arc::new(SwarmFederationEngine::new(node_id, listen_addr, ws)?);
+        let engine = Arc::new(SwarmFederationEngine::new(node_id.clone(), listen_addr, ws.clone())?);
+        let mcp_swarm = Arc::new(P2pMcpSwarmEngine::new(node_id, listen_addr, ws)?);
 
         Ok(Self {
             engine,
+            mcp_swarm,
             listen_port,
             is_running: Arc::new(AtomicBool::new(false)),
             tcp_handle: Arc::new(Mutex::new(None)),
@@ -79,6 +86,10 @@ impl SwarmDaemonService {
         &self.engine
     }
 
+    pub fn mcp_swarm(&self) -> &Arc<P2pMcpSwarmEngine> {
+        &self.mcp_swarm
+    }
+
     pub async fn start(&self) -> Result<()> {
         if self.is_running.swap(true, Ordering::SeqCst) {
             return Ok(());
@@ -87,6 +98,9 @@ impl SwarmDaemonService {
         // 1. Start TCP listener for binary framed IPC
         let tcp_join = self.engine.start_tcp_listener().await?;
         *self.tcp_handle.lock().await = Some(tcp_join);
+
+        let mcp_join = self.mcp_swarm.start_mesh_listener().await?;
+        tokio::spawn(mcp_join);
 
         // 2. Start background heartbeat and stale node pruning maintenance task
         let engine_clone = Arc::clone(&self.engine);
@@ -133,6 +147,18 @@ impl SwarmDaemonService {
         self.engine.dispatch_workflow_sharded(tasks).await
     }
 
+    pub async fn dispatch_mcp_subtask(&self, spec: P2pSubtaskSpec) -> Result<P2pSubtaskResult> {
+        self.mcp_swarm.execute_subtask(spec).await
+    }
+
+    pub async fn execute_mcp_workflow(&self, workflow: P2pWorkflowSpec) -> Result<P2pWorkflowResult> {
+        self.mcp_swarm.execute_workflow(workflow).await
+    }
+
+    pub async fn mcp_status(&self) -> P2pMcpSwarmStatusReport {
+        self.mcp_swarm.status().await
+    }
+
     pub async fn status(&self) -> SwarmFederationStatusReport {
         self.engine.status().await
     }
@@ -140,6 +166,7 @@ impl SwarmDaemonService {
     pub async fn stop(&self) {
         self.is_running.store(false, Ordering::SeqCst);
         self.engine.stop();
+        self.mcp_swarm.stop();
 
         if let Some(handle) = self.tcp_handle.lock().await.take() {
             handle.abort();

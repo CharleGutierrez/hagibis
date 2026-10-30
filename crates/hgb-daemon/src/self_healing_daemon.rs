@@ -33,6 +33,9 @@ use hgb_core::error::Result;
 use hgb_core::event_bus::DistributedEventBus;
 use hgb_core::overlayfs_sandbox::OverlaySandbox;
 
+pub use hgb_core::wasm_autonomous_self_healer;
+
+
 /// Classification of execution failure sources
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FailureSource {
@@ -1179,6 +1182,7 @@ pub struct SelfHealingDaemonLoop {
     event_bus: Option<Arc<DistributedEventBus>>,
     state_machine: Arc<AutonomousStateMachine>,
     autonomous_watchdog: Arc<crate::autonomous_watchdog::AutonomousWatchdog>,
+    wasm_self_healer: Arc<wasm_autonomous_self_healer::WasmAutonomousSelfHealer>,
     total_intercepted: AtomicU64,
     total_attempts: AtomicU64,
     successful_fixes: AtomicU64,
@@ -1197,11 +1201,16 @@ impl SelfHealingDaemonLoop {
             crate::autonomous_watchdog::AutonomousWatchdog::new(&ws)
                 .unwrap_or_else(|_| crate::autonomous_watchdog::AutonomousWatchdog::in_memory().expect("in-memory watchdog fallback"))
         );
+        let wasm_healer = Arc::new(
+            wasm_autonomous_self_healer::WasmAutonomousSelfHealer::new(&ws)
+                .unwrap_or_else(|_| wasm_autonomous_self_healer::WasmAutonomousSelfHealer::in_memory().expect("in-memory wasm healer fallback"))
+        );
         Self {
             workspace_root: ws,
             event_bus: None,
             state_machine: sm,
             autonomous_watchdog: watchdog,
+            wasm_self_healer: wasm_healer,
             total_intercepted: AtomicU64::new(0),
             total_attempts: AtomicU64::new(0),
             successful_fixes: AtomicU64::new(0),
@@ -1225,6 +1234,15 @@ impl SelfHealingDaemonLoop {
         self
     }
 
+    pub fn with_wasm_self_healer(mut self, healer: Arc<wasm_autonomous_self_healer::WasmAutonomousSelfHealer>) -> Self {
+        self.wasm_self_healer = healer;
+        self
+    }
+
+    pub fn wasm_self_healer(&self) -> Arc<wasm_autonomous_self_healer::WasmAutonomousSelfHealer> {
+        self.wasm_self_healer.clone()
+    }
+
     pub fn watchdog(&self) -> Arc<crate::autonomous_watchdog::AutonomousWatchdog> {
         self.autonomous_watchdog.clone()
     }
@@ -1232,6 +1250,38 @@ impl SelfHealingDaemonLoop {
     pub fn state_machine(&self) -> Arc<AutonomousStateMachine> {
         self.state_machine.clone()
     }
+
+    /// Trigger autonomous WebAssembly repair loop driven to First-Green commit
+    pub fn trigger_wasm_self_healing(
+        &self,
+        module_path: Option<&str>,
+        tool_name: &str,
+        error_message: &str,
+        input_payload: Option<serde_json::Value>,
+        max_retries: Option<usize>,
+    ) -> Result<wasm_autonomous_self_healer::WasmSelfHealingReport> {
+        let input = input_payload.unwrap_or_else(|| serde_json::json!({}));
+        let mut diag = wasm_autonomous_self_healer::WasmFailureDiagnostic::new(
+            tool_name,
+            error_message,
+            input,
+        );
+        if let Some(p) = module_path {
+            diag = diag.with_module_path(p);
+        }
+        if let Some(retries) = max_retries {
+            let config = wasm_autonomous_self_healer::WasmHealerConfig {
+                max_retries: retries,
+                ..Default::default()
+            };
+            let healer_inst = wasm_autonomous_self_healer::WasmAutonomousSelfHealer::new(&self.workspace_root)
+                .unwrap_or_else(|_| wasm_autonomous_self_healer::WasmAutonomousSelfHealer::in_memory().expect("in-memory healer"))
+                .with_config(config);
+            return healer_inst.repair_loop(diag, None).map_err(|e| hgb_core::error::HgbError::Execution(e.to_string()));
+        }
+        self.wasm_self_healer.repair_loop(diag, None).map_err(|e| hgb_core::error::HgbError::Execution(e.to_string()))
+    }
+
 
     pub fn synthesize_diagnostics(&self, failure: &ExecutionFailureEvent) -> DiagnosticPackage {
         let telemetry = parse_diagnostic_telemetry(&failure.stderr, &failure.stdout, None);
@@ -1307,6 +1357,48 @@ impl SelfHealingDaemonLoop {
     pub fn intercept_failure(&self, failure: ExecutionFailureEvent) -> Result<HealingAttemptReport> {
         let start = Instant::now();
         self.total_intercepted.fetch_add(1, Ordering::Relaxed);
+
+        if failure.source == FailureSource::WasmExecution {
+            self.total_attempts.fetch_add(1, Ordering::Relaxed);
+            let wasm_rep = self.trigger_wasm_self_healing(
+                failure.affected_file.as_deref(),
+                &failure.command_or_module,
+                &failure.stderr,
+                None,
+                None,
+            )?;
+            if wasm_rep.first_green_achieved {
+                self.successful_fixes.fetch_add(1, Ordering::Relaxed);
+            }
+            if wasm_rep.dpo_pair_recorded {
+                self.dpo_records.fetch_add(1, Ordering::Relaxed);
+            }
+            let report = HealingAttemptReport {
+                attempt_id: format!("heal_wasm_{}", &wasm_rep.cycle_id[..wasm_rep.cycle_id.len().min(12)]),
+                failure_source: "WasmExecution".to_string(),
+                error_excerpt: wasm_rep.initial_diagnostic.error_message.clone(),
+                patch_generated: wasm_rep.first_green_achieved,
+                patch_diff: wasm_rep.new_blake3_hash.clone().unwrap_or_default(),
+                sandbox_verification_passed: wasm_rep.first_green_achieved,
+                applied_to_disk: wasm_rep.persisted_path.is_some(),
+                duration_ms: wasm_rep.total_duration_ms,
+                dpo_pair_recorded: wasm_rep.dpo_pair_recorded,
+                cycle_id: Some(wasm_rep.cycle_id.clone()),
+                state: Some(if wasm_rep.first_green_achieved { "Complete".to_string() } else { "Failed".to_string() }),
+                target_crate: failure.target_crate,
+                hot_reloaded: wasm_rep.persisted_path.is_some(),
+                iterations_run: wasm_rep.total_iterations,
+            };
+
+            if let Ok(mut lock) = self.recent_history.write() {
+                lock.push(report.clone());
+                if lock.len() > 20 {
+                    lock.remove(0);
+                }
+            }
+
+            return Ok(report);
+        }
 
         let diag = self.synthesize_diagnostics(&failure);
 
@@ -1777,4 +1869,48 @@ stack backtrace:
 
         let _ = fs::remove_dir_all(&temp_dir);
     }
+
+    #[test]
+    fn test_self_healing_daemon_wasm_autonomous_repair() {
+        let temp_dir = std::env::temp_dir().join(format!("hgb_daemon_wasm_test_{}", uuid::Uuid::new_v4().simple()));
+        let _ = fs::create_dir_all(&temp_dir);
+
+        let daemon = SelfHealingDaemonLoop::new(&temp_dir);
+
+        // 1. Trigger autonomous WASM repair
+        let rep = daemon
+            .trigger_wasm_self_healing(
+                Some("plugins/failing_calc.wasm"),
+                "failing_calc",
+                "WASM runtime trapped: unreachable opcode reached",
+                Some(serde_json::json!({ "operand": 10 })),
+                Some(3),
+            )
+            .expect("trigger wasm self healing");
+
+        assert_eq!(rep.tool_name, "failing_calc");
+        assert!(rep.first_green_achieved);
+        assert!(rep.persisted_path.is_some());
+        assert!(rep.dpo_pair_recorded);
+
+        // 2. Intercept WASM execution failure event
+        let failure_event = ExecutionFailureEvent {
+            source: FailureSource::WasmExecution,
+            command_or_module: "analytics_worker".to_string(),
+            exit_code: 1,
+            stderr: "WASM runtime trapped: CPU fuel exhaustion".to_string(),
+            stdout: String::new(),
+            affected_file: Some(temp_dir.join("analytics_worker.wasm").to_string_lossy().to_string()),
+            target_crate: None,
+        };
+
+        let attempt = daemon.intercept_failure(failure_event).expect("intercept wasm failure");
+        assert_eq!(attempt.failure_source, "WasmExecution");
+        assert!(attempt.patch_generated);
+        assert!(attempt.sandbox_verification_passed);
+        assert!(attempt.applied_to_disk);
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
 }
+

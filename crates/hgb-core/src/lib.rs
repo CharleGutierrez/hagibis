@@ -1011,7 +1011,8 @@ pub use crdt_edge_sync::{
 // Superpower 4: Hardware-Aware Dynamic CPU Governor Integration
 pub mod dynamic_governor;
 pub use dynamic_governor::{
-    CpuBaselineState, DynamicGovernor, GovernorGuard, GovernorTelemetry, WorkloadKind,
+    CpuBaselineState, DynamicGovernor, GovernorGuard, GovernorTelemetry,
+    WorkloadKind as DynamicGovernorWorkloadKind,
     THERMAL_RELAX_THRESHOLD_C, THERMAL_THROTTLE_THRESHOLD_C,
 };
 
@@ -1117,7 +1118,7 @@ pub use autonomous_state_machine::{
 pub mod dynatune_bridge;
 pub use dynatune_bridge::{
     BatteryTelemetry, CompleteHardwareTelemetry, DynatuneBridge, HostPowerState,
-    PressureRecordTelemetry, PsiMemoryTelemetry, ScalingGuard, ScalingMode,
+    PressureRecordTelemetry, PsiCpuTelemetry, PsiMemoryTelemetry, ScalingGuard, ScalingMode,
     ScalingShiftReport, ThermalZoneTelemetry, WorkloadCategory,
     BATTERY_CRITICAL_THRESHOLD_PCT, BURST_MGLRU_MIN_TTL_MS,
     THERMAL_CRITICAL_TEMP_C, THERMAL_SAFE_HEADROOM_C,
@@ -1193,6 +1194,37 @@ pub mod autonomous_watchdog;
 pub use autonomous_watchdog::{
     AgentContextSnapshot, AgentGenerationParams, FailurePattern, RecoveryStory, WatchdogStatusReport,
 };
+
+// Superpower 1: Autonomous Self-Healing Loop via the WASM Kernel
+pub mod wasm_autonomous_self_healer;
+pub use wasm_autonomous_self_healer::{
+    ToolInvocationResponse, WasmAutonomousSelfHealer, WasmFailureDiagnostic, WasmHealerConfig,
+    WasmRepairIteration, WasmSelfHealingReport, WasmTrapKind,
+};
+
+// Superpower 2: Dynamic Hardware-Aware Routing with Dynatune Integration
+pub mod hardware_aware_workload_router;
+pub use hardware_aware_workload_router::{
+    decide_profile, ExecutionProfile, HardwareAwareWorkloadRouter, WorkloadAdaptiveGuard,
+    WorkloadExecutionDecision, WorkloadExecutionProfile, WorkloadKind,
+};
+
+// Superpower 3: Distributed P2P Agent Swarms via Model Context Protocol (MCP)
+pub mod p2p_mcp_swarm;
+pub use p2p_mcp_swarm::{
+    P2pContentCache, P2pMcpNodeAdvertisement, P2pMcpPacket,
+    P2pMcpSwarmEngine, P2pMcpSwarmStatusReport, P2pMcpToolAdvertisement, P2pSubtaskResult,
+    P2pSubtaskSpec, P2pWorkflowResult, P2pWorkflowSpec, SubtaskDelegationTarget,
+    SubtaskNegotiationPlan, DEFAULT_P2P_MCP_PORT,
+};
+
+// Superpower 4: Profile-Guided WebAssembly JIT Caching
+pub mod wasm_pgo_jit;
+pub use wasm_pgo_jit::{
+    WasmPgoJitEngine, WasmPgoProfile, DEFAULT_PGO_CALL_THRESHOLD, DEFAULT_PGO_DURATION_THRESHOLD_US,
+};
+
+
 
 
 

@@ -278,11 +278,17 @@ impl DaemonState {
                 .unwrap_or_else(|_| crate::autonomous_watchdog::AutonomousWatchdog::in_memory().expect("in-memory watchdog fallback"))
                 .with_event_bus(event_bus.clone()),
         );
+        let wasm_healer = Arc::new(
+            hgb_core::wasm_autonomous_self_healer::WasmAutonomousSelfHealer::new(&ws_dir)
+                .unwrap_or_else(|_| hgb_core::wasm_autonomous_self_healer::WasmAutonomousSelfHealer::in_memory().expect("in-memory wasm healer fallback"))
+                .with_hot_pool(wasm_hot_pool.clone())
+        );
         let self_healing_daemon = Arc::new(
             crate::self_healing_daemon::SelfHealingDaemonLoop::new(&ws_dir)
                 .with_state_machine(state_machine.clone())
                 .with_event_bus(event_bus.clone())
-                .with_watchdog(autonomous_watchdog.clone()),
+                .with_watchdog(autonomous_watchdog.clone())
+                .with_wasm_self_healer(wasm_healer),
         );
         let swarm_port = std::env::var("HGB_SWARM_PORT")
             .ok()
@@ -886,6 +892,7 @@ impl HagibisDaemon {
                 }
             }
             HgbRequest::Prompt { prompt, model, .. } => {
+                let _adaptive_guard = state.governor_watchdog.acquire_workload_guard(hgb_core::hardware_aware_workload_router::WorkloadKind::HeavyInference).ok();
                 let _hw_guard = state.hw_optimizer.optimize_for_workload(hgb_core::dynamic_governor::WorkloadKind::LocalLlmInference).ok();
                 use hgb_core::HgbProvider;
                 let start = std::time::Instant::now();
@@ -3747,7 +3754,42 @@ impl HagibisDaemon {
                         }));
                         HgbResponse::WasmPoolExecResult(rep)
                     }
-                    Err(e) => HgbResponse::Error(format!("WASM pool execution error: {}", e)),
+                    Err(e) => {
+                        let err_str = e.to_string();
+                        let tool_name = Path::new(&wasm_path)
+                            .file_stem()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("wasm_tool");
+                        // Autonomous Self-Healing on WASM execution trap/error
+                        match state.self_healing_daemon.trigger_wasm_self_healing(
+                            Some(&wasm_path),
+                            tool_name,
+                            &err_str,
+                            Some(input.clone()),
+                            None,
+                        ) {
+                            Ok(rep) if rep.first_green_achieved => {
+                                if let Ok(retry_rep) = state.wasm_hot_pool.execute(&wasm_path, &input) {
+                                    HgbResponse::WasmPoolExecResult(retry_rep)
+                                } else {
+                                    HgbResponse::WasmPoolExecResult(hgb_core::WasmHotExecReport {
+                                        plugin_name: tool_name.to_string(),
+                                        wasm_path: wasm_path.clone(),
+                                        blake3_hash: rep.new_blake3_hash.unwrap_or_default(),
+                                        cache_hit: false,
+                                        compile_duration_us: 0,
+                                        checkout_duration_us: 0,
+                                        execution_duration_us: 0,
+                                        total_latency_us: rep.total_duration_ms * 1000,
+                                        fuel_consumed: 0,
+                                        output: rep.execution_result.unwrap_or(serde_json::json!({ "status": "healed" })),
+                                        status: "success".to_string(),
+                                    })
+                                }
+                            }
+                            _ => HgbResponse::Error(format!("WASM pool execution error: {}", err_str)),
+                        }
+                    }
                 }
             }
             HgbRequest::WasmPoolPrewarm { wasm_paths } => {
@@ -3856,6 +3898,7 @@ impl HagibisDaemon {
 
             // Elite Superpower 2: Autonomous Self-Healing Compilation Loops
             HgbRequest::SelfHealingCompile { target_file, code, command, max_retries } => {
+                let _adaptive_guard = state.governor_watchdog.acquire_workload_guard(hgb_core::hardware_aware_workload_router::WorkloadKind::HeavyCompilation).ok();
                 let ws_dir = ws_ctx.to_path_buf();
                 let retries = max_retries.unwrap_or(3);
                 match hgb_core::CompilerInterceptor::heal_and_verify(
@@ -3969,6 +4012,24 @@ impl HagibisDaemon {
 
             // Pillar 3: Self-Healing Autonomous Daemon Loops
             HgbRequest::DaemonSelfHealTrigger { command, target_file } => {
+                if let Some(ref tf) = target_file {
+                    if tf.ends_with(".wasm") {
+                        let tool_name = Path::new(tf)
+                            .file_stem()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("wasm_tool");
+                        match state.self_healing_daemon.trigger_wasm_self_healing(
+                            Some(tf.as_str()),
+                            tool_name,
+                            command.as_deref().unwrap_or("Autonomous WASM self-heal requested"),
+                            None,
+                            None,
+                        ) {
+                            Ok(rep) => return HgbResponse::DaemonSelfHealResult(serde_json::to_string_pretty(&rep).unwrap_or_default()),
+                            Err(e) => return HgbResponse::Error(format!("WASM self-healing trigger failed: {}", e)),
+                        }
+                    }
+                }
                 match state.self_healing_daemon.trigger_heal(command.as_deref(), target_file.as_deref()) {
                     Ok(rep) => HgbResponse::DaemonSelfHealResult(serde_json::to_string_pretty(&rep).unwrap_or_default()),
                     Err(e) => HgbResponse::Error(format!("Daemon self-healing trigger failed: {}", e)),
@@ -4116,6 +4177,7 @@ impl HagibisDaemon {
 
             // Powerhouse Pillar 2: Ollama Speculative Orchestrator
             HgbRequest::OllamaSpeculativeExec { prompt, draft_model, target_model } => {
+                let _adaptive_guard = state.governor_watchdog.acquire_workload_guard(hgb_core::hardware_aware_workload_router::WorkloadKind::HeavyInference).ok();
                 let _hw_guard = state.hw_optimizer.optimize_for_workload(hgb_core::dynamic_governor::WorkloadKind::LocalLlmInference).ok();
                 match state.ollama_orchestrator.speculative_generate(&prompt, draft_model.as_deref(), target_model.as_deref()).await {
                     Ok(telem) => HgbResponse::OllamaSpeculativeResult(telem),
@@ -4133,6 +4195,7 @@ impl HagibisDaemon {
                 HgbResponse::WasmSkillListResult(market.list_skills())
             }
             HgbRequest::WasmSkillHotLoad { name, wasm_path } => {
+                let _adaptive_guard = state.governor_watchdog.acquire_workload_guard(hgb_core::hardware_aware_workload_router::WorkloadKind::WasmSandboxed).ok();
                 let _hw_guard = state.hw_optimizer.optimize_for_workload(hgb_core::dynamic_governor::WorkloadKind::WasmExecution).ok();
                 match std::fs::read(&wasm_path) {
                     Ok(bytes) => {
@@ -4146,6 +4209,7 @@ impl HagibisDaemon {
                 }
             }
             HgbRequest::WasmSkillExec { name, payload } => {
+                let _adaptive_guard = state.governor_watchdog.acquire_workload_guard(hgb_core::hardware_aware_workload_router::WorkloadKind::WasmSandboxed).ok();
                 let _hw_guard = state.hw_optimizer.optimize_for_workload(hgb_core::dynamic_governor::WorkloadKind::WasmExecution).ok();
                 let market = state.wasm_marketplace.read().await;
                 match market.execute_skill(&name, &payload) {
@@ -4156,6 +4220,7 @@ impl HagibisDaemon {
 
             // Powerhouse Pillar 4: Ephemeral Code Execution Sandboxes
             HgbRequest::MicrovmEphemeralExec { code, language, patch_content } => {
+                let _adaptive_guard = state.governor_watchdog.acquire_workload_guard(hgb_core::hardware_aware_workload_router::WorkloadKind::HeavyCompilation).ok();
                 let _hw_guard = state.hw_optimizer.optimize_for_workload(hgb_core::dynamic_governor::WorkloadKind::TestExecution).ok();
                 let spec = hgb_core::microvm_sandbox_executor::EphemeralExecSpec {
                     code,
@@ -5058,4 +5123,30 @@ mod tests {
         assert!(matches!(r2.unwrap(), HgbResponse::Complete { .. }));
         let _ = std::fs::remove_dir_all(&tmp);
     }
+
+    #[tokio::test]
+    async fn test_daemon_wasm_self_healing_trigger() {
+        let tmp = std::env::temp_dir().join(format!("hgb_server_wasm_heal_{}", uuid::Uuid::new_v4().simple()));
+        let _ = std::fs::create_dir_all(&tmp);
+        let socket_path = tmp.join("test.sock");
+        let state = Arc::new(DaemonState::new(socket_path));
+        let ws = WorkspaceIdentity::from_path(&tmp);
+
+        let req = HgbRequest::DaemonSelfHealTrigger {
+            command: Some("wasm trap repair".to_string()),
+            target_file: Some("tool_module.wasm".to_string()),
+        }.with_envelope(uuid::Uuid::new_v4().to_string(), Some(ws));
+
+        let resp = HagibisDaemon::handle_request(&state, req).await;
+        match resp {
+            HgbResponse::DaemonSelfHealResult(json_str) => {
+                assert!(json_str.contains("tool_module"));
+                assert!(json_str.contains("first_green_achieved"));
+            }
+            other => panic!("Expected DaemonSelfHealResult, got: {:?}", other),
+        }
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 }
+

@@ -22,6 +22,7 @@ use wasmtime::*;
 
 use crate::error::{HgbError, Result};
 use crate::wasm_plugin_kernel::{WasmPluginHostState, WasmPluginManifest};
+use crate::wasm_pgo_jit::WasmPgoJitEngine;
 
 /// Default fuel allocated for sandboxed execution (10 million instructions)
 pub const DEFAULT_WASM_FUEL: u64 = 10_000_000;
@@ -86,6 +87,8 @@ struct CachedModule {
     compile_duration_us: u64,
     size_bytes: usize,
     hit_count: AtomicU64,
+    is_tiered_up: bool,
+    engine: Option<Engine>,
 }
 
 /// Structured diagnostic item parsed from compiler logs
@@ -192,6 +195,7 @@ pub struct WasmHotPool {
     total_execution_time_us: AtomicU64,
     cache_hits: AtomicU64,
     cache_misses: AtomicU64,
+    pgo_engine: Arc<RwLock<Option<Arc<WasmPgoJitEngine>>>>,
 }
 
 impl Default for WasmHotPool {
@@ -227,6 +231,7 @@ impl WasmHotPool {
             total_execution_time_us: AtomicU64::new(0),
             cache_hits: AtomicU64::new(0),
             cache_misses: AtomicU64::new(0),
+            pgo_engine: Arc::new(RwLock::new(None)),
         })
     }
 
@@ -349,6 +354,8 @@ impl WasmHotPool {
                     compile_duration_us: compile_dur,
                     size_bytes: bytes.len(),
                     hit_count: AtomicU64::new(0),
+                    is_tiered_up: false,
+                    engine: None,
                 }),
             );
 
@@ -404,6 +411,8 @@ impl WasmHotPool {
                     compile_duration_us: compile_dur,
                     size_bytes: bytes.len(),
                     hit_count: AtomicU64::new(1),
+                    is_tiered_up: false,
+                    engine: None,
                 });
 
                 let mut write_cache = self.module_cache.write().unwrap();
@@ -415,12 +424,16 @@ impl WasmHotPool {
 
         // 2. Checkout or allocate hot worker slot
         let checkout_start = Instant::now();
-        let mut slot = {
+        let (mut slot, is_custom_engine) = if let Some(ref mod_engine) = cached_mod.engine {
+            let slot = Self::create_hot_slot(mod_engine, 8888)?;
+            (slot, true)
+        } else {
             let mut slots = self.available_slots.lock().unwrap();
-            slots.pop().unwrap_or_else(|| {
+            let slot = slots.pop().unwrap_or_else(|| {
                 // Ephemeral fallback if pool is momentarily exhausted
                 Self::create_hot_slot(&self.engine, 9999).unwrap()
-            })
+            });
+            (slot, false)
         };
         let checkout_duration_us = checkout_start.elapsed().as_micros() as u64;
 
@@ -458,7 +471,9 @@ impl WasmHotPool {
         let execution_duration_us = exec_start.elapsed().as_micros() as u64;
 
         // 4. Return worker slot to pool for recycling
-        self.recycle_slot(slot);
+        if !is_custom_engine {
+            self.recycle_slot(slot);
+        }
 
         let total_latency_us = total_start.elapsed().as_micros() as u64;
         self.total_executions.fetch_add(1, Ordering::Relaxed);
@@ -526,6 +541,81 @@ impl WasmHotPool {
             cache_misses: misses,
             hit_ratio_pct,
         }
+    }
+
+    /// Bind a Profile-Guided JIT Engine to this hot pool
+    pub fn set_pgo_engine(&self, pgo: Arc<WasmPgoJitEngine>) {
+        let mut engine_lock = self.pgo_engine.write().unwrap();
+        *engine_lock = Some(pgo);
+    }
+
+    pub fn pgo_engine(&self) -> Option<Arc<WasmPgoJitEngine>> {
+        let engine_lock = self.pgo_engine.read().unwrap();
+        engine_lock.clone()
+    }
+
+    /// Atomically hot-swap a compiled Module into the in-memory module cache
+    pub fn hot_swap_module(&self, path: &Path, module: Module, blake3_hash: &str, compile_duration_us: u64) {
+        let mut cache = self.module_cache.write().unwrap();
+        let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("wasm_tool").to_string();
+        let manifest = WasmPluginManifest {
+            name,
+            version: "0.3.0-pgo-jit".to_string(),
+            description: format!("Profile-Guided JIT Cranelift compiled module from {}", path.display()),
+            author: Some("Hagibis PGO JIT Engine".to_string()),
+            input_schema: serde_json::json!({ "type": "object" }),
+        };
+
+        let engine = module.engine().clone();
+        let entry = Arc::new(CachedModule {
+            blake3_hash: blake3_hash.to_string(),
+            module,
+            manifest,
+            compile_duration_us,
+            size_bytes: 0,
+            hit_count: AtomicU64::new(0),
+            is_tiered_up: true,
+            engine: Some(engine),
+        });
+        cache.insert(path.to_path_buf(), entry);
+    }
+
+    /// Execute a WASM tool with Profile-Guided Optimization telemetry and Cranelift tier-up JIT compilation
+    pub fn execute_with_pgo(
+        &self,
+        module_path: &Path,
+        tool_name: &str,
+        args: serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let start = Instant::now();
+        let rep = self.execute(module_path, &args)?;
+        let duration_us = start.elapsed().as_micros() as u64;
+
+        let mut tiered_up_triggered = false;
+        if let Some(pgo) = self.pgo_engine() {
+            let module_name = module_path.file_stem().and_then(|s| s.to_str()).unwrap_or("wasm_module");
+            let profile = pgo.record_invocation(module_name, tool_name, duration_us)?;
+            if pgo.is_tier_up_eligible(&profile) {
+                if let Ok(wasm_bytes) = fs::read(module_path) {
+                    let hash = blake3::hash(&wasm_bytes).to_hex().to_string();
+                    if let Ok((native_bytes, _tiered_engine, tiered_mod)) = pgo.compile_tier_up(&wasm_bytes) {
+                        let _ = pgo.cache_native_artifact(&hash, &native_bytes);
+                        let _ = pgo.mark_tiered_up(module_name, tool_name);
+                        self.hot_swap_module(module_path, tiered_mod, &hash, duration_us);
+                        tiered_up_triggered = true;
+                    }
+                }
+            }
+        }
+
+        Ok(serde_json::json!({
+            "status": "success",
+            "tool_name": tool_name,
+            "duration_us": duration_us,
+            "tiered_up": tiered_up_triggered,
+            "output": rep.output,
+            "cache_hit": rep.cache_hit
+        }))
     }
 
     /// Helper to discover available compiled WebAssembly microkernel candidates
@@ -989,6 +1079,8 @@ impl WasmHotPool {
             compile_duration_us: 0,
             size_bytes: bytes.len(),
             hit_count: AtomicU64::new(1),
+            is_tiered_up: false,
+            engine: None,
         });
         let mut write_cache = self.module_cache.write().unwrap();
         write_cache.insert(path.to_path_buf(), Arc::clone(&new_mod));

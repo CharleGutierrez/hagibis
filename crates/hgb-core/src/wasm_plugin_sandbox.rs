@@ -370,8 +370,12 @@ impl SandboxedWasmPlugin {
                         || trap.downcast_ref::<Trap>() == Some(&Trap::OutOfFuel)
                         || err_msg.contains("fuel")
                         || trap.root_cause().to_string().contains("fuel");
+                    let is_unreachable = trap.downcast_ref::<Trap>() == Some(&Trap::UnreachableCodeReached)
+                        || err_msg.contains("unreachable");
                     let trap_reason = if is_fuel {
                         "fuel_exhausted".to_string()
+                    } else if is_unreachable {
+                        "unreachable".to_string()
                     } else {
                         err_msg
                     };

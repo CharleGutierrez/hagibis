@@ -15,6 +15,10 @@ use hgb_core::dynatune_bridge::{
     CompleteHardwareTelemetry, DynatuneBridge, HostPowerState, ScalingGuard,
     ScalingShiftReport, WorkloadCategory,
 };
+use hgb_core::hardware_aware_workload_router::{
+    HardwareAwareWorkloadRouter, WorkloadAdaptiveGuard, WorkloadExecutionDecision,
+    WorkloadExecutionProfile, WorkloadKind as HardwareWorkloadKind,
+};
 use hgb_core::Result;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,6 +30,10 @@ pub struct GovernorWatchdogStatus {
     pub host_power_state: Option<HostPowerState>,
     pub complete_telemetry: Option<CompleteHardwareTelemetry>,
     pub last_scaling_shift: Option<ScalingShiftReport>,
+    #[serde(default)]
+    pub last_workload_decision: Option<WorkloadExecutionDecision>,
+    #[serde(default)]
+    pub execution_profile: Option<WorkloadExecutionProfile>,
     pub thermal_protection_engaged: bool,
     pub battery_protection_engaged: bool,
     pub recommended_concurrency_limit: usize,
@@ -34,9 +42,12 @@ pub struct GovernorWatchdogStatus {
 pub struct GovernorWatchdog {
     governor: Arc<DynamicGovernor>,
     dynatune_bridge: Arc<DynatuneBridge>,
+    workload_router: Arc<HardwareAwareWorkloadRouter>,
     active_guard: Arc<Mutex<Option<GovernorGuard>>>,
     active_scaling_guard: Arc<Mutex<Option<ScalingGuard>>>,
+    active_adaptive_guard: Arc<Mutex<Option<WorkloadAdaptiveGuard>>>,
     last_shift: Arc<Mutex<Option<ScalingShiftReport>>>,
+    last_decision: Arc<Mutex<Option<WorkloadExecutionDecision>>>,
     #[allow(dead_code)]
     is_running: Arc<AtomicBool>,
 }
@@ -49,12 +60,18 @@ impl Default for GovernorWatchdog {
 
 impl GovernorWatchdog {
     pub fn new() -> Self {
+        let bridge = Arc::new(DynatuneBridge::new());
+        let router = Arc::new(HardwareAwareWorkloadRouter::with_bridge(Arc::clone(&bridge)));
+
         Self {
             governor: Arc::new(DynamicGovernor::new()),
-            dynatune_bridge: Arc::new(DynatuneBridge::new()),
+            dynatune_bridge: bridge,
+            workload_router: router,
             active_guard: Arc::new(Mutex::new(None)),
             active_scaling_guard: Arc::new(Mutex::new(None)),
+            active_adaptive_guard: Arc::new(Mutex::new(None)),
             last_shift: Arc::new(Mutex::new(None)),
+            last_decision: Arc::new(Mutex::new(None)),
             is_running: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -64,6 +81,38 @@ impl GovernorWatchdog {
         &self.dynatune_bridge
     }
 
+    /// Access Hardware-Aware Workload Router
+    pub fn router(&self) -> &Arc<HardwareAwareWorkloadRouter> {
+        &self.workload_router
+    }
+
+    /// Evaluate a workload and compute an execution decision
+    pub fn evaluate_workload(&self, workload: HardwareWorkloadKind) -> WorkloadExecutionDecision {
+        self.workload_router.evaluate_workload(workload)
+    }
+
+    /// Acquire RAII WorkloadAdaptiveGuard directly for heavy operations
+    pub fn acquire_workload_guard(&self, workload: HardwareWorkloadKind) -> Result<WorkloadAdaptiveGuard> {
+        self.workload_router.acquire_guard(workload)
+    }
+
+    /// Execute an async workload wrapped with WorkloadAdaptiveGuard
+    pub async fn execute_with_adaptive_guard<F, Fut, R>(&self, workload: HardwareWorkloadKind, task: F) -> Result<R>
+    where
+        F: FnOnce(WorkloadExecutionDecision) -> Fut,
+        Fut: std::future::Future<Output = Result<R>>,
+    {
+        self.workload_router.execute_async_with_guard(workload, task).await
+    }
+
+    /// Execute a sync workload wrapped with WorkloadAdaptiveGuard
+    pub fn execute_sync_with_adaptive_guard<F, R>(&self, workload: HardwareWorkloadKind, task: F) -> Result<R>
+    where
+        F: FnOnce(&WorkloadExecutionDecision) -> Result<R>,
+    {
+        self.workload_router.execute_with_guard(workload, task)
+    }
+
     /// Read complete, unified hardware telemetry snapshot
     pub fn complete_telemetry(&self) -> CompleteHardwareTelemetry {
         self.dynatune_bridge.read_complete_hardware_telemetry()
@@ -71,12 +120,13 @@ impl GovernorWatchdog {
 
     /// Boost CPU governor for heavy workload
     pub async fn boost(&self, workload_str: &str) -> Result<GovernorWatchdogStatus> {
-        let (workload, category) = match workload_str.to_lowercase().as_str() {
-            "compile" | "heavycompile" | "build" => (WorkloadKind::HeavyCompile, WorkloadCategory::BuildCompile),
-            "test" | "testexecution" => (WorkloadKind::TestExecution, WorkloadCategory::TestExecution),
-            "llm" | "inference" | "localllminference" => (WorkloadKind::LocalLlmInference, WorkloadCategory::LlmGeneration),
-            "wasm" | "wasmexecution" => (WorkloadKind::WasmExecution, WorkloadCategory::WasmExecution),
-            _ => (WorkloadKind::HeavyCompile, WorkloadCategory::BuildCompile),
+        let (workload, category, hw_kind) = match workload_str.to_lowercase().as_str() {
+            "compile" | "heavycompile" | "build" => (WorkloadKind::HeavyCompile, WorkloadCategory::BuildCompile, HardwareWorkloadKind::HeavyCompilation),
+            "test" | "testexecution" => (WorkloadKind::TestExecution, WorkloadCategory::TestExecution, HardwareWorkloadKind::HeavyCompilation),
+            "llm" | "inference" | "localllminference" => (WorkloadKind::LocalLlmInference, WorkloadCategory::LlmGeneration, HardwareWorkloadKind::HeavyInference),
+            "wasm" | "wasmexecution" => (WorkloadKind::WasmExecution, WorkloadCategory::WasmExecution, HardwareWorkloadKind::WasmSandboxed),
+            "vector" | "vectorbatch" => (WorkloadKind::HeavyCompile, WorkloadCategory::BuildCompile, HardwareWorkloadKind::VectorBatch),
+            _ => (WorkloadKind::HeavyCompile, WorkloadCategory::BuildCompile, HardwareWorkloadKind::HeavyCompilation),
         };
 
         // 1. Dynamic governor boost
@@ -95,6 +145,14 @@ impl GovernorWatchdog {
             *active_s = Some(scaling_guard);
         }
 
+        // 3. WorkloadAdaptiveGuard acquisition for router profile
+        if let Ok(adaptive_guard) = self.workload_router.acquire_guard(hw_kind) {
+            let mut dec_lock = self.last_decision.lock().await;
+            *dec_lock = Some(adaptive_guard.decision().clone());
+            let mut active_a = self.active_adaptive_guard.lock().await;
+            *active_a = Some(adaptive_guard);
+        }
+
         Ok(self.status().await)
     }
 
@@ -109,6 +167,12 @@ impl GovernorWatchdog {
         {
             let mut active_s = self.active_scaling_guard.lock().await;
             if let Some(guard) = active_s.take() {
+                drop(guard);
+            }
+        }
+        {
+            let mut active_a = self.active_adaptive_guard.lock().await;
+            if let Some(guard) = active_a.take() {
                 drop(guard);
             }
         }
@@ -170,9 +234,11 @@ impl GovernorWatchdog {
         if complete.is_throttled {
             let mut active = self.active_guard.lock().await;
             let mut active_s = self.active_scaling_guard.lock().await;
-            if active.is_some() || active_s.is_some() {
+            let mut active_a = self.active_adaptive_guard.lock().await;
+            if active.is_some() || active_s.is_some() || active_a.is_some() {
                 active.take();
                 active_s.take();
+                active_a.take();
                 let _ = self.governor.set_scaling_governor("powersave");
                 let _ = self.governor.set_epp("balance_power");
                 if let Ok(shift) = self.dynatune_bridge.shift_to_powersave_mode() {
@@ -188,7 +254,9 @@ impl GovernorWatchdog {
     /// Query watchdog status and complete hardware telemetry
     pub async fn status(&self) -> GovernorWatchdogStatus {
         let active = self.active_guard.lock().await;
-        let is_boosted = active.is_some();
+        let active_s = self.active_scaling_guard.lock().await;
+        let active_a = self.active_adaptive_guard.lock().await;
+        let is_boosted = active.is_some() || active_s.is_some() || active_a.is_some();
         let current_workload = active.as_ref().map(|g| g.workload.to_string());
         let tel = self.governor.telemetry();
         let complete_tel = self.dynatune_bridge.read_complete_hardware_telemetry();
@@ -197,6 +265,8 @@ impl GovernorWatchdog {
         let recommended_concurrency_limit = complete_tel.recommended_concurrency_limit;
         let host_power = Some(self.dynatune_bridge.read_power_state());
         let last_shift = self.last_shift.lock().await.clone();
+        let last_decision = self.last_decision.lock().await.clone();
+        let execution_profile = last_decision.as_ref().map(|d| d.profile);
 
         GovernorWatchdogStatus {
             is_active: true,
@@ -206,6 +276,8 @@ impl GovernorWatchdog {
             host_power_state: host_power,
             complete_telemetry: Some(complete_tel),
             last_scaling_shift: last_shift,
+            last_workload_decision: last_decision,
+            execution_profile,
             thermal_protection_engaged,
             battery_protection_engaged,
             recommended_concurrency_limit,
@@ -265,5 +337,21 @@ mod tests {
         assert!(telem.cpu_pkg_temp_c > 0.0);
         assert!(telem.memory_total_mb > 0);
         assert!(telem.recommended_concurrency_limit >= 1);
+    }
+
+    #[tokio::test]
+    async fn test_watchdog_adaptive_workload_guard() {
+        let watchdog = GovernorWatchdog::new();
+        let decision = watchdog.evaluate_workload(HardwareWorkloadKind::HeavyCompilation);
+        assert!(decision.recommended_concurrency >= 1);
+
+        let async_res = watchdog
+            .execute_with_adaptive_guard(HardwareWorkloadKind::HeavyInference, |dec| async move {
+                assert!(!dec.target_governor.is_empty());
+                Ok("inference_adaptive_ok".to_string())
+            })
+            .await
+            .expect("execute with adaptive guard");
+        assert_eq!(async_res, "inference_adaptive_ok");
     }
 }
