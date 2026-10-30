@@ -32,6 +32,8 @@ ratatui = { workspace = true }
 chrono = { workspace = true }
 uuid = { version = "1.27.0", features = ["v4"] }
 base64 = { workspace = true }
+notify = "6.1"
+regex = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3.10"

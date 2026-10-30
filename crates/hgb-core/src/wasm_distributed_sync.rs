@@ -37,6 +37,17 @@ pub enum WasmSyncStatus {
     Halted,
 }
 
+impl WasmSyncStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Synchronized => "Synchronized",
+            Self::Diverging => "Diverging",
+            Self::Migrating => "Migrating",
+            Self::Halted => "Halted",
+        }
+    }
+}
+
 /// A tracked memory page in WebAssembly linear memory
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WasmMemoryPage {

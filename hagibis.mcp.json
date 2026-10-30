@@ -1,5 +1,26 @@
 {
   "tools": {
+    "hgb_ollama_pipeline_accelerate": {
+      "description": "Direct local Ollama pipeline acceleration: zero-latency embedding generation and speculative drafting with dynabook hardware optimizations",
+      "parameters": {
+        "action": { "type": "string", "enum": ["generate", "embed", "status"], "default": "generate" },
+        "prompt": { "type": "string", "description": "Prompt or source text to accelerate" },
+        "draft_model": { "type": "string", "description": "Fast draft model (default: qwen2.5-coder:1.5b)" },
+        "target_model": { "type": "string", "description": "Heavy target model (default: phi3:3.8b)" },
+        "max_tokens": { "type": "integer", "description": "Maximum tokens to generate", "default": 256 }
+      }
+    },
+    "hgb_ollama_mutation_vector_sync": {
+      "description": "Incremental file mutation vector pipeline: chunks files, invalidates via BLAKE3 hashes, and syncs/queries SQLite vector database (.hgb/ollama_mutation_vectors.db)",
+      "parameters": {
+        "action": { "type": "string", "enum": ["sync", "search", "stats"], "default": "sync" },
+        "file_path": { "type": "string", "description": "Target workspace file path to synchronize" },
+        "content": { "type": "string", "description": "Optional inline file content" },
+        "query": { "type": "string", "description": "Query string when searching mutation vectors" },
+        "top_k": { "type": "integer", "description": "Number of nearest chunks to retrieve", "default": 5 },
+        "db_path": { "type": "string", "description": "Optional path to SQLite vector database" }
+      }
+    },
     "hgb_self_healing_compile": {
       "description": "Autonomous First-Green compilation loop: executes build/checks in RAM CoW overlay sandbox, intercepts diagnostics, and heals AST syntax errors before disk commit",
       "parameters": {

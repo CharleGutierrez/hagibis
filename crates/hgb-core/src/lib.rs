@@ -1224,6 +1224,18 @@ pub use wasm_pgo_jit::{
     WasmPgoJitEngine, WasmPgoProfile, DEFAULT_PGO_CALL_THRESHOLD, DEFAULT_PGO_DURATION_THRESHOLD_US,
 };
 
+// Superpower 1: Direct Local Ollama Pipeline Acceleration
+pub mod ollama_pipeline_accelerator;
+pub use ollama_pipeline_accelerator::{
+    blob_to_embedding, chunk_source_code, deterministic_semantic_embedding,
+    embedding_to_blob, simd_cosine_similarity, CodeChunk, FileMutationVectorPipeline,
+    MutationSearchResult, MutationSyncReport, OllamaHostConfig,
+    OllamaPipelineAccelerator, OllamaRunnerStatus, SpeculativeDraftResult, VectorDbStats,
+    DEFAULT_FAST_DRAFT_MODEL, DEFAULT_HEAVY_TARGET_MODEL, DEFAULT_MUTATION_VECTORS_DB,
+    DEFAULT_OLLAMA_SOCKET, SIBLING_OLLAMA_DIR,
+};
+
+
 
 
 

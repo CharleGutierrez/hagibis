@@ -523,6 +523,8 @@ pub const CORE_VIBE_TOOLS: &[&str] = &[
     "hgb_wasm_wit_exec",
     "hgb_self_healing_ci",
     "hgb_hot_reload_component",
+    "hgb_ollama_pipeline_accelerate",
+    "hgb_ollama_mutation_vector_sync",
 ];
 
 /// Hagibis MCP Server Engine exposing native core & storage capabilities
@@ -1173,6 +1175,35 @@ impl HagibisMcpServer {
                         },
                         "target_path": { "type": "string", "description": "Optional target path for WASM module or configuration file" },
                         "force": { "type": "boolean", "description": "Force eviction and re-compilation of cached modules", "default": true }
+                    }
+                }
+            },
+            {
+                "name": "hgb_ollama_pipeline_accelerate",
+                "description": "Direct local Ollama pipeline acceleration: zero-latency embedding generation and speculative drafting with dynabook hardware optimizations",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["generate", "embed", "status"], "default": "generate" },
+                        "prompt": { "type": "string", "description": "Prompt or source text to accelerate" },
+                        "draft_model": { "type": "string", "description": "Fast draft model (default: qwen2.5-coder:1.5b)" },
+                        "target_model": { "type": "string", "description": "Heavy target model (default: phi3:3.8b)" },
+                        "max_tokens": { "type": "integer", "description": "Maximum tokens to generate", "default": 256 }
+                    }
+                }
+            },
+            {
+                "name": "hgb_ollama_mutation_vector_sync",
+                "description": "Incremental file mutation vector pipeline: chunks files, invalidates via BLAKE3 hashes, and syncs/queries SQLite vector database (.hgb/ollama_mutation_vectors.db)",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["sync", "search", "stats"], "default": "sync" },
+                        "file_path": { "type": "string", "description": "Target workspace file path to synchronize" },
+                        "content": { "type": "string", "description": "Optional inline file content" },
+                        "query": { "type": "string", "description": "Query string when searching mutation vectors" },
+                        "top_k": { "type": "integer", "description": "Number of nearest chunks to retrieve", "default": 5 },
+                        "db_path": { "type": "string", "description": "Optional path to SQLite vector database" }
                     }
                 }
             }
@@ -2798,6 +2829,82 @@ impl HagibisMcpServer {
                     "duration_us": start.elapsed().as_micros() as u64,
                     "message": "Zero-downtime hot-reload completed successfully"
                 })).unwrap_or_default())
+            }
+
+            "hgb_ollama_pipeline_accelerate" => {
+                progress_cb(20, "Connecting to sibling Ollama acceleration engine...");
+                let action = args.get("action").and_then(|a| a.as_str()).unwrap_or("status");
+                let config = crate::ollama_pipeline_accelerator::OllamaHostConfig::default();
+                let accelerator = crate::ollama_pipeline_accelerator::OllamaPipelineAccelerator::new(config);
+
+                match action {
+                    "status" => {
+                        let status = accelerator.detect_runner_status().await?;
+                        progress_cb(100, "Ollama runner status resolved.");
+                        Ok(serde_json::to_string_pretty(&status).unwrap_or_default())
+                    }
+                    "embed" => {
+                        let text = args.get("prompt").and_then(|p| p.as_str()).unwrap_or("");
+                        let embedding = accelerator.generate_embedding(text).await?;
+                        progress_cb(100, "Generated vector embedding.");
+                        Ok(serde_json::to_string_pretty(&serde_json::json!({
+                            "dimensions": embedding.len(),
+                            "preview": &embedding[..embedding.len().min(8)],
+                            "status": "embedded"
+                        })).unwrap_or_default())
+                    }
+                    "generate" | _ => {
+                        let prompt = args.get("prompt").and_then(|p| p.as_str()).unwrap_or("Hello");
+                        let draft = args.get("draft_model").and_then(|m| m.as_str());
+                        let target = args.get("target_model").and_then(|m| m.as_str());
+                        let max_tokens = args.get("max_tokens").and_then(|t| t.as_u64()).map(|t| t as usize).or(Some(256));
+                        let res = accelerator.speculative_generate(prompt, draft, target, max_tokens).await?;
+                        progress_cb(100, "Speculative generation complete.");
+                        Ok(serde_json::to_string_pretty(&res).unwrap_or_default())
+                    }
+                }
+            }
+
+            "hgb_ollama_mutation_vector_sync" => {
+                progress_cb(20, "Connecting to incremental SQLite mutation vector pipeline...");
+                let action = args.get("action").and_then(|a| a.as_str()).unwrap_or("stats");
+                let db_path = args.get("db_path")
+                    .and_then(|p| p.as_str())
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| self.workspace_root.join(".hgb").join("ollama_mutation_vectors.db"));
+
+                let config = crate::ollama_pipeline_accelerator::OllamaHostConfig::default();
+                let accelerator = std::sync::Arc::new(crate::ollama_pipeline_accelerator::OllamaPipelineAccelerator::new(config));
+                let pipeline = crate::ollama_pipeline_accelerator::FileMutationVectorPipeline::new(&db_path, accelerator)?;
+
+                match action {
+                    "sync" => {
+                        let rel_path = args.get("file_path").and_then(|p| p.as_str()).ok_or_else(|| {
+                            HgbError::Execution("Missing required parameter: 'file_path'".into())
+                        })?;
+                        let content = if let Some(c) = args.get("content").and_then(|c| c.as_str()) {
+                            c.to_string()
+                        } else {
+                            let full = self.workspace_root.join(rel_path);
+                            fs::read_to_string(&full)?
+                        };
+                        let report = pipeline.sync_file_mutation(rel_path, &content).await?;
+                        progress_cb(100, "File mutation vector sync complete.");
+                        Ok(serde_json::to_string_pretty(&report).unwrap_or_default())
+                    }
+                    "search" => {
+                        let query = args.get("query").and_then(|q| q.as_str()).unwrap_or("");
+                        let top_k = args.get("top_k").and_then(|k| k.as_u64()).unwrap_or(5) as usize;
+                        let matches = pipeline.find_nearest_mutation_chunks(query, top_k).await?;
+                        progress_cb(100, "Mutation chunks retrieved.");
+                        Ok(serde_json::to_string_pretty(&matches).unwrap_or_default())
+                    }
+                    "stats" | _ => {
+                        let stats = pipeline.get_stats()?;
+                        progress_cb(100, "Mutation vector pipeline stats retrieved.");
+                        Ok(serde_json::to_string_pretty(&stats).unwrap_or_default())
+                    }
+                }
             }
 
             other => Ok(format!("Tool '{}' recognized by Hagibis MCP dispatcher.", other)),

@@ -3544,6 +3544,43 @@ enum Commands {
     /// Pillar 4: Autonomous Watchdog & Self-Healing Agent Loops
     #[command(subcommand)]
     Watchdog(WatchdogSubcommand),
+
+    /// Superpower 4: Turn CLI into Fully Autonomous "Vibe Coding" Agent Loop
+    #[command(name = "vibe-loop", alias = "vloop")]
+    VibeLoop {
+        /// Workspace path to monitor and auto-heal (default: current directory)
+        #[arg(short, long)]
+        path: Option<String>,
+        /// Automatically commit validated First-Green patches to git
+        #[arg(long, default_value_t = false)]
+        auto_commit: bool,
+        /// Maximum self-healing retry iterations
+        #[arg(short, long, default_value_t = 3)]
+        max_retries: usize,
+        /// Enable codebase self-optimization
+        #[arg(long, default_value_t = false)]
+        optimize: bool,
+    },
+
+    /// Fully Autonomous Vibe Coding Watcher
+    #[command(name = "autonomous", alias = "auto-loop")]
+    Autonomous {
+        /// Continuously watch workspace for filesystem events and auto-heal
+        #[arg(long, default_value_t = false)]
+        watch: bool,
+        /// Workspace path to monitor and auto-heal (default: current directory)
+        #[arg(short, long)]
+        path: Option<String>,
+        /// Automatically commit validated First-Green patches to git
+        #[arg(long, default_value_t = false)]
+        auto_commit: bool,
+        /// Maximum self-healing retry iterations
+        #[arg(short, long, default_value_t = 3)]
+        max_retries: usize,
+        /// Enable codebase self-optimization
+        #[arg(long, default_value_t = false)]
+        optimize: bool,
+    },
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -10780,6 +10817,34 @@ async fn test_calc() { assert!(calculate(5)); }".to_string()
                 Ok(())
             }
         },
+        Commands::VibeLoop { path, auto_commit, max_retries, optimize } => {
+            let ws_path = path.map(std::path::PathBuf::from).unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")));
+            let loop_config = hgb_cli::vibe_autonomous_loop::VibeAutonomousConfig {
+                workspace_root: ws_path,
+                auto_commit,
+                max_retries,
+                optimize,
+                debounce_ms: 250,
+                watch_mode: true,
+                ..Default::default()
+            };
+            let vibe_loop = hgb_cli::vibe_autonomous_loop::VibeAutonomousLoop::new(loop_config);
+            vibe_loop.run().await.map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+        }
+        Commands::Autonomous { watch, path, auto_commit, max_retries, optimize } => {
+            let ws_path = path.map(std::path::PathBuf::from).unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")));
+            let loop_config = hgb_cli::vibe_autonomous_loop::VibeAutonomousConfig {
+                workspace_root: ws_path,
+                auto_commit,
+                max_retries,
+                optimize,
+                debounce_ms: 250,
+                watch_mode: watch,
+                ..Default::default()
+            };
+            let vibe_loop = hgb_cli::vibe_autonomous_loop::VibeAutonomousLoop::new(loop_config);
+            vibe_loop.run().await.map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+        }
         Commands::Ide { .. } => unreachable!(),
     }
 }
