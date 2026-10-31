@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -24,9 +24,108 @@ use crate::mcp_server::HagibisMcpServer;
 use crate::p2p_swarm_federation::{read_free_ram_mb, SWARM_FRAME_MAGIC};
 
 pub const DEFAULT_P2P_MCP_PORT: u16 = 8970;
+pub const DEFAULT_UDP_DISCOVERY_PORT: u16 = 8970;
+pub const P2P_DISCOVERY_MAGIC: u32 = 0x48474253; // 'HGBS'
 pub const DEFAULT_MCP_HEARTBEAT_SECS: u64 = 5;
 pub const DEFAULT_PEER_TIMEOUT_SECS: i64 = 15;
 pub const P2P_OVERLOAD_LOAD_SCORE: f32 = 0.70;
+
+/// UDP discovery beacon broadcasted across local network nodes
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct P2pDiscoveryBeacon {
+    pub magic: u32,
+    pub node_id: String,
+    pub listen_addr: SocketAddr,
+    pub load_score: f32,
+    pub available_cpu_cores: usize,
+    pub free_ram_mb: u64,
+    pub available_tools: Vec<String>,
+    pub timestamp_secs: i64,
+}
+
+/// Context document or semantic node replicated in distributed Hagibis context graph
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ContextGraphNode {
+    pub collection: String,
+    pub key: String,
+    pub content: String,
+    pub metadata: serde_json::Value,
+    pub embedding: Option<Vec<f32>>,
+    pub blake3_hash: String,
+    pub updated_at: i64,
+}
+
+/// Outcome report of cross-peer context graph synchronization
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ContextGraphSyncReport {
+    pub collection: String,
+    pub replicated_nodes: usize,
+    pub source_node_id: String,
+    pub bytes_transferred: usize,
+    pub duration_ms: u64,
+}
+
+/// Result match from a vector embedding shard search across the swarm mesh
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VectorShardMatch {
+    pub id: String,
+    pub filepath_or_key: String,
+    pub chunk_index: usize,
+    pub content_snippet: String,
+    pub blake3_hash: String,
+    pub score: f32,
+    pub source_node_id: String,
+}
+
+/// Federated MCP tool advertising provider details across swarm nodes
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FederatedToolInfo {
+    pub tool: P2pMcpToolAdvertisement,
+    pub provider_node_id: String,
+    pub provider_addr: SocketAddr,
+    pub node_load_score: f32,
+    pub is_local: bool,
+}
+
+/// High-level RPC and peer coordination messages for P2P MCP federation
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum P2pMcpMessage {
+    ContextGraphSync {
+        collection: Option<String>,
+        since_timestamp: Option<i64>,
+        limit: Option<usize>,
+        payload: Option<Vec<ContextGraphNode>>,
+    },
+    ContextGraphSyncResponse {
+        nodes: Vec<ContextGraphNode>,
+        total_count: usize,
+        source_node_id: String,
+        success: bool,
+    },
+    VectorShardQuery {
+        query: String,
+        top_k: usize,
+        threshold: Option<f32>,
+    },
+    VectorShardQueryResponse {
+        matches: Vec<VectorShardMatch>,
+        total_searched: usize,
+        source_node_id: String,
+        success: bool,
+    },
+    DelegateToolExecution {
+        subtask: P2pSubtaskSpec,
+        input_data: Option<Vec<u8>>,
+    },
+    DelegateToolExecutionResponse {
+        result: P2pSubtaskResult,
+    },
+    ToolFederationList,
+    ToolFederationListResponse {
+        tools: Vec<P2pMcpToolAdvertisement>,
+        node_id: String,
+    },
+}
 
 /// Registered MCP tool descriptor advertised across the swarm mesh
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -374,6 +473,7 @@ pub enum P2pMcpPacket {
     SubtaskExecutionResult(P2pSubtaskResult),
     FetchStateRequest { blake3_hash: String },
     FetchStateResponse { blake3_hash: String, found: bool, data: Option<Vec<u8>> },
+    Message(P2pMcpMessage),
 }
 
 /// Telemetry status snapshot of the P2P MCP Swarm Engine
@@ -403,6 +503,7 @@ pub struct P2pMcpSwarmEngine {
     peer_registry: Arc<RwLock<HashMap<String, P2pMcpNodeAdvertisement>>>,
     content_cache: Arc<P2pContentCache>,
     mcp_server: Arc<HagibisMcpServer>,
+    context_graph: Arc<RwLock<HashMap<String, ContextGraphNode>>>,
     is_running: Arc<AtomicBool>,
     total_subtasks_delegated: AtomicU64,
     total_subtasks_local: AtomicU64,
@@ -426,6 +527,7 @@ impl P2pMcpSwarmEngine {
         let cache_dir = ws.join(".hgb").join("swarm_state_cache");
         let content_cache = Arc::new(P2pContentCache::new(Some(cache_dir)));
         let mcp_server = Arc::new(HagibisMcpServer::new(&ws));
+        let context_graph = Arc::new(RwLock::new(HashMap::new()));
 
         Ok(Self {
             node_id,
@@ -435,6 +537,7 @@ impl P2pMcpSwarmEngine {
             peer_registry,
             content_cache,
             mcp_server,
+            context_graph,
             is_running: Arc::new(AtomicBool::new(false)),
             total_subtasks_delegated: AtomicU64::new(0),
             total_subtasks_local: AtomicU64::new(0),
@@ -827,10 +930,441 @@ impl P2pMcpSwarmEngine {
                 let reply_bytes = bincode::serialize(&reply).map_err(|e| HgbError::Execution(e.to_string()))?;
                 send_framed_packet(stream, &reply_bytes).await?;
             }
+            P2pMcpPacket::Message(msg) => {
+                let reply_msg = self.handle_p2p_message(msg).await?;
+                let reply = P2pMcpPacket::Message(reply_msg);
+                let reply_bytes = bincode::serialize(&reply).map_err(|e| HgbError::Execution(e.to_string()))?;
+                send_framed_packet(stream, &reply_bytes).await?;
+            }
             _ => {}
         }
 
         Ok(())
+    }
+
+    /// Process inbound RPC messages across peer nodes
+    pub async fn handle_p2p_message(&self, msg: P2pMcpMessage) -> Result<P2pMcpMessage> {
+        match msg {
+            P2pMcpMessage::ContextGraphSync { collection, since_timestamp, limit, payload } => {
+                if let Some(nodes) = payload {
+                    let mut graph = self.context_graph.write().await;
+                    for node in nodes {
+                        graph.insert(format!("{}:{}", node.collection, node.key), node);
+                    }
+                }
+                let graph = self.context_graph.read().await;
+                let lim = limit.unwrap_or(250);
+                let matching: Vec<ContextGraphNode> = graph
+                    .values()
+                    .filter(|n| {
+                        if let Some(ref c) = collection {
+                            if &n.collection != c {
+                                return false;
+                            }
+                        }
+                        if let Some(ts) = since_timestamp {
+                            if n.updated_at < ts {
+                                return false;
+                            }
+                        }
+                        true
+                    })
+                    .take(lim)
+                    .cloned()
+                    .collect();
+
+                let total = matching.len();
+                Ok(P2pMcpMessage::ContextGraphSyncResponse {
+                    nodes: matching,
+                    total_count: total,
+                    source_node_id: self.node_id.clone(),
+                    success: true,
+                })
+            }
+            P2pMcpMessage::ContextGraphSyncResponse { .. } => {
+                Ok(P2pMcpMessage::ContextGraphSyncResponse {
+                    nodes: Vec::new(),
+                    total_count: 0,
+                    source_node_id: self.node_id.clone(),
+                    success: true,
+                })
+            }
+            P2pMcpMessage::VectorShardQuery { query, top_k, threshold } => {
+                let matches = self.search_local_vector_shards(&query, top_k, threshold).await;
+                let total = matches.len();
+                Ok(P2pMcpMessage::VectorShardQueryResponse {
+                    matches,
+                    total_searched: total,
+                    source_node_id: self.node_id.clone(),
+                    success: true,
+                })
+            }
+            P2pMcpMessage::VectorShardQueryResponse { .. } => {
+                Ok(P2pMcpMessage::VectorShardQueryResponse {
+                    matches: Vec::new(),
+                    total_searched: 0,
+                    source_node_id: self.node_id.clone(),
+                    success: true,
+                })
+            }
+            P2pMcpMessage::DelegateToolExecution { subtask, input_data } => {
+                let result = self.execute_local_subtask(&subtask, input_data).await?;
+                Ok(P2pMcpMessage::DelegateToolExecutionResponse { result })
+            }
+            P2pMcpMessage::DelegateToolExecutionResponse { .. } => {
+                Err(HgbError::Execution("Unexpected response variant in request handler".to_string()))
+            }
+            P2pMcpMessage::ToolFederationList => {
+                let local_ad = self.local_advertisement().await;
+                Ok(P2pMcpMessage::ToolFederationListResponse {
+                    tools: local_ad.advertised_tools,
+                    node_id: self.node_id.clone(),
+                })
+            }
+            P2pMcpMessage::ToolFederationListResponse { .. } => {
+                let local_ad = self.local_advertisement().await;
+                Ok(P2pMcpMessage::ToolFederationListResponse {
+                    tools: local_ad.advertised_tools,
+                    node_id: self.node_id.clone(),
+                })
+            }
+        }
+    }
+
+    /// Dispatch a request message to a remote peer and await reply
+    pub async fn send_p2p_message(&self, peer_addr: SocketAddr, msg: P2pMcpMessage) -> Result<P2pMcpMessage> {
+        let packet = P2pMcpPacket::Message(msg);
+        let payload = bincode::serialize(&packet).map_err(|e| HgbError::Execution(e.to_string()))?;
+
+        let mut stream = tokio::time::timeout(
+            Duration::from_millis(5000),
+            TcpStream::connect(peer_addr),
+        )
+        .await
+        .map_err(|_| HgbError::Execution(format!("Connection timeout to peer {}", peer_addr)))?
+        .map_err(|e| HgbError::Execution(format!("Failed to connect to peer {}: {}", peer_addr, e)))?;
+
+        send_framed_packet(&mut stream, &payload).await?;
+        let resp_payload = receive_framed_packet(&mut stream).await?;
+
+        let resp_packet: P2pMcpPacket = bincode::deserialize(&resp_payload)
+            .map_err(|e| HgbError::Execution(format!("Deserialization error: {}", e)))?;
+
+        match resp_packet {
+            P2pMcpPacket::Message(reply_msg) => Ok(reply_msg),
+            other => Err(HgbError::Execution(format!("Unexpected reply packet from peer: {:?}", other))),
+        }
+    }
+
+    /// Store a context node in the local context graph
+    pub async fn put_context_node(&self, mut node: ContextGraphNode) -> String {
+        if node.blake3_hash.is_empty() {
+            node.blake3_hash = blake3::hash(node.content.as_bytes()).to_hex().to_string();
+        }
+        if node.updated_at == 0 {
+            node.updated_at = Utc::now().timestamp();
+        }
+        let hash = node.blake3_hash.clone();
+        let key = format!("{}:{}", node.collection, node.key);
+        let mut graph = self.context_graph.write().await;
+        graph.insert(key, node);
+        hash
+    }
+
+    /// Retrieve a context node from the local context graph
+    pub async fn get_context_node(&self, collection: &str, key: &str) -> Option<ContextGraphNode> {
+        let lookup_key = format!("{}:{}", collection, key);
+        let graph = self.context_graph.read().await;
+        graph.get(&lookup_key).cloned()
+    }
+
+    /// List all context nodes, optionally filtered by collection
+    pub async fn list_context_nodes(&self, collection: Option<&str>) -> Vec<ContextGraphNode> {
+        let graph = self.context_graph.read().await;
+        graph
+            .values()
+            .filter(|n| collection.map_or(true, |c| n.collection == c))
+            .cloned()
+            .collect()
+    }
+
+    /// Synchronize context graph nodes from a peer node
+    pub async fn sync_context_graph_with_peer(
+        &self,
+        peer_addr: SocketAddr,
+        collection: Option<String>,
+    ) -> Result<ContextGraphSyncReport> {
+        let start = Instant::now();
+        let req = P2pMcpMessage::ContextGraphSync {
+            collection: collection.clone(),
+            since_timestamp: None,
+            limit: Some(500),
+            payload: None,
+        };
+
+        match self.send_p2p_message(peer_addr, req).await? {
+            P2pMcpMessage::ContextGraphSyncResponse {
+                nodes,
+                source_node_id,
+                success,
+                ..
+            } => {
+                if !success {
+                    return Err(HgbError::Execution("Remote peer reported failure syncing context graph".to_string()));
+                }
+                let mut bytes_transferred = 0;
+                let count = nodes.len();
+                let mut graph = self.context_graph.write().await;
+                for node in nodes {
+                    bytes_transferred += node.content.len() + node.key.len();
+                    graph.insert(format!("{}:{}", node.collection, node.key), node);
+                }
+
+                Ok(ContextGraphSyncReport {
+                    collection: collection.unwrap_or_else(|| "all".to_string()),
+                    replicated_nodes: count,
+                    source_node_id,
+                    bytes_transferred,
+                    duration_ms: start.elapsed().as_millis() as u64,
+                })
+            }
+            other => Err(HgbError::Execution(format!("Unexpected reply syncing context graph: {:?}", other))),
+        }
+    }
+
+    /// Replicate local context graph nodes to a remote peer node
+    pub async fn replicate_context_graph_to_peer(
+        &self,
+        peer_addr: SocketAddr,
+        nodes: Vec<ContextGraphNode>,
+    ) -> Result<ContextGraphSyncReport> {
+        let start = Instant::now();
+        let count = nodes.len();
+        let bytes_transferred: usize = nodes.iter().map(|n| n.content.len() + n.key.len()).sum();
+        let req = P2pMcpMessage::ContextGraphSync {
+            collection: None,
+            since_timestamp: None,
+            limit: None,
+            payload: Some(nodes),
+        };
+
+        match self.send_p2p_message(peer_addr, req).await? {
+            P2pMcpMessage::ContextGraphSyncResponse { source_node_id, success, .. } => {
+                if !success {
+                    return Err(HgbError::Execution("Remote peer rejected context graph replication".to_string()));
+                }
+                Ok(ContextGraphSyncReport {
+                    collection: "replicated".to_string(),
+                    replicated_nodes: count,
+                    source_node_id,
+                    bytes_transferred,
+                    duration_ms: start.elapsed().as_millis() as u64,
+                })
+            }
+            other => Err(HgbError::Execution(format!("Unexpected reply to graph replication: {:?}", other))),
+        }
+    }
+
+    /// Search local vector shards and context graph entries
+    pub async fn search_local_vector_shards(
+        &self,
+        query: &str,
+        top_k: usize,
+        threshold: Option<f32>,
+    ) -> Vec<VectorShardMatch> {
+        let thresh = threshold.unwrap_or(0.0);
+        let query_lower = query.to_lowercase();
+        let graph = self.context_graph.read().await;
+        let mut matches = Vec::new();
+
+        for node in graph.values() {
+            let content_lower = node.content.to_lowercase();
+            let key_lower = node.key.to_lowercase();
+            let mut score: f32 = 0.0;
+
+            if content_lower.contains(&query_lower) || key_lower.contains(&query_lower) {
+                score = 0.85;
+                if key_lower.contains(&query_lower) {
+                    score += 0.10;
+                }
+            } else {
+                let query_words: Vec<&str> = query_lower.split_whitespace().collect();
+                let mut matched = 0;
+                for word in &query_words {
+                    if content_lower.contains(word) {
+                        matched += 1;
+                    }
+                }
+                if !query_words.is_empty() && matched > 0 {
+                    score = (matched as f32 / query_words.len() as f32) * 0.70;
+                }
+            }
+
+            if score > thresh {
+                let snippet: String = node.content.chars().take(200).collect();
+                matches.push(VectorShardMatch {
+                    id: format!("{}:{}", node.collection, node.key),
+                    filepath_or_key: node.key.clone(),
+                    chunk_index: 0,
+                    content_snippet: snippet,
+                    blake3_hash: node.blake3_hash.clone(),
+                    score,
+                    source_node_id: self.node_id.clone(),
+                });
+            }
+        }
+
+        // Also check SQLite mutation vectors in workspace if present
+        let db_path = self.workspace_root.join(".hgb").join("ollama_mutation_vectors.db");
+        if db_path.exists() {
+            if let Ok(conn) = rusqlite::Connection::open(&db_path) {
+                let pattern = format!("%{}%", query);
+                if let Ok(mut stmt) = conn.prepare(
+                    "SELECT id, filepath, chunk_index, blake3_hash, content FROM mutation_chunks WHERE content LIKE ?1 LIMIT ?2"
+                ) {
+                    if let Ok(rows) = stmt.query_map(rusqlite::params![pattern, top_k], |row| {
+                        let id: String = row.get(0)?;
+                        let filepath: String = row.get(1)?;
+                        let chunk_index: usize = row.get(2)?;
+                        let blake3_hash: String = row.get(3)?;
+                        let content: String = row.get(4)?;
+                        Ok((id, filepath, chunk_index, blake3_hash, content))
+                    }) {
+                        for item in rows.flatten() {
+                            let snippet: String = item.4.chars().take(200).collect();
+                            matches.push(VectorShardMatch {
+                                id: item.0,
+                                filepath_or_key: item.1,
+                                chunk_index: item.2,
+                                content_snippet: snippet,
+                                blake3_hash: item.3,
+                                score: 0.90,
+                                source_node_id: self.node_id.clone(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        matches.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        matches.truncate(top_k);
+        matches
+    }
+
+    /// Query vector shards across the entire swarm mesh
+    pub async fn query_vector_shards_across_swarm(
+        &self,
+        query: &str,
+        top_k: usize,
+    ) -> Vec<VectorShardMatch> {
+        let mut all_matches = self.search_local_vector_shards(query, top_k, None).await;
+
+        let peers = self.list_peers().await;
+        for peer in peers {
+            if peer.is_stale(DEFAULT_PEER_TIMEOUT_SECS) {
+                continue;
+            }
+            let req = P2pMcpMessage::VectorShardQuery {
+                query: query.to_string(),
+                top_k,
+                threshold: Some(0.30),
+            };
+            match self.send_p2p_message(peer.listen_addr, req).await {
+                Ok(P2pMcpMessage::VectorShardQueryResponse { matches, .. }) => {
+                    all_matches.extend(matches);
+                }
+                Err(e) => {
+                    eprintln!("Failed to query vector shard on peer {}: {}", peer.node_id, e);
+                }
+                _ => {}
+            }
+        }
+
+        all_matches.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        all_matches.truncate(top_k);
+        all_matches
+    }
+
+    /// Aggregate all available MCP tools across the local node and connected swarm peers
+    pub async fn list_federated_tools(&self) -> Vec<FederatedToolInfo> {
+        let mut result = Vec::new();
+        let local_ad = self.local_advertisement().await;
+        for tool in &local_ad.advertised_tools {
+            result.push(FederatedToolInfo {
+                tool: tool.clone(),
+                provider_node_id: local_ad.node_id.clone(),
+                provider_addr: local_ad.listen_addr,
+                node_load_score: local_ad.load_score,
+                is_local: true,
+            });
+        }
+
+        let peers = self.list_peers().await;
+        for peer in peers {
+            if peer.is_stale(DEFAULT_PEER_TIMEOUT_SECS) {
+                continue;
+            }
+            for tool in &peer.advertised_tools {
+                result.push(FederatedToolInfo {
+                    tool: tool.clone(),
+                    provider_node_id: peer.node_id.clone(),
+                    provider_addr: peer.listen_addr,
+                    node_load_score: peer.load_score,
+                    is_local: false,
+                });
+            }
+        }
+        result
+    }
+
+    /// Delegate a subtask tool execution to a specific remote peer node
+    pub async fn delegate_tool_to_peer(
+        &self,
+        target_peer: SocketAddr,
+        spec: P2pSubtaskSpec,
+        input_data: Option<Vec<u8>>,
+    ) -> Result<P2pSubtaskResult> {
+        let req = P2pMcpMessage::DelegateToolExecution {
+            subtask: spec,
+            input_data,
+        };
+        match self.send_p2p_message(target_peer, req).await? {
+            P2pMcpMessage::DelegateToolExecutionResponse { mut result } => {
+                result.is_remote = true;
+                self.total_subtasks_delegated.fetch_add(1, Ordering::Relaxed);
+                Ok(result)
+            }
+            other => Err(HgbError::Execution(format!("Unexpected response to tool delegation: {:?}", other))),
+        }
+    }
+
+    /// Create UDP discovery beacon payload for this node
+    pub async fn create_discovery_beacon(&self) -> P2pDiscoveryBeacon {
+        let ad = self.local_advertisement().await;
+        let tools: Vec<String> = ad.advertised_tools.iter().map(|t| t.name.clone()).collect();
+        P2pDiscoveryBeacon {
+            magic: SWARM_FRAME_MAGIC,
+            node_id: self.node_id.clone(),
+            listen_addr: self.listen_addr,
+            load_score: ad.load_score,
+            available_cpu_cores: ad.available_cpu_cores,
+            free_ram_mb: ad.free_ram_mb,
+            available_tools: tools,
+            timestamp_secs: Utc::now().timestamp(),
+        }
+    }
+
+    /// Process a received UDP discovery beacon from a peer node
+    pub async fn receive_discovery_beacon(&self, beacon: P2pDiscoveryBeacon) {
+        if beacon.node_id == self.node_id {
+            return;
+        }
+        let mut ad = P2pMcpNodeAdvertisement::new(beacon.node_id.clone(), beacon.listen_addr);
+        ad.available_cpu_cores = beacon.available_cpu_cores;
+        ad.free_ram_mb = beacon.free_ram_mb;
+        ad.advertised_tools.retain(|t| beacon.available_tools.contains(&t.name));
+        self.register_peer(ad).await;
     }
 
     pub fn stop(&self) {
@@ -990,5 +1524,92 @@ mod tests {
 
         let retrieved = cache.get(&hash).await.unwrap();
         assert_eq!(retrieved, sample_payload);
+    }
+
+    #[tokio::test]
+    async fn test_context_graph_and_vector_shard_search() {
+        let dir = tempdir().unwrap();
+        let engine = P2pMcpSwarmEngine::new("node_graph", "127.0.0.1:0".parse().unwrap(), dir.path()).unwrap();
+
+        // 1. Put context nodes
+        let node1 = ContextGraphNode {
+            collection: "codebase".to_string(),
+            key: "auth.rs".to_string(),
+            content: "pub fn authenticate_user(token: &str) -> bool { token == \"secret\" }".to_string(),
+            metadata: serde_json::json!({ "lang": "rust" }),
+            embedding: None,
+            blake3_hash: String::new(),
+            updated_at: 0,
+        };
+        let hash1 = engine.put_context_node(node1).await;
+        assert!(!hash1.is_empty());
+
+        let node2 = ContextGraphNode {
+            collection: "codebase".to_string(),
+            key: "database.rs".to_string(),
+            content: "pub fn connect_sqlite(db_path: &Path) -> Result<Connection> { ... }".to_string(),
+            metadata: serde_json::json!({ "lang": "rust" }),
+            embedding: None,
+            blake3_hash: String::new(),
+            updated_at: 0,
+        };
+        engine.put_context_node(node2).await;
+
+        // 2. Query context nodes
+        let fetched = engine.get_context_node("codebase", "auth.rs").await.unwrap();
+        assert_eq!(fetched.key, "auth.rs");
+
+        let all_nodes = engine.list_context_nodes(Some("codebase")).await;
+        assert_eq!(all_nodes.len(), 2);
+
+        // 3. Search vector shards
+        let matches = engine.search_local_vector_shards("authenticate", 5, None).await;
+        assert!(!matches.is_empty());
+        assert_eq!(matches[0].filepath_or_key, "auth.rs");
+        assert!(matches[0].score >= 0.85);
+
+        // 4. Federated tools listing
+        let tools = engine.list_federated_tools().await;
+        assert!(!tools.is_empty());
+        assert!(tools.iter().any(|t| t.is_local && t.tool.name == "hgb_sqlite_query"));
+    }
+
+    #[tokio::test]
+    async fn test_p2p_message_handling_sync() {
+        let dir = tempdir().unwrap();
+        let engine = P2pMcpSwarmEngine::new("node_sync", "127.0.0.1:0".parse().unwrap(), dir.path()).unwrap();
+
+        let node = ContextGraphNode {
+            collection: "notes".to_string(),
+            key: "arch.md".to_string(),
+            content: "Hagibis sovereign edge architecture".to_string(),
+            metadata: serde_json::json!({}),
+            embedding: None,
+            blake3_hash: "hash_abc".to_string(),
+            updated_at: 100,
+        };
+
+        // Send replication payload via P2pMcpMessage
+        let msg = P2pMcpMessage::ContextGraphSync {
+            collection: Some("notes".to_string()),
+            since_timestamp: None,
+            limit: None,
+            payload: Some(vec![node]),
+        };
+
+        let reply = engine.handle_p2p_message(msg).await.unwrap();
+        match reply {
+            P2pMcpMessage::ContextGraphSyncResponse { nodes, total_count, success, .. } => {
+                assert!(success);
+                assert_eq!(total_count, 1);
+                assert_eq!(nodes[0].key, "arch.md");
+            }
+            _ => panic!("Expected ContextGraphSyncResponse"),
+        }
+
+        // Verify discovery beacon
+        let beacon = engine.create_discovery_beacon().await;
+        assert_eq!(beacon.node_id, "node_sync");
+        assert!(!beacon.available_tools.is_empty());
     }
 }

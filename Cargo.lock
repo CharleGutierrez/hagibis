@@ -1981,6 +1981,7 @@ dependencies = [
  "memmap2",
  "mlua",
  "ndarray",
+ "notify",
  "qrcode",
  "quote",
  "ratatui",

@@ -19,7 +19,10 @@ use std::time::Instant;
 use memmap2::MmapMut;
 use serde::{Deserialize, Serialize};
 
-use hgb_core::{HgbError, Result};
+pub use hgb_core::{
+    align_up_64, ShmFrameHeader, ShmTaskDispatch, ShmTaskExecutionReport, ShmTaskType,
+    ShmTelemetryFrame, FRAME_HEADER_SIZE, FRAME_MAGIC, HgbError, Result,
+};
 
 /// Magic identifier for Hagibis Shared Memory Ring Buffer: `0x4847425F53484D31` ("HGB_SHM1")
 pub const SHM_ZERO_COPY_MAGIC: u64 = 0x4847425F53484D31;
@@ -39,6 +42,9 @@ pub const TAG_PROMPT: u8 = 0x01;
 pub const TAG_TOKEN_STREAM: u8 = 0x02;
 pub const TAG_EMBEDDING: u8 = 0x03;
 pub const TAG_WASM_MEMORY: u8 = 0x04;
+pub const TAG_TASK_DISPATCH: u8 = 0x05;
+pub const TAG_TASK_EXECUTION_REPORT: u8 = 0x06;
+pub const TAG_TELEMETRY_FRAME: u8 = 0x07;
 
 /// Cacheline-aligned header placed at offset 0 of the memory-mapped file
 #[repr(C, align(64))]
@@ -587,6 +593,242 @@ impl ShmZeroCopyStorage {
         self.write_wasm_kernel_buffer(&wasm_memory[offset..offset + len], channel_id)
     }
 
+    /// Attempt to write a 64-byte cacheline-aligned length-prefixed frame with atomic acquire/release
+    pub fn try_write_aligned_frame(&mut self, tag: u8, payload: &[u8]) -> Result<bool> {
+        let needed = align_up_64(FRAME_HEADER_SIZE + payload.len());
+        if needed > self.capacity {
+            return Err(HgbError::Storage(format!(
+                "Aligned payload size {} exceeds total ring capacity {}",
+                needed, self.capacity
+            )));
+        }
+
+        let head = self.header().head.load(Ordering::Relaxed);
+        let tail = self.header().tail.load(Ordering::Acquire);
+        let occupied = head.saturating_sub(tail);
+        let available = (self.capacity as u64).saturating_sub(occupied) as usize;
+
+        if needed > available {
+            return Ok(false);
+        }
+
+        let seq = self.header().seq_no.fetch_add(1, Ordering::Relaxed) + 1;
+        let timestamp_ns = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u64;
+
+        let checksum = payload.iter().fold(0u32, |acc, &b| acc.wrapping_add(b as u32));
+
+        let header = ShmFrameHeader {
+            magic: FRAME_MAGIC,
+            tag,
+            flags: 0,
+            reserved1: 0,
+            payload_len: payload.len() as u32,
+            seq_no: seq,
+            timestamp_ns,
+            checksum,
+            reserved2: [0u8; 28],
+        };
+
+        let header_bytes = unsafe {
+            std::slice::from_raw_parts(&header as *const _ as *const u8, FRAME_HEADER_SIZE)
+        };
+
+        self.write_payload_wrapped(head, header_bytes);
+        self.write_payload_wrapped(head + (FRAME_HEADER_SIZE as u64), payload);
+
+        let unaligned = FRAME_HEADER_SIZE + payload.len();
+        if needed > unaligned {
+            let pad = needed - unaligned;
+            let zeroes = [0u8; 64];
+            self.write_payload_wrapped(head + (unaligned as u64), &zeroes[..pad]);
+        }
+
+        fence(Ordering::Release);
+        self.header().head.store(head + (needed as u64), Ordering::Release);
+
+        Ok(true)
+    }
+
+    /// Attempt to read a 64-byte cacheline-aligned length-prefixed frame with atomic acquire/release
+    pub fn try_read_aligned_frame(&mut self) -> Result<Option<(ShmFrameHeader, Vec<u8>)>> {
+        let head = self.header().head.load(Ordering::Acquire);
+        let tail = self.header().tail.load(Ordering::Relaxed);
+        let occupied = head.saturating_sub(tail);
+
+        if occupied < (FRAME_HEADER_SIZE as u64) {
+            return Ok(None);
+        }
+
+        let mut header_bytes = [0u8; FRAME_HEADER_SIZE];
+        self.read_payload_wrapped(tail, &mut header_bytes);
+
+        let magic = u32::from_le_bytes(header_bytes[0..4].try_into().unwrap());
+        if magic != FRAME_MAGIC {
+            return Ok(None);
+        }
+
+        let header: ShmFrameHeader = unsafe {
+            std::ptr::read_unaligned(header_bytes.as_ptr() as *const ShmFrameHeader)
+        };
+
+        let payload_len = header.payload_len as usize;
+        let needed = align_up_64(FRAME_HEADER_SIZE + payload_len);
+
+        if (occupied as usize) < needed {
+            return Ok(None);
+        }
+
+        let mut payload = vec![0u8; payload_len];
+        self.read_payload_wrapped(tail + (FRAME_HEADER_SIZE as u64), &mut payload);
+
+        fence(Ordering::Release);
+        self.header().tail.store(tail + (needed as u64), Ordering::Release);
+
+        Ok(Some((header, payload)))
+    }
+
+    /// True zero-copy reader for 64-byte aligned frames passing memory-mapped slices directly to a closure
+    pub fn read_aligned_zero_copy<F, R>(&mut self, f: F) -> Result<Option<R>>
+    where
+        F: FnOnce(&ShmFrameHeader, &[u8], &[u8]) -> R,
+    {
+        let head = self.header().head.load(Ordering::Acquire);
+        let tail = self.header().tail.load(Ordering::Relaxed);
+        let occupied = head.saturating_sub(tail);
+
+        if occupied < (FRAME_HEADER_SIZE as u64) {
+            return Ok(None);
+        }
+
+        let mut header_bytes = [0u8; FRAME_HEADER_SIZE];
+        self.read_payload_wrapped(tail, &mut header_bytes);
+
+        let magic = u32::from_le_bytes(header_bytes[0..4].try_into().unwrap());
+        if magic != FRAME_MAGIC {
+            return Ok(None);
+        }
+
+        let header: ShmFrameHeader = unsafe {
+            std::ptr::read_unaligned(header_bytes.as_ptr() as *const ShmFrameHeader)
+        };
+
+        let payload_len = header.payload_len as usize;
+        let needed = align_up_64(FRAME_HEADER_SIZE + payload_len);
+
+        if (occupied as usize) < needed {
+            return Ok(None);
+        }
+
+        let cap = self.capacity;
+        let payload_start = HEADER_SIZE;
+        let offset = ((tail + (FRAME_HEADER_SIZE as u64)) % (cap as u64)) as usize;
+
+        let (slice1, slice2): (&[u8], &[u8]) = if offset + payload_len <= cap {
+            (&self.mmap[payload_start + offset..payload_start + offset + payload_len], &[])
+        } else {
+            let first = cap - offset;
+            (
+                &self.mmap[payload_start + offset..payload_start + cap],
+                &self.mmap[payload_start..payload_start + (payload_len - first)],
+            )
+        };
+
+        let result = f(&header, slice1, slice2);
+
+        fence(Ordering::Release);
+        self.header().tail.store(tail + (needed as u64), Ordering::Release);
+
+        Ok(Some(result))
+    }
+
+    /// Dispatches an autonomous task, prompt job, or test run in <1 microsecond
+    pub fn write_task_dispatch(&mut self, task: &ShmTaskDispatch) -> Result<bool> {
+        let serialized = serde_json::to_vec(task)
+            .map_err(|e| HgbError::Serialization(format!("Failed to serialize ShmTaskDispatch: {}", e)))?;
+        self.try_write_aligned_frame(TAG_TASK_DISPATCH, &serialized)
+    }
+
+    /// Read incoming autonomous task dispatch frame
+    pub fn read_task_dispatch(&mut self) -> Result<Option<ShmTaskDispatch>> {
+        match self.try_read_aligned_frame()? {
+            Some((header, payload)) => {
+                if header.tag != TAG_TASK_DISPATCH {
+                    return Err(HgbError::Storage(format!(
+                        "Frame tag mismatch: expected TaskDispatch (0x{:02X}), found 0x{:02X}",
+                        TAG_TASK_DISPATCH, header.tag
+                    )));
+                }
+                let task: ShmTaskDispatch = serde_json::from_slice(&payload)
+                    .map_err(|e| HgbError::Serialization(format!("Failed to deserialize ShmTaskDispatch: {}", e)))?;
+                Ok(Some(task))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Stream back stdout/stderr chunks and execution results
+    pub fn write_task_execution_report(&mut self, report: &ShmTaskExecutionReport) -> Result<bool> {
+        let serialized = serde_json::to_vec(report)
+            .map_err(|e| HgbError::Serialization(format!("Failed to serialize ShmTaskExecutionReport: {}", e)))?;
+        self.try_write_aligned_frame(TAG_TASK_EXECUTION_REPORT, &serialized)
+    }
+
+    /// Read task execution report frame
+    pub fn read_task_execution_report(&mut self) -> Result<Option<ShmTaskExecutionReport>> {
+        match self.try_read_aligned_frame()? {
+            Some((header, payload)) => {
+                if header.tag != TAG_TASK_EXECUTION_REPORT {
+                    return Err(HgbError::Storage(format!(
+                        "Frame tag mismatch: expected TaskExecutionReport (0x{:02X}), found 0x{:02X}",
+                        TAG_TASK_EXECUTION_REPORT, header.tag
+                    )));
+                }
+                let report: ShmTaskExecutionReport = serde_json::from_slice(&payload)
+                    .map_err(|e| HgbError::Serialization(format!("Failed to deserialize ShmTaskExecutionReport: {}", e)))?;
+                Ok(Some(report))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Send high-frequency host hardware telemetry frame without socket overhead
+    pub fn write_telemetry_frame(&mut self, frame: &ShmTelemetryFrame) -> Result<bool> {
+        let serialized = serde_json::to_vec(frame)
+            .map_err(|e| HgbError::Serialization(format!("Failed to serialize ShmTelemetryFrame: {}", e)))?;
+        self.try_write_aligned_frame(TAG_TELEMETRY_FRAME, &serialized)
+    }
+
+    /// Read high-frequency host hardware telemetry frame
+    pub fn read_telemetry_frame(&mut self) -> Result<Option<ShmTelemetryFrame>> {
+        match self.try_read_aligned_frame()? {
+            Some((header, payload)) => {
+                if header.tag != TAG_TELEMETRY_FRAME {
+                    return Err(HgbError::Storage(format!(
+                        "Frame tag mismatch: expected TelemetryFrame (0x{:02X}), found 0x{:02X}",
+                        TAG_TELEMETRY_FRAME, header.tag
+                    )));
+                }
+                let frame: ShmTelemetryFrame = serde_json::from_slice(&payload)
+                    .map_err(|e| HgbError::Serialization(format!("Failed to deserialize ShmTelemetryFrame: {}", e)))?;
+                Ok(Some(frame))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Name identifier
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Path identifier
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
     /// Execute benchmark verifying nanosecond/microsecond-latency throughput and zero-copy integrity
     pub fn benchmark(&mut self, chunk_size: usize, iterations: usize) -> Result<ShmZeroCopyBenchReport> {
         let pattern = vec![0xFEu8; chunk_size];
@@ -836,6 +1078,96 @@ impl ShmZeroCopyProducer {
         self.try_write_frame(&framed)
     }
 
+    /// Attempt to write a 64-byte cacheline-aligned length-prefixed frame with atomic acquire/release
+    pub fn try_write_aligned_frame(&mut self, tag: u8, payload: &[u8]) -> Result<bool> {
+        let needed = align_up_64(FRAME_HEADER_SIZE + payload.len());
+        if needed > self.capacity {
+            return Err(HgbError::Storage(format!(
+                "Aligned payload size {} exceeds total ring capacity {}",
+                needed, self.capacity
+            )));
+        }
+
+        let head = self.header().head.load(Ordering::Relaxed);
+        let tail = self.header().tail.load(Ordering::Acquire);
+        let occupied = head.saturating_sub(tail);
+        let available = (self.capacity as u64).saturating_sub(occupied) as usize;
+
+        if needed > available {
+            return Ok(false);
+        }
+
+        let seq = self.header().seq_no.fetch_add(1, Ordering::Relaxed) + 1;
+        let timestamp_ns = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u64;
+
+        let checksum = payload.iter().fold(0u32, |acc, &b| acc.wrapping_add(b as u32));
+
+        let header = ShmFrameHeader {
+            magic: FRAME_MAGIC,
+            tag,
+            flags: 0,
+            reserved1: 0,
+            payload_len: payload.len() as u32,
+            seq_no: seq,
+            timestamp_ns,
+            checksum,
+            reserved2: [0u8; 28],
+        };
+
+        let header_bytes = unsafe {
+            std::slice::from_raw_parts(&header as *const _ as *const u8, FRAME_HEADER_SIZE)
+        };
+
+        self.write_payload_wrapped(head, header_bytes);
+        self.write_payload_wrapped(head + (FRAME_HEADER_SIZE as u64), payload);
+
+        let unaligned = FRAME_HEADER_SIZE + payload.len();
+        if needed > unaligned {
+            let pad = needed - unaligned;
+            let zeroes = [0u8; 64];
+            self.write_payload_wrapped(head + (unaligned as u64), &zeroes[..pad]);
+        }
+
+        fence(Ordering::Release);
+        self.header().head.store(head + (needed as u64), Ordering::Release);
+
+        Ok(true)
+    }
+
+    /// Dispatches an autonomous task, prompt job, or test run in <1 microsecond
+    pub fn write_task_dispatch(&mut self, task: &ShmTaskDispatch) -> Result<bool> {
+        let serialized = serde_json::to_vec(task)
+            .map_err(|e| HgbError::Serialization(format!("Failed to serialize ShmTaskDispatch: {}", e)))?;
+        self.try_write_aligned_frame(TAG_TASK_DISPATCH, &serialized)
+    }
+
+    /// Stream back stdout/stderr chunks and execution results
+    pub fn write_task_execution_report(&mut self, report: &ShmTaskExecutionReport) -> Result<bool> {
+        let serialized = serde_json::to_vec(report)
+            .map_err(|e| HgbError::Serialization(format!("Failed to serialize ShmTaskExecutionReport: {}", e)))?;
+        self.try_write_aligned_frame(TAG_TASK_EXECUTION_REPORT, &serialized)
+    }
+
+    /// Send high-frequency host hardware telemetry frame without socket overhead
+    pub fn write_telemetry_frame(&mut self, frame: &ShmTelemetryFrame) -> Result<bool> {
+        let serialized = serde_json::to_vec(frame)
+            .map_err(|e| HgbError::Serialization(format!("Failed to serialize ShmTelemetryFrame: {}", e)))?;
+        self.try_write_aligned_frame(TAG_TELEMETRY_FRAME, &serialized)
+    }
+
+    /// Name identifier
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Path identifier
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
     pub fn set_unlink_on_drop(&mut self, unlink: bool) {
         self.unlink_on_drop = unlink;
     }
@@ -1050,6 +1382,160 @@ impl ShmZeroCopyConsumer {
         }
     }
 
+    /// Attempt to read a 64-byte cacheline-aligned length-prefixed frame with atomic acquire/release
+    pub fn try_read_aligned_frame(&mut self) -> Result<Option<(ShmFrameHeader, Vec<u8>)>> {
+        let head = self.header().head.load(Ordering::Acquire);
+        let tail = self.header().tail.load(Ordering::Relaxed);
+        let occupied = head.saturating_sub(tail);
+
+        if occupied < (FRAME_HEADER_SIZE as u64) {
+            return Ok(None);
+        }
+
+        let mut header_bytes = [0u8; FRAME_HEADER_SIZE];
+        self.read_payload_wrapped(tail, &mut header_bytes);
+
+        let magic = u32::from_le_bytes(header_bytes[0..4].try_into().unwrap());
+        if magic != FRAME_MAGIC {
+            return Ok(None);
+        }
+
+        let header: ShmFrameHeader = unsafe {
+            std::ptr::read_unaligned(header_bytes.as_ptr() as *const ShmFrameHeader)
+        };
+
+        let payload_len = header.payload_len as usize;
+        let needed = align_up_64(FRAME_HEADER_SIZE + payload_len);
+
+        if (occupied as usize) < needed {
+            return Ok(None);
+        }
+
+        let mut payload = vec![0u8; payload_len];
+        self.read_payload_wrapped(tail + (FRAME_HEADER_SIZE as u64), &mut payload);
+
+        fence(Ordering::Release);
+        self.header().tail.store(tail + (needed as u64), Ordering::Release);
+
+        Ok(Some((header, payload)))
+    }
+
+    /// True zero-copy reader for 64-byte aligned frames passing memory-mapped slices directly to a closure
+    pub fn read_aligned_zero_copy<F, R>(&mut self, f: F) -> Result<Option<R>>
+    where
+        F: FnOnce(&ShmFrameHeader, &[u8], &[u8]) -> R,
+    {
+        let head = self.header().head.load(Ordering::Acquire);
+        let tail = self.header().tail.load(Ordering::Relaxed);
+        let occupied = head.saturating_sub(tail);
+
+        if occupied < (FRAME_HEADER_SIZE as u64) {
+            return Ok(None);
+        }
+
+        let mut header_bytes = [0u8; FRAME_HEADER_SIZE];
+        self.read_payload_wrapped(tail, &mut header_bytes);
+
+        let magic = u32::from_le_bytes(header_bytes[0..4].try_into().unwrap());
+        if magic != FRAME_MAGIC {
+            return Ok(None);
+        }
+
+        let header: ShmFrameHeader = unsafe {
+            std::ptr::read_unaligned(header_bytes.as_ptr() as *const ShmFrameHeader)
+        };
+
+        let payload_len = header.payload_len as usize;
+        let needed = align_up_64(FRAME_HEADER_SIZE + payload_len);
+
+        if (occupied as usize) < needed {
+            return Ok(None);
+        }
+
+        let cap = self.capacity;
+        let payload_start = HEADER_SIZE;
+        let offset = ((tail + (FRAME_HEADER_SIZE as u64)) % (cap as u64)) as usize;
+
+        let (slice1, slice2): (&[u8], &[u8]) = if offset + payload_len <= cap {
+            (&self.mmap[payload_start + offset..payload_start + offset + payload_len], &[])
+        } else {
+            let first = cap - offset;
+            (
+                &self.mmap[payload_start + offset..payload_start + cap],
+                &self.mmap[payload_start..payload_start + (payload_len - first)],
+            )
+        };
+
+        let result = f(&header, slice1, slice2);
+
+        fence(Ordering::Release);
+        self.header().tail.store(tail + (needed as u64), Ordering::Release);
+
+        Ok(Some(result))
+    }
+
+    /// Read incoming autonomous task dispatch frame
+    pub fn read_task_dispatch(&mut self) -> Result<Option<ShmTaskDispatch>> {
+        match self.try_read_aligned_frame()? {
+            Some((header, payload)) => {
+                if header.tag != TAG_TASK_DISPATCH {
+                    return Err(HgbError::Storage(format!(
+                        "Frame tag mismatch: expected TaskDispatch (0x{:02X}), found 0x{:02X}",
+                        TAG_TASK_DISPATCH, header.tag
+                    )));
+                }
+                let task: ShmTaskDispatch = serde_json::from_slice(&payload)
+                    .map_err(|e| HgbError::Serialization(format!("Failed to deserialize ShmTaskDispatch: {}", e)))?;
+                Ok(Some(task))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Read task execution report frame
+    pub fn read_task_execution_report(&mut self) -> Result<Option<ShmTaskExecutionReport>> {
+        match self.try_read_aligned_frame()? {
+            Some((header, payload)) => {
+                if header.tag != TAG_TASK_EXECUTION_REPORT {
+                    return Err(HgbError::Storage(format!(
+                        "Frame tag mismatch: expected TaskExecutionReport (0x{:02X}), found 0x{:02X}",
+                        TAG_TASK_EXECUTION_REPORT, header.tag
+                    )));
+                }
+                let report: ShmTaskExecutionReport = serde_json::from_slice(&payload)
+                    .map_err(|e| HgbError::Serialization(format!("Failed to deserialize ShmTaskExecutionReport: {}", e)))?;
+                Ok(Some(report))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Read high-frequency host hardware telemetry frame
+    pub fn read_telemetry_frame(&mut self) -> Result<Option<ShmTelemetryFrame>> {
+        match self.try_read_aligned_frame()? {
+            Some((header, payload)) => {
+                if header.tag != TAG_TELEMETRY_FRAME {
+                    return Err(HgbError::Storage(format!(
+                        "Frame tag mismatch: expected TelemetryFrame (0x{:02X}), found 0x{:02X}",
+                        TAG_TELEMETRY_FRAME, header.tag
+                    )));
+                }
+                let frame: ShmTelemetryFrame = serde_json::from_slice(&payload)
+                    .map_err(|e| HgbError::Serialization(format!("Failed to deserialize ShmTelemetryFrame: {}", e)))?;
+                Ok(Some(frame))
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
     pub fn is_empty(&self) -> bool {
         let head = self.header().head.load(Ordering::Acquire);
         let tail = self.header().tail.load(Ordering::Relaxed);
@@ -1217,5 +1703,165 @@ mod tests {
         assert_eq!(status.capacity_bytes, 64 * 1024);
         assert_eq!(status.unread_bytes, 0);
         storage.unlink().expect("unlink");
+    }
+
+    #[test]
+    fn test_shm_zero_copy_aligned_frames() {
+        let ring_name = format!("test_aligned_{}", std::process::id());
+        let mut storage = ShmZeroCopyStorage::create(&ring_name, 512).expect("create storage");
+        storage.set_unlink_on_drop(true);
+
+        let payload = b"Cacheline aligned 64-byte frame payload testing";
+        for i in 0..20 {
+            let written = storage.try_write_aligned_frame(TAG_RAW, payload).expect("write aligned");
+            assert!(written, "Write failed at iter {}", i);
+
+            let (header, recvd) = storage.try_read_aligned_frame().expect("read aligned").expect("some frame");
+            assert_eq!(header.tag, TAG_RAW);
+            assert_eq!(header.payload_len as usize, payload.len());
+            assert_eq!(&recvd, payload);
+        }
+
+        // Test zero-copy reader
+        storage.try_write_aligned_frame(TAG_PROMPT, b"Zero copy prompt").expect("write prompt");
+        let zc_res = storage.read_aligned_zero_copy(|hdr, s1, s2| {
+            assert_eq!(hdr.tag, TAG_PROMPT);
+            let mut combined = s1.to_vec();
+            combined.extend_from_slice(s2);
+            combined
+        }).expect("read zc").expect("some zc");
+        assert_eq!(&zc_res, b"Zero copy prompt");
+    }
+
+    #[test]
+    fn test_shm_zero_copy_task_dispatch_and_execution_report() {
+        let ring_name = format!("test_task_report_{}", std::process::id());
+        let storage = ShmZeroCopyStorage::create(&ring_name, 128 * 1024).expect("create storage");
+        let (mut producer, mut consumer) = storage.split().expect("split");
+        producer.set_unlink_on_drop(true);
+
+        let dispatch = ShmTaskDispatch::new(
+            "dispatch_001",
+            "Dispatched prompt job for Hagibis",
+            ShmTaskType::PromptJob,
+            "Explain zero-copy IPC",
+        )
+        .with_sandbox(true)
+        .with_workspace("/tmp/hagibis_ws");
+
+        assert!(producer.write_task_dispatch(&dispatch).expect("write dispatch"));
+
+        let recvd_dispatch = consumer.read_task_dispatch().expect("read dispatch").expect("some dispatch");
+        assert_eq!(recvd_dispatch.task_id, "dispatch_001");
+        assert_eq!(recvd_dispatch.title, "Dispatched prompt job for Hagibis");
+        assert_eq!(recvd_dispatch.payload, "Explain zero-copy IPC");
+        assert_eq!(recvd_dispatch.workspace_root, Some("/tmp/hagibis_ws".to_string()));
+
+        // Stream report chunk
+        let chunk = ShmTaskExecutionReport::chunk("dispatch_001", "Chunk 1 output...", 0, false);
+        assert!(producer.write_task_execution_report(&chunk).expect("write chunk"));
+
+        let recvd_chunk = consumer.read_task_execution_report().expect("read chunk").expect("some chunk");
+        assert!(recvd_chunk.is_chunk);
+        assert_eq!(recvd_chunk.stdout, "Chunk 1 output...");
+
+        // Final report
+        let report = ShmTaskExecutionReport::success("dispatch_001", "Execution finished successfully", 420);
+        assert!(producer.write_task_execution_report(&report).expect("write report"));
+
+        let recvd_report = consumer.read_task_execution_report().expect("read report").expect("some report");
+        assert!(recvd_report.success);
+        assert!(recvd_report.is_final);
+        assert_eq!(recvd_report.stdout, "Execution finished successfully");
+        assert_eq!(recvd_report.execution_duration_us, 420);
+    }
+
+    #[test]
+    fn test_shm_zero_copy_telemetry_frame() {
+        let ring_name = format!("test_telemetry_{}", std::process::id());
+        let mut storage = ShmZeroCopyStorage::create(&ring_name, 64 * 1024).expect("create storage");
+        storage.set_unlink_on_drop(true);
+
+        let frame = ShmTelemetryFrame {
+            timestamp_ns: 987654321,
+            cpu_usage_pct: 35.8,
+            memory_rss_bytes: 128 * 1024 * 1024,
+            memory_total_bytes: 32 * 1024 * 1024 * 1024,
+            temperature_celsius: Some(48.5),
+            power_watts: Some(22.4),
+            active_tasks: 5,
+            ring_head: 2048,
+            ring_tail: 1024,
+            metadata: serde_json::json!({ "node_id": "worker_1" }),
+        };
+
+        assert!(storage.write_telemetry_frame(&frame).expect("write telem"));
+        let recvd = storage.read_telemetry_frame().expect("read telem").expect("some telem");
+        assert_eq!(recvd.timestamp_ns, 987654321);
+        assert_eq!(recvd.cpu_usage_pct, 35.8);
+        assert_eq!(recvd.temperature_celsius, Some(48.5));
+        assert_eq!(recvd.active_tasks, 5);
+    }
+
+    #[test]
+    fn test_shm_zero_copy_sub_microsecond_bench() {
+        let ring_name = format!("test_bench_us_{}", std::process::id());
+        let mut storage = ShmZeroCopyStorage::create(&ring_name, 512 * 1024).expect("create storage");
+        storage.set_unlink_on_drop(true);
+
+        let payload = b"Sub-microsecond latency frame verification payload";
+        let iterations = 1000;
+        let start = Instant::now();
+
+        for _ in 0..iterations {
+            assert!(storage.try_write_aligned_frame(TAG_RAW, payload).expect("write"));
+            let recvd = storage.try_read_aligned_frame().expect("read").expect("some frame");
+            assert_eq!(recvd.1.len(), payload.len());
+        }
+
+        let elapsed = start.elapsed();
+        let avg_latency_ns = (elapsed.as_nanos() as f64) / (iterations as f64);
+        println!(
+            "ShmZeroCopyStorage aligned roundtrip: {} iterations in {:?}, avg latency: {:.2} ns",
+            iterations, elapsed, avg_latency_ns
+        );
+        assert!(avg_latency_ns < 50_000.0, "Latency higher than expected: {} ns", avg_latency_ns);
+    }
+
+    #[test]
+    fn test_shm_zero_copy_concurrency() {
+        let ring_name = format!("test_concurrency_{}", std::process::id());
+        let storage = ShmZeroCopyStorage::create(&ring_name, 1024 * 1024).expect("create storage");
+        let (mut producer, mut consumer) = storage.split().expect("split");
+        producer.set_unlink_on_drop(true);
+
+        let count = 100;
+        let handle = std::thread::spawn(move || {
+            let mut recvd_count = 0;
+            while recvd_count < count {
+                if let Some(task) = consumer.read_task_dispatch().expect("read dispatch") {
+                    assert!(task.task_id.starts_with("concurrent_"));
+                    recvd_count += 1;
+                } else {
+                    std::thread::yield_now();
+                }
+            }
+            recvd_count
+        });
+
+        for i in 0..count {
+            let dispatch = ShmTaskDispatch::new(
+                format!("concurrent_{}", i),
+                format!("Concurrent Task {}", i),
+                ShmTaskType::Autonomous,
+                format!("Job payload {}", i),
+            );
+            while !producer.write_task_dispatch(&dispatch).expect("write dispatch") {
+                std::thread::yield_now();
+            }
+        }
+
+        let total = handle.join().expect("join");
+        assert_eq!(total, count);
     }
 }

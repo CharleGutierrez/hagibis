@@ -42,6 +42,34 @@
         "limit": { "type": "integer", "description": "Maximum number of results to return", "default": 5 }
       }
     },
+    "hgb_p2p_swarm_discover": {
+      "description": "Discover active peer nodes, available MCP tools, load scores, and hardware capabilities across the decentralized P2P development mesh",
+      "parameters": {
+        "tool_name": { "type": "string", "description": "Optional specific MCP tool name to discover capable peers for" },
+        "timeout_secs": { "type": "integer", "description": "Stale peer timeout threshold in seconds", "default": 15 }
+      }
+    },
+    "hgb_p2p_context_sync": {
+      "description": "Synchronize context graphs and query vector shards across multiple developer machines seamlessly with BLAKE3 verification",
+      "parameters": {
+        "action": { "type": "string", "enum": ["sync_graph", "query_shards", "list_nodes", "put_node"], "default": "query_shards" },
+        "peer_addr": { "type": "string", "description": "Target peer IP:Port address (e.g. 192.168.1.10:8970) for direct sync" },
+        "collection": { "type": "string", "description": "Context graph collection namespace" },
+        "query": { "type": "string", "description": "Semantic/lexical search query string for vector shard search" },
+        "top_k": { "type": "integer", "description": "Number of top matching shards to retrieve", "default": 5 },
+        "node_key": { "type": "string", "description": "Unique key when storing context node" },
+        "node_content": { "type": "string", "description": "Content string when storing context node" }
+      }
+    },
+    "hgb_p2p_tool_delegate": {
+      "description": "Delegate MCP tool execution (WASM execution, speculative inference, compilation) to optimal remote peer in the P2P swarm based on real-time load score",
+      "parameters": {
+        "tool_name": { "type": "string", "description": "Target MCP tool to delegate", "required": true },
+        "arguments": { "type": "object", "description": "Arguments payload for tool execution", "required": true },
+        "target_peer": { "type": "string", "description": "Optional specific peer IP:Port to delegate to (evaluates dynamic load if omitted)" },
+        "timeout_ms": { "type": "integer", "description": "Delegation execution timeout in milliseconds", "default": 10000 }
+      }
+    },
     "hgb_ollama_pipeline_accelerate": {
       "description": "Direct local Ollama pipeline acceleration: zero-latency embedding generation and speculative drafting with dynabook hardware optimizations",
       "parameters": {

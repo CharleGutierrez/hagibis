@@ -451,6 +451,10 @@ pub use swarm_service::{
     SwarmDaemonConfig, SwarmDaemonService, SwarmServiceStatusSnapshot,
 };
 
+// Vector 2: Universal WASM Plugin Hot-Reloading Service
+pub mod wasm_hot_reload_service;
+pub use wasm_hot_reload_service::WasmHotReloadService;
+
 
 
 

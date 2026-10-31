@@ -1593,6 +1593,10 @@ pub enum HgbRequest {
     StreamTelemetryToShm {
         client_pid: u32,
     },
+    DispatchTaskShm {
+        client_pid: u32,
+        task: crate::shm_ring_channel::ShmTaskDispatch,
+    },
 
     // Pillar 2: Distributed MicroVM Mesh & WASM Swarm Federation
     SwarmStatus,
@@ -1601,6 +1605,12 @@ pub enum HgbRequest {
         title: String,
         task_kind: String,
         code: String,
+    },
+
+    // Vector 2: Universal WASM Plugin Hot-Reloading
+    WasmHotReloadStatus,
+    TriggerWasmReload {
+        module_path: Option<String>,
     },
 }
 
@@ -2320,6 +2330,11 @@ pub enum HgbResponse {
         total_tokens: usize,
         duration_ms: u64,
     },
+    ShmTaskResult(crate::shm_ring_channel::ShmTaskExecutionReport),
+
+    // Vector 2: Universal WASM Plugin Hot-Reloading
+    WasmHotReloadStatusResult(serde_json::Value),
+    TriggerWasmReloadResult(serde_json::Value),
 }
 
 #[path = "hardware_runtime_synergy.rs"]

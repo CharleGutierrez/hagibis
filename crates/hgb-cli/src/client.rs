@@ -175,6 +175,7 @@ impl HgbClient {
     }
 
     /// Stream LLM tokens from daemon over zero-copy SHM ring buffer
+    #[allow(dead_code)]
     pub async fn stream_tokens_shm<F>(
         &self,
         prompt: &str,
@@ -247,6 +248,81 @@ impl HgbClient {
             }
             HgbResponse::Error(e) => Err(HgbError::Ipc(format!("Stream telemetry failed: {e}"))),
             other => Err(HgbError::Ipc(format!("Unexpected response: {other:?}"))),
+        }
+    }
+
+    /// Dispatches an autonomous task, prompt job, or test run to hgbd daemon over zero-copy shared memory
+    #[allow(dead_code)]
+    pub async fn dispatch_task_shm(
+        &self,
+        task: &hgb_core::shm_ring_channel::ShmTaskDispatch,
+    ) -> Result<hgb_core::shm_ring_channel::ShmTaskExecutionReport> {
+        let mut channel = self.negotiate_shm_ring(None).await?;
+        let client_pid = if task.client_pid > 0 { task.client_pid } else { std::process::id() };
+
+        // 1. Dispatch task into memory-mapped ring buffer in <1 microsecond
+        let _ = channel.send_task_dispatch(task);
+
+        let this = self.clone();
+        let task_clone = task.clone();
+        let send_handle = tokio::spawn(async move {
+            this.send(HgbRequest::DispatchTaskShm {
+                client_pid,
+                task: task_clone,
+            })
+            .await
+        });
+
+        let poll_timeout = std::time::Duration::from_millis(2000);
+        let mut gathered_stdout = String::new();
+        let mut gathered_stderr = String::new();
+        let mut final_report = None;
+
+        // 2. Stream back stdout/stderr chunks and execution results over zero-copy SHM
+        loop {
+            match channel.recv_frame_blocking(poll_timeout)? {
+                Some(hgb_core::shm_ring_channel::ShmRingFrame::TaskExecutionReport(report)) => {
+                    if report.is_chunk {
+                        gathered_stdout.push_str(&report.stdout);
+                        gathered_stderr.push_str(&report.stderr);
+                        if report.is_final {
+                            final_report = Some(hgb_core::shm_ring_channel::ShmTaskExecutionReport {
+                                task_id: report.task_id,
+                                success: report.success,
+                                exit_code: report.exit_code,
+                                stdout: gathered_stdout.clone(),
+                                stderr: gathered_stderr.clone(),
+                                execution_duration_us: report.execution_duration_us,
+                                state: report.state,
+                                is_chunk: false,
+                                chunk_index: report.chunk_index,
+                                is_final: true,
+                            });
+                            break;
+                        }
+                    } else {
+                        final_report = Some(report);
+                        break;
+                    }
+                }
+                Some(_) => {}
+                None => {
+                    if send_handle.is_finished() {
+                        break;
+                    }
+                }
+            }
+        }
+
+        let resp = send_handle.await.map_err(|e| HgbError::Ipc(e.to_string()))??;
+        if let Some(rep) = final_report {
+            Ok(rep)
+        } else {
+            match resp {
+                HgbResponse::ShmTaskResult(rep) => Ok(rep),
+                HgbResponse::Error(e) => Err(HgbError::Ipc(format!("Task execution failed: {e}"))),
+                other => Err(HgbError::Ipc(format!("Unexpected response for DispatchTaskShm: {other:?}"))),
+            }
         }
     }
 

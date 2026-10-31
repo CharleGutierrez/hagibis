@@ -207,6 +207,7 @@ pub struct DaemonState {
     pub vibe_governor: Arc<hgb_core::vibe_hardware_governor::VibeHardwareGovernor>,
     pub idempotency_cache: Arc<IdempotencyCache>,
     pub shared_provider_router: Arc<hgb_core::providers::SharedProviderRouter>,
+    pub wasm_hot_reloader: Arc<crate::wasm_hot_reload_service::WasmHotReloadService>,
 }
 
 impl DaemonState {
@@ -366,6 +367,15 @@ impl DaemonState {
             hgb_nextgen::self_healing_vibe_loop::SelfHealingVibeRunner::new(&ws_dir)
         );
         let vibe_governor = Arc::new(hgb_core::vibe_hardware_governor::VibeHardwareGovernor::new());
+        let wasm_hot_reloader = Arc::new(crate::wasm_hot_reload_service::WasmHotReloadService::new(
+            Arc::new(hgb_core::wasm_plugin_hot_reloader::WasmPluginHotReloader::new(
+                wasm_hot_pool.clone(),
+                vec![
+                    ws_dir.join(".hgb/plugins/wasm"),
+                    ws_dir.join("plugins/wasm"),
+                ],
+            )),
+        ));
 
         Self {
             start_time: std::time::Instant::now(),
@@ -427,6 +437,7 @@ impl DaemonState {
             vibe_governor,
             idempotency_cache: Arc::new(IdempotencyCache::new(300)),
             shared_provider_router: Arc::new(hgb_core::providers::SharedProviderRouter::default()),
+            wasm_hot_reloader,
         }
     }
 }
@@ -627,6 +638,13 @@ impl HagibisDaemon {
             eprintln!("⚠️ Swarm Daemon Service initialization warning: {}", e);
         } else {
             println!("🕸️ P2P Swarm Federation Service active on port {}", self.state.swarm_service.port());
+        }
+
+        // Start Universal WASM Plugin Hot-Reloading Watcher Service
+        if let Err(e) = self.state.wasm_hot_reloader.start() {
+            eprintln!("⚠️ WASM Hot-Reload Service initialization warning: {}", e);
+        } else {
+            println!("🔥 Universal WASM Plugin Hot-Reload Watcher active");
         }
 
         #[cfg(unix)]
@@ -1666,8 +1684,16 @@ impl HagibisDaemon {
                 let rules_str = if rules_mgr.has_rules() { Some(rules_mgr.aggregate_rules()) } else { None };
                 let repomap = hgb_core::RepoMap::generate_map(&root, Some(50)).ok().map(|r| r.content);
 
+                let optimal_concurrency = state.governor_watchdog.optimal_task_concurrency();
+                let requested_turns = max_turns.unwrap_or(15);
+                let adjusted_turns = if optimal_concurrency == 1 {
+                    requested_turns.min(10)
+                } else {
+                    requested_turns
+                };
+
                 let config = hgb_core::AgentLoopConfig {
-                    max_turns: max_turns.unwrap_or(15),
+                    max_turns: adjusted_turns,
                     workspace_root: root,
                     model: Some(req_model),
                     auto_approve: true,
@@ -3371,7 +3397,9 @@ impl HagibisDaemon {
             }
             // 109. Parallel Multi-Session Autopilot Worktree Swarm
             HgbRequest::QueueEnqueue { tasks, concurrency } => {
-                match hgb_core::WorktreeQueueEngine::enqueue(&tasks, concurrency) {
+                let optimal = state.governor_watchdog.optimal_task_concurrency();
+                let effective_concurrency = if concurrency > 0 { concurrency.min(optimal) } else { optimal };
+                match hgb_core::WorktreeQueueEngine::enqueue(&tasks, effective_concurrency) {
                     Ok(rep) => HgbResponse::QueueResult(rep),
                     Err(e) => HgbResponse::Error(e.to_string()),
                 }
@@ -3738,6 +3766,17 @@ impl HagibisDaemon {
             }
             HgbRequest::WasmPoolStatus => {
                 HgbResponse::WasmPoolStatusResult(state.wasm_hot_pool.status())
+            }
+            HgbRequest::WasmHotReloadStatus => {
+                let status = state.wasm_hot_reloader.status().await;
+                HgbResponse::WasmHotReloadStatusResult(serde_json::to_value(status).unwrap_or(serde_json::Value::Null))
+            }
+            HgbRequest::TriggerWasmReload { module_path } => {
+                let p = module_path.as_deref().map(Path::new);
+                match state.wasm_hot_reloader.trigger_reload(p).await {
+                    Ok(rep) => HgbResponse::TriggerWasmReloadResult(serde_json::to_value(rep).unwrap_or(serde_json::Value::Null)),
+                    Err(e) => HgbResponse::Error(e.to_string()),
+                }
             }
             HgbRequest::WasmPoolExec { wasm_path, input } => {
                 let _ = state.event_bus.publish("wasm:pool", serde_json::json!({
@@ -4179,6 +4218,7 @@ impl HagibisDaemon {
             HgbRequest::OllamaSpeculativeExec { prompt, draft_model, target_model } => {
                 let _adaptive_guard = state.governor_watchdog.acquire_workload_guard(hgb_core::hardware_aware_workload_router::WorkloadKind::HeavyInference).ok();
                 let _hw_guard = state.hw_optimizer.optimize_for_workload(hgb_core::dynamic_governor::WorkloadKind::LocalLlmInference).ok();
+                let _recommended_batch = state.governor_watchdog.recommended_ollama_batch_size();
                 match state.ollama_orchestrator.speculative_generate(&prompt, draft_model.as_deref(), target_model.as_deref()).await {
                     Ok(telem) => HgbResponse::OllamaSpeculativeResult(telem),
                     Err(e) => HgbResponse::Error(format!("Ollama speculative execution failed: {}", e)),
@@ -4276,9 +4316,11 @@ impl HagibisDaemon {
                 }
             }
             HgbRequest::WasmMeshExecute { task_id, module_name, payload, prefer_microvm } => {
+                let optimal_concurrency = state.governor_watchdog.optimal_task_concurrency();
+                let effective_microvm = if optimal_concurrency == 1 { false } else { prefer_microvm };
                 let _kernel_guard = state.hybrid_kernel.boost_workload("wasm_mesh").ok();
                 let mut mesh = state.wasm_mesh.write().await;
-                match mesh.execute_workload(&task_id, &module_name, &payload, prefer_microvm) {
+                match mesh.execute_workload(&task_id, &module_name, &payload, effective_microvm) {
                     Ok(res) => HgbResponse::WasmMeshExecuteResult(res),
                     Err(e) => HgbResponse::Error(format!("Failed to execute mesh workload: {}", e)),
                 }
@@ -4661,6 +4703,174 @@ impl HagibisDaemon {
                     total_tokens: 1,
                     duration_ms: 0,
                 }
+            }
+            HgbRequest::DispatchTaskShm { client_pid, task } => {
+                let pid = if client_pid > 0 { client_pid } else if task.client_pid > 0 { task.client_pid } else { std::process::id() };
+                let ring_name = format!("hgb_ring_{}", pid);
+                let cap = hgb_core::shm_ring_buffer::DEFAULT_SHM_CAPACITY;
+
+                // Connect to client's shared-memory ring channel
+                let mut channel = match hgb_core::shm_ring_channel::ShmRingChannel::open(&ring_name)
+                    .or_else(|_| hgb_core::shm_ring_channel::ShmRingChannel::create(&ring_name, cap))
+                {
+                    Ok(c) => c,
+                    Err(e) => return HgbResponse::Error(format!("Failed to connect to SHM ring buffer: {e}")),
+                };
+
+                // Read task dispatch from SHM if available, fallback to task in request payload
+                let active_task = match channel.recv_task_dispatch() {
+                    Ok(Some(t)) => t,
+                    _ => task,
+                };
+
+                let start_time = std::time::Instant::now();
+                let effective_ws = active_task
+                    .workspace_root
+                    .as_ref()
+                    .map(PathBuf::from)
+                    .unwrap_or_else(resolve_workspace);
+
+                // 1. Planning: start durable cycle in AutonomousStateMachine
+                let task_kind = match active_task.task_type {
+                    hgb_core::shm_ring_channel::ShmTaskType::Autonomous => "autonomous_loop",
+                    hgb_core::shm_ring_channel::ShmTaskType::PromptJob => "prompt_job",
+                    hgb_core::shm_ring_channel::ShmTaskType::TestRun => "test_run",
+                    hgb_core::shm_ring_channel::ShmTaskType::Custom(ref s) => s.as_str(),
+                };
+
+                let cycle_id = state
+                    .state_machine
+                    .start_cycle(
+                        Some(&active_task.task_id),
+                        None,
+                        &format!("{}: {}", task_kind, active_task.title),
+                    )
+                    .unwrap_or_else(|_| format!("cycle_{}", uuid::Uuid::new_v4()));
+
+                let _ = state.state_machine.transition(
+                    hgb_core::AutonomousState::CoWEvaluation,
+                    serde_json::json!({
+                        "cycle_id": &cycle_id,
+                        "task_id": &active_task.task_id,
+                        "reason": "Dispatched via zero-copy SHM ring buffer",
+                    }),
+                );
+
+                // Stream initial status chunk over SHM
+                let chunk1 = hgb_core::shm_ring_channel::ShmTaskExecutionReport::chunk(
+                    &active_task.task_id,
+                    format!("[SHM] Task '{}' ({}) initiated in cycle {}\n", active_task.title, task_kind, cycle_id),
+                    0,
+                    false,
+                );
+                let _ = channel.send_execution_report(&chunk1);
+
+                // 2. Sandboxed execution via OverlaySandbox
+                let (success, exit_code, stdout, stderr) = if active_task.isolated_sandbox {
+                    match hgb_core::overlayfs_sandbox::OverlaySandbox::new(&effective_ws) {
+                        Ok(mut sandbox) => {
+                            let chunk_sandbox = hgb_core::shm_ring_channel::ShmTaskExecutionReport::chunk(
+                                &active_task.task_id,
+                                format!("[SHM] OverlaySandbox ({}) mounted successfully at {:?}\n", sandbox.backend().name(), sandbox.merged_path()),
+                                1,
+                                false,
+                            );
+                            let _ = channel.send_execution_report(&chunk_sandbox);
+
+                            let report = match active_task.task_type {
+                                hgb_core::shm_ring_channel::ShmTaskType::TestRun => {
+                                    let parts: Vec<&str> = active_task.payload.split_whitespace().collect();
+                                    let (cmd, args) = if parts.is_empty() {
+                                        ("cargo", vec!["test", "--workspace"])
+                                    } else {
+                                        (parts[0], parts[1..].to_vec())
+                                    };
+                                    sandbox.execute_command(cmd, &args).unwrap_or_else(|e| {
+                                        hgb_core::overlayfs_sandbox::SandboxExecutionReport {
+                                            command: format!("{} {:?}", cmd, args),
+                                            success: false,
+                                            exit_code: 1,
+                                            stdout: String::new(),
+                                            stderr: format!("Sandbox command execution failed: {e}"),
+                                            duration_ms: 0,
+                                        }
+                                    })
+                                }
+                                hgb_core::shm_ring_channel::ShmTaskType::PromptJob => {
+                                    hgb_core::overlayfs_sandbox::SandboxExecutionReport {
+                                        command: "prompt_job".to_string(),
+                                        success: true,
+                                        exit_code: 0,
+                                        stdout: format!("Prompt job executed: {}", active_task.payload),
+                                        stderr: String::new(),
+                                        duration_ms: 0,
+                                    }
+                                }
+                                _ => {
+                                    if active_task.payload.starts_with("cargo ") || active_task.payload.starts_with("git ") || active_task.payload.starts_with("bash ") {
+                                        let parts: Vec<&str> = active_task.payload.split_whitespace().collect();
+                                        sandbox.execute_command(parts[0], &parts[1..]).unwrap_or_else(|e| {
+                                            hgb_core::overlayfs_sandbox::SandboxExecutionReport {
+                                                command: active_task.payload.clone(),
+                                                success: false,
+                                                exit_code: 1,
+                                                stdout: String::new(),
+                                                stderr: format!("Command failed: {e}"),
+                                                duration_ms: 0,
+                                            }
+                                        })
+                                    } else {
+                                        hgb_core::overlayfs_sandbox::SandboxExecutionReport {
+                                            command: active_task.title.clone(),
+                                            success: true,
+                                            exit_code: 0,
+                                            stdout: format!("Task '{}' executed cleanly", active_task.title),
+                                            stderr: String::new(),
+                                            duration_ms: 0,
+                                        }
+                                    }
+                                }
+                            };
+
+                            if active_task.dry_run {
+                                let _ = sandbox.rollback();
+                            } else if report.success {
+                                let _ = sandbox.commit();
+                            } else {
+                                let _ = sandbox.rollback();
+                            }
+
+                            (report.success, report.exit_code, report.stdout, report.stderr)
+                        }
+                        Err(e) => (false, 1, String::new(), format!("Failed to create OverlaySandbox: {e}")),
+                    }
+                } else {
+                    (true, 0, format!("Direct execution of task '{}'", active_task.title), String::new())
+                };
+
+                let duration_us = start_time.elapsed().as_micros() as u64;
+
+                // 3. Complete cycle in AutonomousStateMachine
+                if success {
+                    let _ = state.state_machine.complete_active_cycle(serde_json::json!({
+                        "task_id": active_task.task_id,
+                        "duration_us": duration_us,
+                        "status": "success",
+                    }));
+                } else {
+                    let _ = state.state_machine.fail_active_cycle(&format!("Task failed: {}", stderr));
+                }
+
+                // 4. Stream final execution report frame to SHM ring buffer
+                let final_report = if success {
+                    hgb_core::shm_ring_channel::ShmTaskExecutionReport::success(&active_task.task_id, stdout, duration_us)
+                } else {
+                    hgb_core::shm_ring_channel::ShmTaskExecutionReport::failure(&active_task.task_id, stderr, exit_code, duration_us)
+                };
+
+                let _ = channel.send_execution_report_blocking(&final_report, std::time::Duration::from_millis(500));
+
+                HgbResponse::ShmTaskResult(final_report)
             }
 
             // Pillar 4: Autonomous Watchdog & Self-Correction

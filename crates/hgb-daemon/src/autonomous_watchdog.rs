@@ -20,7 +20,6 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
 use rusqlite::{params, Connection};
-use serde::{Deserialize, Serialize};
 
 use hgb_core::error::{HgbError, Result};
 use hgb_core::event_bus::DistributedEventBus;

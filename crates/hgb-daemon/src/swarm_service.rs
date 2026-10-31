@@ -5,7 +5,7 @@
 //! synchronize heartbeats, and cooperatively execute compute tasks.
 
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -18,8 +18,9 @@ use hgb_core::p2p_swarm_federation::{
     DEFAULT_HEARTBEAT_INTERVAL_SECS, DEFAULT_STALE_NODE_TIMEOUT_SECS,
 };
 use hgb_core::p2p_mcp_swarm::{
-    P2pMcpSwarmEngine, P2pSubtaskSpec, P2pSubtaskResult, P2pWorkflowSpec, P2pWorkflowResult,
-    P2pMcpSwarmStatusReport,
+    ContextGraphNode, ContextGraphSyncReport, FederatedToolInfo, P2pMcpSwarmEngine,
+    P2pMcpSwarmStatusReport, P2pSubtaskResult, P2pSubtaskSpec, P2pWorkflowResult,
+    P2pWorkflowSpec, VectorShardMatch,
 };
 
 pub const DEFAULT_SWARM_PORT: u16 = DEFAULT_FEDERATION_PORT;
@@ -159,6 +160,34 @@ impl SwarmDaemonService {
         self.mcp_swarm.status().await
     }
 
+    pub async fn put_context_node(&self, node: ContextGraphNode) -> String {
+        self.mcp_swarm.put_context_node(node).await
+    }
+
+    pub async fn get_context_node(&self, collection: &str, key: &str) -> Option<ContextGraphNode> {
+        self.mcp_swarm.get_context_node(collection, key).await
+    }
+
+    pub async fn list_context_nodes(&self, collection: Option<&str>) -> Vec<ContextGraphNode> {
+        self.mcp_swarm.list_context_nodes(collection).await
+    }
+
+    pub async fn sync_context_graph(
+        &self,
+        peer_addr: SocketAddr,
+        collection: Option<String>,
+    ) -> Result<ContextGraphSyncReport> {
+        self.mcp_swarm.sync_context_graph_with_peer(peer_addr, collection).await
+    }
+
+    pub async fn query_vector_shards(&self, query: &str, top_k: usize) -> Vec<VectorShardMatch> {
+        self.mcp_swarm.query_vector_shards_across_swarm(query, top_k).await
+    }
+
+    pub async fn list_federated_tools(&self) -> Vec<FederatedToolInfo> {
+        self.mcp_swarm.list_federated_tools().await
+    }
+
     pub async fn status(&self) -> SwarmFederationStatusReport {
         self.engine.status().await
     }
@@ -174,5 +203,46 @@ impl SwarmDaemonService {
         if let Some(handle) = self.maintenance_handle.lock().await.take() {
             handle.abort();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_swarm_daemon_service_mcp_and_context_graph() {
+        let tmp = std::env::temp_dir().join(format!("hgb_swarm_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let service = SwarmDaemonService::new(&tmp, 0).unwrap();
+        let mcp_status = service.mcp_status().await;
+        assert!(!mcp_status.node_id.is_empty());
+        assert!(!mcp_status.advertised_tools.is_empty());
+
+        let node = ContextGraphNode {
+            collection: "swarm_test".to_string(),
+            key: "test_doc.md".to_string(),
+            content: "Hagibis sovereign distributed swarm".to_string(),
+            metadata: serde_json::json!({}),
+            embedding: None,
+            blake3_hash: String::new(),
+            updated_at: 0,
+        };
+
+        let hash = service.put_context_node(node).await;
+        assert!(!hash.is_empty());
+
+        let fetched = service.get_context_node("swarm_test", "test_doc.md").await.unwrap();
+        assert_eq!(fetched.key, "test_doc.md");
+
+        let matches = service.query_vector_shards("sovereign", 3).await;
+        assert!(!matches.is_empty());
+        assert_eq!(matches[0].filepath_or_key, "test_doc.md");
+
+        let federated = service.list_federated_tools().await;
+        assert!(!federated.is_empty());
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

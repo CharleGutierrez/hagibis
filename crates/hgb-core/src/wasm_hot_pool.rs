@@ -249,6 +249,11 @@ impl WasmHotPool {
         &self.router
     }
 
+    /// Access the internal Wasmtime Engine
+    pub fn engine(&self) -> &Engine {
+        &self.engine
+    }
+
     /// Internal factory to construct an execution slot with pre-bound host functions
     fn create_hot_slot(engine: &Engine, id: usize) -> Result<HotWorkerSlot> {
         let mut store = Store::new(
@@ -620,6 +625,32 @@ impl WasmHotPool {
             size_bytes: 0,
             hit_count: AtomicU64::new(0),
             is_tiered_up: true,
+            engine: Some(engine),
+        });
+        cache.insert(path.to_path_buf(), entry);
+    }
+
+    /// Atomically hot-swap a compiled Module with custom manifest, size, and tiering status
+    pub fn hot_swap_module_with_manifest(
+        &self,
+        path: &Path,
+        module: Module,
+        manifest: WasmPluginManifest,
+        blake3_hash: &str,
+        compile_duration_us: u64,
+        size_bytes: usize,
+        is_tiered_up: bool,
+    ) {
+        let mut cache = self.module_cache.write().unwrap();
+        let engine = module.engine().clone();
+        let entry = Arc::new(CachedModule {
+            blake3_hash: blake3_hash.to_string(),
+            module,
+            manifest,
+            compile_duration_us,
+            size_bytes,
+            hit_count: AtomicU64::new(0),
+            is_tiered_up,
             engine: Some(engine),
         });
         cache.insert(path.to_path_buf(), entry);

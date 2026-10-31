@@ -1138,7 +1138,11 @@ pub use shm_ring_buffer::{
 
 pub mod shm_ring_channel;
 pub use shm_ring_channel::{
-    ShmRingChannel, ShmRingChannelConsumer, ShmRingChannelProducer, ShmRingFrame,
+    align_up_64, ShmFrameHeader, ShmRingChannel, ShmRingChannelConsumer, ShmRingChannelProducer,
+    ShmRingFrame, ShmTaskDispatch, ShmTaskExecutionReport, ShmTaskType, ShmTelemetryFrame,
+    FRAME_HEADER_SIZE, FRAME_MAGIC, FRAME_TAG_RAW, FRAME_TAG_REQUEST, FRAME_TAG_RESPONSE,
+    FRAME_TAG_TASK_DISPATCH, FRAME_TAG_TASK_REPORT, FRAME_TAG_TELEMETRY, FRAME_TAG_TELEMETRY_FRAME,
+    FRAME_TAG_TOKEN_CHUNK,
 };
 
 // Strategic Upgrade 2: Distributed MicroVM Swarm Intelligence (Firecracker + WASM Hybrid)
@@ -1255,6 +1259,24 @@ pub use zig_wasm_agent_compiler::{
     HealingAttempt, SandboxedWasmAgentRunner, ZigCompilerConfig, ZigCompilationResult,
     ZigOptimization, ZigWasmAgentCompiler, ZigWasmTarget,
 };
+
+// Vector 3: Hardware-Aware Dynamic Profiling (Synergy with dynatune & kernel-optimizer)
+pub mod dynamic_hardware_profiler;
+pub use dynamic_hardware_profiler::{
+    compute_ollama_batch_size, compute_task_concurrency, DynamicHardwareProfiler,
+    HardwareGovernorProfile, HardwareProfileTelemetry, ProfileSwitchReport,
+    ProfilerGovernorGuard, ThermalZoneInfo, BALANCED_MGLRU_MIN_TTL_MS,
+    POWERSAVE_MGLRU_MIN_TTL_MS, THERMAL_HEADROOM_SAFE_C, THERMAL_THROTTLE_LIMIT_C,
+};
+
+// Vector 2: Universal WASM Plugin Hot-Reloading
+pub mod wasm_plugin_hot_reloader;
+pub use wasm_plugin_hot_reloader::{
+    HotReloadEvent, HotReloadReport, HotReloadedPluginInfo, WasmHotReloadConfig,
+    WasmPluginHotReloader, DEFAULT_HOT_RELOAD_POLL_MS, DEFAULT_WASM_PLUGIN_DIR,
+    WASM_MAGIC_HEADER, WASM_VERSION_1,
+};
+
 
 
 

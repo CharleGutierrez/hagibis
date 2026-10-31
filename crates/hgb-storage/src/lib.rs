@@ -110,10 +110,11 @@ pub use simd_runtime_dispatch::{
 // Pillar 3: Zero-Copy Shared Memory IPC via hgb-storage
 pub mod shm_zero_copy_storage;
 pub use shm_zero_copy_storage::{
-    resolve_shm_storage_path, ShmStorageHeader, ShmZeroCopyBenchReport,
-    ShmZeroCopyConsumer, ShmZeroCopyProducer, ShmZeroCopyStorage,
-    ShmZeroCopyStorageStatus, TokenStreamChunk, DEFAULT_STORAGE_RING_CAPACITY,
-    SHM_ZERO_COPY_MAGIC, SHM_ZERO_COPY_VERSION, TAG_EMBEDDING, TAG_PROMPT,
-    TAG_RAW, TAG_TOKEN_STREAM, TAG_WASM_MEMORY,
+    resolve_shm_storage_path, ShmStorageHeader, ShmTaskDispatch, ShmTaskExecutionReport,
+    ShmTaskType, ShmTelemetryFrame, ShmZeroCopyBenchReport, ShmZeroCopyConsumer,
+    ShmZeroCopyProducer, ShmZeroCopyStorage, ShmZeroCopyStorageStatus, TokenStreamChunk,
+    DEFAULT_STORAGE_RING_CAPACITY, SHM_ZERO_COPY_MAGIC, SHM_ZERO_COPY_VERSION,
+    TAG_EMBEDDING, TAG_PROMPT, TAG_RAW, TAG_TASK_DISPATCH, TAG_TASK_EXECUTION_REPORT,
+    TAG_TELEMETRY_FRAME, TAG_TOKEN_STREAM, TAG_WASM_MEMORY,
 };
 

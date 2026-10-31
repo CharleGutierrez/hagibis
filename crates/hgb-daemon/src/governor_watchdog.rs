@@ -11,6 +11,10 @@ use serde::{Deserialize, Serialize};
 use hgb_core::dynamic_governor::{
     DynamicGovernor, GovernorGuard, GovernorTelemetry, WorkloadKind,
 };
+use hgb_core::dynamic_hardware_profiler::{
+    DynamicHardwareProfiler, HardwareGovernorProfile, HardwareProfileTelemetry,
+    ProfilerGovernorGuard,
+};
 use hgb_core::dynatune_bridge::{
     CompleteHardwareTelemetry, DynatuneBridge, HostPowerState, ScalingGuard,
     ScalingShiftReport, WorkloadCategory,
@@ -37,15 +41,23 @@ pub struct GovernorWatchdogStatus {
     pub thermal_protection_engaged: bool,
     pub battery_protection_engaged: bool,
     pub recommended_concurrency_limit: usize,
+    #[serde(default)]
+    pub optimal_concurrency: usize,
+    #[serde(default)]
+    pub recommended_ollama_batch_size: usize,
+    #[serde(default)]
+    pub profiler_telemetry: Option<HardwareProfileTelemetry>,
 }
 
 pub struct GovernorWatchdog {
     governor: Arc<DynamicGovernor>,
     dynatune_bridge: Arc<DynatuneBridge>,
     workload_router: Arc<HardwareAwareWorkloadRouter>,
+    profiler: Arc<DynamicHardwareProfiler>,
     active_guard: Arc<Mutex<Option<GovernorGuard>>>,
     active_scaling_guard: Arc<Mutex<Option<ScalingGuard>>>,
     active_adaptive_guard: Arc<Mutex<Option<WorkloadAdaptiveGuard>>>,
+    active_profiler_guard: Arc<Mutex<Option<ProfilerGovernorGuard>>>,
     last_shift: Arc<Mutex<Option<ScalingShiftReport>>>,
     last_decision: Arc<Mutex<Option<WorkloadExecutionDecision>>>,
     #[allow(dead_code)]
@@ -62,14 +74,18 @@ impl GovernorWatchdog {
     pub fn new() -> Self {
         let bridge = Arc::new(DynatuneBridge::new());
         let router = Arc::new(HardwareAwareWorkloadRouter::with_bridge(Arc::clone(&bridge)));
+        let profiler = Arc::new(DynamicHardwareProfiler::new());
+        let _sampler = profiler.start_background_sampler(std::time::Duration::from_secs(1));
 
         Self {
             governor: Arc::new(DynamicGovernor::new()),
             dynatune_bridge: bridge,
             workload_router: router,
+            profiler,
             active_guard: Arc::new(Mutex::new(None)),
             active_scaling_guard: Arc::new(Mutex::new(None)),
             active_adaptive_guard: Arc::new(Mutex::new(None)),
+            active_profiler_guard: Arc::new(Mutex::new(None)),
             last_shift: Arc::new(Mutex::new(None)),
             last_decision: Arc::new(Mutex::new(None)),
             is_running: Arc::new(AtomicBool::new(false)),
@@ -84,6 +100,26 @@ impl GovernorWatchdog {
     /// Access Hardware-Aware Workload Router
     pub fn router(&self) -> &Arc<HardwareAwareWorkloadRouter> {
         &self.workload_router
+    }
+
+    /// Access Dynamic Hardware Profiler
+    pub fn profiler(&self) -> &Arc<DynamicHardwareProfiler> {
+        &self.profiler
+    }
+
+    /// Read optimal task concurrency dynamically computed by DynamicHardwareProfiler
+    pub fn optimal_task_concurrency(&self) -> usize {
+        self.profiler.optimal_task_concurrency()
+    }
+
+    /// Read recommended Ollama token batch size dynamically computed by DynamicHardwareProfiler
+    pub fn recommended_ollama_batch_size(&self) -> usize {
+        self.profiler.recommended_ollama_batch_size()
+    }
+
+    /// Read live hardware profile telemetry
+    pub fn hardware_profile_telemetry(&self) -> HardwareProfileTelemetry {
+        self.profiler.current_telemetry()
     }
 
     /// Evaluate a workload and compute an execution decision
@@ -153,6 +189,12 @@ impl GovernorWatchdog {
             *active_a = Some(adaptive_guard);
         }
 
+        // 4. DynamicHardwareProfiler profile boost with RAII guard
+        if let Ok(p_guard) = self.profiler.acquire_profile_guard(HardwareGovernorProfile::Performance) {
+            let mut active_p = self.active_profiler_guard.lock().await;
+            *active_p = Some(p_guard);
+        }
+
         Ok(self.status().await)
     }
 
@@ -176,9 +218,16 @@ impl GovernorWatchdog {
                 drop(guard);
             }
         }
+        {
+            let mut active_p = self.active_profiler_guard.lock().await;
+            if let Some(guard) = active_p.take() {
+                drop(guard);
+            }
+        }
 
         let _ = self.governor.set_scaling_governor("powersave");
         let _ = self.governor.set_epp("balance_performance");
+        let _ = self.profiler.switch_profile(HardwareGovernorProfile::PowerSave);
 
         let shift = self.dynatune_bridge.shift_to_powersave_mode()?;
         {
@@ -231,16 +280,20 @@ impl GovernorWatchdog {
     /// Thermal and battery watchdog check: detects throttling conditions and disengages burst mode if needed
     pub async fn check_and_safeguard(&self) -> bool {
         let complete = self.dynatune_bridge.read_complete_hardware_telemetry();
-        if complete.is_throttled {
+        let profiler_throttled = self.profiler.enforce_thermal_safety();
+        if complete.is_throttled || profiler_throttled {
             let mut active = self.active_guard.lock().await;
             let mut active_s = self.active_scaling_guard.lock().await;
             let mut active_a = self.active_adaptive_guard.lock().await;
-            if active.is_some() || active_s.is_some() || active_a.is_some() {
+            let mut active_p = self.active_profiler_guard.lock().await;
+            if active.is_some() || active_s.is_some() || active_a.is_some() || active_p.is_some() {
                 active.take();
                 active_s.take();
                 active_a.take();
+                active_p.take();
                 let _ = self.governor.set_scaling_governor("powersave");
                 let _ = self.governor.set_epp("balance_power");
+                let _ = self.profiler.switch_profile(HardwareGovernorProfile::PowerSave);
                 if let Ok(shift) = self.dynatune_bridge.shift_to_powersave_mode() {
                     let mut shift_lock = self.last_shift.lock().await;
                     *shift_lock = Some(shift);
@@ -256,13 +309,17 @@ impl GovernorWatchdog {
         let active = self.active_guard.lock().await;
         let active_s = self.active_scaling_guard.lock().await;
         let active_a = self.active_adaptive_guard.lock().await;
-        let is_boosted = active.is_some() || active_s.is_some() || active_a.is_some();
+        let active_p = self.active_profiler_guard.lock().await;
+        let is_boosted = active.is_some() || active_s.is_some() || active_a.is_some() || active_p.is_some();
         let current_workload = active.as_ref().map(|g| g.workload.to_string());
         let tel = self.governor.telemetry();
         let complete_tel = self.dynatune_bridge.read_complete_hardware_telemetry();
         let thermal_protection_engaged = complete_tel.is_thermal_throttled;
         let battery_protection_engaged = complete_tel.is_battery_critical;
         let recommended_concurrency_limit = complete_tel.recommended_concurrency_limit;
+        let optimal_concurrency = self.profiler.optimal_task_concurrency();
+        let recommended_ollama_batch_size = self.profiler.recommended_ollama_batch_size();
+        let profiler_telemetry = Some(self.profiler.current_telemetry());
         let host_power = Some(self.dynatune_bridge.read_power_state());
         let last_shift = self.last_shift.lock().await.clone();
         let last_decision = self.last_decision.lock().await.clone();
@@ -281,6 +338,9 @@ impl GovernorWatchdog {
             thermal_protection_engaged,
             battery_protection_engaged,
             recommended_concurrency_limit,
+            optimal_concurrency,
+            recommended_ollama_batch_size,
+            profiler_telemetry,
         }
     }
 }
@@ -353,5 +413,24 @@ mod tests {
             .await
             .expect("execute with adaptive guard");
         assert_eq!(async_res, "inference_adaptive_ok");
+    }
+
+    #[tokio::test]
+    async fn test_watchdog_dynamic_hardware_profiler_synergy() {
+        let watchdog = GovernorWatchdog::new();
+        let concurrency = watchdog.optimal_task_concurrency();
+        assert!(concurrency >= 1);
+
+        let batch_size = watchdog.recommended_ollama_batch_size();
+        assert!(batch_size >= 128 && batch_size <= 512);
+
+        let profiler_telem = watchdog.hardware_profile_telemetry();
+        assert!(profiler_telem.cpu_pkg_temp_c > 0.0);
+        assert!(profiler_telem.memory_total_mb > 0);
+
+        let status = watchdog.status().await;
+        assert_eq!(status.optimal_concurrency, concurrency);
+        assert_eq!(status.recommended_ollama_batch_size, batch_size);
+        assert!(status.profiler_telemetry.is_some());
     }
 }

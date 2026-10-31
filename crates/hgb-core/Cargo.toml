@@ -43,6 +43,7 @@ wasmtime = "18.0"
 tokio-tungstenite = "0.21"
 futures-util = "0.3"
 ndarray = "0.15"
+notify = "6.1"
 
 [dev-dependencies]
 tempfile = "3.10"
