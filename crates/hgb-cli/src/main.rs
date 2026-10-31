@@ -767,7 +767,7 @@ enum Commands {
     },
 
     /// Speculative dual-draft racing & Masterclass Autonomous Vibe Coding Agent Loop
-    #[command(alias = "vibe-mode", alias = "autonomous-loop")]
+    #[command(alias = "vibe-mode")]
     Vibe {
         /// Launch interactive real-time Vibe Cockpit TUI dashboard
         #[arg(long)]
@@ -3612,6 +3612,20 @@ enum Commands {
         /// Enable codebase self-optimization
         #[arg(long, default_value_t = false)]
         optimize: bool,
+    },
+
+    /// Pillar 4: Autonomous Agent Loop Expansion (Masterclass Chapter 8)
+    #[command(name = "autonomous-loop", alias = "auto-loop-ch8", alias = "ch8-loop")]
+    AutonomousLoop {
+        /// High-level developer intent to decompose and autonomously execute
+        #[arg(short, long)]
+        intent: Option<String>,
+        /// Continuously watch workspace for filesystem events and loop on intents
+        #[arg(long, default_value_t = false)]
+        watch: bool,
+        /// Maximum self-healing retry iterations
+        #[arg(short, long, default_value_t = 3)]
+        max_retries: usize,
     },
 }
 
@@ -10970,6 +10984,68 @@ async fn test_calc() { assert!(calculate(5)); }".to_string()
             };
             let vibe_loop = hgb_cli::vibe_autonomous_loop::VibeAutonomousLoop::new(loop_config);
             vibe_loop.run().await.map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+        }
+        Commands::AutonomousLoop { intent, watch, max_retries } => {
+            let ws_path = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let loop_intent = intent.unwrap_or_else(|| "add caching layer to auth service".to_string());
+
+            println!("\n{}", "=== 🔄 Hagibis Autonomous Agent Loop (Pillar 4: Chapter 8) ===".cyan().bold());
+            println!("  • Workspace:     {}", ws_path.display());
+            println!("  • Target Intent: {}", loop_intent.yellow().bold());
+            println!("  • Max Retries:   {}", max_retries);
+            println!("  • Watch Mode:    {}", if watch { "ENABLED (Event-Driven)".green() } else { "ONCE (First-Green)".cyan() });
+            println!("{}", "------------------------------------------------------------------".dimmed());
+
+            // 1. First attempt via resident daemon over Unix Domain Socket
+            let client = HgbClient::new();
+            let daemon_res = client.watchdog_heal(Some(&format!("intent:{}", loop_intent)), Some(max_retries)).await;
+
+            let certificate = match daemon_res {
+                Ok(val) => {
+                    println!("  [✓] Dispatched via Resident Daemon Service (hgbd)");
+                    serde_json::from_value::<hgb_nextgen::ch8_autonomous_agent_loop::AutonomousConsensusCertificate>(val).ok()
+                }
+                Err(_) => {
+                    // 2. Standalone fallback directly via Ch8AutonomousAgentLoop
+                    println!("  [i] Daemon offline; running directly via sovereign Ch8AutonomousAgentLoop...");
+                    let agent_loop = hgb_nextgen::ch8_autonomous_agent_loop::Ch8AutonomousAgentLoop::new(&ws_path)
+                        .map_err(|e| Box::<dyn std::error::Error>::from(e.to_string()))?
+                        .with_max_retries(max_retries);
+
+                    agent_loop.execute_intent(&loop_intent).ok()
+                }
+            };
+
+            if let Some(cert) = certificate {
+                println!("\n{}", "[✓] Autonomous Workflow Completed Successfully!".green().bold());
+                println!("  • Certificate ID:       {}", cert.certificate_id.yellow());
+                println!("  • Workflow ID:          {}", cert.workflow_id.cyan());
+                println!("  • Steps Executed:       {}", cert.total_steps_executed);
+                println!("  • Self-Healing Rounds:  {}", cert.self_healing_iterations);
+                println!("  • First-Green Verified: {}", if cert.first_green_verified { "YES [VERIFIED]".green().bold() } else { "NO".red() });
+                println!("  • BLAKE3 Seal:          {}", cert.blake3_hash.green().bold());
+                println!("  • Signed At:            {}", cert.signed_timestamp);
+                println!("\n{}", "  Recovery Story Summary:".bold());
+                for s in &cert.recovery_story.steps_summary {
+                    println!("    • {}", s);
+                }
+                if !cert.recovery_story.patches_applied.is_empty() {
+                    println!("\n{}", "  Surgical Patches Applied:".bold());
+                    for p in &cert.recovery_story.patches_applied {
+                        println!("    • {}", p.green());
+                    }
+                }
+            } else {
+                eprintln!("{}", "[-] Autonomous workflow execution encountered an error.".red());
+            }
+
+            if watch {
+                println!("\n{}", "👀 Watching workspace for events (Press Ctrl+C to terminate)...".cyan());
+                tokio::signal::ctrl_c().await?;
+            }
+
+            println!();
+            Ok(())
         }
         Commands::Ide { .. } => unreachable!(),
     }

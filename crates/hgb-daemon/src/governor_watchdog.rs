@@ -238,6 +238,85 @@ impl GovernorWatchdog {
         Ok(self.status().await)
     }
 
+    /// Automatically trigger dynatune / kernel-optimizer to switch CPU governors to 'performance',
+    /// ramp up thermal headroom, enable turbo, and prioritize memory bandwidth (MGLRU min_ttl_ms 1000)
+    /// during heavy local LLM inference or WASM sandboxing tasks.
+    pub async fn on_queue_active(&self) -> Result<GovernorWatchdogStatus> {
+        // 1. Dynamic governor boost
+        let guard = self.governor.boost_for_workload(WorkloadKind::HeavyCompile)?;
+        {
+            let mut active = self.active_guard.lock().await;
+            *active = Some(guard);
+        }
+
+        // 2. Dynatune bridge scaling shift & RAII guard (bursts governor, EPP performance, MGLRU min_ttl_ms 1000)
+        let scaling_guard = self.dynatune_bridge.burst_guard(WorkloadCategory::BuildCompile)?;
+        {
+            let mut shift_lock = self.last_shift.lock().await;
+            *shift_lock = Some(scaling_guard.active_shift.clone());
+            let mut active_s = self.active_scaling_guard.lock().await;
+            *active_s = Some(scaling_guard);
+        }
+
+        // 3. Workload router guard
+        if let Ok(adaptive_guard) = self.workload_router.acquire_guard(HardwareWorkloadKind::HeavyCompilation) {
+            let mut dec_lock = self.last_decision.lock().await;
+            *dec_lock = Some(adaptive_guard.decision().clone());
+            let mut active_a = self.active_adaptive_guard.lock().await;
+            *active_a = Some(adaptive_guard);
+        }
+
+        // 4. DynamicHardwareProfiler queue active signal (performance governor, EPP performance, turbo, MGLRU 1000)
+        let _ = self.profiler.on_queue_active();
+        if let Ok(p_guard) = self.profiler.acquire_profile_guard(HardwareGovernorProfile::Performance) {
+            let mut active_p = self.active_profiler_guard.lock().await;
+            *active_p = Some(p_guard);
+        }
+
+        Ok(self.status().await)
+    }
+
+    /// Immediately drop CPU governor back to 'powersave', EPP to 'balance_performance',
+    /// and relax memory pressure the moment the task queue empties.
+    pub async fn on_queue_idle(&self) -> Result<GovernorWatchdogStatus> {
+        {
+            let mut active = self.active_guard.lock().await;
+            if let Some(guard) = active.take() {
+                drop(guard);
+            }
+        }
+        {
+            let mut active_s = self.active_scaling_guard.lock().await;
+            if let Some(guard) = active_s.take() {
+                drop(guard);
+            }
+        }
+        {
+            let mut active_a = self.active_adaptive_guard.lock().await;
+            if let Some(guard) = active_a.take() {
+                drop(guard);
+            }
+        }
+        {
+            let mut active_p = self.active_profiler_guard.lock().await;
+            if let Some(guard) = active_p.take() {
+                drop(guard);
+            }
+        }
+
+        let _ = self.governor.set_scaling_governor("powersave");
+        let _ = self.governor.set_epp("balance_performance");
+        let _ = self.profiler.on_queue_idle();
+
+        let shift = self.dynatune_bridge.shift_to_powersave_mode()?;
+        {
+            let mut shift_lock = self.last_shift.lock().await;
+            *shift_lock = Some(shift);
+        }
+
+        Ok(self.status().await)
+    }
+
     /// Execute a heavy asynchronous task wrapped with dynamic workload boosting and automatic relaxation
     pub async fn execute_with_workload_boost<F, Fut, R>(&self, workload: &str, task: F) -> Result<R>
     where
@@ -432,5 +511,30 @@ mod tests {
         assert_eq!(status.optimal_concurrency, concurrency);
         assert_eq!(status.recommended_ollama_batch_size, batch_size);
         assert!(status.profiler_telemetry.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_watchdog_queue_active_and_idle_transitions() {
+        let watchdog = GovernorWatchdog::new();
+
+        // Initially ensure idle/powersave
+        let _ = watchdog.on_queue_idle().await;
+        let initial_status = watchdog.status().await;
+        assert!(!initial_status.is_boosted);
+
+        // Queue becomes active: shift to performance, EPP performance, turbo, MGLRU 1000
+        let active_status = watchdog.on_queue_active().await.expect("on_queue_active");
+        assert!(active_status.is_boosted);
+        if let Some(ref shift) = active_status.last_scaling_shift {
+            assert_eq!(shift.scaling_governor, "performance");
+            assert_eq!(shift.epp, "performance");
+        }
+
+        // Queue becomes idle: drop to powersave, EPP balance_performance, relax memory pressure
+        let idle_status = watchdog.on_queue_idle().await.expect("on_queue_idle");
+        assert!(!idle_status.is_boosted);
+        if let Some(ref shift) = idle_status.last_scaling_shift {
+            assert_eq!(shift.scaling_governor, "powersave");
+        }
     }
 }

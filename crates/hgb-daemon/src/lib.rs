@@ -455,6 +455,12 @@ pub use swarm_service::{
 pub mod wasm_hot_reload_service;
 pub use wasm_hot_reload_service::WasmHotReloadService;
 
+// Pillar 4: Autonomous Agent Loop Expansion (Masterclass Chapter 8)
+pub mod autonomous_daemon_loop;
+pub use autonomous_daemon_loop::{
+    AutonomousDaemonLoopService, AutonomousDaemonLoopStatusReport, AutonomousDaemonRequest,
+};
+
 
 
 

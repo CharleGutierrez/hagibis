@@ -1612,6 +1612,11 @@ pub enum HgbRequest {
     TriggerWasmReload {
         module_path: Option<String>,
     },
+
+    // Pillar 2: Multi-Tier Execution Sandbox
+    MultiTierSandboxExec {
+        request: crate::multi_tier_sandbox::SandboxExecutionRequest,
+    },
 }
 
 impl HgbRequest {
@@ -2335,6 +2340,9 @@ pub enum HgbResponse {
     // Vector 2: Universal WASM Plugin Hot-Reloading
     WasmHotReloadStatusResult(serde_json::Value),
     TriggerWasmReloadResult(serde_json::Value),
+
+    // Pillar 2: Multi-Tier Execution Sandbox
+    MultiTierSandboxResult(crate::multi_tier_sandbox::SandboxExecutionOutcome),
 }
 
 #[path = "hardware_runtime_synergy.rs"]

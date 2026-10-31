@@ -44,6 +44,7 @@ tokio-tungstenite = "0.21"
 futures-util = "0.3"
 ndarray = "0.15"
 notify = "6.1"
+wat = { path = "../wat" }
 
 [dev-dependencies]
 tempfile = "3.10"

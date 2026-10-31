@@ -664,6 +664,42 @@ impl DynamicHardwareProfiler {
         })
     }
 
+    /// Automatically signals dynatune / kernel-optimizer to shift CPU governor to `performance`,
+    /// sets EPP to `performance`, enables turbo, and prioritizes memory bandwidth (MGLRU min_ttl_ms 1000)
+    /// when the task queue transitions to active.
+    pub fn on_queue_active(&self) -> Result<ProfileSwitchReport> {
+        let mut report = self.switch_profile(HardwareGovernorProfile::Performance)?;
+        let pstate_dir = self.cpu_sysfs_base.join("intel_pstate");
+        if pstate_dir.is_dir() {
+            let _ = fs::write(pstate_dir.join("no_turbo"), "0\n");
+            let _ = fs::write(pstate_dir.join("hwp_dynamic_boost"), "1\n");
+            let _ = fs::write(pstate_dir.join("max_perf_pct"), "100\n");
+            report.actions.push("Intel P-State turbo enabled & hwp_dynamic_boost set to 1".to_string());
+        }
+        let _ = self.write_scaling_governor("performance");
+        let _ = self.write_epp("performance");
+        let _ = self.write_mglru_min_ttl_ms(BURST_MGLRU_MIN_TTL_MS);
+        report.governor = "performance".to_string();
+        report.epp = "performance".to_string();
+        report.mglru_min_ttl_ms = BURST_MGLRU_MIN_TTL_MS;
+        report.actions.push(format!("Queue active: governor=performance, epp=performance, mglru_min_ttl_ms={}", BURST_MGLRU_MIN_TTL_MS));
+        Ok(report)
+    }
+
+    /// Immediately drops CPU governor back to `powersave`, EPP to `balance_performance`,
+    /// and relaxes memory pressure when the queue is drained/idle.
+    pub fn on_queue_idle(&self) -> Result<ProfileSwitchReport> {
+        let mut report = self.switch_profile(HardwareGovernorProfile::PowerSave)?;
+        let _ = self.write_scaling_governor("powersave");
+        let _ = self.write_epp("balance_performance");
+        let _ = self.write_mglru_min_ttl_ms(POWERSAVE_MGLRU_MIN_TTL_MS);
+        report.governor = "powersave".to_string();
+        report.epp = "balance_performance".to_string();
+        report.mglru_min_ttl_ms = POWERSAVE_MGLRU_MIN_TTL_MS;
+        report.actions.push("Queue idle: governor=powersave, epp=balance_performance, memory pressure relaxed (mglru_min_ttl_ms=0)".to_string());
+        Ok(report)
+    }
+
     /// Thermal and battery safety enforcement: if host exceeds thermal limit or battery critical,
     /// automatically enforces balanced or powersave profiles.
     pub fn enforce_thermal_safety(&self) -> bool {
@@ -1185,5 +1221,22 @@ mod tests {
         if let Some(h) = handle {
             let _ = h.await;
         }
+    }
+
+    #[test]
+    fn test_queue_active_and_idle_transitions() {
+        let profiler = DynamicHardwareProfiler::new();
+
+        // Trigger queue active boost
+        let active_report = profiler.on_queue_active().expect("on_queue_active");
+        assert_eq!(active_report.governor, "performance");
+        assert_eq!(active_report.epp, "performance");
+        assert_eq!(active_report.mglru_min_ttl_ms, BURST_MGLRU_MIN_TTL_MS);
+
+        // Trigger queue idle relax
+        let idle_report = profiler.on_queue_idle().expect("on_queue_idle");
+        assert_eq!(idle_report.governor, "powersave");
+        assert_eq!(idle_report.epp, "balance_performance");
+        assert_eq!(idle_report.mglru_min_ttl_ms, POWERSAVE_MGLRU_MIN_TTL_MS);
     }
 }

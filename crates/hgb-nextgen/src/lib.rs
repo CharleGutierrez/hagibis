@@ -193,6 +193,16 @@ pub use vibe_cockpit_tui::{
     VibeFileDiff, VibeStatus, VibeStepStatus, VibeTelemetrySnapshot, VirtualTuiBuffer,
 };
 
+// Pillar 4: Autonomous Agent Loop Expansion (Masterclass Chapter 8)
+pub mod ch8_autonomous_agent_loop;
+pub use ch8_autonomous_agent_loop::{
+    AstSelfHealingEngine, AutonomousConsensusCertificate, AutonomousLoopStore,
+    AutonomousPlanGraph, AutonomousPlanStep, AutonomousPlanningEngine,
+    AutonomousRecoveryStory, CandidatePatch, Ch8AutonomousAgentLoop, ExecutionTier,
+    InterceptedDiagnostic, MultiTierSandboxRouter, StepExecutionResult, StepStatus,
+    WorkflowRunRecord, WorkflowStatus,
+};
+
 
 
 

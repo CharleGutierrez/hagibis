@@ -1999,6 +1999,7 @@ dependencies = [
  "tokio-tungstenite 0.21.0",
  "uuid",
  "wasmtime",
+ "wat 1.0.0",
 ]
 
 [[package]]
@@ -5665,7 +5666,7 @@ dependencies = [
  "wasmtime-jit-icache-coherence",
  "wasmtime-runtime",
  "wasmtime-winch",
- "wat",
+ "wat 1.261.0",
  "windows-sys 0.52.0",
 ]
 
@@ -5925,6 +5926,10 @@ dependencies = [
  "unicode-width 0.2.0",
  "wasm-encoder 0.261.0",
 ]
+
+[[package]]
+name = "wat"
+version = "1.0.0"
 
 [[package]]
 name = "wat"

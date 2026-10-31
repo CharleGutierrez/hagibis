@@ -208,6 +208,68 @@ pub struct DaemonState {
     pub idempotency_cache: Arc<IdempotencyCache>,
     pub shared_provider_router: Arc<hgb_core::providers::SharedProviderRouter>,
     pub wasm_hot_reloader: Arc<crate::wasm_hot_reload_service::WasmHotReloadService>,
+    pub active_tasks_count: Arc<std::sync::atomic::AtomicUsize>,
+    pub queued_tasks_count: Arc<std::sync::atomic::AtomicUsize>,
+    pub multi_tier_sandbox: Arc<hgb_core::multi_tier_sandbox::MultiTierSandboxRouter>,
+    pub autonomous_daemon_loop: Arc<crate::autonomous_daemon_loop::AutonomousDaemonLoopService>,
+}
+
+impl DaemonState {
+    /// Track new task entering the queue; triggers on_queue_active() if transitions from idle
+    pub async fn on_task_enqueued(&self) {
+        let prev_queued = self.queued_tasks_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let active = self.active_tasks_count.load(std::sync::atomic::Ordering::SeqCst);
+        if prev_queued == 0 && active == 0 {
+            let _ = self.governor_watchdog.on_queue_active().await;
+        }
+    }
+
+    /// Track queued task dequeued and started
+    pub async fn on_task_dequeued(&self) {
+        let _ = self.queued_tasks_count.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        let prev_active = self.active_tasks_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if prev_active == 0 {
+            let _ = self.governor_watchdog.on_queue_active().await;
+        }
+    }
+
+    /// Trigger governor boost on queue active
+    pub async fn on_queue_active(&self) {
+        let _ = self.governor_watchdog.on_queue_active().await;
+    }
+
+    /// Drop governor to powersave on queue idle
+    pub async fn on_queue_idle(&self) {
+        let _ = self.governor_watchdog.on_queue_idle().await;
+    }
+
+    /// Track active task started (e.g. request or heavy LLM/WASM task);
+    /// triggers on_queue_active() when active task count transitions from 0 to 1.
+    pub async fn on_task_started(&self) {
+        let prev = self.active_tasks_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if prev == 0 {
+            let _ = self.governor_watchdog.on_queue_active().await;
+        }
+    }
+
+    /// Track active task finished; triggers on_queue_idle() when active tasks drop to 0 and queue is empty.
+    pub async fn on_task_finished(&self) {
+        let prev = self.active_tasks_count.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        let remaining_queued = self.queued_tasks_count.load(std::sync::atomic::Ordering::SeqCst);
+        if prev == 1 && remaining_queued == 0 {
+            let _ = self.governor_watchdog.on_queue_idle().await;
+        }
+    }
+
+    /// Read currently active tasks count
+    pub fn active_tasks(&self) -> usize {
+        self.active_tasks_count.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Read currently queued tasks count
+    pub fn queued_tasks(&self) -> usize {
+        self.queued_tasks_count.load(std::sync::atomic::Ordering::Relaxed)
+    }
 }
 
 impl DaemonState {
@@ -376,6 +438,10 @@ impl DaemonState {
                 ],
             )),
         ));
+        let autonomous_daemon_loop = Arc::new(
+            crate::autonomous_daemon_loop::AutonomousDaemonLoopService::new(ws_dir.clone())
+                .expect("init autonomous daemon loop service")
+        );
 
         Self {
             start_time: std::time::Instant::now(),
@@ -412,7 +478,7 @@ impl DaemonState {
             shm_bridge,
             actor_swarm_coordinator,
             crdt_sync_document,
-            governor_watchdog,
+            governor_watchdog: Arc::clone(&governor_watchdog),
             hw_optimizer,
             ollama_orchestrator,
             wasm_marketplace,
@@ -438,6 +504,13 @@ impl DaemonState {
             idempotency_cache: Arc::new(IdempotencyCache::new(300)),
             shared_provider_router: Arc::new(hgb_core::providers::SharedProviderRouter::default()),
             wasm_hot_reloader,
+            active_tasks_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            queued_tasks_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            multi_tier_sandbox: Arc::new(hgb_core::multi_tier_sandbox::MultiTierSandboxRouter::with_bridge(
+                &ws_dir,
+                Arc::clone(governor_watchdog.bridge()),
+            )),
+            autonomous_daemon_loop,
         }
     }
 }
@@ -748,8 +821,11 @@ impl HagibisDaemon {
     }
 
     pub async fn handle_request(state: &Arc<DaemonState>, req: HgbRequest) -> HgbResponse {
+        state.on_task_started().await;
         let ws_dir = resolve_workspace();
-        Self::handle_request_with_context(state, req, &ws_dir).await
+        let resp = Self::handle_request_with_context(state, req, &ws_dir).await;
+        state.on_task_finished().await;
+        resp
     }
 
     pub async fn handle_request_with_context(
@@ -4216,6 +4292,7 @@ impl HagibisDaemon {
 
             // Powerhouse Pillar 2: Ollama Speculative Orchestrator
             HgbRequest::OllamaSpeculativeExec { prompt, draft_model, target_model } => {
+                let _ = state.governor_watchdog.on_queue_active().await;
                 let _adaptive_guard = state.governor_watchdog.acquire_workload_guard(hgb_core::hardware_aware_workload_router::WorkloadKind::HeavyInference).ok();
                 let _hw_guard = state.hw_optimizer.optimize_for_workload(hgb_core::dynamic_governor::WorkloadKind::LocalLlmInference).ok();
                 let _recommended_batch = state.governor_watchdog.recommended_ollama_batch_size();
@@ -4235,6 +4312,7 @@ impl HagibisDaemon {
                 HgbResponse::WasmSkillListResult(market.list_skills())
             }
             HgbRequest::WasmSkillHotLoad { name, wasm_path } => {
+                let _ = state.governor_watchdog.on_queue_active().await;
                 let _adaptive_guard = state.governor_watchdog.acquire_workload_guard(hgb_core::hardware_aware_workload_router::WorkloadKind::WasmSandboxed).ok();
                 let _hw_guard = state.hw_optimizer.optimize_for_workload(hgb_core::dynamic_governor::WorkloadKind::WasmExecution).ok();
                 match std::fs::read(&wasm_path) {
@@ -4249,6 +4327,7 @@ impl HagibisDaemon {
                 }
             }
             HgbRequest::WasmSkillExec { name, payload } => {
+                let _ = state.governor_watchdog.on_queue_active().await;
                 let _adaptive_guard = state.governor_watchdog.acquire_workload_guard(hgb_core::hardware_aware_workload_router::WorkloadKind::WasmSandboxed).ok();
                 let _hw_guard = state.hw_optimizer.optimize_for_workload(hgb_core::dynamic_governor::WorkloadKind::WasmExecution).ok();
                 let market = state.wasm_marketplace.read().await;
@@ -4260,6 +4339,7 @@ impl HagibisDaemon {
 
             // Powerhouse Pillar 4: Ephemeral Code Execution Sandboxes
             HgbRequest::MicrovmEphemeralExec { code, language, patch_content } => {
+                let _ = state.governor_watchdog.on_queue_active().await;
                 let _adaptive_guard = state.governor_watchdog.acquire_workload_guard(hgb_core::hardware_aware_workload_router::WorkloadKind::HeavyCompilation).ok();
                 let _hw_guard = state.hw_optimizer.optimize_for_workload(hgb_core::dynamic_governor::WorkloadKind::TestExecution).ok();
                 let spec = hgb_core::microvm_sandbox_executor::EphemeralExecSpec {
@@ -4887,11 +4967,25 @@ impl HagibisDaemon {
                 HgbResponse::WatchdogSnapshots(snapshots)
             }
             HgbRequest::AutonomousHealTrigger { target_crate, max_retries } => {
+                let retries = max_retries.unwrap_or(3);
+                // Pillar 4: Autonomous Agent Loop Expansion (Codifying ch8_autonomous_loops.py into Rust)
+                if let Some(ref tc) = target_crate {
+                    if tc.contains(' ') || tc.starts_with("intent:") || tc.starts_with("workflow:") {
+                        let clean_intent = tc.strip_prefix("intent:").or_else(|| tc.strip_prefix("workflow:")).unwrap_or(tc);
+                        match state.autonomous_daemon_loop.execute_workflow(clean_intent, retries) {
+                            Ok(cert) => {
+                                let val = serde_json::to_value(&cert).unwrap_or(serde_json::Value::Null);
+                                return HgbResponse::AutonomousHealResult(val);
+                            }
+                            Err(e) => return HgbResponse::Error(format!("Autonomous workflow failed: {e}")),
+                        }
+                    }
+                }
                 let spec = crate::self_healing_daemon::AutonomousFeedbackSpec::new(
                     None,
                     None,
                     target_crate,
-                    max_retries.unwrap_or(3),
+                    retries,
                     true,
                 );
                 match state.self_healing_daemon.run_multi_iteration_feedback_loop(spec) {
@@ -4934,6 +5028,15 @@ impl HagibisDaemon {
                 match state.swarm_service.dispatch_task(task).await {
                     Ok(res) => HgbResponse::SwarmTaskResult(res),
                     Err(e) => HgbResponse::Error(format!("Swarm task dispatch failed: {e}")),
+                }
+            }
+
+            // Pillar 2: Distributed Multi-Tier Sandboxing via Firecracker & WASM
+            HgbRequest::MultiTierSandboxExec { request } => {
+                let _ = state.governor_watchdog.on_queue_active().await;
+                match state.multi_tier_sandbox.execute(&request) {
+                    Ok(outcome) => HgbResponse::MultiTierSandboxResult(outcome),
+                    Err(e) => HgbResponse::Error(format!("Multi-tier sandbox execution failed: {}", e)),
                 }
             }
         }
@@ -5354,6 +5457,57 @@ mod tests {
                 assert!(json_str.contains("first_green_achieved"));
             }
             other => panic!("Expected DaemonSelfHealResult, got: {:?}", other),
+        }
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[tokio::test]
+    async fn test_daemon_task_queue_transitions_and_multi_tier_sandbox() {
+        let tmp = std::env::temp_dir().join(format!("hgb_queue_test_{}", uuid::Uuid::new_v4().simple()));
+        let _ = std::fs::create_dir_all(&tmp);
+        let socket_path = tmp.join("test.sock");
+        let state = Arc::new(DaemonState::new(socket_path));
+        let ws = WorkspaceIdentity::from_path(&tmp);
+
+        // Initially empty queue and powersave / not boosted
+        let _ = state.governor_watchdog.on_queue_idle().await;
+        assert_eq!(state.active_tasks(), 0);
+        assert_eq!(state.queued_tasks(), 0);
+
+        // 1. Task enqueued: triggers on_queue_active()
+        state.on_task_enqueued().await;
+        assert_eq!(state.queued_tasks(), 1);
+        let watchdog_status = state.governor_watchdog.status().await;
+        assert!(watchdog_status.is_boosted, "Watchdog must be boosted when queue becomes active");
+
+        // 2. Task dequeued and started: queued drops, active increases
+        state.on_task_dequeued().await;
+        assert_eq!(state.queued_tasks(), 0);
+        assert_eq!(state.active_tasks(), 1);
+
+        // 3. Task finished: active count drops to 0, queue empty -> triggers on_queue_idle()
+        state.on_task_finished().await;
+        assert_eq!(state.active_tasks(), 0);
+        let watchdog_status_idle = state.governor_watchdog.status().await;
+        assert!(!watchdog_status_idle.is_boosted, "Watchdog must be idle when task queue empties");
+
+        // 4. Test MultiTierSandboxExec dispatch through daemon
+        let req = HgbRequest::MultiTierSandboxExec {
+            request: hgb_core::multi_tier_sandbox::SandboxExecutionRequest::new(
+                "(module (func (export \"run\") (result i32) i32.const 999))",
+                "wat",
+            ),
+        }.with_envelope(uuid::Uuid::new_v4().to_string(), Some(ws));
+
+        let resp = HagibisDaemon::handle_request(&state, req).await;
+        match resp {
+            HgbResponse::MultiTierSandboxResult(outcome) => {
+                assert_eq!(outcome.tier_used, hgb_core::multi_tier_sandbox::SandboxExecutionTier::Tier1WasmZig);
+                assert_eq!(outcome.exit_code, 999);
+                assert!(outcome.fuel_consumed.is_some());
+            }
+            other => panic!("Expected MultiTierSandboxResult, got: {:?}", other),
         }
 
         let _ = std::fs::remove_dir_all(&tmp);
