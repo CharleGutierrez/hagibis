@@ -21,7 +21,12 @@ use std::time::Instant;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
+use crate::dynatune_bridge::{DynatuneBridge, WorkloadCategory};
 use crate::error::{HgbError, Result};
+use crate::hardware_aware_workload_router::{
+    HardwareAwareWorkloadRouter, WorkloadAdaptiveGuard, WorkloadExecutionDecision,
+    WorkloadExecutionProfile, WorkloadKind,
+};
 use crate::microvm_sandbox_executor::{EphemeralExecSpec, FirecrackerEphemeralSandbox};
 use crate::wasm_hot_pool::WasmHotPool;
 
@@ -203,6 +208,8 @@ pub struct MicroVmSwarmOrchestrator {
     wasm_dispatched: AtomicU64,
     microvm_dispatched: AtomicU64,
     fallback_dispatched: AtomicU64,
+    dynatune_bridge: Arc<DynatuneBridge>,
+    hardware_router: Arc<HardwareAwareWorkloadRouter>,
 }
 
 impl Default for MicroVmSwarmOrchestrator {
@@ -213,11 +220,33 @@ impl Default for MicroVmSwarmOrchestrator {
 }
 
 impl MicroVmSwarmOrchestrator {
-    /// Initialize a new hybrid swarm orchestrator
+    /// Initialize a new hybrid swarm orchestrator with auto-discovered hardware dynamic tuning
     pub fn new(workspace_root: impl Into<PathBuf>) -> Result<Self> {
+        let bridge = Arc::new(DynatuneBridge::new());
+        let router = Arc::new(HardwareAwareWorkloadRouter::with_bridge(Arc::clone(&bridge)));
+        Self::with_components(workspace_root, router, bridge)
+    }
+
+    /// Initialize orchestrator with a custom HardwareAwareWorkloadRouter
+    pub fn with_router(workspace_root: impl Into<PathBuf>, router: Arc<HardwareAwareWorkloadRouter>) -> Result<Self> {
+        let bridge = Arc::clone(router.bridge());
+        Self::with_components(workspace_root, router, bridge)
+    }
+
+    /// Initialize orchestrator with a custom DynatuneBridge
+    pub fn with_bridge(workspace_root: impl Into<PathBuf>, bridge: Arc<DynatuneBridge>) -> Result<Self> {
+        let router = Arc::new(HardwareAwareWorkloadRouter::with_bridge(Arc::clone(&bridge)));
+        Self::with_components(workspace_root, router, bridge)
+    }
+
+    fn with_components(
+        workspace_root: impl Into<PathBuf>,
+        router: Arc<HardwareAwareWorkloadRouter>,
+        bridge: Arc<DynatuneBridge>,
+    ) -> Result<Self> {
         let ws = workspace_root.into();
-        let wasm_pool = Arc::new(WasmHotPool::new(8)?);
-        let firecracker_sandbox = Arc::new(FirecrackerEphemeralSandbox::new(&ws));
+        let wasm_pool = Arc::new(WasmHotPool::with_router(8, Arc::clone(&router))?);
+        let firecracker_sandbox = Arc::new(FirecrackerEphemeralSandbox::with_bridge(&ws, Arc::clone(&bridge)));
 
         Ok(Self {
             workspace_root: ws,
@@ -227,7 +256,19 @@ impl MicroVmSwarmOrchestrator {
             wasm_dispatched: AtomicU64::new(0),
             microvm_dispatched: AtomicU64::new(0),
             fallback_dispatched: AtomicU64::new(0),
+            dynatune_bridge: bridge,
+            hardware_router: router,
         })
+    }
+
+    /// Access reference to the internal Dynatune bridge
+    pub fn dynatune_bridge(&self) -> &Arc<DynatuneBridge> {
+        &self.dynatune_bridge
+    }
+
+    /// Access reference to the internal Hardware-Aware Workload Router
+    pub fn hardware_router(&self) -> &Arc<HardwareAwareWorkloadRouter> {
+        &self.hardware_router
     }
 
     /// Access reference to the internal WASM hot pool
@@ -627,17 +668,108 @@ impl MicroVmSwarmOrchestrator {
         }
     }
 
-    /// Dispatch task to isolated Firecracker microVM (or Landlock CoW fallback)
-    fn dispatch_to_microvm_worker(&self, task_id: &str, task: &SwarmTask) -> Result<SwarmExecutionOutcome> {
-        let start = Instant::now();
+    /// Dispatch an ephemeral Firecracker microVM task with hardware-aware dynamic governor tuning
+    pub fn dispatch_ephemeral_firecracker_task(&self, task: &SwarmTask) -> Result<SwarmExecutionOutcome> {
+        let task_id = task.id.clone().unwrap_or_else(|| {
+            let hash = blake3::hash(task.code.as_bytes()).to_hex().to_string();
+            format!("task_{}", &hash[0..12])
+        });
 
+        // 1. Query Dynatune hardware telemetry
+        let telemetry = self.dynatune_bridge.read_complete_hardware_telemetry();
+        let current_temp = telemetry.cpu_pkg_temp_c.max(telemetry.max_temp_c);
+
+        // 2. Safeguard against extreme thermal limits (>82°C) or critical battery (<15%)
+        if current_temp > 82.0 {
+            return Err(HgbError::Execution(format!(
+                "Hardware safeguard advisory: Firecracker microVM launch aborted. Host CPU temperature {:.1}°C exceeds critical thermal limit (82.0°C). Throttling required to prevent chassis thermal shutdown.",
+                current_temp
+            )));
+        }
+
+        if let Some(ref primary_bat) = telemetry.primary_battery {
+            if primary_bat.is_discharging && primary_bat.capacity_pct < 15 {
+                return Err(HgbError::Execution(format!(
+                    "Hardware safeguard advisory: Firecracker microVM launch aborted. Battery capacity is {}% (< 15% critical reserve) on discharge. Connect AC power to resume microVM workloads.",
+                    primary_bat.capacity_pct
+                )));
+            }
+        } else if !telemetry.ac_connected && telemetry.batteries.iter().any(|b| b.is_discharging && b.capacity_pct < 15) {
+            return Err(HgbError::Execution(
+                "Hardware safeguard advisory: Firecracker microVM launch aborted. Battery capacity is below 15% critical reserve on discharge. Connect AC power to resume microVM workloads.".to_string(),
+            ));
+        }
+
+        // 3. Dynamic governor boosting vs thermal/battery throttling
+        let is_discharging = telemetry.primary_battery.as_ref().map_or(!telemetry.ac_connected && !telemetry.batteries.is_empty(), |b| b.is_discharging);
+        let is_throttled = is_discharging || current_temp >= 78.0 || telemetry.is_thermal_throttled || telemetry.is_battery_critical;
+
+        let (decision, vcpu) = if !is_throttled && telemetry.ac_connected && current_temp < 75.0 {
+            // Signal performance profile: EPP performance, governor performance, turbo boost allowed
+            let dec = WorkloadExecutionDecision {
+                workload: WorkloadKind::HeavyCompilation,
+                profile: WorkloadExecutionProfile::MaxPerformance,
+                target_governor: "performance".to_string(),
+                target_epp: "performance".to_string(),
+                recommended_concurrency: telemetry.recommended_concurrency_limit,
+                context_compaction_recommended: false,
+                offload_to_swarm: false,
+                max_perf_pct: 100,
+                no_turbo: false,
+                mglru_min_ttl_ms: 1000,
+                target_nice: -5,
+                reason: format!("Dynatune boost: AC connected, CPU temp {:.1}°C < 75°C", current_temp),
+                cpu_temp_c: current_temp,
+                battery_capacity_pct: telemetry.primary_battery.as_ref().map(|b| b.capacity_pct),
+                is_discharging: false,
+                ac_connected: true,
+                ram_free_pct: telemetry.memory_available_pct,
+                psi_memory_some_avg10: telemetry.psi_memory.some.avg10,
+                psi_cpu_some_avg10: telemetry.psi_cpu.some.avg10,
+                timestamp_ms: telemetry.timestamp_epoch_ms,
+            };
+            (dec, 2)
+        } else {
+            // Thermal throttling or battery discharge: limit concurrency and scale down worker allocations
+            let dec = WorkloadExecutionDecision {
+                workload: WorkloadKind::HeavyCompilation,
+                profile: WorkloadExecutionProfile::ThermalThrottledSafe,
+                target_governor: "powersave".to_string(),
+                target_epp: "power".to_string(),
+                recommended_concurrency: telemetry.recommended_concurrency_limit.min(2).max(1),
+                context_compaction_recommended: true,
+                offload_to_swarm: true,
+                max_perf_pct: 70,
+                no_turbo: true,
+                mglru_min_ttl_ms: 0,
+                target_nice: 10,
+                reason: format!(
+                    "Dynatune throttled clamp: temp {:.1}°C, discharging: {}, concurrency limited to {}",
+                    current_temp, is_discharging, telemetry.recommended_concurrency_limit
+                ),
+                cpu_temp_c: current_temp,
+                battery_capacity_pct: telemetry.primary_battery.as_ref().map(|b| b.capacity_pct),
+                is_discharging,
+                ac_connected: telemetry.ac_connected,
+                ram_free_pct: telemetry.memory_available_pct,
+                psi_memory_some_avg10: telemetry.psi_memory.some.avg10,
+                psi_cpu_some_avg10: telemetry.psi_cpu.some.avg10,
+                timestamp_ms: telemetry.timestamp_epoch_ms,
+            };
+            (dec, 1) // Scaled down worker allocation
+        };
+
+        // Engage RAII WorkloadAdaptiveGuard for duration of the microVM execution
+        let _guard = WorkloadAdaptiveGuard::acquire(Arc::clone(&self.dynatune_bridge), decision.clone())?;
+
+        let start = Instant::now();
         let spec = EphemeralExecSpec {
             code: task.code.clone(),
             language: task.language.clone(),
             patch_content: task.patch_content.clone(),
             timeout_ms: task.timeout_ms,
             memory_mb: task.max_memory_mb,
-            vcpu: 2,
+            vcpu,
         };
 
         // Execute inside FirecrackerEphemeralSandbox (with seamless Landlock CoW fallback)
@@ -649,7 +781,7 @@ impl MicroVmSwarmOrchestrator {
         }
 
         Ok(SwarmExecutionOutcome {
-            task_id: task_id.to_string(),
+            task_id,
             worker_type: SwarmWorkerType::FirecrackerMicroVm,
             complexity: TaskComplexity::HeavyUntrusted,
             success: res.success,
@@ -664,12 +796,55 @@ impl MicroVmSwarmOrchestrator {
             metadata: serde_json::json!({
                 "sandbox_id": res.sandbox_id,
                 "patch_applied": res.patch_applied,
+                "governor": decision.target_governor,
+                "epp": decision.target_epp,
+                "turbo_allowed": !decision.no_turbo,
+                "max_perf_pct": decision.max_perf_pct,
+                "concurrency_limit": decision.recommended_concurrency,
+                "throttled": decision.no_turbo,
+                "vcpu": vcpu,
+                "cpu_temp_c": current_temp,
+                "ac_connected": telemetry.ac_connected,
             }),
         })
     }
 
-    /// Batch execution of multiple swarm tasks
+    /// Dispatch task to isolated Firecracker microVM (or Landlock CoW fallback)
+    fn dispatch_to_microvm_worker(&self, _task_id: &str, task: &SwarmTask) -> Result<SwarmExecutionOutcome> {
+        self.dispatch_ephemeral_firecracker_task(task)
+    }
+
+    /// Batch execution of multiple swarm tasks with hardware-aware dynamic tuning
     pub fn dispatch_batch(&self, tasks: &[SwarmTask]) -> Result<Vec<SwarmExecutionOutcome>> {
+        let telemetry = self.dynatune_bridge.read_complete_hardware_telemetry();
+        let current_temp = telemetry.cpu_pkg_temp_c.max(telemetry.max_temp_c);
+
+        let _guard = if telemetry.ac_connected && current_temp < 75.0 {
+            Some(self.dynatune_bridge.burst_guard(WorkloadCategory::BuildCompile)?)
+        } else if current_temp >= 78.0 || telemetry.is_battery_critical {
+            Some(self.dynatune_bridge.burst_guard(WorkloadCategory::IdleInterval)?)
+        } else {
+            None
+        };
+
+        let mut outcomes = Vec::with_capacity(tasks.len());
+        for task in tasks {
+            outcomes.push(self.dispatch(task)?);
+        }
+        Ok(outcomes)
+    }
+
+    /// Batch execution of lightweight WASM tasks wrapped with dynamic hardware tuning guard
+    pub fn dispatch_wasm_batch(&self, tasks: &[SwarmTask]) -> Result<Vec<SwarmExecutionOutcome>> {
+        let telemetry = self.dynatune_bridge.read_complete_hardware_telemetry();
+        let current_temp = telemetry.cpu_pkg_temp_c.max(telemetry.max_temp_c);
+
+        let _guard = if telemetry.ac_connected && current_temp < 75.0 {
+            Some(self.dynatune_bridge.burst_guard(WorkloadCategory::WasmExecution)?)
+        } else {
+            Some(self.dynatune_bridge.burst_guard(WorkloadCategory::IdleInterval)?)
+        };
+
         let mut outcomes = Vec::with_capacity(tasks.len());
         for task in tasks {
             outcomes.push(self.dispatch(task)?);
@@ -876,5 +1051,91 @@ mod tests {
         assert_eq!(st.wasm_dispatched, 1);
         assert_eq!(st.microvm_dispatched, 1);
         assert!(st.wasm_hot_slots >= 1);
+    }
+
+    #[test]
+    fn test_firecracker_task_dispatch_with_dynamic_governor_boosting() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        // Simulated cool condition on AC: 52.0°C < 75.0°C, AC online, no discharge
+        let bridge = DynatuneBridge::create_simulated_sysfs(temp_dir.path(), 52.0, true, false, 95).unwrap();
+        let orchestrator = MicroVmSwarmOrchestrator::with_bridge(temp_dir.path(), Arc::new(bridge)).expect("orchestrator");
+
+        let task = SwarmTask::new_heavy("bash", "echo 'Boosting Verified'");
+        let outcome = orchestrator.dispatch_ephemeral_firecracker_task(&task).expect("dispatch");
+
+        assert!(outcome.success);
+        assert_eq!(outcome.worker_type, SwarmWorkerType::FirecrackerMicroVm);
+        assert_eq!(outcome.metadata["governor"], "performance");
+        assert_eq!(outcome.metadata["epp"], "performance");
+        assert_eq!(outcome.metadata["turbo_allowed"], true);
+        assert_eq!(outcome.metadata["throttled"], false);
+        assert_eq!(outcome.metadata["vcpu"], 2);
+    }
+
+    #[test]
+    fn test_thermal_throttling_clamp_under_simulated_high_temperature() {
+        // 1. Moderate thermal throttle (79.5°C >= 78.0°C and <= 82.0°C) -> Throttled clamp
+        {
+            let temp_dir = tempfile::tempdir().expect("tempdir");
+            let bridge = DynatuneBridge::create_simulated_sysfs(temp_dir.path(), 79.5, true, false, 90).unwrap();
+            let orchestrator = MicroVmSwarmOrchestrator::with_bridge(temp_dir.path(), Arc::new(bridge)).expect("orchestrator");
+
+            let task = SwarmTask::new_heavy("bash", "echo 'Thermal throttled'");
+            let outcome = orchestrator.dispatch_ephemeral_firecracker_task(&task).expect("dispatch under thermal clamp");
+
+            assert!(outcome.success);
+            assert_eq!(outcome.metadata["governor"], "powersave");
+            assert_eq!(outcome.metadata["epp"], "power");
+            assert_eq!(outcome.metadata["throttled"], true);
+            assert_eq!(outcome.metadata["turbo_allowed"], false);
+            assert_eq!(outcome.metadata["vcpu"], 1); // Allocation scaled down
+            assert!(outcome.metadata["concurrency_limit"].as_u64().unwrap() <= 2);
+        }
+
+        // 2. Severe critical overheat (85.0°C > 82.0°C) -> Launch prevented with advisory error
+        {
+            let temp_dir = tempfile::tempdir().expect("tempdir");
+            let bridge = DynatuneBridge::create_simulated_sysfs(temp_dir.path(), 85.0, true, false, 90).unwrap();
+            let orchestrator = MicroVmSwarmOrchestrator::with_bridge(temp_dir.path(), Arc::new(bridge)).expect("orchestrator");
+
+            let task = SwarmTask::new_heavy("bash", "echo 'Should never execute'");
+            let err = orchestrator.dispatch_ephemeral_firecracker_task(&task).unwrap_err();
+            let msg = err.to_string();
+            assert!(msg.contains("Hardware safeguard advisory"), "Expected advisory error, got: {}", msg);
+            assert!(msg.contains("82.0°C"), "Expected 82.0°C threshold, got: {}", msg);
+        }
+    }
+
+    #[test]
+    fn test_battery_discharge_concurrency_scaling() {
+        // 1. Discharging at 20% -> Concurrency throttled & vcpu scaled down
+        {
+            let temp_dir = tempfile::tempdir().expect("tempdir");
+            let bridge = DynatuneBridge::create_simulated_sysfs(temp_dir.path(), 60.0, false, true, 20).unwrap();
+            let orchestrator = MicroVmSwarmOrchestrator::with_bridge(temp_dir.path(), Arc::new(bridge)).expect("orchestrator");
+
+            let task = SwarmTask::new_heavy("bash", "echo 'Battery scaled'");
+            let outcome = orchestrator.dispatch_ephemeral_firecracker_task(&task).expect("dispatch under battery scaling");
+
+            assert!(outcome.success);
+            assert_eq!(outcome.metadata["governor"], "powersave");
+            assert_eq!(outcome.metadata["epp"], "power");
+            assert_eq!(outcome.metadata["throttled"], true);
+            assert_eq!(outcome.metadata["vcpu"], 1);
+            assert!(outcome.metadata["concurrency_limit"].as_u64().unwrap() <= 2);
+        }
+
+        // 2. Discharging at critical depleted level (< 15%, e.g. 10%) -> Launch prevented with advisory error
+        {
+            let temp_dir = tempfile::tempdir().expect("tempdir");
+            let bridge = DynatuneBridge::create_simulated_sysfs(temp_dir.path(), 60.0, false, true, 10).unwrap();
+            let orchestrator = MicroVmSwarmOrchestrator::with_bridge(temp_dir.path(), Arc::new(bridge)).expect("orchestrator");
+
+            let task = SwarmTask::new_heavy("bash", "echo 'Should not run on empty battery'");
+            let err = orchestrator.dispatch_ephemeral_firecracker_task(&task).unwrap_err();
+            let msg = err.to_string();
+            assert!(msg.contains("Hardware safeguard advisory"), "Expected advisory error, got: {}", msg);
+            assert!(msg.contains("15%"), "Expected 15% threshold in message, got: {}", msg);
+        }
     }
 }

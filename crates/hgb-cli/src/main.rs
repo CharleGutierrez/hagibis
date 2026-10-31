@@ -258,6 +258,34 @@ pub enum WatchdogSubcommand {
     },
 }
 
+#[derive(Subcommand, Debug, Clone)]
+pub enum EdgeSubcommand {
+    /// Display current Cloudflare Workers mesh status, configured routes, and sync state
+    Status {
+        /// Workspace root path containing wrangler.toml (default: current directory)
+        #[arg(short, long)]
+        path: Option<String>,
+    },
+    /// Trigger immediate full bidirectional synchronization (telemetry + vector cache)
+    Sync {
+        /// Override Cloudflare Workers edge endpoint URL
+        #[arg(short, long)]
+        endpoint: Option<String>,
+        /// Workspace root path containing wrangler.toml (default: current directory)
+        #[arg(short, long)]
+        path: Option<String>,
+    },
+    /// Publish current agent state and telemetry to edge
+    Publish {
+        /// Override Cloudflare Workers edge endpoint URL
+        #[arg(short, long)]
+        endpoint: Option<String>,
+        /// Workspace root path containing wrangler.toml (default: current directory)
+        #[arg(short, long)]
+        path: Option<String>,
+    },
+}
+
 #[derive(Subcommand)]
 enum Commands {
     /// Native Editor Integration & LSP Predictions
@@ -739,7 +767,7 @@ enum Commands {
     },
 
     /// Speculative dual-draft racing & Masterclass Autonomous Vibe Coding Agent Loop
-    #[command(alias = "vibe-loop", alias = "autonomous-loop")]
+    #[command(alias = "vibe-mode", alias = "autonomous-loop")]
     Vibe {
         /// Launch interactive real-time Vibe Cockpit TUI dashboard
         #[arg(long)]
@@ -3540,6 +3568,10 @@ enum Commands {
     /// Pillar 2: Distributed MicroVM Mesh & WASM Swarm Federation
     #[command(subcommand)]
     Swarm(SwarmSubcommand),
+
+    /// Pillar 3: Edge-Native Synchronization via Cloudflare Workers & Wrangler
+    #[command(subcommand)]
+    Edge(EdgeSubcommand),
 
     /// Pillar 4: Autonomous Watchdog & Self-Healing Agent Loops
     #[command(subcommand)]
@@ -10814,6 +10846,100 @@ async fn test_calc() { assert!(calculate(5)); }".to_string()
                     }
                     Err(e) => eprintln!("[-] Self-healing test failed: {}", e),
                 }
+                Ok(())
+            }
+        },
+        Commands::Edge(sub) => match sub {
+            EdgeSubcommand::Status { path } => {
+                let ws_path = path.map(PathBuf::from).unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+                let engine = hgb_core::CloudflareEdgeMeshEngine::load_from_workspace(&ws_path)?;
+                let status = engine.status().await?;
+
+                println!("\n{}", "=== 🌐 Cloudflare Workers Edge Mesh Status ===".cyan().bold());
+                println!("  • App Name:             {}", status.app_name.yellow().bold());
+                println!("  • Compatibility Date:   {}", status.compatibility_date.cyan());
+                println!("  • Edge Endpoint:        {}", status.edge_url.white().bold());
+                println!("  • Edge Connectivity:    {}", if status.connectivity_status.contains("live edge") {
+                    status.connectivity_status.green().bold()
+                } else {
+                    status.connectivity_status.yellow()
+                });
+                println!("  • Offline WAL Buffer:   {} ({} pending items)", status.buffer_db_path, status.pending_buffered_items);
+                println!("  • Local Mutation Vecs:  {} chunks cached in SQLite", status.local_mutation_vectors_count);
+                if let Some(ts) = status.last_sync_timestamp {
+                    println!("  • Last Edge Sync:       {}", ts);
+                }
+
+                if let Some(routes) = &status.routes {
+                    println!("\n  {}", "Configured Edge Routes (_routes.json):".bold());
+                    println!("    - Includes: {:?}", routes.include);
+                    println!("    - Excludes: {:?}", routes.exclude);
+                }
+                println!();
+                Ok(())
+            }
+            EdgeSubcommand::Sync { endpoint, path } => {
+                let ws_path = path.map(PathBuf::from).unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+                let mut engine = hgb_core::CloudflareEdgeMeshEngine::load_from_workspace(&ws_path)?;
+                if let Some(ep) = endpoint {
+                    engine.set_edge_url(ep);
+                }
+
+                println!("{}", "🌐 Starting Full Bidirectional Cloudflare Workers Mesh Sync...".cyan().bold());
+                println!("  Target Edge: {}", engine.config().edge_url.yellow());
+
+                let res = engine.sync_all().await?;
+
+                println!("\n{}", "=== 🪽 Edge Mesh Synchronization Receipt ===".green().bold());
+                println!("  • Overall Status:       {}", res.overall_status.green().bold());
+                println!("  • App / Target:         {} @ {}", res.app_name.yellow(), res.edge_url);
+                println!("  • Telemetry Sync:       {}", if res.telemetry_receipt.published_to_edge {
+                    format!("✔ Live Edge Delivery ({} ms)", res.telemetry_receipt.latency_ms).green()
+                } else {
+                    format!("⚠ Buffered Locally in WAL ({})", res.telemetry_receipt.message).yellow()
+                });
+                println!("  • Vector Cache Sync:    {}", if res.vector_receipt.synced_to_edge {
+                    format!("✔ {} chunks synced to {} ({} ms)", res.vector_receipt.chunks_synced, res.vector_receipt.storage_backend, res.vector_receipt.latency_ms).green()
+                } else {
+                    format!("⚠ Buffered Locally in WAL ({} chunks, {})", res.vector_receipt.chunks_synced, res.vector_receipt.message).yellow()
+                });
+                println!("  • Remote Triggers:      {} trigger(s) received from edge", res.triggers_received.len());
+                for trig in &res.triggers_received {
+                    println!("    - [{}] from '{}' (id: {})", trig.kind, trig.source, trig.id);
+                }
+                println!("  • Offline WAL Flush:    {}", res.buffer_flush_report.message.cyan());
+                println!("  • Total Sync Latency:   {} ms", res.total_duration_ms);
+                println!();
+                Ok(())
+            }
+            EdgeSubcommand::Publish { endpoint, path } => {
+                let ws_path = path.map(PathBuf::from).unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+                let mut engine = hgb_core::CloudflareEdgeMeshEngine::load_from_workspace(&ws_path)?;
+                if let Some(ep) = endpoint {
+                    engine.set_edge_url(ep);
+                }
+
+                let telemetry = engine.collect_local_telemetry()?;
+                println!("{}", "📡 Publishing Local Hagibis Node Telemetry to Public Edge...".cyan().bold());
+                println!("  • Node ID:       {}", telemetry.node_id.yellow());
+                println!("  • CPU Cores:     {} (Load Avg: {:.2})", telemetry.hardware.cpu_cores, telemetry.hardware.load_average);
+                println!("  • Memory:        {} MB used / {} MB total", telemetry.hardware.memory_used_mb, telemetry.hardware.memory_total_mb);
+                println!("  • GPU Support:   {}", if telemetry.hardware.gpu_available {
+                    telemetry.hardware.gpu_device_name.as_deref().unwrap_or("Available").green()
+                } else {
+                    "None / CPU Fallback".white()
+                });
+                println!("  • Active Models: {}", telemetry.active_models.join(", ").cyan());
+                println!("  • Swarm Peers:   {} active peer(s)", telemetry.swarm_peers.len());
+
+                let receipt = engine.publish_telemetry(Some(telemetry)).await?;
+                println!("\n{}", "=== Telemetry Publish Receipt ===".bold());
+                println!("  • Status:        {}", if receipt.published_to_edge { "✔ PUBLISHED (Live Edge)".green().bold() } else { "⚠ BUFFERED (Offline WAL)".yellow().bold() });
+                println!("  • Endpoint:      {}", receipt.endpoint);
+                println!("  • Payload Seal:  {}", receipt.payload_hash);
+                println!("  • Latency:       {} ms", receipt.latency_ms);
+                println!("  • Message:       {}", receipt.message);
+                println!();
                 Ok(())
             }
         },

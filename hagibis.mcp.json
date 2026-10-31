@@ -1,5 +1,47 @@
 {
   "tools": {
+    "hgb_firecracker_spawn": {
+      "description": "Spawn a hardware-isolated Firecracker microVM jail (or Landlock CoW sandbox) with vCPU and memory limits for untrusted code execution",
+      "parameters": {
+        "vcpu_count": { "type": "integer", "description": "Number of virtual CPUs (default: 2)", "default": 2 },
+        "mem_size_mib": { "type": "integer", "description": "Memory size in MiB (default: 1024)", "default": 1024 },
+        "kernel_path": { "type": "string", "description": "Optional custom kernel image path (e.g. /var/lib/hgb/vmlinux)" },
+        "rootfs_path": { "type": "string", "description": "Optional custom rootfs path" },
+        "timeout_secs": { "type": "integer", "description": "MicroVM execution timeout in seconds", "default": 60 }
+      }
+    },
+    "hgb_firecracker_exec": {
+      "description": "Execute a command safely inside an active Firecracker microVM jail or isolated sandbox, returning stdout, stderr, exit code, and memory metrics",
+      "parameters": {
+        "jail_id": { "type": "string", "description": "Target microVM jail identifier returned by hgb_firecracker_spawn", "required": true },
+        "command": { "type": "string", "description": "Command or script to execute inside the microVM", "required": true },
+        "working_dir": { "type": "string", "description": "Optional working directory inside the jail" },
+        "env_vars": { "type": "object", "description": "Optional environment variables map" }
+      }
+    },
+    "hgb_firecracker_destroy": {
+      "description": "Cleanly tear down a Firecracker microVM jail, unmount overlay filesystems, release cgroups, and free allocated memory",
+      "parameters": {
+        "jail_id": { "type": "string", "description": "Target microVM jail identifier to terminate", "required": true }
+      }
+    },
+    "hgb_storage_context_store": {
+      "description": "Persist context documents, code snippets, or embeddings into Hagibis's local SQLite WAL database with FTS5 lexical indexing and vector search",
+      "parameters": {
+        "collection": { "type": "string", "description": "Collection or domain namespace", "default": "default" },
+        "key": { "type": "string", "description": "Unique key or file identifier", "required": true },
+        "content": { "type": "string", "description": "Context content string to index and store", "required": true },
+        "metadata": { "type": "object", "description": "Optional JSON metadata attributes" }
+      }
+    },
+    "hgb_storage_context_query": {
+      "description": "Query Hagibis context memory using hybrid FTS5 full-text lexical search and SIMD cosine vector similarity scoring",
+      "parameters": {
+        "collection": { "type": "string", "description": "Collection or domain namespace", "default": "default" },
+        "query": { "type": "string", "description": "Lexical or semantic query string", "required": true },
+        "limit": { "type": "integer", "description": "Maximum number of results to return", "default": 5 }
+      }
+    },
     "hgb_ollama_pipeline_accelerate": {
       "description": "Direct local Ollama pipeline acceleration: zero-latency embedding generation and speculative drafting with dynabook hardware optimizations",
       "parameters": {

@@ -1041,6 +1041,8 @@ pub use wasm_skill_marketplace::{
 pub mod microvm_sandbox_executor;
 pub use microvm_sandbox_executor::{
     EphemeralExecResult, EphemeralExecSpec, FirecrackerEphemeralSandbox,
+    FirecrackerJailDestroyReport, FirecrackerJailExecReport, FirecrackerJailExecSpec,
+    FirecrackerJailInfo, FirecrackerSpawnConfig,
 };
 
 // Autonomous Expansion Pillar 1: Hybrid Kernel-Level Acceleration (dynatune & kernel-optimizer)
@@ -1234,6 +1236,27 @@ pub use ollama_pipeline_accelerator::{
     DEFAULT_FAST_DRAFT_MODEL, DEFAULT_HEAVY_TARGET_MODEL, DEFAULT_MUTATION_VECTORS_DB,
     DEFAULT_OLLAMA_SOCKET, SIBLING_OLLAMA_DIR,
 };
+
+// Pillar 3: Edge-Native Synchronization via Cloudflare Workers & Wrangler
+pub mod cloudflare_edge_mesh;
+pub use cloudflare_edge_mesh::{
+    glob_match, BufferFlushReport, BufferedItem, CloudflareEdgeMeshConfig,
+    CloudflareEdgeMeshEngine, CloudflareEdgeMeshStatus, CloudflareRoutesConfig,
+    EdgePublishReceipt, EdgeStorageBackend, EdgeTelemetryPayload, EdgeVectorChunk,
+    EdgeVectorSyncBatch, EdgeVectorSyncReceipt, FullMeshSyncResult, HardwareTelemetry,
+    RemoteTrigger, RemoteTriggerAck, RemoteTriggerKind, SwarmPeerTelemetry,
+    DEFAULT_COMPATIBILITY_DATE, DEFAULT_EDGE_BUFFER_DB, DEFAULT_EDGE_TIMEOUT_MS,
+};
+
+// Pillar 1: WASM-Zig Sandbox with Autonomous Agent Loops
+pub mod zig_wasm_agent_compiler;
+pub use zig_wasm_agent_compiler::{
+    AgentInvocationResult, AutonomousLoopReport, AutonomousZigAgentLoop, CompilerStats,
+    HealingAttempt, SandboxedWasmAgentRunner, ZigCompilerConfig, ZigCompilationResult,
+    ZigOptimization, ZigWasmAgentCompiler, ZigWasmTarget,
+};
+
+
 
 
 

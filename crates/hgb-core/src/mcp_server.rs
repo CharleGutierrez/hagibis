@@ -25,7 +25,9 @@ use crate::compiler_interceptor::{CompilerDiagnostic, CompilerInterceptor, Compi
 use crate::dynatune_synergy::DynatuneSynergyEngine;
 use crate::error::{HgbError, Result};
 use crate::memory::ProjectMemoryLedger;
-use crate::microvm_sandbox_executor::{EphemeralExecSpec, FirecrackerEphemeralSandbox};
+use crate::microvm_sandbox_executor::{
+    EphemeralExecSpec, FirecrackerEphemeralSandbox, FirecrackerJailExecSpec, FirecrackerSpawnConfig,
+};
 use crate::overlayfs_sandbox::OverlaySandbox;
 use crate::ast_query::AstQueryEngine;
 use crate::prompt_grounding::UniversalPromptGrounder;
@@ -507,8 +509,8 @@ impl HgbMcpProfile {
     }
 }
 
-/// The top essential vibe coding tools exposed under progressive disclosure (HgbMcpProfile::Core)
-pub const CORE_VIBE_TOOLS: &[&str] = &[
+/// The top essential vibe coding and autonomous swarm tools exposed under progressive disclosure (HgbMcpProfile::Core)
+pub const CORE_TOOLS: &[&str] = &[
     "hgb_self_healing_compile",
     "hgb_cow_sandbox",
     "hgb_vibe_speedrun",
@@ -525,7 +527,15 @@ pub const CORE_VIBE_TOOLS: &[&str] = &[
     "hgb_hot_reload_component",
     "hgb_ollama_pipeline_accelerate",
     "hgb_ollama_mutation_vector_sync",
+    "hgb_firecracker_spawn",
+    "hgb_firecracker_exec",
+    "hgb_firecracker_destroy",
+    "hgb_storage_context_store",
+    "hgb_storage_context_query",
 ];
+
+/// Backward-compatible alias for CORE_TOOLS
+pub const CORE_VIBE_TOOLS: &[&str] = CORE_TOOLS;
 
 /// Hagibis MCP Server Engine exposing native core & storage capabilities
 pub struct HagibisMcpServer {
@@ -568,7 +578,7 @@ impl HagibisMcpServer {
                         .iter()
                         .filter(|tool| {
                             let name = tool.get("name").and_then(|n| n.as_str()).unwrap_or("");
-                            CORE_VIBE_TOOLS.contains(&name)
+                            CORE_TOOLS.contains(&name)
                         })
                         .cloned()
                         .collect();
@@ -1205,6 +1215,72 @@ impl HagibisMcpServer {
                         "top_k": { "type": "integer", "description": "Number of nearest chunks to retrieve", "default": 5 },
                         "db_path": { "type": "string", "description": "Optional path to SQLite vector database" }
                     }
+                }
+            },
+            {
+                "name": "hgb_firecracker_spawn",
+                "description": "Initialize and boot an isolated Firecracker microVM jail (or rootless Landlock LSM CoW jail fallback) for untrusted swarm workloads",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "vcpu_count": { "type": "integer", "description": "Number of vCPUs to allocate (default: 2)", "default": 2 },
+                        "mem_size_mib": { "type": "integer", "description": "Memory size in MiB (default: 1024)", "default": 1024 },
+                        "kernel_path": { "type": "string", "description": "Optional custom kernel image path (e.g. /var/lib/firecracker/vmlinux.bin)" },
+                        "rootfs_path": { "type": "string", "description": "Optional custom rootfs image path (e.g. /var/lib/firecracker/rootfs.ext4)" },
+                        "timeout_secs": { "type": "integer", "description": "Execution timeout in seconds (default: 60)", "default": 60 }
+                    }
+                }
+            },
+            {
+                "name": "hgb_firecracker_exec",
+                "description": "Execute a command inside designated microVM sandbox (or Landlock CoW jail), returning structured execution report",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "jail_id": { "type": "string", "description": "Target microVM jail identifier returned by hgb_firecracker_spawn" },
+                        "command": { "description": "Command string or array of arguments to execute in sandbox" },
+                        "working_dir": { "type": "string", "description": "Optional working directory inside jail" },
+                        "env_vars": { "type": "object", "description": "Optional environment variables key-value map" }
+                    },
+                    "required": ["jail_id", "command"]
+                }
+            },
+            {
+                "name": "hgb_firecracker_destroy",
+                "description": "Gracefully terminate Firecracker microVM, unmount jail overlays, clean up cgroups, and remove temporary shm / socket files",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "jail_id": { "type": "string", "description": "Target microVM jail identifier to terminate and destroy" }
+                    },
+                    "required": ["jail_id"]
+                }
+            },
+            {
+                "name": "hgb_storage_context_store",
+                "description": "Save arbitrary context chunks or embeddings directly into Hagibis's SQLite WAL database (.hgb/hgb.db / .hgb/style_memory.db)",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "collection": { "type": "string", "description": "Target storage collection name (e.g. 'project_docs', 'swarm_context', 'code_snippets')" },
+                        "key": { "type": "string", "description": "Unique key or path within collection" },
+                        "content": { "type": "string", "description": "Raw text, markdown, or code context chunk" },
+                        "metadata": { "type": "object", "description": "Optional arbitrary JSON metadata payload" }
+                    },
+                    "required": ["collection", "key", "content"]
+                }
+            },
+            {
+                "name": "hgb_storage_context_query",
+                "description": "Perform hybrid FTS5 full-text and semantic vector search over stored context chunks and return matching records",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "collection": { "type": "string", "description": "Target storage collection name to query" },
+                        "query": { "type": "string", "description": "Lexical or semantic search query string" },
+                        "limit": { "type": "integer", "description": "Maximum number of matching records to return (default: 10)", "default": 10 }
+                    },
+                    "required": ["collection", "query"]
                 }
             }
         ])
@@ -2907,6 +2983,342 @@ impl HagibisMcpServer {
                 }
             }
 
+            "hgb_firecracker_spawn" => {
+                progress_cb(15, "Parsing Firecracker microVM spawn specifications...");
+                let vcpu_count = args.get("vcpu_count").and_then(|v| v.as_u64()).unwrap_or(2) as u32;
+                let mem_size_mib = args.get("mem_size_mib").and_then(|v| v.as_u64()).unwrap_or(1024) as u32;
+                let kernel_path = args.get("kernel_path").and_then(|v| v.as_str()).map(|s| s.to_string());
+                let rootfs_path = args.get("rootfs_path").and_then(|v| v.as_str()).map(|s| s.to_string());
+                let timeout_secs = args.get("timeout_secs").and_then(|v| v.as_u64()).unwrap_or(60);
+
+                let config = FirecrackerSpawnConfig {
+                    vcpu_count,
+                    mem_size_mib,
+                    kernel_path,
+                    rootfs_path,
+                    timeout_secs,
+                };
+
+                progress_cb(50, "Initializing hardware microVM jail and Landlock fallback boundary...");
+                let sandbox = FirecrackerEphemeralSandbox::new(&self.workspace_root);
+                let jail_info = sandbox.spawn_jail(&config)?;
+
+                progress_cb(100, "Firecracker microVM jail ready.");
+                Ok(serde_json::to_string_pretty(&jail_info).unwrap_or_default())
+            }
+
+            "hgb_firecracker_exec" => {
+                progress_cb(15, "Validating microVM execution parameters...");
+                let jail_id = args.get("jail_id").and_then(|v| v.as_str()).ok_or_else(|| {
+                    HgbError::Execution("Missing 'jail_id' argument".into())
+                })?;
+
+                let cmd_val = args.get("command").ok_or_else(|| {
+                    HgbError::Execution("Missing 'command' argument".into())
+                })?;
+
+                let command = if let Some(s) = cmd_val.as_str() {
+                    vec!["sh".to_string(), "-c".to_string(), s.to_string()]
+                } else if let Some(arr) = cmd_val.as_array() {
+                    let parts: Vec<String> = arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect();
+                    if parts.is_empty() {
+                        return Err(HgbError::Execution("Empty 'command' array provided".into()));
+                    }
+                    parts
+                } else {
+                    return Err(HgbError::Execution("'command' must be a string or array of strings".into()));
+                };
+
+                let working_dir = args.get("working_dir").and_then(|v| v.as_str()).map(|s| s.to_string());
+                let mut env_vars = HashMap::new();
+                if let Some(obj) = args.get("env_vars").and_then(|v| v.as_object()) {
+                    for (k, v) in obj {
+                        if let Some(s) = v.as_str() {
+                            env_vars.insert(k.clone(), s.to_string());
+                        } else {
+                            env_vars.insert(k.clone(), v.to_string());
+                        }
+                    }
+                }
+
+                let spec = FirecrackerJailExecSpec {
+                    jail_id: jail_id.to_string(),
+                    command,
+                    working_dir,
+                    env_vars,
+                };
+
+                progress_cb(50, "Executing command inside microVM sandbox...");
+                let sandbox = FirecrackerEphemeralSandbox::new(&self.workspace_root);
+                let exec_report = sandbox.exec_in_jail(&spec)?;
+
+                progress_cb(100, "Command execution inside microVM completed.");
+                Ok(serde_json::to_string_pretty(&exec_report).unwrap_or_default())
+            }
+
+            "hgb_firecracker_destroy" => {
+                progress_cb(20, "Resolving microVM jail teardown boundary...");
+                let jail_id = args.get("jail_id").and_then(|v| v.as_str()).ok_or_else(|| {
+                    HgbError::Execution("Missing 'jail_id' argument".into())
+                })?;
+
+                progress_cb(60, "Gracefully terminating microVM, unmounting overlays, and cleaning shm sockets...");
+                let sandbox = FirecrackerEphemeralSandbox::new(&self.workspace_root);
+                let destroy_report = sandbox.destroy_jail(jail_id)?;
+
+                progress_cb(100, "Firecracker microVM jail successfully destroyed.");
+                Ok(serde_json::to_string_pretty(&destroy_report).unwrap_or_default())
+            }
+
+            "hgb_storage_context_store" => {
+                progress_cb(15, "Resolving target SQLite WAL database and schema...");
+                let collection = args.get("collection").and_then(|v| v.as_str()).ok_or_else(|| {
+                    HgbError::Execution("Missing 'collection' argument".into())
+                })?;
+                let key = args.get("key").and_then(|v| v.as_str()).ok_or_else(|| {
+                    HgbError::Execution("Missing 'key' argument".into())
+                })?;
+                let content = args.get("content").and_then(|v| v.as_str()).ok_or_else(|| {
+                    HgbError::Execution("Missing 'content' argument".into())
+                })?;
+                let metadata_val = args.get("metadata").cloned().unwrap_or(Value::Object(serde_json::Map::new()));
+                let metadata_str = serde_json::to_string(&metadata_val).unwrap_or_else(|_| "{}".to_string());
+
+                let hgb_dir = self.workspace_root.join(".hgb");
+                let _ = fs::create_dir_all(&hgb_dir);
+                let style_db = hgb_dir.join("style_memory.db");
+                let hgb_db = hgb_dir.join("hgb.db");
+                let db_path = if style_db.exists() {
+                    style_db
+                } else {
+                    hgb_db
+                };
+
+                let conn = rusqlite::Connection::open(&db_path).map_err(|e| {
+                    HgbError::Execution(format!("Failed to open SQLite database at {}: {}", db_path.display(), e))
+                })?;
+
+                conn.execute_batch(
+                    "PRAGMA journal_mode = WAL;
+                     PRAGMA synchronous = NORMAL;
+                     PRAGMA busy_timeout = 5000;
+                     CREATE TABLE IF NOT EXISTS context_store (
+                         id INTEGER PRIMARY KEY AUTOINCREMENT,
+                         collection TEXT NOT NULL,
+                         key TEXT NOT NULL,
+                         content TEXT NOT NULL,
+                         metadata TEXT,
+                         embedding_blob BLOB,
+                         created_at INTEGER NOT NULL,
+                         updated_at INTEGER NOT NULL,
+                         UNIQUE(collection, key)
+                     );
+                     CREATE INDEX IF NOT EXISTS idx_context_collection ON context_store(collection);
+                     CREATE INDEX IF NOT EXISTS idx_context_key ON context_store(collection, key);"
+                ).map_err(|e| HgbError::Execution(format!("Failed to initialize context_store schema: {}", e)))?;
+
+                let fts5_ok = conn.execute(
+                    "CREATE VIRTUAL TABLE IF NOT EXISTS context_fts5 USING fts5(
+                         collection UNINDEXED,
+                         key UNINDEXED,
+                         content,
+                         tokenize='porter unicode61'
+                     )",
+                    [],
+                ).is_ok();
+
+                progress_cb(50, "Generating deterministic semantic vector embedding...");
+                let emb = crate::ollama_pipeline_accelerator::deterministic_semantic_embedding(content, 768);
+                let blob = crate::ollama_pipeline_accelerator::embedding_to_blob(&emb);
+                let now = chrono::Utc::now().timestamp();
+
+                progress_cb(80, "Writing context chunk and FTS5 index to SQLite WAL database...");
+                conn.execute(
+                    "INSERT INTO context_store (collection, key, content, metadata, embedding_blob, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
+                     ON CONFLICT(collection, key) DO UPDATE SET
+                         content = excluded.content,
+                         metadata = excluded.metadata,
+                         embedding_blob = excluded.embedding_blob,
+                         updated_at = excluded.updated_at;",
+                    rusqlite::params![collection, key, content, metadata_str, blob, now],
+                ).map_err(|e| HgbError::Execution(format!("Failed to insert context into SQLite: {}", e)))?;
+
+                if fts5_ok {
+                    let _ = conn.execute("DELETE FROM context_fts5 WHERE collection = ?1 AND key = ?2", rusqlite::params![collection, key]);
+                    let _ = conn.execute("INSERT INTO context_fts5 (collection, key, content) VALUES (?1, ?2, ?3)", rusqlite::params![collection, key, content]);
+                }
+
+                progress_cb(100, "Context chunk persisted successfully.");
+                let report = serde_json::json!({
+                    "status": "stored",
+                    "collection": collection,
+                    "key": key,
+                    "bytes_stored": content.len(),
+                    "embedding_dimensions": 768,
+                    "fts5_indexed": fts5_ok,
+                    "database": db_path.display().to_string(),
+                    "updated_at": now
+                });
+                Ok(serde_json::to_string_pretty(&report).unwrap_or_default())
+            }
+
+            "hgb_storage_context_query" => {
+                progress_cb(15, "Opening SQLite WAL context storage...");
+                let collection = args.get("collection").and_then(|v| v.as_str()).ok_or_else(|| {
+                    HgbError::Execution("Missing 'collection' argument".into())
+                })?;
+                let query = args.get("query").and_then(|v| v.as_str()).ok_or_else(|| {
+                    HgbError::Execution("Missing 'query' argument".into())
+                })?;
+                let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
+
+                let hgb_dir = self.workspace_root.join(".hgb");
+                let style_db = hgb_dir.join("style_memory.db");
+                let hgb_db = hgb_dir.join("hgb.db");
+                let db_path = if style_db.exists() {
+                    style_db
+                } else if hgb_db.exists() {
+                    hgb_db
+                } else {
+                    return Ok(serde_json::to_string_pretty(&serde_json::json!({
+                        "collection": collection,
+                        "query": query,
+                        "total_results": 0,
+                        "results": []
+                    })).unwrap_or_default());
+                };
+
+                let conn = rusqlite::Connection::open(&db_path).map_err(|e| {
+                    HgbError::Execution(format!("Failed to open SQLite database at {}: {}", db_path.display(), e))
+                })?;
+
+                let table_exists: bool = conn.query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='context_store'",
+                    [],
+                    |r| r.get::<_, i64>(0),
+                ).map(|c| c > 0).unwrap_or(false);
+
+                if !table_exists {
+                    return Ok(serde_json::to_string_pretty(&serde_json::json!({
+                        "collection": collection,
+                        "query": query,
+                        "total_results": 0,
+                        "results": []
+                    })).unwrap_or_default());
+                }
+
+                progress_cb(35, "Executing lexical FTS5 matching...");
+                let mut fts_matches = HashMap::new();
+                let sanitized_query: String = query
+                    .chars()
+                    .filter(|c| c.is_alphanumeric() || c.is_whitespace() || *c == '_')
+                    .collect();
+                let fts_terms: Vec<String> = sanitized_query
+                    .split_whitespace()
+                    .map(|term| format!("\"{}\"", term))
+                    .collect();
+
+                let fts_table_exists: bool = conn.query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='context_fts5'",
+                    [],
+                    |r| r.get::<_, i64>(0),
+                ).map(|c| c > 0).unwrap_or(false);
+
+                if fts_table_exists && !fts_terms.is_empty() {
+                    let match_expr = fts_terms.join(" OR ");
+                    if let Ok(mut stmt) = conn.prepare("SELECT key, rank FROM context_fts5 WHERE collection = ?1 AND context_fts5 MATCH ?2 ORDER BY rank LIMIT 100") {
+                        if let Ok(rows) = stmt.query_map(rusqlite::params![collection, match_expr], |row| {
+                            Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+                        }) {
+                            for item in rows.flatten() {
+                                fts_matches.insert(item.0, item.1);
+                            }
+                        }
+                    }
+                }
+
+                progress_cb(60, "Computing query semantic embedding and SIMD vector similarity...");
+                let query_emb = crate::ollama_pipeline_accelerator::deterministic_semantic_embedding(query, 768);
+
+                let mut stmt = conn.prepare("SELECT key, content, metadata, embedding_blob, updated_at FROM context_store WHERE collection = ?1")
+                    .map_err(|e| HgbError::Execution(format!("Query preparation failed: {}", e)))?;
+
+                struct SearchCandidate {
+                    key: String,
+                    content: String,
+                    metadata: Value,
+                    score: f32,
+                    semantic_similarity: f32,
+                    lexical_match: bool,
+                    updated_at: i64,
+                }
+
+                let mut candidates = Vec::new();
+                let rows = stmt.query_map(rusqlite::params![collection], |row| {
+                    let key: String = row.get(0)?;
+                    let content: String = row.get(1)?;
+                    let metadata_str: Option<String> = row.get(2)?;
+                    let blob: Option<Vec<u8>> = row.get(3)?;
+                    let updated_at: i64 = row.get(4)?;
+                    Ok((key, content, metadata_str, blob, updated_at))
+                }).map_err(|e| HgbError::Execution(format!("Context query execution failed: {}", e)))?;
+
+                for item in rows.flatten() {
+                    let (key, content, meta_str, blob_opt, updated_at) = item;
+                    let meta_val = meta_str.as_deref().and_then(|s| serde_json::from_str(s).ok()).unwrap_or(Value::Null);
+
+                    let semantic_sim = if let Some(ref blob) = blob_opt {
+                        let chunk_emb = crate::ollama_pipeline_accelerator::blob_to_embedding(blob);
+                        crate::ollama_pipeline_accelerator::simd_cosine_similarity(&query_emb, &chunk_emb)
+                    } else {
+                        0.0
+                    };
+
+                    let is_fts_match = fts_matches.contains_key(&key);
+                    let is_substr_match = content.to_lowercase().contains(&sanitized_query.to_lowercase());
+                    let lexical_match = is_fts_match || is_substr_match;
+
+                    let lexical_boost = if is_fts_match { 0.5 } else if is_substr_match { 0.3 } else { 0.0 };
+                    let hybrid_score = (0.5 * semantic_sim.max(0.0)) + lexical_boost;
+
+                    if lexical_match || semantic_sim > 0.15 {
+                        candidates.push(SearchCandidate {
+                            key,
+                            content,
+                            metadata: meta_val,
+                            score: hybrid_score,
+                            semantic_similarity: semantic_sim,
+                            lexical_match,
+                            updated_at,
+                        });
+                    }
+                }
+
+                progress_cb(90, "Ranking hybrid search candidates by fused score...");
+                candidates.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+                let top_candidates = candidates.into_iter().take(limit).map(|c| {
+                    serde_json::json!({
+                        "key": c.key,
+                        "content": c.content,
+                        "metadata": c.metadata,
+                        "score": (c.score * 1000.0).round() / 1000.0,
+                        "semantic_similarity": (c.semantic_similarity * 1000.0).round() / 1000.0,
+                        "lexical_match": c.lexical_match,
+                        "updated_at": c.updated_at
+                    })
+                }).collect::<Vec<_>>();
+
+                progress_cb(100, "Hybrid context query completed.");
+                let response = serde_json::json!({
+                    "collection": collection,
+                    "query": query,
+                    "total_results": top_candidates.len(),
+                    "results": top_candidates
+                });
+                Ok(serde_json::to_string_pretty(&response).unwrap_or_default())
+            }
+
             other => Ok(format!("Tool '{}' recognized by Hagibis MCP dispatcher.", other)),
         }
     }
@@ -3303,5 +3715,208 @@ path = "src/lib.rs"
         let parsed: Value = serde_json::from_str(&res).expect("JSON");
         assert_eq!(parsed["status"], "reloaded");
         assert_eq!(parsed["wasm_reloaded"], true);
+    }
+
+    #[tokio::test]
+    async fn test_mcp_pillar4_tool_schemas() {
+        // Verify Core profile progressive disclosure contains Pillar 4 swarm tools
+        let core_tools_val = HagibisMcpServer::list_tools();
+        let core_tools = core_tools_val.as_array().expect("Array of tools");
+        let core_names: Vec<&str> = core_tools.iter().filter_map(|t| t.get("name").and_then(|n| n.as_str())).collect();
+        assert!(core_names.contains(&"hgb_firecracker_spawn"));
+        assert!(core_names.contains(&"hgb_firecracker_exec"));
+        assert!(core_names.contains(&"hgb_firecracker_destroy"));
+        assert!(core_names.contains(&"hgb_storage_context_store"));
+        assert!(core_names.contains(&"hgb_storage_context_query"));
+
+        // Verify Full catalog schemas
+        let full_tools_val = HagibisMcpServer::list_full_tools();
+        let full_tools = full_tools_val.as_array().expect("Full catalog array");
+
+        let spawn_tool = full_tools.iter().find(|t| t["name"] == "hgb_firecracker_spawn").expect("hgb_firecracker_spawn found");
+        let spawn_props = &spawn_tool["inputSchema"]["properties"];
+        assert!(spawn_props.get("vcpu_count").is_some());
+        assert!(spawn_props.get("mem_size_mib").is_some());
+        assert!(spawn_props.get("kernel_path").is_some());
+        assert!(spawn_props.get("rootfs_path").is_some());
+        assert!(spawn_props.get("timeout_secs").is_some());
+
+        let exec_tool = full_tools.iter().find(|t| t["name"] == "hgb_firecracker_exec").expect("hgb_firecracker_exec found");
+        let exec_props = &exec_tool["inputSchema"]["properties"];
+        assert!(exec_props.get("jail_id").is_some());
+        assert!(exec_props.get("command").is_some());
+        assert!(exec_props.get("working_dir").is_some());
+        assert!(exec_props.get("env_vars").is_some());
+        let exec_req: Vec<String> = exec_tool["inputSchema"]["required"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
+        assert!(exec_req.contains(&"jail_id".to_string()));
+        assert!(exec_req.contains(&"command".to_string()));
+
+        let destroy_tool = full_tools.iter().find(|t| t["name"] == "hgb_firecracker_destroy").expect("hgb_firecracker_destroy found");
+        assert!(destroy_tool["inputSchema"]["properties"].get("jail_id").is_some());
+        let destroy_req: Vec<String> = destroy_tool["inputSchema"]["required"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
+        assert!(destroy_req.contains(&"jail_id".to_string()));
+
+        let store_tool = full_tools.iter().find(|t| t["name"] == "hgb_storage_context_store").expect("hgb_storage_context_store found");
+        let store_props = &store_tool["inputSchema"]["properties"];
+        assert!(store_props.get("collection").is_some());
+        assert!(store_props.get("key").is_some());
+        assert!(store_props.get("content").is_some());
+        assert!(store_props.get("metadata").is_some());
+        let store_req: Vec<String> = store_tool["inputSchema"]["required"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
+        assert!(store_req.contains(&"collection".to_string()));
+        assert!(store_req.contains(&"key".to_string()));
+        assert!(store_req.contains(&"content".to_string()));
+
+        let query_tool = full_tools.iter().find(|t| t["name"] == "hgb_storage_context_query").expect("hgb_storage_context_query found");
+        let query_props = &query_tool["inputSchema"]["properties"];
+        assert!(query_props.get("collection").is_some());
+        assert!(query_props.get("query").is_some());
+        assert!(query_props.get("limit").is_some());
+        let query_req: Vec<String> = query_tool["inputSchema"]["required"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
+        assert!(query_req.contains(&"collection".to_string()));
+        assert!(query_req.contains(&"query".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_mcp_firecracker_microvm_lifecycle_roundtrip() {
+        let tmp = std::env::temp_dir().join(format!("hgb_fc_mcp_test_{}", std::process::id()));
+        let _ = fs::create_dir_all(&tmp);
+        let server = HagibisMcpServer::new(&tmp);
+
+        // 1. Spawn microVM jail
+        let spawn_args = serde_json::json!({
+            "vcpu_count": 2,
+            "mem_size_mib": 512,
+            "timeout_secs": 30
+        });
+        let spawn_res = server.execute_tool("hgb_firecracker_spawn", &spawn_args).await.expect("spawn tool execute");
+        let spawn_json: Value = serde_json::from_str(&spawn_res).expect("JSON response");
+        let jail_id = spawn_json["jail_id"].as_str().expect("jail_id").to_string();
+        assert!(jail_id.starts_with("hgb_jail_"));
+        assert_eq!(spawn_json["status"], "running");
+        assert!(!spawn_json["socket_path"].as_str().unwrap().is_empty());
+        assert!(spawn_json["isolation_tier"].as_str().unwrap().contains("Firecracker") || spawn_json["isolation_tier"].as_str().unwrap().contains("Landlock"));
+
+        // 2. Exec command with array arguments and environment variables
+        let exec_args = serde_json::json!({
+            "jail_id": jail_id,
+            "command": ["sh", "-c", "echo 'Node Active' && echo \"ENV_KEY=$MY_KEY\""],
+            "env_vars": { "MY_KEY": "SWARM_SUPERPOWER_4" }
+        });
+        let exec_res = server.execute_tool("hgb_firecracker_exec", &exec_args).await.expect("exec tool execute");
+        let exec_json: Value = serde_json::from_str(&exec_res).expect("JSON response");
+        assert_eq!(exec_json["exit_code"], 0);
+        assert_eq!(exec_json["success"], true);
+        let stdout = exec_json["stdout"].as_str().unwrap();
+        assert!(stdout.contains("Node Active"));
+        assert!(stdout.contains("ENV_KEY=SWARM_SUPERPOWER_4"));
+        assert!(exec_json["blast_radius_bytes"].as_u64().unwrap() > 0);
+
+        // 3. Exec string command format
+        let string_exec_args = serde_json::json!({
+            "jail_id": jail_id,
+            "command": "echo 'Direct string command execution works'"
+        });
+        let str_res = server.execute_tool("hgb_firecracker_exec", &string_exec_args).await.expect("string command execute");
+        let str_json: Value = serde_json::from_str(&str_res).expect("JSON response");
+        assert_eq!(str_json["exit_code"], 0);
+        assert!(str_json["stdout"].as_str().unwrap().contains("Direct string command execution works"));
+
+        // 4. Destroy microVM jail
+        let destroy_args = serde_json::json!({ "jail_id": jail_id });
+        let destroy_res = server.execute_tool("hgb_firecracker_destroy", &destroy_args).await.expect("destroy tool execute");
+        let destroy_json: Value = serde_json::from_str(&destroy_res).expect("JSON response");
+        assert_eq!(destroy_json["status"], "destroyed");
+        assert!(destroy_json["message"].as_str().unwrap().contains("successfully terminated"));
+
+        // 5. Subsequent execution in destroyed jail must return error
+        let failed_exec = server.execute_tool("hgb_firecracker_exec", &exec_args).await;
+        assert!(failed_exec.is_err());
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[tokio::test]
+    async fn test_mcp_storage_context_store_and_hybrid_query() {
+        let tmp = std::env::temp_dir().join(format!("hgb_storage_mcp_test_{}", std::process::id()));
+        let _ = fs::create_dir_all(&tmp);
+        let server = HagibisMcpServer::new(&tmp);
+
+        let collection = "hagibis_architecture";
+
+        // 1. Store item 1: Firecracker microVM
+        let store1_args = serde_json::json!({
+            "collection": collection,
+            "key": "firecracker_sandboxing.md",
+            "content": "Firecracker hardware microVM sandboxes provide sub-second boot time and hardware isolation via Linux KVM.",
+            "metadata": { "pillar": 4, "type": "virtualization" }
+        });
+        let store1_res = server.execute_tool("hgb_storage_context_store", &store1_args).await.expect("store 1");
+        let store1_json: Value = serde_json::from_str(&store1_res).expect("JSON");
+        assert_eq!(store1_json["status"], "stored");
+        assert_eq!(store1_json["embedding_dimensions"], 768);
+
+        // 2. Store item 2: SQLite WAL storage
+        let store2_args = serde_json::json!({
+            "collection": collection,
+            "key": "sqlite_wal_storage.md",
+            "content": "Hagibis context storage leverages SQLite in WAL mode with FTS5 lexical indexing and SIMD vector embeddings.",
+            "metadata": { "pillar": 4, "type": "storage" }
+        });
+        let store2_res = server.execute_tool("hgb_storage_context_store", &store2_args).await.expect("store 2");
+        let store2_json: Value = serde_json::from_str(&store2_res).expect("JSON");
+        assert_eq!(store2_json["status"], "stored");
+
+        // 3. Store item 3: WASM HotPool
+        let store3_args = serde_json::json!({
+            "collection": collection,
+            "key": "wasm_hot_pool.md",
+            "content": "WebAssembly hot pool executes sandboxed functions in linear memory under 50 microseconds.",
+            "metadata": { "pillar": 2, "type": "wasm" }
+        });
+        let store3_res = server.execute_tool("hgb_storage_context_store", &store3_args).await.expect("store 3");
+        let store3_json: Value = serde_json::from_str(&store3_res).expect("JSON");
+        assert_eq!(store3_json["status"], "stored");
+
+        // 4. Query with lexical + semantic terms for Firecracker
+        let query_fc_args = serde_json::json!({
+            "collection": collection,
+            "query": "Firecracker microVM hardware isolation",
+            "limit": 5
+        });
+        let q_fc_res = server.execute_tool("hgb_storage_context_query", &query_fc_args).await.expect("query fc");
+        let q_fc_json: Value = serde_json::from_str(&q_fc_res).expect("JSON");
+        assert!(q_fc_json["total_results"].as_u64().unwrap() >= 1);
+        let top_match = &q_fc_json["results"][0];
+        assert_eq!(top_match["key"], "firecracker_sandboxing.md");
+        assert_eq!(top_match["lexical_match"], true);
+        assert!(top_match["score"].as_f64().unwrap() > 0.4);
+        assert_eq!(top_match["metadata"]["pillar"], 4);
+
+        // 5. Query for SQLite WAL storage
+        let query_sql_args = serde_json::json!({
+            "collection": collection,
+            "query": "SQLite WAL mode FTS5 indexing",
+            "limit": 5
+        });
+        let q_sql_res = server.execute_tool("hgb_storage_context_query", &query_sql_args).await.expect("query sql");
+        let q_sql_json: Value = serde_json::from_str(&q_sql_res).expect("JSON");
+        assert!(q_sql_json["total_results"].as_u64().unwrap() >= 1);
+        let sql_top = &q_sql_json["results"][0];
+        assert_eq!(sql_top["key"], "sqlite_wal_storage.md");
+        assert_eq!(sql_top["lexical_match"], true);
+
+        // 6. Query with semantic query
+        let query_sem_args = serde_json::json!({
+            "collection": collection,
+            "query": "sub-second virtual machine KVM",
+            "limit": 3
+        });
+        let q_sem_res = server.execute_tool("hgb_storage_context_query", &query_sem_args).await.expect("query sem");
+        let q_sem_json: Value = serde_json::from_str(&q_sem_res).expect("JSON");
+        assert!(q_sem_json["total_results"].as_u64().unwrap() >= 1);
+        assert_eq!(q_sem_json["results"][0]["key"], "firecracker_sandboxing.md");
+
+        let _ = fs::remove_dir_all(&tmp);
     }
 }

@@ -31,7 +31,6 @@
 
 use std::fmt;
 use std::fs;
-use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -414,7 +413,7 @@ impl WorkloadAdaptiveGuard {
         // 1. Privileged hardware governor and EPP application
         if is_privileged {
             // Apply Intel P-State parameters
-            let pstate_dir = Path::new("/sys/devices/system/cpu/intel_pstate");
+            let pstate_dir = bridge.intel_pstate_base();
             if pstate_dir.exists() {
                 let no_turbo_val = if decision.no_turbo { "1\n" } else { "0\n" };
                 let _ = fs::write(pstate_dir.join("no_turbo"), no_turbo_val);
@@ -424,7 +423,7 @@ impl WorkloadAdaptiveGuard {
             }
 
             // Apply cpufreq governors and EPP across all policies
-            let cpufreq_dir = Path::new("/sys/devices/system/cpu/cpufreq");
+            let cpufreq_dir = bridge.cpu_sysfs_base().join("cpufreq");
             if let Ok(entries) = fs::read_dir(cpufreq_dir) {
                 for entry in entries.flatten() {
                     let p = entry.path();
@@ -483,14 +482,14 @@ impl Drop for WorkloadAdaptiveGuard {
 
         // 2. Restore privileged settings if previously altered
         if self.is_privileged {
-            let pstate_dir = Path::new("/sys/devices/system/cpu/intel_pstate");
+            let pstate_dir = self.bridge.intel_pstate_base();
             if pstate_dir.exists() {
                 let no_turbo_val = if self.baseline_no_turbo { "1\n" } else { "0\n" };
                 let _ = fs::write(pstate_dir.join("no_turbo"), no_turbo_val);
                 let _ = fs::write(pstate_dir.join("max_perf_pct"), format!("{}\n", self.baseline_max_perf_pct));
             }
 
-            let cpufreq_dir = Path::new("/sys/devices/system/cpu/cpufreq");
+            let cpufreq_dir = self.bridge.cpu_sysfs_base().join("cpufreq");
             if let Ok(entries) = fs::read_dir(cpufreq_dir) {
                 for entry in entries.flatten() {
                     let p = entry.path();
@@ -804,5 +803,57 @@ mod tests {
         assert!(WorkloadKind::HeavyInference.is_heavy());
         assert!(WorkloadKind::HeavyCompilation.is_heavy());
         assert!(!WorkloadKind::Lightweight.is_heavy());
+    }
+
+    #[test]
+    fn test_firecracker_task_dispatch_with_dynamic_governor_boosting() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        // Simulated cool condition on AC: 52.0°C < 70.0°C, AC connected, no battery discharge
+        let bridge = DynatuneBridge::create_simulated_sysfs(temp_dir.path(), 52.0, true, false, 95).unwrap();
+        let router = HardwareAwareWorkloadRouter::with_bridge(Arc::new(bridge));
+
+        let decision = router.evaluate_workload(WorkloadKind::HeavyCompilation);
+        assert_eq!(decision.profile, WorkloadExecutionProfile::MaxPerformance);
+        assert_eq!(decision.target_governor, "performance");
+        assert_eq!(decision.target_epp, "performance");
+        assert_eq!(decision.max_perf_pct, 100);
+        assert!(!decision.no_turbo, "Turbo boost should be allowed under MaxPerformance");
+        assert!(decision.recommended_concurrency >= 1);
+
+        let guard = router.acquire_guard(WorkloadKind::HeavyCompilation).expect("acquire guard");
+        assert_eq!(guard.decision().profile, WorkloadExecutionProfile::MaxPerformance);
+    }
+
+    #[test]
+    fn test_thermal_throttling_clamp_under_simulated_high_temperature() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        // Simulated overheat threshold: 80.0°C >= 78.0°C
+        let bridge = DynatuneBridge::create_simulated_sysfs(temp_dir.path(), 80.0, true, false, 90).unwrap();
+        let router = HardwareAwareWorkloadRouter::with_bridge(Arc::new(bridge));
+
+        let decision = router.evaluate_workload(WorkloadKind::HeavyCompilation);
+        assert_eq!(decision.profile, WorkloadExecutionProfile::ThermalThrottledSafe);
+        assert_eq!(decision.target_governor, "powersave");
+        assert_eq!(decision.target_epp, "power");
+        assert_eq!(decision.max_perf_pct, 70);
+        assert!(decision.no_turbo, "Turbo boost must be clamped off under thermal throttle");
+        assert!(decision.recommended_concurrency <= 2, "Concurrency must be clamped to 1-2 workers");
+        assert!(decision.context_compaction_recommended);
+    }
+
+    #[test]
+    fn test_battery_discharge_concurrency_scaling() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        // Simulated battery discharging at 18% (< 25%)
+        let bridge = DynatuneBridge::create_simulated_sysfs(temp_dir.path(), 58.0, false, true, 18).unwrap();
+        let router = HardwareAwareWorkloadRouter::with_bridge(Arc::new(bridge));
+
+        let decision = router.evaluate_workload(WorkloadKind::HeavyInference);
+        assert_eq!(decision.profile, WorkloadExecutionProfile::ThermalThrottledSafe);
+        assert_eq!(decision.target_governor, "powersave");
+        assert_eq!(decision.target_epp, "power");
+        assert_eq!(decision.max_perf_pct, 70);
+        assert!(decision.recommended_concurrency <= 2, "Concurrency must be scaled down during battery discharge");
+        assert!(decision.offload_to_swarm);
     }
 }

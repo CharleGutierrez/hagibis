@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use wasmtime::*;
 
 use crate::error::{HgbError, Result};
+use crate::hardware_aware_workload_router::{HardwareAwareWorkloadRouter, WorkloadKind};
 use crate::wasm_plugin_kernel::{WasmPluginHostState, WasmPluginManifest};
 use crate::wasm_pgo_jit::WasmPgoJitEngine;
 
@@ -196,6 +197,7 @@ pub struct WasmHotPool {
     cache_hits: AtomicU64,
     cache_misses: AtomicU64,
     pgo_engine: Arc<RwLock<Option<Arc<WasmPgoJitEngine>>>>,
+    router: Arc<HardwareAwareWorkloadRouter>,
 }
 
 impl Default for WasmHotPool {
@@ -207,6 +209,12 @@ impl Default for WasmHotPool {
 impl WasmHotPool {
     /// Initialize a new hot pool with a given slot capacity
     pub fn new(capacity: usize) -> Result<Self> {
+        let router = Arc::new(HardwareAwareWorkloadRouter::new());
+        Self::with_router(capacity, router)
+    }
+
+    /// Initialize a new hot pool with a given slot capacity and custom HardwareAwareWorkloadRouter
+    pub fn with_router(capacity: usize, router: Arc<HardwareAwareWorkloadRouter>) -> Result<Self> {
         let mut config = Config::new();
         config.consume_fuel(true);
         config.cranelift_opt_level(OptLevel::Speed);
@@ -232,7 +240,13 @@ impl WasmHotPool {
             cache_hits: AtomicU64::new(0),
             cache_misses: AtomicU64::new(0),
             pgo_engine: Arc::new(RwLock::new(None)),
+            router,
         })
+    }
+
+    /// Access the internal hardware-aware workload router
+    pub fn router(&self) -> &Arc<HardwareAwareWorkloadRouter> {
+        &self.router
     }
 
     /// Internal factory to construct an execution slot with pre-bound host functions
@@ -297,6 +311,13 @@ impl WasmHotPool {
 
     /// Pre-warm and compile a list of WASM binaries into the module cache
     pub fn prewarm(&self, wasm_paths: &[impl AsRef<Path>]) -> Result<Vec<ModulePrewarmReport>> {
+        // Wrap multi-module parallel/batch compilation with dynamic governor tuning guard
+        let _guard = if wasm_paths.len() > 1 {
+            Some(self.router.acquire_guard(WorkloadKind::HeavyCompilation)?)
+        } else {
+            None
+        };
+
         let mut reports = Vec::new();
         for p in wasm_paths {
             let path = p.as_ref();
@@ -368,6 +389,30 @@ impl WasmHotPool {
             });
         }
         Ok(reports)
+    }
+
+    /// Parallel multi-module compilation batch wrapped with dynamic hardware governor tuning guard
+    pub fn compile_batch(&self, wasm_paths: &[impl AsRef<Path>]) -> Result<Vec<ModulePrewarmReport>> {
+        let _guard = self.router.acquire_guard(WorkloadKind::HeavyCompilation)?;
+        self.prewarm(wasm_paths)
+    }
+
+    /// Execute a batch of WASM execution requests wrapped with dynamic hardware governor tuning guard
+    pub fn execute_batch(&self, requests: &[(&Path, &serde_json::Value)]) -> Result<Vec<WasmHotExecReport>> {
+        let guard = self.router.acquire_guard(WorkloadKind::WasmSandboxed)?;
+        let _limit = guard.recommended_concurrency().max(1);
+
+        let mut reports = Vec::with_capacity(requests.len());
+        for (path, input) in requests {
+            let rep = self.execute(path, input)?;
+            reports.push(rep);
+        }
+        Ok(reports)
+    }
+
+    /// Execute a pipeline batch of WASM execution requests wrapped with dynamic hardware governor tuning guard
+    pub fn execute_pipeline_batch(&self, requests: &[(&Path, &serde_json::Value)]) -> Result<Vec<WasmHotExecReport>> {
+        self.execute_batch(requests)
     }
 
     /// Execute a WASM plugin by path using the zero-copy hot pool
@@ -578,6 +623,12 @@ impl WasmHotPool {
             engine: Some(engine),
         });
         cache.insert(path.to_path_buf(), entry);
+    }
+
+    /// Check whether a cached module has been tiered up via PGO
+    pub fn is_module_tiered_up(&self, module_path: &Path) -> Option<bool> {
+        let cache = self.module_cache.read().ok()?;
+        cache.get(module_path).map(|entry| entry.is_tiered_up)
     }
 
     /// Execute a WASM tool with Profile-Guided Optimization telemetry and Cranelift tier-up JIT compilation

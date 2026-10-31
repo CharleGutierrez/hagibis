@@ -256,6 +256,7 @@ pub struct DynatuneBridge {
     thermal_sysfs_base: PathBuf,
     intel_pstate_base: PathBuf,
     mglru_sysfs_base: PathBuf,
+    meminfo_path: PathBuf,
     dynatune_dir: Option<PathBuf>,
     kernel_ctl_path: Option<PathBuf>,
     is_performance_burst: Arc<AtomicBool>,
@@ -278,10 +279,133 @@ impl DynatuneBridge {
             thermal_sysfs_base: PathBuf::from("/sys/class/thermal"),
             intel_pstate_base: PathBuf::from("/sys/devices/system/cpu/intel_pstate"),
             mglru_sysfs_base: PathBuf::from("/sys/kernel/mm/lru_gen"),
+            meminfo_path: PathBuf::from("/proc/meminfo"),
             dynatune_dir,
             kernel_ctl_path,
             is_performance_burst: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// Initialize Dynatune host bridge with custom sysfs base paths (for virtualized/isolated environments and tests)
+    pub fn with_sysfs_bases(
+        power_sysfs_base: impl Into<PathBuf>,
+        cpu_sysfs_base: impl Into<PathBuf>,
+        thermal_sysfs_base: impl Into<PathBuf>,
+        intel_pstate_base: impl Into<PathBuf>,
+        mglru_sysfs_base: impl Into<PathBuf>,
+    ) -> Self {
+        let (dynatune_dir, kernel_ctl_path) = Self::discover_sibling_tools();
+        Self {
+            power_sysfs_base: power_sysfs_base.into(),
+            cpu_sysfs_base: cpu_sysfs_base.into(),
+            thermal_sysfs_base: thermal_sysfs_base.into(),
+            intel_pstate_base: intel_pstate_base.into(),
+            mglru_sysfs_base: mglru_sysfs_base.into(),
+            meminfo_path: PathBuf::from("/proc/meminfo"),
+            dynatune_dir,
+            kernel_ctl_path,
+            is_performance_burst: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Access the power sysfs base path
+    pub fn power_sysfs_base(&self) -> &Path {
+        &self.power_sysfs_base
+    }
+
+    /// Access the CPU sysfs base path
+    pub fn cpu_sysfs_base(&self) -> &Path {
+        &self.cpu_sysfs_base
+    }
+
+    /// Access the thermal sysfs base path
+    pub fn thermal_sysfs_base(&self) -> &Path {
+        &self.thermal_sysfs_base
+    }
+
+    /// Access the Intel P-state sysfs base path
+    pub fn intel_pstate_base(&self) -> &Path {
+        &self.intel_pstate_base
+    }
+
+    /// Access the MGLRU sysfs base path
+    pub fn mglru_sysfs_base(&self) -> &Path {
+        &self.mglru_sysfs_base
+    }
+
+    /// Helper to scaffold a real sysfs filesystem layout in the given base path for deterministic testing
+    pub fn create_simulated_sysfs(
+        base_dir: &Path,
+        cpu_temp_c: f64,
+        ac_online: bool,
+        bat_discharging: bool,
+        bat_pct: u32,
+    ) -> std::io::Result<Self> {
+        let power_dir = base_dir.join("power_supply");
+        let cpu_dir = base_dir.join("cpu");
+        let thermal_dir = base_dir.join("thermal");
+        let pstate_dir = cpu_dir.join("intel_pstate");
+        let mglru_dir = base_dir.join("lru_gen");
+
+        fs::create_dir_all(&power_dir)?;
+        fs::create_dir_all(&cpu_dir)?;
+        fs::create_dir_all(&thermal_dir)?;
+        fs::create_dir_all(&pstate_dir)?;
+        fs::create_dir_all(&mglru_dir)?;
+
+        // AC power supply
+        let ac_dir = power_dir.join("AC");
+        fs::create_dir_all(&ac_dir)?;
+        fs::write(ac_dir.join("online"), if ac_online { "1\n" } else { "0\n" })?;
+
+        // Battery power supply
+        let bat_dir = power_dir.join("BAT0");
+        fs::create_dir_all(&bat_dir)?;
+        fs::write(
+            bat_dir.join("status"),
+            if bat_discharging { "Discharging\n" } else { "Charging\n" },
+        )?;
+        fs::write(bat_dir.join("capacity"), format!("{}\n", bat_pct))?;
+        fs::write(bat_dir.join("voltage_now"), "7600000\n")?;
+        fs::write(bat_dir.join("power_now"), "12000000\n")?;
+
+        // Thermal zone
+        let tz_dir = thermal_dir.join("thermal_zone0");
+        fs::create_dir_all(&tz_dir)?;
+        fs::write(tz_dir.join("type"), "x86_pkg_temp\n")?;
+        fs::write(tz_dir.join("temp"), format!("{}\n", (cpu_temp_c * 1000.0) as i64))?;
+
+        // CPU policy0
+        let pol_dir = cpu_dir.join("cpufreq/policy0");
+        fs::create_dir_all(&pol_dir)?;
+        fs::write(pol_dir.join("scaling_governor"), "powersave\n")?;
+        fs::write(pol_dir.join("energy_performance_preference"), "balance_performance\n")?;
+        fs::write(pol_dir.join("scaling_cur_freq"), "2400000\n")?;
+
+        // Intel P-state
+        fs::write(pstate_dir.join("no_turbo"), "0\n")?;
+        fs::write(pstate_dir.join("max_perf_pct"), "100\n")?;
+        fs::write(pstate_dir.join("hwp_dynamic_boost"), "0\n")?;
+
+        // MGLRU
+        fs::write(mglru_dir.join("min_ttl_ms"), "0\n")?;
+
+        // System memory info (Simulated plentiful 75% headroom)
+        let meminfo_file = base_dir.join("meminfo");
+        fs::write(
+            &meminfo_file,
+            "MemTotal:       16384000 kB\nMemFree:        12288000 kB\nMemAvailable:   12288000 kB\n",
+        )?;
+
+        let mut bridge = Self::with_sysfs_bases(
+            power_dir,
+            cpu_dir,
+            thermal_dir,
+            pstate_dir,
+            mglru_dir,
+        );
+        bridge.meminfo_path = meminfo_file;
+        Ok(bridge)
     }
 
     /// Discover sibling projects `dynatune` and `kernel-optimizer`
@@ -550,7 +674,7 @@ impl DynatuneBridge {
         let mut available_kb = 0u64;
         let mut free_kb = 0u64;
 
-        if let Ok(content) = fs::read_to_string("/proc/meminfo") {
+        if let Ok(content) = fs::read_to_string(&self.meminfo_path) {
             for line in content.lines() {
                 if line.starts_with("MemTotal:") {
                     total_kb = line.split_whitespace().nth(1).and_then(|v| v.parse().ok()).unwrap_or(0);
