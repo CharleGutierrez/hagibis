@@ -1959,6 +1959,38 @@ pub use mcp_mesh_router::{
     PrivacyLevel,
 };
 
+// Pillar 1: Native Subsystem Integration with dynatune & kernel-optimizer
+pub mod dynatune_subsystem_fuse;
+pub use dynatune_subsystem_fuse::{
+    BatteryTelemetryRecord, CpuGovernorRecord, DynatuneSubsystemFuse,
+    DynatuneWorkloadBoostGuard, FuseGovernorMode, MglruTelemetryRecord,
+    PreviousSubsystemState, SafeguardState, SubsystemPaths,
+    SubsystemTelemetrySnapshot, ThermalZoneRecord,
+    DEFAULT_DYNATUNE_BIN, DEFAULT_DYNATUNE_SOCK, DEFAULT_KERNEL_CTL_BIN,
+    IDLE_MGLRU_MIN_TTL_MS, SIBLING_KERNEL_CTL_BIN,
+};
+
+// Pillar 2: Distributed Micro-VM & WASM Edge Mesh Scheduler
+pub mod distributed_microvm_scheduler;
+pub use distributed_microvm_scheduler::{
+    read_free_ram_mb as scheduler_read_free_ram_mb,
+    write_framed_packet, read_framed_packet,
+    DistributedExecutionReport, DistributedMicroVmScheduler, DistributedNodeDescriptor,
+    DistributedTaskGraph, SchedulerPacket, ShardExecutionOutcome, TaskShard,
+    DEFAULT_SCHEDULER_TCP_PORT, DEFAULT_SCHEDULER_UDP_PORT, DEFAULT_SHARD_FUEL_LIMIT,
+    DEFAULT_STALE_NODE_TIMEOUT_SECS, DISTRIBUTED_FRAME_MAGIC, MAX_SCHEDULER_FRAME_BYTES,
+};
+
+// Pillar 4: Autonomous Loop Self-Healing & Hot-Reloading Plugins
+pub mod autonomous_wasm_plugin_healer;
+pub use autonomous_wasm_plugin_healer::{
+    AutonomousHealingReport, AutonomousWasmPluginHealer, HotspotProfiler,
+    PgoHotspotsReport, SynthesizedToolCode, ToolExecutionError, ToolHotspotMetric,
+    ToolRequirement, WasmModuleCertificate, inspect_wasm_memory_limits,
+    MAX_PLUGIN_MEMORY_PAGES_16MB, MAX_PLUGIN_MEMORY_PAGES_32MB,
+};
+
+
 
 
 

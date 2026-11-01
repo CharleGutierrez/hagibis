@@ -351,7 +351,26 @@ impl ZigWasmAgentCompiler {
             }
         }
 
-        // 4. Cache Miss: Invoke local Zig compiler
+        // 4. Cache Miss: Handle WAT text directly or invoke local Zig compiler
+        let trimmed = source_code.trim();
+        if trimmed.starts_with("(module") || trimmed.starts_with("(;") {
+            if let Ok(bytes) = wat::parse_str(source_code) {
+                let duration = start_time.elapsed().as_micros() as u64;
+                let wasm_file = self.config.cache_dir.join(format!("{}.wasm", source_hash));
+                let _ = fs::create_dir_all(&self.config.cache_dir);
+                let _ = fs::write(&wasm_file, &bytes);
+                self.in_memory_cache.write().unwrap().insert(source_hash.clone(), bytes.clone());
+                return Ok(CompilationResult {
+                    wasm_bytes: bytes.clone(),
+                    source_hash,
+                    cache_hit: false,
+                    compile_duration_us: duration,
+                    wasm_path: if wasm_file.exists() { Some(wasm_file) } else { None },
+                    size_bytes: bytes.len(),
+                });
+            }
+        }
+
         let build_root = self
             .config
             .shm_build_dir
@@ -476,6 +495,122 @@ impl ZigWasmAgentCompiler {
             cache_misses: misses,
             total_compile_time_us: total_time,
         }
+    }
+
+    /// Surgical self-healing for Zig compiler diagnostics
+    pub fn self_heal_syntax(&self, failed_source: &str, compiler_error: &str) -> Option<String> {
+        let mut lines: Vec<String> = failed_source.lines().map(|s| s.to_string()).collect();
+        let mut modified = false;
+
+        // 1. Missing semicolon: `expected ';' after statement` or `expected ';', found`
+        if let Ok(re_semi) = Regex::new(r":(\d+):\d+:\s*error:\s*expected\s*';'") {
+            if let Some(caps) = re_semi.captures(compiler_error) {
+                if let Ok(line_num) = caps[1].parse::<usize>() {
+                    if line_num > 0 && line_num <= lines.len() {
+                        let target_idx = line_num - 1;
+                        if !lines[target_idx].trim().ends_with(';') {
+                            lines[target_idx].push(';');
+                            modified = true;
+                        } else if target_idx > 0 && !lines[target_idx - 1].trim().ends_with(';') {
+                            lines[target_idx - 1].push(';');
+                            modified = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Cannot assign to constant: `cannot assign to constant`
+        if let Ok(re_const) = Regex::new(r":(\d+):(\d+):\s*error:\s*cannot assign to constant") {
+            if let Some(caps) = re_const.captures(compiler_error) {
+                if let Ok(line_num) = caps[1].parse::<usize>() {
+                    if line_num > 0 && line_num <= lines.len() {
+                        let err_line = lines[line_num - 1].clone();
+                        // Extract identifier being assigned
+                        if let Ok(re_id) = Regex::new(r"^\s*([a-zA-Z0-9_]+)\s*=") {
+                            if let Some(id_match) = re_id.captures(&err_line) {
+                                let var_name = id_match[1].to_string();
+                                // Scan previous lines for `const <var_name>` and replace with `var <var_name>`
+                                for l in &mut lines {
+                                    let pattern = format!("const {} ", var_name);
+                                    if l.contains(&pattern) {
+                                        *l = l.replace(&pattern, &format!("var {} ", var_name));
+                                        modified = true;
+                                        break;
+                                    }
+                                    let pattern_colon = format!("const {}:", var_name);
+                                    if l.contains(&pattern_colon) {
+                                        *l = l.replace(&pattern_colon, &format!("var {}:", var_name));
+                                        modified = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. Local variable never mutated: `local variable is never mutated` -> change `var` to `const`
+        if let Ok(re_var) = Regex::new(r":(\d+):(\d+):\s*error:\s*local variable is never mutated") {
+            if let Some(caps) = re_var.captures(compiler_error) {
+                if let Ok(line_num) = caps[1].parse::<usize>() {
+                    if line_num > 0 && line_num <= lines.len() {
+                        let target = &mut lines[line_num - 1];
+                        if target.contains("var ") {
+                            *target = target.replacen("var ", "const ", 1);
+                            modified = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        // 4. Unused local variable/constant: `unused local constant` or `unused local variable`
+        if let Ok(re_unused) = Regex::new(r":(\d+):(\d+):\s*error:\s*unused local (constant|variable)") {
+            if let Some(caps) = re_unused.captures(compiler_error) {
+                if let Ok(line_num) = caps[1].parse::<usize>() {
+                    if line_num > 0 && line_num <= lines.len() {
+                        let decl_line = &lines[line_num - 1];
+                        if let Ok(re_id) = Regex::new(r"(?:const|var)\s+([a-zA-Z0-9_]+)") {
+                            if let Some(id_caps) = re_id.captures(decl_line) {
+                                let id = &id_caps[1];
+                                // Append `_ = <id>;` on next line
+                                let discard = format!("    _ = {};", id);
+                                lines.insert(line_num, discard);
+                                modified = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if modified {
+            Some(lines.join("\n"))
+        } else {
+            None
+        }
+    }
+
+    /// Self-healing for runtime execution traps
+    pub fn self_heal_runtime(&self, failed_source: &str, trap_reason: &str) -> Option<String> {
+        if trap_reason.contains("fuel_exhausted") || trap_reason.contains("fuel") {
+            let modified = failed_source.replace("while (true)", "var _iter: usize = 0; while (_iter < 100000) : (_iter += 1)");
+            if modified != failed_source {
+                return Some(modified);
+            }
+        }
+
+        if trap_reason.contains("bounds") || trap_reason.contains("out of bounds") {
+            let modified = failed_source.replace("[4096]u8", "[65536]u8");
+            if modified != failed_source {
+                return Some(modified);
+            }
+        }
+
+        None
     }
 }
 
@@ -1549,113 +1684,12 @@ pub export fn hgb_tool_invoke(input_ptr: [*]const u8, input_len: usize) u64 {
 
     /// Surgical self-healing for Zig compiler diagnostics
     pub fn self_heal_syntax(&self, failed_source: &str, compiler_error: &str) -> Option<String> {
-        let mut lines: Vec<String> = failed_source.lines().map(|s| s.to_string()).collect();
-        let mut modified = false;
-
-        // 1. Missing semicolon: `expected ';' after statement` or `expected ';', found`
-        let re_semi = Regex::new(r":(\d+):\d+:\s*error:\s*expected\s*';'").ok()?;
-        if let Some(caps) = re_semi.captures(compiler_error) {
-            if let Ok(line_num) = caps[1].parse::<usize>() {
-                if line_num > 0 && line_num <= lines.len() {
-                    let target_idx = line_num - 1;
-                    if !lines[target_idx].trim().ends_with(';') {
-                        lines[target_idx].push(';');
-                        modified = true;
-                    } else if target_idx > 0 && !lines[target_idx - 1].trim().ends_with(';') {
-                        lines[target_idx - 1].push(';');
-                        modified = true;
-                    }
-                }
-            }
-        }
-
-        // 2. Cannot assign to constant: `cannot assign to constant`
-        let re_const = Regex::new(r":(\d+):(\d+):\s*error:\s*cannot assign to constant").ok()?;
-        if let Some(caps) = re_const.captures(compiler_error) {
-            if let Ok(line_num) = caps[1].parse::<usize>() {
-                if line_num > 0 && line_num <= lines.len() {
-                    let err_line = lines[line_num - 1].clone();
-                    // Extract identifier being assigned
-                    if let Some(id_match) = Regex::new(r"^\s*([a-zA-Z0-9_]+)\s*=").ok()?.captures(&err_line) {
-                        let var_name = id_match[1].to_string();
-                        // Scan previous lines for `const <var_name>` and replace with `var <var_name>`
-                        for l in &mut lines {
-                            let pattern = format!("const {} ", var_name);
-                            if l.contains(&pattern) {
-                                *l = l.replace(&pattern, &format!("var {} ", var_name));
-                                modified = true;
-                                break;
-                            }
-                            let pattern_colon = format!("const {}:", var_name);
-                            if l.contains(&pattern_colon) {
-                                *l = l.replace(&pattern_colon, &format!("var {}:", var_name));
-                                modified = true;
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // 3. Local variable never mutated: `local variable is never mutated` -> change `var` to `const`
-        let re_var = Regex::new(r":(\d+):(\d+):\s*error:\s*local variable is never mutated").ok()?;
-        if let Some(caps) = re_var.captures(compiler_error) {
-            if let Ok(line_num) = caps[1].parse::<usize>() {
-                if line_num > 0 && line_num <= lines.len() {
-                    let target = &mut lines[line_num - 1];
-                    if target.contains("var ") {
-                        *target = target.replacen("var ", "const ", 1);
-                        modified = true;
-                    }
-                }
-            }
-        }
-
-        // 4. Unused local variable/constant: `unused local constant` or `unused local variable`
-        let re_unused = Regex::new(r":(\d+):(\d+):\s*error:\s*unused local (constant|variable)").ok()?;
-        if let Some(caps) = re_unused.captures(compiler_error) {
-            if let Ok(line_num) = caps[1].parse::<usize>() {
-                if line_num > 0 && line_num <= lines.len() {
-                    let decl_line = &lines[line_num - 1];
-                    let re_id = Regex::new(r"(?:const|var)\s+([a-zA-Z0-9_]+)").ok()?;
-                    if let Some(id_caps) = re_id.captures(decl_line) {
-                        let id = &id_caps[1];
-                        // Append `_ = <id>;` on next line
-                        let discard = format!("    _ = {};", id);
-                        lines.insert(line_num, discard);
-                        modified = true;
-                    }
-                }
-            }
-        }
-
-        if modified {
-            Some(lines.join("\n"))
-        } else {
-            None
-        }
+        self.compiler.self_heal_syntax(failed_source, compiler_error)
     }
 
     /// Self-healing for runtime execution traps
     pub fn self_heal_runtime(&self, failed_source: &str, trap_reason: &str) -> Option<String> {
-        if trap_reason.contains("fuel_exhausted") || trap_reason.contains("fuel") {
-            // If CPU fuel was exhausted, we can wrap the task in a bounded iteration or optimize loop
-            let modified = failed_source.replace("while (true)", "var _iter: usize = 0; while (_iter < 100000) : (_iter += 1)");
-            if modified != failed_source {
-                return Some(modified);
-            }
-        }
-
-        if trap_reason.contains("bounds") || trap_reason.contains("out of bounds") {
-            // Expand scratch buffer size from 4096 to 65536
-            let modified = failed_source.replace("[4096]u8", "[65536]u8");
-            if modified != failed_source {
-                return Some(modified);
-            }
-        }
-
-        None
+        self.compiler.self_heal_runtime(failed_source, trap_reason)
     }
 }
 

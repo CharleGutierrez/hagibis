@@ -381,6 +381,90 @@
         "tool_name": { "type": "string", "description": "Subroutine or tool entrypoint to invoke", "default": "run" },
         "force_tier_up": { "type": "boolean", "description": "Force immediate Cranelift compilation without waiting for threshold", "default": false }
       }
+    },
+    "hgb_distributed_scheduler_dispatch": {
+      "description": "Dispatch a multi-stage, dual-tier task graph across the distributed WebAssembly and MicroVM edge mesh with intelligent load sharding, failover, and BLAKE3 provenance",
+      "parameters": {
+        "graph_id": {
+          "type": "string",
+          "description": "Optional unique task graph identifier (auto-generated if omitted)"
+        },
+        "shards": {
+          "type": "array",
+          "description": "List of task shards with dependency specifications, tier preferences, and code payloads",
+          "items": {
+            "type": "object",
+            "properties": {
+              "shard_id": { "type": "string", "description": "Unique shard identifier within the graph", "required": true },
+              "task_name": { "type": "string", "description": "Human-readable task name" },
+              "code": { "type": "string", "description": "Source code, script, or WebAssembly text/bytecode to execute", "required": true },
+              "language": { "type": "string", "description": "Language runtime (wat, wasm, zig, bash, python)", "default": "bash" },
+              "tier": { "type": "string", "enum": ["Tier1WasmZig", "Tier2FirecrackerMicroVm"], "description": "Optional explicit execution sandbox tier" },
+              "fuel_limit": { "type": "integer", "description": "CPU instruction fuel limit for Tier 1 WASM execution", "default": 10000000 },
+              "memory_limit_mb": { "type": "integer", "description": "Memory ceiling in megabytes", "default": 128 },
+              "timeout_ms": { "type": "integer", "description": "Shard execution timeout in milliseconds", "default": 10000 },
+              "dependencies": { "type": "array", "items": { "type": "string" }, "description": "Shard IDs that must complete before this shard executes" },
+              "input_payload": { "type": "object", "description": "Optional input JSON arguments" }
+            },
+            "required": ["shard_id", "code"]
+          },
+          "required": true
+        }
+      }
+    },
+    "hgb_distributed_node_status": {
+      "description": "Inspect distributed edge mesh topology, active worker nodes, CPU cores, available RAM, active microVMs/WASM instances, supported tiers, and load scores",
+      "parameters": {
+        "include_stale": {
+          "type": "boolean",
+          "description": "Include stale peer nodes in status report",
+          "default": false
+        }
+      }
+    },
+    "hgb_distributed_node_register": {
+      "description": "Manually register a peer daemon or worker edge node into the distributed microVM and WASM scheduler mesh",
+      "parameters": {
+        "node_id": {
+          "type": "string",
+          "description": "Unique peer node identifier",
+          "required": true
+        },
+        "listen_addr": {
+          "type": "string",
+          "description": "Network socket address for peer TCP transport (e.g. 192.168.1.50:8977)",
+          "required": true
+        },
+        "supported_tiers": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["Tier1WasmZig", "Tier2FirecrackerMicroVm"] },
+          "description": "Execution sandbox tiers supported by this node"
+        },
+        "cpu_cores": {
+          "type": "integer",
+          "description": "Number of available CPU cores on peer host"
+        },
+        "free_ram_mb": {
+          "type": "integer",
+          "description": "Available RAM in megabytes on peer host"
+        },
+        "load_score": {
+          "type": "number",
+          "description": "Initial load score rating for peer node",
+          "default": 0.1
+        }
+      }
+    },
+    "hgb_wasm_plugin_inject": {
+      "description": "Synthesize or dynamically inject signed WebAssembly / Zig plugin into WasmHotPool without daemon restart",
+      "parameters": {
+        "plugin_name": { "type": "string", "description": "Unique name of dynamic tool plugin", "required": true },
+        "zig_source": { "type": "string", "description": "Optional Zig source code to compile and inject on the fly" },
+        "wasm_base64": { "type": "string", "description": "Optional base64-encoded precompiled WebAssembly bytecode" },
+        "signature_hex": { "type": "string", "description": "Optional Ed25519 signature hex string" },
+        "public_key_hex": { "type": "string", "description": "Optional Ed25519 public key hex string" },
+        "description": { "type": "string", "description": "Description of synthesized tool capability" }
+      }
     }
   },
   "mcpServers": {
@@ -434,7 +518,11 @@
         "hgb_self_healing_ci",
         "hgb_hot_reload_component",
         "hgb_p2p_mcp_swarm_delegate",
-        "hgb_wasm_pgo_tier_up"
+        "hgb_wasm_pgo_tier_up",
+        "hgb_distributed_scheduler_dispatch",
+        "hgb_distributed_node_status",
+        "hgb_distributed_node_register",
+        "hgb_wasm_plugin_inject"
       ]
     },
     "hagibis_sse": {

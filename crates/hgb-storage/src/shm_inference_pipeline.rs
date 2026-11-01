@@ -283,7 +283,7 @@ mod tests {
 
         // Corrupt payload byte directly in shared memory mmap
         let payload_offset = INFER_CONTROL_HEADER_SIZE + INFER_FRAME_HEADER_SIZE;
-        stream.mmap[payload_offset + 5] ^= 0xFF; // Tamper!
+        stream.as_mut_slice()[payload_offset + 5] ^= 0xFF; // Tamper!
 
         // Must fail with cryptographic verification checksum mismatch
         let read_result = stream.read_frame();

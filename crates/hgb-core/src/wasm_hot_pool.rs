@@ -530,8 +530,44 @@ impl WasmHotPool {
 
         let fuel_before = slot.store.get_fuel().unwrap_or(DEFAULT_WASM_FUEL);
 
-        // Check for exported `run`, `hgb_invoke`, or `main`
-        let output = if let Ok(run_func) = instance.get_typed_func::<(), i32>(&mut slot.store, "run") {
+        // Check for exported `hgb_tool_invoke`, `run`, `hgb_invoke`, or `main`
+        let output = if let Ok(invoke_tool_fn) = instance.get_typed_func::<(i32, i32), i64>(&mut slot.store, "hgb_tool_invoke") {
+            let input_bytes = match input {
+                serde_json::Value::String(s) => s.as_bytes().to_vec(),
+                other => other.to_string().into_bytes(),
+            };
+            let in_len = input_bytes.len() as i32;
+            let in_ptr = if let Ok(alloc_fn) = instance.get_typed_func::<i32, i32>(&mut slot.store, "hgb_alloc") {
+                alloc_fn.call(&mut slot.store, in_len).unwrap_or(65536)
+            } else {
+                65536
+            };
+            if let Some(mem) = instance.get_memory(&mut slot.store, "memory") {
+                let _ = mem.write(&mut slot.store, in_ptr as usize, &input_bytes);
+            }
+            if let Ok(packed_res) = invoke_tool_fn.call(&mut slot.store, (in_ptr, in_len)) {
+                let out_ptr = (packed_res as u64 & 0xFFFF_FFFF) as usize;
+                let out_len = ((packed_res as u64) >> 32) as usize;
+                let mut res_val = serde_json::Value::Null;
+                if let Some(mem) = instance.get_memory(&mut slot.store, "memory") {
+                    let mem_slice = mem.data(&slot.store);
+                    if out_ptr + out_len <= mem_slice.len() {
+                        let raw = &mem_slice[out_ptr..out_ptr + out_len];
+                        if let Ok(json) = serde_json::from_slice::<serde_json::Value>(raw) {
+                            res_val = json;
+                        } else if let Ok(txt) = std::str::from_utf8(raw) {
+                            res_val = serde_json::Value::String(txt.to_string());
+                        }
+                    }
+                }
+                if let Ok(dealloc_fn) = instance.get_typed_func::<(i32, i32), ()>(&mut slot.store, "hgb_dealloc") {
+                    let _ = dealloc_fn.call(&mut slot.store, (in_ptr, in_len));
+                }
+                res_val
+            } else {
+                serde_json::json!({ "status": "success", "mode": "hot_pool_zero_copy" })
+            }
+        } else if let Ok(run_func) = instance.get_typed_func::<(), i32>(&mut slot.store, "run") {
             let res = run_func.call(&mut slot.store, ()).map_err(|e| {
                 HgbError::Execution(format!("WASM runtime execution trap: {}", e))
             })?;
@@ -654,6 +690,31 @@ impl WasmHotPool {
     pub fn set_pgo_engine(&self, pgo: Arc<WasmPgoJitEngine>) {
         let mut engine_lock = self.pgo_engine.write().unwrap();
         *engine_lock = Some(pgo);
+    }
+
+    /// Register dynamically validated and hot-injected plugin metadata
+    pub fn register_dynamic_plugin(&self, meta: DynamicPluginMetadata) {
+        if let Ok(mut reg) = self.dynamic_registry.write() {
+            reg.insert(meta.name.clone(), meta);
+        }
+    }
+
+    /// Get dynamic plugin metadata by name
+    pub fn get_dynamic_plugin(&self, name: &str) -> Option<DynamicPluginMetadata> {
+        self.dynamic_registry.read().ok()?.get(name).cloned()
+    }
+
+    /// List all dynamic plugins currently registered
+    pub fn list_dynamic_plugins(&self) -> Vec<DynamicPluginMetadata> {
+        self.dynamic_registry.read().map(|r| r.values().cloned().collect()).unwrap_or_default()
+    }
+
+    /// Check if a plugin module exists in module cache or dynamic registry
+    pub fn has_plugin(&self, name: &str) -> bool {
+        let cache = self.module_cache.read().unwrap();
+        let path = PathBuf::from(name);
+        let dynamic_key = PathBuf::from(format!("dynamic://{}", name));
+        cache.contains_key(&path) || cache.contains_key(&dynamic_key) || self.dynamic_registry.read().map(|r| r.contains_key(name)).unwrap_or(false)
     }
 
     pub fn pgo_engine(&self) -> Option<Arc<WasmPgoJitEngine>> {

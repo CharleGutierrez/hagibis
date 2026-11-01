@@ -713,6 +713,11 @@ impl ZeroCopyTensorStream {
         Ok(())
     }
 
+    /// Direct mutable access to shared memory slice
+    pub fn as_mut_slice(&mut self) -> &mut [u8] {
+        &mut self.mmap
+    }
+
     /// Run sub-millisecond serialization and streaming latency benchmark
     pub fn benchmark(&mut self, chunk_size: usize, iterations: usize) -> Result<TensorStreamBenchReport> {
         let pattern = vec![0xABu8; chunk_size];

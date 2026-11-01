@@ -129,4 +129,15 @@ pub use shm_inference_pipeline::{
     INFER_FRAME_MAGIC, INFER_STREAM_VERSION,
 };
 
+// Pillar 3: Zero-Copy Mmap Vector Index & SIMD Memory Engine
+pub mod mmap_vector_index;
+pub use mmap_vector_index::{
+    align_up_64, compute_cosine_similarity, compute_dot_product, compute_euclidean_sq,
+    cosine_similarity_unrolled_8x, dot_product_unrolled_8x, euclidean_sq_unrolled_8x,
+    resolve_mmap_vector_path, MmapMetadataRecord, MmapRecordSummary, MmapVectorBenchReport,
+    MmapVectorHeader, MmapVectorIndex, MmapVectorMatch, MmapVectorReader, VectorMetric,
+    HEADER_SIZE as MMAP_HEADER_SIZE, METADATA_ENTRY_SIZE, MMAP_VECTOR_MAGIC, MMAP_VECTOR_VERSION,
+};
+
+
 

@@ -218,6 +218,8 @@ pub struct DaemonState {
     pub multi_tier_sandbox: Arc<hgb_core::multi_tier_sandbox::MultiTierSandboxRouter>,
     pub autonomous_daemon_loop: Arc<crate::autonomous_daemon_loop::AutonomousDaemonLoopService>,
     pub hud_broadcast: tokio::sync::broadcast::Sender<CockpitHudTelemetry>,
+    pub distributed_scheduler: Arc<hgb_core::distributed_microvm_scheduler::DistributedMicroVmScheduler>,
+    pub wasm_plugin_healer: Arc<hgb_core::autonomous_wasm_plugin_healer::AutonomousWasmPluginHealer>,
 }
 
 impl DaemonState {
@@ -450,6 +452,32 @@ impl DaemonState {
                 .expect("init autonomous daemon loop service")
         );
 
+        let distributed_scheduler = Arc::new(
+            hgb_core::distributed_microvm_scheduler::DistributedMicroVmScheduler::new(
+                "daemon_edge_scheduler",
+                "127.0.0.1:8976".parse().unwrap(),
+                &ws_dir,
+            ).unwrap_or_else(|_| {
+                hgb_core::distributed_microvm_scheduler::DistributedMicroVmScheduler::with_tiers(
+                    "daemon_edge_scheduler",
+                    "127.0.0.1:8976".parse().unwrap(),
+                    &ws_dir,
+                    vec![
+                        hgb_core::multi_tier_sandbox::SandboxExecutionTier::Tier1WasmZig,
+                        hgb_core::multi_tier_sandbox::SandboxExecutionTier::Tier2FirecrackerMicroVm,
+                    ],
+                ).expect("fallback scheduler")
+            })
+        );
+
+        let wasm_plugin_healer = Arc::new(
+            hgb_core::autonomous_wasm_plugin_healer::AutonomousWasmPluginHealer::new(
+                wasm_hot_pool.clone(),
+                ws_dir.join(".hgb/plugins/wasm"),
+            ).expect("init wasm plugin healer")
+        );
+        autonomous_daemon_loop.set_wasm_healer(wasm_plugin_healer.clone());
+
         Self {
             start_time: std::time::Instant::now(),
             socket_path,
@@ -522,6 +550,8 @@ impl DaemonState {
                 let (tx, _) = tokio::sync::broadcast::channel(256);
                 tx
             },
+            distributed_scheduler,
+            wasm_plugin_healer,
         }
     }
 

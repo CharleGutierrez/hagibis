@@ -25,8 +25,11 @@ use std::sync::{Arc, RwLock};
 
 use hgb_core::error::Result;
 use hgb_core::event_bus::DistributedEventBus;
+use hgb_core::autonomous_wasm_plugin_healer::{
+    AutonomousWasmPluginHealer, ToolRequirement,
+};
 use hgb_nextgen::ch8_autonomous_agent_loop::{
-    AutonomousConsensusCertificate, AutonomousPlanStep, Ch8AutonomousAgentLoop,
+    AutonomousConsensusCertificate, Ch8AutonomousAgentLoop,
     WorkflowRunRecord, WorkflowStatus,
 };
 
@@ -72,6 +75,7 @@ pub struct AutonomousDaemonLoopService {
     total_executed: Arc<AtomicU64>,
     total_healed: Arc<AtomicU64>,
     event_bus: Option<Arc<DistributedEventBus>>,
+    wasm_healer: Arc<RwLock<Option<Arc<AutonomousWasmPluginHealer>>>>,
 }
 
 impl AutonomousDaemonLoopService {
@@ -87,6 +91,7 @@ impl AutonomousDaemonLoopService {
             total_executed: Arc::new(AtomicU64::new(0)),
             total_healed: Arc::new(AtomicU64::new(0)),
             event_bus: None,
+            wasm_healer: Arc::new(RwLock::new(None)),
         })
     }
 
@@ -102,6 +107,7 @@ impl AutonomousDaemonLoopService {
             total_executed: Arc::new(AtomicU64::new(0)),
             total_healed: Arc::new(AtomicU64::new(0)),
             event_bus: None,
+            wasm_healer: Arc::new(RwLock::new(None)),
         })
     }
 
@@ -117,6 +123,7 @@ impl AutonomousDaemonLoopService {
             total_executed: Arc::new(AtomicU64::new(0)),
             total_healed: Arc::new(AtomicU64::new(0)),
             event_bus: None,
+            wasm_healer: Arc::new(RwLock::new(None)),
         })
     }
 
@@ -126,9 +133,42 @@ impl AutonomousDaemonLoopService {
         self
     }
 
+    /// Attach autonomous WASM plugin healer
+    pub fn with_wasm_healer(self, healer: Arc<AutonomousWasmPluginHealer>) -> Self {
+        *self.wasm_healer.write().unwrap() = Some(healer);
+        self
+    }
+
+    /// Set runtime reference to autonomous WASM plugin healer
+    pub fn set_wasm_healer(&self, healer: Arc<AutonomousWasmPluginHealer>) {
+        *self.wasm_healer.write().unwrap() = Some(healer);
+    }
+
+    /// Access reference to autonomous WASM plugin healer
+    pub fn wasm_healer(&self) -> Option<Arc<AutonomousWasmPluginHealer>> {
+        self.wasm_healer.read().unwrap().clone()
+    }
+
     /// Access underlying autonomous agent loop orchestrator
     pub fn agent_loop(&self) -> &Arc<Ch8AutonomousAgentLoop> {
         &self.agent_loop
+    }
+
+    /// Execute workflow with dynamic tool synthesis and hot-swap injection
+    pub fn execute_workflow_with_tools(
+        &self,
+        intent: &str,
+        required_tools: &[ToolRequirement],
+        max_retries: usize,
+    ) -> Result<AutonomousConsensusCertificate> {
+        if let Some(ref healer) = *self.wasm_healer.read().unwrap() {
+            for req in required_tools {
+                if !healer.hot_pool().has_plugin(&req.name) {
+                    let _ = healer.intercept_and_heal(req.clone());
+                }
+            }
+        }
+        self.execute_workflow(intent, max_retries)
     }
 
     /// Execute high-level user intent through autonomous multi-step planning and self-healing

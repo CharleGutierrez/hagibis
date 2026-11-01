@@ -536,6 +536,9 @@ pub const CORE_TOOLS: &[&str] = &[
     "hgb_wasm_mesh_peers",
     "hgb_mcp_mesh_route",
     "hgb_mcp_mesh_status",
+    "hgb_distributed_scheduler_dispatch",
+    "hgb_distributed_node_status",
+    "hgb_distributed_node_register",
 ];
 
 /// Backward-compatible alias for CORE_TOOLS
@@ -1316,6 +1319,67 @@ impl HagibisMcpServer {
                     "type": "object",
                     "properties": {},
                     "required": []
+                }
+            },
+            {
+                "name": "hgb_distributed_scheduler_dispatch",
+                "description": "Dispatch a multi-stage, dual-tier task graph across the distributed WebAssembly and MicroVM edge mesh with intelligent load sharding, failover, and BLAKE3 provenance",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "graph_id": { "type": "string", "description": "Optional unique task graph identifier (auto-generated if omitted)" },
+                        "shards": {
+                            "type": "array",
+                            "description": "List of task shards with dependency specifications, tier preferences, and code payloads",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "shard_id": { "type": "string", "description": "Unique shard identifier within the graph" },
+                                    "task_name": { "type": "string", "description": "Human-readable task name" },
+                                    "code": { "type": "string", "description": "Source code, script, or WebAssembly text/bytecode to execute" },
+                                    "language": { "type": "string", "description": "Language runtime (wat, wasm, zig, bash, python)", "default": "bash" },
+                                    "tier": { "type": "string", "enum": ["Tier1WasmZig", "Tier2FirecrackerMicroVm"], "description": "Optional explicit execution sandbox tier" },
+                                    "fuel_limit": { "type": "integer", "description": "CPU instruction fuel limit for Tier 1 WASM execution", "default": 10000000 },
+                                    "memory_limit_mb": { "type": "integer", "description": "Memory ceiling in megabytes", "default": 128 },
+                                    "timeout_ms": { "type": "integer", "description": "Shard execution timeout in milliseconds", "default": 10000 },
+                                    "dependencies": { "type": "array", "items": { "type": "string" }, "description": "Shard IDs that must complete before this shard executes" },
+                                    "input_payload": { "type": "object", "description": "Optional input JSON arguments" }
+                                },
+                                "required": ["shard_id", "code"]
+                            }
+                        }
+                    },
+                    "required": ["shards"]
+                }
+            },
+            {
+                "name": "hgb_distributed_node_status",
+                "description": "Inspect distributed edge mesh topology, active worker nodes, CPU cores, available RAM, active microVMs/WASM instances, supported tiers, and load scores",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "include_stale": { "type": "boolean", "description": "Include stale peer nodes in status report", "default": false }
+                    }
+                }
+            },
+            {
+                "name": "hgb_distributed_node_register",
+                "description": "Manually register a peer daemon or worker edge node into the distributed microVM and WASM scheduler mesh",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "node_id": { "type": "string", "description": "Unique peer node identifier" },
+                        "listen_addr": { "type": "string", "description": "Network socket address for peer TCP transport (e.g. 192.168.1.50:8977)" },
+                        "supported_tiers": {
+                            "type": "array",
+                            "items": { "type": "string", "enum": ["Tier1WasmZig", "Tier2FirecrackerMicroVm"] },
+                            "description": "Execution sandbox tiers supported by this node"
+                        },
+                        "cpu_cores": { "type": "integer", "description": "Number of available CPU cores on peer host" },
+                        "free_ram_mb": { "type": "integer", "description": "Available RAM in megabytes on peer host" },
+                        "load_score": { "type": "number", "description": "Starting load score metric (0.0 to 1.0)", "default": 0.0 }
+                    },
+                    "required": ["node_id", "listen_addr"]
                 }
             }
         ])
@@ -3412,6 +3476,148 @@ impl HagibisMcpServer {
                 let report = router.mesh_status_report().await;
                 progress_cb(100, "Mesh status query completed.");
                 Ok(serde_json::to_string_pretty(&report).unwrap_or_default())
+            }
+
+            "hgb_distributed_scheduler_dispatch" => {
+                progress_cb(10, "Parsing distributed task graph specification...");
+                let shards_val = args.get("shards").and_then(|v| v.as_array()).ok_or_else(|| {
+                    HgbError::Execution("Missing 'shards' array in distributed dispatch request".into())
+                })?;
+
+                let graph_id = args.get("graph_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_else(|| "task_graph_auto");
+
+                let mut task_graph = crate::distributed_microvm_scheduler::DistributedTaskGraph::new(graph_id);
+
+                for item in shards_val {
+                    let s_id = item.get("shard_id").and_then(|v| v.as_str()).unwrap_or("shard_0");
+                    let name = item.get("task_name").and_then(|v| v.as_str()).unwrap_or(s_id);
+                    let code = item.get("code").and_then(|v| v.as_str()).unwrap_or("");
+                    let lang = item.get("language").and_then(|v| v.as_str()).unwrap_or("bash");
+
+                    let mut shard = crate::distributed_microvm_scheduler::TaskShard::new(s_id, code, lang)
+                        .with_task_name(name);
+
+                    if let Some(t_str) = item.get("tier").and_then(|v| v.as_str()) {
+                        match t_str {
+                            "Tier1WasmZig" => shard = shard.with_tier(crate::multi_tier_sandbox::SandboxExecutionTier::Tier1WasmZig),
+                            "Tier2FirecrackerMicroVm" => shard = shard.with_tier(crate::multi_tier_sandbox::SandboxExecutionTier::Tier2FirecrackerMicroVm),
+                            _ => {}
+                        }
+                    }
+                    if let Some(fuel) = item.get("fuel_limit").and_then(|v| v.as_u64()) {
+                        shard = shard.with_fuel_limit(fuel);
+                    }
+                    if let Some(mem) = item.get("memory_limit_mb").and_then(|v| v.as_u64()) {
+                        shard = shard.with_memory_limit(mem as usize);
+                    }
+                    if let Some(timeout) = item.get("timeout_ms").and_then(|v| v.as_u64()) {
+                        shard = shard.with_timeout(timeout);
+                    }
+                    if let Some(deps) = item.get("dependencies").and_then(|v| v.as_array()) {
+                        for d in deps.iter().filter_map(|x| x.as_str()) {
+                            shard = shard.add_dependency(d);
+                        }
+                    }
+                    if let Some(payload) = item.get("input_payload") {
+                        shard = shard.with_payload(payload.clone());
+                    }
+
+                    task_graph = task_graph.add_shard(shard);
+                }
+
+                progress_cb(30, "Topologically decomposing task graph into concurrency stages...");
+                let scheduler_addr: std::net::SocketAddr = "127.0.0.1:8977".parse().unwrap();
+                let scheduler = std::sync::Arc::new(
+                    crate::distributed_microvm_scheduler::DistributedMicroVmScheduler::new(
+                        "mcp_local_scheduler",
+                        scheduler_addr,
+                        &self.workspace_root,
+                    )?
+                );
+
+                progress_cb(60, "Dispatching shards across distributed edge mesh...");
+                let report = scheduler.dispatch_task_graph(&task_graph).await?;
+                progress_cb(100, "Distributed task graph execution completed.");
+
+                Ok(serde_json::to_string_pretty(&report).unwrap_or_default())
+            }
+
+            "hgb_distributed_node_status" => {
+                progress_cb(20, "Inspecting distributed mesh nodes and load scores...");
+                let scheduler_addr: std::net::SocketAddr = "127.0.0.1:8977".parse().unwrap();
+                let scheduler = crate::distributed_microvm_scheduler::DistributedMicroVmScheduler::new(
+                    "mcp_local_scheduler",
+                    scheduler_addr,
+                    &self.workspace_root,
+                )?;
+
+                let status = scheduler.status().await;
+                progress_cb(100, "Mesh status inspection completed.");
+                Ok(serde_json::to_string_pretty(&status).unwrap_or_default())
+            }
+
+            "hgb_distributed_node_register" => {
+                progress_cb(10, "Validating peer node descriptor...");
+                let node_id = args.get("node_id").and_then(|v| v.as_str()).ok_or_else(|| {
+                    HgbError::Execution("Missing 'node_id' in registration request".into())
+                })?;
+                let addr_str = args.get("listen_addr").and_then(|v| v.as_str()).ok_or_else(|| {
+                    HgbError::Execution("Missing 'listen_addr' in registration request".into())
+                })?;
+                let listen_addr: std::net::SocketAddr = addr_str.parse().map_err(|e| {
+                    HgbError::Execution(format!("Invalid socket address '{}': {}", addr_str, e))
+                })?;
+
+                let tiers = if let Some(arr) = args.get("supported_tiers").and_then(|v| v.as_array()) {
+                    arr.iter().filter_map(|t| match t.as_str()? {
+                        "Tier1WasmZig" => Some(crate::multi_tier_sandbox::SandboxExecutionTier::Tier1WasmZig),
+                        "Tier2FirecrackerMicroVm" => Some(crate::multi_tier_sandbox::SandboxExecutionTier::Tier2FirecrackerMicroVm),
+                        _ => None,
+                    }).collect()
+                } else {
+                    vec![
+                        crate::multi_tier_sandbox::SandboxExecutionTier::Tier1WasmZig,
+                        crate::multi_tier_sandbox::SandboxExecutionTier::Tier2FirecrackerMicroVm,
+                    ]
+                };
+
+                let mut desc = crate::distributed_microvm_scheduler::DistributedNodeDescriptor::new(
+                    node_id,
+                    listen_addr,
+                    tiers,
+                );
+
+                if let Some(cores) = args.get("cpu_cores").and_then(|v| v.as_u64()) {
+                    desc.cpu_cores = cores as usize;
+                }
+                if let Some(ram) = args.get("free_ram_mb").and_then(|v| v.as_u64()) {
+                    desc.free_ram_mb = ram;
+                }
+                if let Some(load) = args.get("load_score").and_then(|v| v.as_f64()) {
+                    desc.load_score = load as f32;
+                }
+
+                let scheduler_addr: std::net::SocketAddr = "127.0.0.1:8977".parse().unwrap();
+                let scheduler = crate::distributed_microvm_scheduler::DistributedMicroVmScheduler::new(
+                    "mcp_local_scheduler",
+                    scheduler_addr,
+                    &self.workspace_root,
+                )?;
+
+                scheduler.register_peer(desc.clone()).await;
+                progress_cb(100, "Node registered successfully into mesh.");
+
+                Ok(serde_json::to_string_pretty(&serde_json::json!({
+                    "status": "registered",
+                    "node_id": desc.node_id,
+                    "listen_addr": desc.listen_addr.to_string(),
+                    "supported_tiers": desc.supported_tiers,
+                    "cpu_cores": desc.cpu_cores,
+                    "free_ram_mb": desc.free_ram_mb,
+                    "load_score": desc.load_score,
+                })).unwrap_or_default())
             }
 
             other => Ok(format!("Tool '{}' recognized by Hagibis MCP dispatcher.", other)),

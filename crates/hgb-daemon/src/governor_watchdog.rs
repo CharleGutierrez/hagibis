@@ -42,6 +42,10 @@ use hgb_core::dynatune_bridge::{
     CompleteHardwareTelemetry, DynatuneBridge, HostPowerState, ScalingGuard,
     ScalingShiftReport, WorkloadCategory,
 };
+use hgb_core::dynatune_subsystem_fuse::{
+    DynatuneSubsystemFuse, DynatuneWorkloadBoostGuard,
+    SubsystemTelemetrySnapshot,
+};
 use hgb_core::hardware_aware_workload_router::{
     HardwareAwareWorkloadRouter, WorkloadAdaptiveGuard, WorkloadExecutionDecision,
     WorkloadExecutionProfile, WorkloadKind as HardwareWorkloadKind,
@@ -564,6 +568,10 @@ pub struct GovernorWatchdogStatus {
     pub last_telemetry_optimization: Option<TelemetryOptimizationRecord>,
     #[serde(default)]
     pub total_self_healing_actions: u64,
+    #[serde(default)]
+    pub subsystem_fuse_boosted: bool,
+    #[serde(default)]
+    pub subsystem_fuse_telemetry: Option<SubsystemTelemetrySnapshot>,
 }
 
 pub struct GovernorWatchdog {
@@ -575,6 +583,7 @@ pub struct GovernorWatchdog {
     dynatune_bridge: Arc<DynatuneBridge>,
     workload_router: Arc<HardwareAwareWorkloadRouter>,
     profiler: Arc<DynamicHardwareProfiler>,
+    dynatune_fuse: Arc<DynatuneSubsystemFuse>,
     active_guard: Arc<Mutex<Option<GovernorGuard>>>,
     active_scaling_guard: Arc<Mutex<Option<ScalingGuard>>>,
     active_adaptive_guard: Arc<Mutex<Option<WorkloadAdaptiveGuard>>>,
@@ -616,6 +625,7 @@ impl GovernorWatchdog {
         let router = Arc::new(HardwareAwareWorkloadRouter::with_bridge(Arc::clone(&bridge)));
         let profiler = Arc::new(DynamicHardwareProfiler::new());
         let _sampler = profiler.start_background_sampler(std::time::Duration::from_secs(1));
+        let dynatune_fuse = Arc::new(DynatuneSubsystemFuse::new());
 
         Self {
             workspace_root: workspace_root.to_path_buf(),
@@ -626,6 +636,7 @@ impl GovernorWatchdog {
             dynatune_bridge: bridge,
             workload_router: router,
             profiler,
+            dynatune_fuse,
             active_guard: Arc::new(Mutex::new(None)),
             active_scaling_guard: Arc::new(Mutex::new(None)),
             active_adaptive_guard: Arc::new(Mutex::new(None)),
@@ -646,6 +657,7 @@ impl GovernorWatchdog {
         let bridge = Arc::new(DynatuneBridge::new());
         let router = Arc::new(HardwareAwareWorkloadRouter::with_bridge(Arc::clone(&bridge)));
         let profiler = Arc::new(DynamicHardwareProfiler::new());
+        let dynatune_fuse = Arc::new(DynatuneSubsystemFuse::new());
 
         Self {
             workspace_root: PathBuf::from("."),
@@ -656,6 +668,7 @@ impl GovernorWatchdog {
             dynatune_bridge: bridge,
             workload_router: router,
             profiler,
+            dynatune_fuse,
             active_guard: Arc::new(Mutex::new(None)),
             active_scaling_guard: Arc::new(Mutex::new(None)),
             active_adaptive_guard: Arc::new(Mutex::new(None)),
@@ -714,6 +727,26 @@ impl GovernorWatchdog {
     /// Access Dynamic Hardware Profiler
     pub fn profiler(&self) -> &Arc<DynamicHardwareProfiler> {
         &self.profiler
+    }
+
+    /// Direct reference to Dynatune & Kernel-Optimizer Subsystem Fuse
+    pub fn fuse(&self) -> &Arc<DynatuneSubsystemFuse> {
+        &self.dynatune_fuse
+    }
+
+    /// Acquire RAII DynatuneWorkloadBoostGuard bound to the fuse
+    pub fn acquire_subsystem_boost_guard(&self, workload: &str) -> DynatuneWorkloadBoostGuard {
+        self.dynatune_fuse.acquire_guard(workload)
+    }
+
+    /// Explicit workload start trigger boosting CPU and memory bandwidth
+    pub fn on_workload_started(&self) {
+        let _ = self.dynatune_fuse.boost_performance("workload_started");
+    }
+
+    /// Explicit workload completion trigger dropping to powersave
+    pub fn on_workload_completed(&self) {
+        let _ = self.dynatune_fuse.drop_to_powersave();
     }
 
     /// Read optimal task concurrency dynamically computed by DynamicHardwareProfiler
@@ -912,6 +945,9 @@ impl GovernorWatchdog {
             *active_p = Some(p_guard);
         }
 
+        // 5. DynatuneSubsystemFuse hardware performance boost
+        let _ = self.dynatune_fuse.boost_performance("queue_active");
+
         Ok(self.status().await)
     }
 
@@ -946,6 +982,7 @@ impl GovernorWatchdog {
         let _ = self.governor.set_scaling_governor("powersave");
         let _ = self.governor.set_epp("balance_performance");
         let _ = self.profiler.on_queue_idle();
+        let _ = self.dynatune_fuse.drop_to_powersave();
 
         let shift = self.dynatune_bridge.shift_to_powersave_mode()?;
         {
@@ -1322,6 +1359,8 @@ impl GovernorWatchdog {
         let recommended_affinity_cluster = Some(self.profiler.steer_workload_affinity(TaskIntensity::Intensive));
         let last_telemetry_optimization = self.last_optimization_record.lock().await.clone();
         let total_self_healing_actions = self.total_self_heals.load(Ordering::Relaxed);
+        let subsystem_fuse_boosted = self.dynatune_fuse.is_boosted();
+        let subsystem_fuse_telemetry = Some(self.dynatune_fuse.query_telemetry());
 
         GovernorWatchdogStatus {
             is_active: true,
@@ -1343,6 +1382,8 @@ impl GovernorWatchdog {
             recommended_affinity_cluster,
             last_telemetry_optimization,
             total_self_healing_actions,
+            subsystem_fuse_boosted,
+            subsystem_fuse_telemetry,
         }
     }
 }
