@@ -394,7 +394,8 @@ pub use shm_grpc_bridge::{
 // Superpower 4: Hardware-Aware Dynamic CPU Governor Integration
 pub mod governor_watchdog;
 pub use governor_watchdog::{
-    GovernorWatchdog, GovernorWatchdogStatus,
+    CorrectiveGovernorParams, GovernorWatchdog, GovernorWatchdogStatus,
+    ProcessSample, TelemetryOptimizationRecord, TriggerReason,
 };
 
 // Autonomous Expansion Pillar 3: Proactive Autonomous Feedback Loops (Vibe-Coding Watcher)

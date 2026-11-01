@@ -532,6 +532,10 @@ pub const CORE_TOOLS: &[&str] = &[
     "hgb_firecracker_destroy",
     "hgb_storage_context_store",
     "hgb_storage_context_query",
+    "hgb_wasm_edge_shard_exec",
+    "hgb_wasm_mesh_peers",
+    "hgb_mcp_mesh_route",
+    "hgb_mcp_mesh_status",
 ];
 
 /// Backward-compatible alias for CORE_TOOLS
@@ -1281,6 +1285,37 @@ impl HagibisMcpServer {
                         "limit": { "type": "integer", "description": "Maximum number of matching records to return (default: 10)", "default": 10 }
                     },
                     "required": ["collection", "query"]
+                }
+            },
+            {
+                "name": "hgb_mcp_mesh_route",
+                "description": "Route and load-balance context requests across the distributed MCP mesh (Local Ollama, MicroVM sandbox, WASM Edge, or P2P swarm) with hardware telemetry guidance and strict privacy boundary enforcement",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "prompt": { "type": "string", "description": "Prompt or context instructions to execute" },
+                        "capability": {
+                            "type": "string",
+                            "enum": ["FastDraft", "DeepReasoning", "SandboxedExecution", "DistributedBatch", "SovereignStorage", "ApiEnrichment"],
+                            "default": "DeepReasoning"
+                        },
+                        "privacy": {
+                            "type": "string",
+                            "enum": ["StrictlyLocal", "SwarmEncrypted", "ExternalAllowed"],
+                            "default": "StrictlyLocal"
+                        },
+                        "max_latency_ms": { "type": "integer", "description": "Maximum latency budget in milliseconds", "default": 10000 }
+                    },
+                    "required": ["prompt"]
+                }
+            },
+            {
+                "name": "hgb_mcp_mesh_status",
+                "description": "Retrieve live telemetry, registered backends, active load scores, and request dispatch statistics from the Distributed MCP Multi-Agent Mesh Router",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
                 }
             }
         ])
@@ -3317,6 +3352,66 @@ impl HagibisMcpServer {
                     "results": top_candidates
                 });
                 Ok(serde_json::to_string_pretty(&response).unwrap_or_default())
+            }
+
+            "hgb_mcp_mesh_route" => {
+                progress_cb(10, "Initializing Distributed MCP Mesh Router...");
+                let prompt = args.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
+                let capability_str = args.get("capability").and_then(|v| v.as_str()).unwrap_or("DeepReasoning");
+                let privacy_str = args.get("privacy").and_then(|v| v.as_str()).unwrap_or("StrictlyLocal");
+                let max_latency = args.get("max_latency_ms").and_then(|v| v.as_u64()).unwrap_or(10_000);
+
+                let capability = match capability_str {
+                    "FastDraft" => crate::mcp_mesh_router::McpMeshCapability::FastDraft,
+                    "SandboxedExecution" => crate::mcp_mesh_router::McpMeshCapability::SandboxedExecution,
+                    "DistributedBatch" => crate::mcp_mesh_router::McpMeshCapability::DistributedBatch,
+                    "SovereignStorage" => crate::mcp_mesh_router::McpMeshCapability::SovereignStorage,
+                    "ApiEnrichment" => crate::mcp_mesh_router::McpMeshCapability::ApiEnrichment,
+                    _ => crate::mcp_mesh_router::McpMeshCapability::DeepReasoning,
+                };
+
+                let privacy = match privacy_str {
+                    "SwarmEncrypted" => crate::mcp_mesh_router::PrivacyLevel::SwarmEncrypted,
+                    "ExternalAllowed" => crate::mcp_mesh_router::PrivacyLevel::ExternalAllowed,
+                    _ => crate::mcp_mesh_router::PrivacyLevel::StrictlyLocal,
+                };
+
+                let router = crate::mcp_mesh_router::DistributedMcpMeshRouter::new(
+                    crate::mcp_mesh_router::McpMeshRouterConfig::default(),
+                );
+
+                let req = crate::mcp_mesh_router::McpContextRequest::new(prompt, capability, privacy)
+                    .with_latency_budget(max_latency);
+
+                progress_cb(40, "Evaluating hardware telemetry and making mesh routing decision...");
+                let outcome = router.dispatch_context_request(&req).await?;
+                progress_cb(100, "Mesh request dispatched successfully.");
+
+                Ok(serde_json::to_string_pretty(&serde_json::json!({
+                    "status": "success",
+                    "request_id": outcome.request_id,
+                    "decision": {
+                        "target_kind": outcome.decision.target.target_kind(),
+                        "estimated_latency_ms": outcome.decision.estimated_latency_ms,
+                        "load_score": outcome.decision.load_score,
+                        "thermal_headroom_c": outcome.decision.thermal_headroom_c,
+                        "reasoning": outcome.decision.reasoning,
+                    },
+                    "output": outcome.output_payload,
+                    "actual_latency_ms": outcome.actual_latency_ms,
+                    "tokens_processed": outcome.tokens_processed,
+                    "blake3_digest": outcome.blake3_digest
+                })).unwrap_or_default())
+            }
+
+            "hgb_mcp_mesh_status" => {
+                progress_cb(20, "Querying live Distributed MCP Mesh Router status...");
+                let router = crate::mcp_mesh_router::DistributedMcpMeshRouter::new(
+                    crate::mcp_mesh_router::McpMeshRouterConfig::default(),
+                );
+                let report = router.mesh_status_report().await;
+                progress_cb(100, "Mesh status query completed.");
+                Ok(serde_json::to_string_pretty(&report).unwrap_or_default())
             }
 
             other => Ok(format!("Tool '{}' recognized by Hagibis MCP dispatcher.", other)),

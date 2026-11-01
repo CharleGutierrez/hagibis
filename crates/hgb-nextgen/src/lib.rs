@@ -82,7 +82,7 @@ pub use cockpit::{
     AttachmentKind, ChronoWarpCardItem, ClipboardXeroxCardItem, CockpitActiveTab, CockpitApp,
     CockpitArtifactDiff, CockpitBackgroundTask, CockpitChatItem, CockpitChatSender,
     CockpitDagNode, CockpitInputMode, CockpitItem, CockpitNodeStatus, CockpitOverlay,
-    CockpitState, CockpitTelemetry, CockpitToolCall, CockpitVibeManager, CockpitViewMode,
+    CockpitState, CockpitTelemetry, CockpitHudSubscriber, CockpitHudTelemetry, CockpitToolCall, CockpitVibeManager, CockpitViewMode,
     CouncilCardItem, CrashBannerItem, DbTimeMachineCardItem, DiffAction, DiffActionHitbox,
     DiffCardItem, DiffCardStatus, GhostCardItem, GreenLightCardItem,
     HallucinationSentryCardItem, HealHitbox, ImagePreviewItem, PhantomSwarmCardItem,
@@ -202,6 +202,16 @@ pub use ch8_autonomous_agent_loop::{
     InterceptedDiagnostic, MultiTierSandboxRouter, StepExecutionResult, StepStatus,
     WorkflowRunRecord, WorkflowStatus,
 };
+
+// Pillar IV: Autonomous Self-Healing Agent Loops & Self-Optimization
+pub mod self_optimize_healer;
+pub use self_optimize_healer::{
+    BottleneckInterceptor, BottleneckTrace, ErrorKind, OptimizationPatch,
+    OptimizationReceipt, OptimizationStrategy, PatchGenerator, RegressionGuard,
+    SandboxVerificationReceipt, SandboxedVerifier, SelfOptimizeHealer,
+    SelfOptimizeReport, SelfOptimizeStore,
+};
+
 
 
 

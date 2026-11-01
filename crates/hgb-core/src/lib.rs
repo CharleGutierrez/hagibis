@@ -1263,10 +1263,14 @@ pub use zig_wasm_agent_compiler::{
 // Vector 3: Hardware-Aware Dynamic Profiling (Synergy with dynatune & kernel-optimizer)
 pub mod dynamic_hardware_profiler;
 pub use dynamic_hardware_profiler::{
-    compute_ollama_batch_size, compute_task_concurrency, DynamicHardwareProfiler,
-    HardwareGovernorProfile, HardwareProfileTelemetry, ProfileSwitchReport,
-    ProfilerGovernorGuard, ThermalZoneInfo, BALANCED_MGLRU_MIN_TTL_MS,
-    POWERSAVE_MGLRU_MIN_TTL_MS, THERMAL_HEADROOM_SAFE_C, THERMAL_THROTTLE_LIMIT_C,
+    compute_ollama_batch_size, compute_task_concurrency, compute_workload_affinity,
+    discover_topology_from_sysfs, evaluate_mglru_pressure,
+    get_current_thread_affinity, set_current_thread_affinity_raw,
+    CoreAffinityGuard, CoreClusterKind, CpuCoreInfo, CpuTopology,
+    DynamicHardwareProfiler, HardwareGovernorProfile, HardwareProfileTelemetry,
+    MglruPressureLevel, ProfileSwitchReport, ProfilerGovernorGuard, TaskIntensity,
+    ThermalZoneInfo, BALANCED_MGLRU_MIN_TTL_MS, POWERSAVE_MGLRU_MIN_TTL_MS,
+    THERMAL_HEADROOM_SAFE_C, THERMAL_THROTTLE_LIMIT_C,
 };
 
 // Vector 2: Universal WASM Plugin Hot-Reloading
@@ -1289,6 +1293,18 @@ pub use ollama_ecosystem_bridge::{
     TokenStreamReceiver, DEFAULT_OLLAMA_HTTP, DEFAULT_SHM_CACHE_DIR,
     DEFAULT_SOVEREIGN_TARGET_MODEL,
 };
+
+// Pillar 3: True Zero-Copy Shared Memory for AI Inference Pipelines
+pub mod shm_inference_pipeline;
+pub use shm_inference_pipeline::{
+    resolve_infer_stream_path, InferControlHeader, InferDataType, TensorFrameHeader,
+    TensorStreamBenchReport, TensorStreamStatus, WasmDirectMemoryBridge,
+    ZeroCopyTensorConsumer, ZeroCopyTensorProducer, ZeroCopyTensorStream,
+    DEFAULT_INFER_STREAM_CAPACITY, FLAG_CHECKSUMMED, FLAG_INTERMEDIATE_ACTIVATION,
+    FLAG_IS_FINAL, FLAG_KV_CACHE, INFER_CONTROL_HEADER_SIZE, INFER_FRAME_HEADER_SIZE,
+    INFER_FRAME_MAGIC, INFER_STREAM_VERSION,
+};
+
 
 // ==============================================================================
 // Pillar 2: Distributed Multi-Tier Sandboxing via Firecracker & WASM
@@ -1925,6 +1941,24 @@ pub use multi_tier_sandbox::{
     MultiTierSandboxRouter, SandboxExecutionOutcome, SandboxExecutionRequest,
     SandboxExecutionTier,
 };
+
+pub mod wasm_edge_mesh;
+pub use wasm_edge_mesh::{
+    MeshNodeAdvertisement, MeshPacket, WasmComputationGraph, WasmEdgeMeshEngine,
+    WasmExecutionFragment, WasmFragmentOutcome, WasmGraphNode, WasmMeshExecutionReport,
+    WasmMeshShardRouter, WasmNodeAdvertisement,
+};
+pub mod wasm_mesh {
+    pub use super::wasm_edge_mesh::*;
+}
+
+pub mod mcp_mesh_router;
+pub use mcp_mesh_router::{
+    BackendHealthStatus, DistributedMcpMeshRouter, McpContextRequest, McpMeshCapability,
+    McpMeshRouteTarget, McpMeshRouterConfig, McpMeshRoutingDecision, McpMeshRoutingOutcome,
+    PrivacyLevel,
+};
+
 
 
 

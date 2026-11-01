@@ -108,6 +108,27 @@
         "target_model": { "type": "string", "description": "Optional heavy target model (default: phi3:3.8b)" }
       }
     },
+    "hgb_mcp_mesh_route": {
+      "description": "Route and load-balance context requests across the distributed MCP mesh (Local Ollama, MicroVM sandbox, WASM Edge, or P2P swarm) with hardware telemetry guidance and strict privacy boundary enforcement",
+      "parameters": {
+        "prompt": { "type": "string", "description": "Prompt or context instructions to execute", "required": true },
+        "capability": {
+          "type": "string",
+          "enum": ["FastDraft", "DeepReasoning", "SandboxedExecution", "DistributedBatch", "SovereignStorage", "ApiEnrichment"],
+          "default": "DeepReasoning"
+        },
+        "privacy": {
+          "type": "string",
+          "enum": ["StrictlyLocal", "SwarmEncrypted", "ExternalAllowed"],
+          "default": "StrictlyLocal"
+        },
+        "max_latency_ms": { "type": "integer", "description": "Maximum latency budget in milliseconds", "default": 10000 }
+      }
+    },
+    "hgb_mcp_mesh_status": {
+      "description": "Retrieve live telemetry, registered backends, active load scores, and request dispatch statistics from the Distributed MCP Multi-Agent Mesh Router",
+      "parameters": {}
+    },
     "ollama_task_split": {
       "description": "Autonomous task complexity evaluator routing prompts between sub-second draft models (1.5B) and deep reasoning models (3.8B/7B)",
       "parameters": {

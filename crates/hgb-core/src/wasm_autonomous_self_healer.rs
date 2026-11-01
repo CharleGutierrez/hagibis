@@ -654,28 +654,40 @@ impl WasmAutonomousSelfHealer {
 
     /// Query local LLM context (via Ollama API) for patch synthesis
     pub fn query_llm_patch(&self, prompt: &str) -> Option<String> {
-        let client = reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_millis(500))
-            .build()
-            .ok()?;
+        let endpoint = self.config.ollama_endpoint.clone();
+        let model = self.config.model.clone();
+        let prompt_str = prompt.to_string();
 
-        let body = serde_json::json!({
-            "model": self.config.model,
-            "prompt": prompt,
-            "stream": false,
-            "options": {
-                "temperature": 0.2,
-                "top_p": 0.95
+        let run_query = move || {
+            let client = reqwest::blocking::Client::builder()
+                .timeout(std::time::Duration::from_millis(500))
+                .build()
+                .ok()?;
+
+            let body = serde_json::json!({
+                "model": model,
+                "prompt": prompt_str,
+                "stream": false,
+                "options": {
+                    "temperature": 0.2,
+                    "top_p": 0.95
+                }
+            });
+
+            let url = format!("{}/api/generate", endpoint.trim_end_matches('/'));
+            let res = client.post(&url).json(&body).send().ok()?;
+            if res.status().is_success() {
+                let json: serde_json::Value = res.json().ok()?;
+                json.get("response").and_then(|r| r.as_str()).map(|s| s.to_string())
+            } else {
+                None
             }
-        });
+        };
 
-        let url = format!("{}/api/generate", self.config.ollama_endpoint.trim_end_matches('/'));
-        let res = client.post(&url).json(&body).send().ok()?;
-        if res.status().is_success() {
-            let json: serde_json::Value = res.json().ok()?;
-            json.get("response").and_then(|r| r.as_str()).map(|s| s.to_string())
+        if tokio::runtime::Handle::try_current().is_ok() {
+            std::thread::spawn(run_query).join().ok().flatten()
         } else {
-            None
+            run_query()
         }
     }
 

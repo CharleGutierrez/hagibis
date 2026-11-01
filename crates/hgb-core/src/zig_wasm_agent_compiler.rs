@@ -32,11 +32,17 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use wasmtime::*;
 
 use crate::error::{HgbError, Result};
+use crate::wasm_hot_pool::{
+    DynamicPluginMetadata, WasmHotExecReport, WasmHotPool, WasmMemoryLimits,
+    DEFAULT_MAX_PLUGIN_MEMORY_PAGES,
+};
+use crate::wasm_plugin_kernel::WasmPluginManifest;
 use crate::wasm_plugin_sandbox::{
     PluginCapabilities, SandboxedWasmHostState, SandboxedWasmPlugin, WasmCapabilityViolation,
 };

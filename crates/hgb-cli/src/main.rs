@@ -3009,6 +3009,26 @@ enum Commands {
         status: bool,
     },
 
+    /// Autonomous Self-Healing & Profile-Guided Code Super-Optimization
+    #[command(name = "self-optimize", alias = "self_optimize", alias = "optimize")]
+    SelfOptimize {
+        /// Optional target file or directory path to analyze and optimize
+        #[arg(short, long)]
+        target: Option<PathBuf>,
+
+        /// Enable production profile-guided optimization mode
+        #[arg(short, long)]
+        profile: bool,
+
+        /// Maximum optimization and self-healing iterations (default: 3)
+        #[arg(short, long, default_value_t = 3)]
+        max_iterations: usize,
+
+        /// Dry-run mode: verify optimizations in sandbox without writing to workspace disk
+        #[arg(short = 'd', long)]
+        dry_run: bool,
+    },
+
     /// Elite Superpower 2: Autonomous Self-Healing Compilation Loop
     #[command(name = "self-heal", alias = "heal-loop", alias = "fix-compile")]
     SelfHeal {
@@ -11046,6 +11066,42 @@ async fn test_calc() { assert!(calculate(5)); }".to_string()
 
             println!();
             Ok(())
+        }
+        Commands::SelfOptimize { target, profile, max_iterations, dry_run } => {
+            println!("{}", "🚀 Running Hagibis Autonomous Self-Optimization & Healing...".cyan().bold());
+            let ws = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            match hgb_nextgen::self_optimize_healer::SelfOptimizeHealer::run_self_optimization(
+                &ws,
+                target.as_deref(),
+                profile,
+                max_iterations,
+                dry_run,
+            ) {
+                Ok(report) => {
+                    println!("{}", "✅ Self-Optimization completed successfully:".green().bold());
+                    println!("  • Status:               {}", report.status.cyan().bold());
+                    println!("  • Elapsed:              {} ms", report.elapsed_ms);
+                    println!("  • Intercepted Traces:   {}", report.total_bottlenecks_intercepted);
+                    println!("  • Synthesized Patches:  {}", report.total_patches_synthesized);
+                    println!("  • First-Green Verified: {}", report.total_first_green_verified);
+                    println!("  • Applied to Disk:      {}", report.total_applied_to_disk);
+                    for (idx, r) in report.receipts.iter().enumerate() {
+                        let id_preview = if r.receipt_id.len() >= 8 { &r.receipt_id[..8] } else { &r.receipt_id };
+                        println!("  [{}] Receipt {}: {} ({:?}) -> SLA improvement: {:.1}%",
+                            idx + 1,
+                            id_preview,
+                            r.operation_name,
+                            r.strategy,
+                            r.sla_improvement_pct
+                        );
+                    }
+                    Ok(())
+                }
+                Err(e) => {
+                    eprintln!("{} {}", "❌ Self-Optimization error:".red().bold(), e);
+                    Err(Box::new(e) as Box<dyn std::error::Error>)
+                }
+            }
         }
         Commands::Ide { .. } => unreachable!(),
     }

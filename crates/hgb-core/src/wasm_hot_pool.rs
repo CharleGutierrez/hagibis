@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use wasmtime::*;
 
@@ -24,9 +25,35 @@ use crate::error::{HgbError, Result};
 use crate::hardware_aware_workload_router::{HardwareAwareWorkloadRouter, WorkloadKind};
 use crate::wasm_plugin_kernel::{WasmPluginHostState, WasmPluginManifest};
 use crate::wasm_pgo_jit::WasmPgoJitEngine;
+use crate::zig_wasm_agent_compiler::ZigWasmAgentCompiler;
 
 /// Default fuel allocated for sandboxed execution (10 million instructions)
 pub const DEFAULT_WASM_FUEL: u64 = 10_000_000;
+
+/// Default maximum linear memory pages allowed for dynamic plugins (256 pages = 16 MiB)
+pub const DEFAULT_MAX_PLUGIN_MEMORY_PAGES: u32 = 256;
+
+/// WebAssembly module linear memory limits inspected from binary sections
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WasmMemoryLimits {
+    pub initial_pages: u32,
+    pub maximum_pages: Option<u32>,
+}
+
+/// Telemetry and metadata for a dynamically signed and injected WebAssembly plugin
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DynamicPluginMetadata {
+    pub name: String,
+    pub blake3_hash: String,
+    pub signature_hex: String,
+    pub public_key_hex: String,
+    pub size_bytes: usize,
+    pub initial_memory_pages: u32,
+    pub maximum_memory_pages: Option<u32>,
+    pub injected_at_epoch_ms: u64,
+    pub is_active: bool,
+    pub manifest: WasmPluginManifest,
+}
 
 /// Telemetry metrics for a single hot WASM execution
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,6 +84,8 @@ pub struct WasmHotPoolStatus {
     pub cache_hits: u64,
     pub cache_misses: u64,
     pub hit_ratio_pct: f64,
+    #[serde(default)]
+    pub dynamic_plugins_count: usize,
 }
 
 /// Information about a cached module in the pool
@@ -198,6 +227,8 @@ pub struct WasmHotPool {
     cache_misses: AtomicU64,
     pgo_engine: Arc<RwLock<Option<Arc<WasmPgoJitEngine>>>>,
     router: Arc<HardwareAwareWorkloadRouter>,
+    dynamic_registry: Arc<RwLock<HashMap<String, DynamicPluginMetadata>>>,
+    max_memory_pages: u32,
 }
 
 impl Default for WasmHotPool {
@@ -241,6 +272,8 @@ impl WasmHotPool {
             cache_misses: AtomicU64::new(0),
             pgo_engine: Arc::new(RwLock::new(None)),
             router,
+            dynamic_registry: Arc::new(RwLock::new(HashMap::new())),
+            max_memory_pages: DEFAULT_MAX_PLUGIN_MEMORY_PAGES,
         })
     }
 
@@ -428,7 +461,8 @@ impl WasmHotPool {
         // 1. Resolve or compile module (Cache Lookup)
         let (cached_mod, cache_hit, compile_duration_us) = {
             let read_cache = self.module_cache.read().unwrap();
-            if let Some(existing) = read_cache.get(path) {
+            let dynamic_key = PathBuf::from(format!("dynamic://{}", path.display()));
+            if let Some(existing) = read_cache.get(path).or_else(|| read_cache.get(&dynamic_key)) {
                 // Verify content hasn't changed on disk (fast metadata check)
                 existing.hit_count.fetch_add(1, Ordering::Relaxed);
                 self.cache_hits.fetch_add(1, Ordering::Relaxed);
@@ -496,7 +530,7 @@ impl WasmHotPool {
 
         let fuel_before = slot.store.get_fuel().unwrap_or(DEFAULT_WASM_FUEL);
 
-        // Check for exported `run` or `hgb_invoke`
+        // Check for exported `run`, `hgb_invoke`, or `main`
         let output = if let Ok(run_func) = instance.get_typed_func::<(), i32>(&mut slot.store, "run") {
             let res = run_func.call(&mut slot.store, ()).map_err(|e| {
                 HgbError::Execution(format!("WASM runtime execution trap: {}", e))
@@ -506,6 +540,26 @@ impl WasmHotPool {
                 "exit_code": res,
                 "plugin": cached_mod.manifest.name,
                 "message": format!("WASM function run() returned {}", res)
+            })
+        } else if let Ok(invoke_func) = instance.get_typed_func::<(), i32>(&mut slot.store, "hgb_invoke") {
+            let res = invoke_func.call(&mut slot.store, ()).map_err(|e| {
+                HgbError::Execution(format!("WASM runtime execution trap: {}", e))
+            })?;
+            serde_json::json!({
+                "status": "success",
+                "exit_code": res,
+                "plugin": cached_mod.manifest.name,
+                "message": format!("WASM function hgb_invoke() returned {}", res)
+            })
+        } else if let Ok(main_func) = instance.get_typed_func::<(), i32>(&mut slot.store, "main") {
+            let res = main_func.call(&mut slot.store, ()).map_err(|e| {
+                HgbError::Execution(format!("WASM runtime execution trap: {}", e))
+            })?;
+            serde_json::json!({
+                "status": "success",
+                "exit_code": res,
+                "plugin": cached_mod.manifest.name,
+                "message": format!("WASM function main() returned {}", res)
             })
         } else {
             serde_json::json!({
@@ -579,6 +633,8 @@ impl WasmHotPool {
             100.0
         };
 
+        let dynamic_plugins_count = self.dynamic_registry.read().map(|r| r.len()).unwrap_or(0);
+
         WasmHotPoolStatus {
             pool_capacity: self.pool_capacity,
             available_hot_slots,
@@ -590,6 +646,7 @@ impl WasmHotPool {
             cache_hits: hits,
             cache_misses: misses,
             hit_ratio_pct,
+            dynamic_plugins_count,
         }
     }
 

@@ -569,6 +569,125 @@ impl Default for CockpitTelemetry {
     }
 }
 
+/// Real-time Cockpit HUD Telemetry emitted by the hgb-daemon WebSocket endpoint `/ws/cockpit_hud`
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CockpitHudTelemetry {
+    pub cpu_frequencies_mhz: Vec<u32>,
+    pub wasm_memory_mb: f64,
+    pub active_mcp_tools: Vec<String>,
+    pub thermal_curve: Vec<f32>,
+    pub battery_draw_w: f32,
+    pub mglru_pressure: String,
+    pub active_task_count: usize,
+    pub uptime_secs: u64,
+}
+
+impl Default for CockpitHudTelemetry {
+    fn default() -> Self {
+        Self {
+            cpu_frequencies_mhz: vec![2400, 2400, 2400, 2400],
+            wasm_memory_mb: 8.5,
+            active_mcp_tools: vec![
+                "bash_exec".to_string(),
+                "file_edit".to_string(),
+                "vector_search".to_string(),
+            ],
+            thermal_curve: vec![42.0, 43.5, 41.8, 44.0],
+            battery_draw_w: 14.5,
+            mglru_pressure: "nominal".to_string(),
+            active_task_count: 0,
+            uptime_secs: 0,
+        }
+    }
+}
+
+/// Background WebSocket client subscriber streaming real-time telemetry from `/ws/cockpit_hud`
+#[derive(Debug)]
+pub struct CockpitHudSubscriber {
+    endpoint: String,
+    telemetry: Arc<std::sync::RwLock<Option<CockpitHudTelemetry>>>,
+    shutdown: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl CockpitHudSubscriber {
+    pub fn new(endpoint: impl Into<String>) -> Self {
+        Self {
+            endpoint: endpoint.into(),
+            telemetry: Arc::new(std::sync::RwLock::new(None)),
+            shutdown: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    pub fn with_shared_telemetry(
+        endpoint: impl Into<String>,
+        telemetry: Arc<std::sync::RwLock<Option<CockpitHudTelemetry>>>,
+    ) -> Self {
+        Self {
+            endpoint: endpoint.into(),
+            telemetry,
+            shutdown: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    pub fn telemetry(&self) -> Option<CockpitHudTelemetry> {
+        self.telemetry.read().ok().and_then(|guard| guard.clone())
+    }
+
+    pub fn shared_telemetry(&self) -> Arc<std::sync::RwLock<Option<CockpitHudTelemetry>>> {
+        Arc::clone(&self.telemetry)
+    }
+
+    pub fn stop(&self) {
+        self.shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn start(&self) -> tokio::task::JoinHandle<()> {
+        let endpoint = self.endpoint.clone();
+        let telemetry = Arc::clone(&self.telemetry);
+        let shutdown = Arc::clone(&self.shutdown);
+
+        tokio::spawn(async move {
+            use futures_util::StreamExt;
+
+            while !shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+                match tokio_tungstenite::connect_async(&endpoint).await {
+                    Ok((mut ws_stream, _)) => {
+                        while !shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+                            tokio::select! {
+                                msg = ws_stream.next() => {
+                                    match msg {
+                                        Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text))) => {
+                                            if let Ok(data) = serde_json::from_str::<CockpitHudTelemetry>(&text) {
+                                                if let Ok(mut lock) = telemetry.write() {
+                                                    *lock = Some(data);
+                                                }
+                                            }
+                                        }
+                                        Some(Ok(tokio_tungstenite::tungstenite::Message::Ping(payload))) => {
+                                            use futures_util::SinkExt;
+                                            let _ = ws_stream.send(tokio_tungstenite::tungstenite::Message::Pong(payload)).await;
+                                        }
+                                        Some(Ok(tokio_tungstenite::tungstenite::Message::Close(_))) | None => {
+                                            break;
+                                        }
+                                        Some(Err(_)) => break,
+                                        _ => {}
+                                    }
+                                }
+                                _ = tokio::time::sleep(tokio::time::Duration::from_millis(50)) => {}
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        // Connection failed or disconnected; backoff before retrying
+                        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                    }
+                }
+            }
+        })
+    }
+}
+
 /// Complete state machine for the Interactive Cockpit TUI Engine
 #[derive(Debug, Clone)]
 pub struct CockpitState {
@@ -658,6 +777,8 @@ pub struct CockpitState {
     pub invariant_cards: Vec<InvariantCardItem>,
     pub architecture_dag_cards: Vec<ArchitectureDagCardItem>,
     pub voice_copilot_cards: Vec<VoiceCoPilotCardItem>,
+    pub hud_telemetry: Arc<std::sync::RwLock<Option<CockpitHudTelemetry>>>,
+    pub hud_subscriber: Option<Arc<CockpitHudSubscriber>>,
     pub needs_clear: bool,
 }
 
@@ -2391,7 +2512,44 @@ impl CockpitState {
             invariant_cards: Vec::new(),
             architecture_dag_cards: Vec::new(),
             voice_copilot_cards: Vec::new(),
+            hud_telemetry: {
+                let tel = Arc::new(std::sync::RwLock::new(None));
+                tel
+            },
+            hud_subscriber: {
+                let hud_port = std::env::var("HGB_COCKPIT_HUD_PORT")
+                    .ok()
+                    .and_then(|p| p.parse().ok())
+                    .unwrap_or(8084);
+                let hud_url = std::env::var("HGB_COCKPIT_HUD_URL")
+                    .unwrap_or_else(|_| format!("ws://127.0.0.1:{}/ws/cockpit_hud", hud_port));
+                Some(Arc::new(CockpitHudSubscriber::new(hud_url)))
+            },
             needs_clear: false,
+        }
+    }
+
+    /// Update Cockpit HUD telemetry snapshot
+    pub fn update_hud_telemetry(&mut self, tel: CockpitHudTelemetry) {
+        if let Ok(mut lock) = self.hud_telemetry.write() {
+            *lock = Some(tel);
+        }
+    }
+
+    /// Retrieve latest live HUD telemetry snapshot if connected
+    pub fn latest_hud_telemetry(&self) -> Option<CockpitHudTelemetry> {
+        self.hud_telemetry.read().ok().and_then(|guard| guard.clone())
+    }
+
+    /// Connect and start background WebSocket subscriber streaming `/ws/cockpit_hud`
+    pub fn start_hud_subscriber(&mut self) {
+        if let Some(sub) = &self.hud_subscriber {
+            // Share the same hud_telemetry buffer
+            let shared_sub = CockpitHudSubscriber::with_shared_telemetry(
+                sub.endpoint.clone(),
+                Arc::clone(&self.hud_telemetry),
+            );
+            shared_sub.start();
         }
     }
 
@@ -4576,7 +4734,13 @@ impl CockpitState {
             .borders(Borders::ALL)
             .title(" 🪽 HAGIBIS AGY COCKPIT 🪽 ");
 
-        let temp_color = if self.telemetry.peak_temperature_celsius > 75.0 { Color::Red } else { Color::Green };
+        let live_hud = self.latest_hud_telemetry();
+        let peak_temp = if let Some(hud) = &live_hud {
+            hud.thermal_curve.iter().cloned().max_by(|a, b| a.total_cmp(b)).map(|v| v as f64).unwrap_or(self.telemetry.peak_temperature_celsius)
+        } else {
+            self.telemetry.peak_temperature_celsius
+        };
+        let temp_color = if peak_temp > 75.0 { Color::Red } else { Color::Green };
         let mut hud_row1 = vec![
             Span::styled(format!(" [{}] ", self.model_pill), Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)),
             Span::raw(" "),
@@ -4596,29 +4760,64 @@ impl CockpitState {
             ));
         }
 
-        let hud_lines = vec![
-            Line::from(hud_row1),
-            Line::from(vec![
-                Span::styled("🔥 Thermal: ", Style::default().fg(Color::Yellow)),
-                Span::styled(format!("{:.1}°C  ", self.telemetry.peak_temperature_celsius), Style::default().fg(temp_color).add_modifier(Modifier::BOLD)),
-                Span::styled("🪽 Throughput: ", Style::default().fg(Color::Yellow)),
-                Span::styled(format!("{:.1} tok/s  ", self.telemetry.tokens_per_sec), Style::default().fg(Color::Cyan)),
-                Span::styled("📊 Tokens: ", Style::default().fg(Color::Yellow)),
-                Span::styled(format!("{}  ", self.telemetry.total_tokens), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                Span::styled("🔗 UDS Latency: ", Style::default().fg(Color::Yellow)),
-                Span::styled(format!("{}µs  ", self.telemetry.uds_latency_us), Style::default().fg(Color::Green)),
-                Span::styled("🐝 Swarm Agents: ", Style::default().fg(Color::Yellow)),
-                Span::styled(format!("{}  ", self.nodes.len()), Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
-                Span::styled("🎯 Acceptance: ", Style::default().fg(Color::Yellow)),
-                Span::styled(format!("{:.0}%", self.telemetry.speculative_acceptance_rate * 100.0), Style::default().fg(Color::Yellow)),
-            ]),
-            Line::from(vec![
+        let mut hud_row2 = vec![
+            Span::styled("🔥 Thermal: ", Style::default().fg(Color::Yellow)),
+            Span::styled(format!("{:.1}°C  ", peak_temp), Style::default().fg(temp_color).add_modifier(Modifier::BOLD)),
+        ];
+
+        if let Some(hud) = &live_hud {
+            let avg_cpu = if !hud.cpu_frequencies_mhz.is_empty() {
+                hud.cpu_frequencies_mhz.iter().sum::<u32>() / hud.cpu_frequencies_mhz.len() as u32
+            } else {
+                2400
+            };
+            hud_row2.push(Span::styled("⚡ CPU: ", Style::default().fg(Color::Yellow)));
+            hud_row2.push(Span::styled(format!("{}MHz [{}c]  ", avg_cpu, hud.cpu_frequencies_mhz.len()), Style::default().fg(Color::Cyan)));
+            hud_row2.push(Span::styled("📦 WASM: ", Style::default().fg(Color::Yellow)));
+            hud_row2.push(Span::styled(format!("{:.1}MB  ", hud.wasm_memory_mb), Style::default().fg(Color::Green)));
+            hud_row2.push(Span::styled("🔋 Draw: ", Style::default().fg(Color::Yellow)));
+            hud_row2.push(Span::styled(format!("{:.1}W  ", hud.battery_draw_w), Style::default().fg(Color::Magenta)));
+            hud_row2.push(Span::styled("🧠 MGLRU: ", Style::default().fg(Color::Yellow)));
+            hud_row2.push(Span::styled(format!("{}  ", hud.mglru_pressure), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)));
+            hud_row2.push(Span::styled("⚙️ Tasks: ", Style::default().fg(Color::Yellow)));
+            hud_row2.push(Span::styled(format!("{}  ", hud.active_task_count), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)));
+        } else {
+            hud_row2.push(Span::styled("🪽 Throughput: ", Style::default().fg(Color::Yellow)));
+            hud_row2.push(Span::styled(format!("{:.1} tok/s  ", self.telemetry.tokens_per_sec), Style::default().fg(Color::Cyan)));
+            hud_row2.push(Span::styled("📊 Tokens: ", Style::default().fg(Color::Yellow)));
+            hud_row2.push(Span::styled(format!("{}  ", self.telemetry.total_tokens), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),);
+            hud_row2.push(Span::styled("🔗 UDS Latency: ", Style::default().fg(Color::Yellow)));
+            hud_row2.push(Span::styled(format!("{}µs  ", self.telemetry.uds_latency_us), Style::default().fg(Color::Green)));
+            hud_row2.push(Span::styled("🐝 Swarm Agents: ", Style::default().fg(Color::Yellow)));
+            hud_row2.push(Span::styled(format!("{}  ", self.nodes.len()), Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)));
+            hud_row2.push(Span::styled("🎯 Acceptance: ", Style::default().fg(Color::Yellow)));
+            hud_row2.push(Span::styled(format!("{:.0}%", self.telemetry.speculative_acceptance_rate * 100.0), Style::default().fg(Color::Yellow)));
+        }
+
+        let hud_row3 = if let Some(hud) = &live_hud {
+            vec![
+                Span::styled(format!("● WS HUD: LIVE ({} tools • uptime {}s)", hud.active_mcp_tools.len(), hud.uptime_secs), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::raw(" | "),
                 Span::styled("● MESH: CONNECTED (P2P Gossip)", Style::default().fg(Color::Green)),
                 Span::raw(" | "),
                 Span::styled("● SHIELD: ACTIVE (Formal Invariant SMT)", Style::default().fg(Color::Cyan)),
                 Span::raw(" | "),
                 Span::styled(format!("● TIME: {}", Utc::now().format("%Y-%m-%d %H:%M:%S UTC")), Style::default().fg(Color::DarkGray)),
-            ]),
+            ]
+        } else {
+            vec![
+                Span::styled("● MESH: CONNECTED (P2P Gossip)", Style::default().fg(Color::Green)),
+                Span::raw(" | "),
+                Span::styled("● SHIELD: ACTIVE (Formal Invariant SMT)", Style::default().fg(Color::Cyan)),
+                Span::raw(" | "),
+                Span::styled(format!("● TIME: {}", Utc::now().format("%Y-%m-%d %H:%M:%S UTC")), Style::default().fg(Color::DarkGray)),
+            ]
+        };
+
+        let hud_lines = vec![
+            Line::from(hud_row1),
+            Line::from(hud_row2),
+            Line::from(hud_row3),
         ];
         let hud_paragraph = Paragraph::new(hud_lines).block(hud_block);
         frame.render_widget(hud_paragraph, main_chunks[0]);
@@ -7119,6 +7318,7 @@ impl CockpitState {
         let backend = CrosstermBackend::new(stdout_handle);
         let mut terminal = Terminal::new(backend)?;
 
+        self.start_hud_subscriber();
         let res = self.event_loop(&mut terminal).await;
 
         disable_raw_mode()?;
@@ -8615,5 +8815,84 @@ async fn test_scroll_pill_click_to_bottom() {
         assert!(rendered.contains("The quick brown fox"));
         assert!(rendered.contains("instruction that must wrap cleanly"));
         assert!(rendered.contains("on one line"));
+    }
+
+    #[test]
+    fn test_cockpit_hud_telemetry_defaults_and_serde() {
+        let default_tel = CockpitHudTelemetry::default();
+        assert_eq!(default_tel.cpu_frequencies_mhz.len(), 4);
+        assert_eq!(default_tel.mglru_pressure, "nominal");
+        assert_eq!(default_tel.active_task_count, 0);
+
+        let json = serde_json::to_string(&default_tel).expect("serialize telemetry");
+        let deserialized: CockpitHudTelemetry = serde_json::from_str(&json).expect("deserialize telemetry");
+        assert_eq!(deserialized, default_tel);
+    }
+
+    #[tokio::test]
+    async fn test_cockpit_hud_subscriber_and_live_rendering() {
+        use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+        use axum::routing::get;
+        use axum::Router;
+
+        // 1. Spawn a mock WebSocket server that serves /ws/cockpit_hud
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind ephemeral port");
+        let port = listener.local_addr().expect("local addr").port();
+
+        let app = Router::new().route(
+            "/ws/cockpit_hud",
+            get(|ws: WebSocketUpgrade| async move {
+                ws.on_upgrade(|mut socket: WebSocket| async move {
+                    let mut tel = CockpitHudTelemetry::default();
+                    tel.cpu_frequencies_mhz = vec![3600, 3600, 3600, 3600];
+                    tel.wasm_memory_mb = 16.4;
+                    tel.battery_draw_w = 22.5;
+                    tel.mglru_pressure = "low".to_string();
+                    tel.active_task_count = 3;
+                    let msg = serde_json::to_string(&tel).unwrap();
+                    let _ = socket.send(Message::Text(msg)).await;
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                })
+            }),
+        );
+
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        // 2. Wire and start CockpitHudSubscriber
+        let ws_url = format!("ws://127.0.0.1:{}/ws/cockpit_hud", port);
+        let subscriber = CockpitHudSubscriber::new(&ws_url);
+        let handle = subscriber.start();
+
+        // 3. Wait for telemetry receipt
+        let mut received = None;
+        for _ in 0..40 {
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+            if let Some(t) = subscriber.telemetry() {
+                received = Some(t);
+                break;
+            }
+        }
+        subscriber.stop();
+        handle.abort();
+
+        assert!(received.is_some(), "Subscriber should receive live telemetry from /ws/cockpit_hud");
+        let tel = received.unwrap();
+        assert_eq!(tel.wasm_memory_mb, 16.4);
+        assert_eq!(tel.active_task_count, 3);
+
+        // 4. Test live HUD rendering in CockpitState
+        let mut state = CockpitState::new();
+        state.view_mode = CockpitViewMode::CockpitSplit;
+        state.update_hud_telemetry(tel);
+
+        let rendered = state.render_headless_to_string(140, 30);
+        assert!(rendered.contains("3600MHz"), "HUD should render CPU frequency");
+        assert!(rendered.contains("16.4MB"), "HUD should render WASM memory");
+        assert!(rendered.contains("22.5W"), "HUD should render power draw");
+        assert!(rendered.contains("low"), "HUD should render MGLRU pressure");
+        assert!(rendered.contains("Tasks:"), "HUD should render active task counter");
+        assert!(rendered.contains("WS HUD: LIVE"), "HUD should display live WebSocket status");
     }
 }

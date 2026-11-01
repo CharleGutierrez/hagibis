@@ -1969,6 +1969,7 @@ dependencies = [
  "chrono",
  "colored",
  "crossterm",
+ "ed25519-dalek",
  "futures-util",
  "hex",
  "hgb-storage",
@@ -2025,6 +2026,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.20",
  "tokio",
+ "tokio-tungstenite 0.21.0",
  "tower",
  "unicode-width 0.2.0",
  "uuid",
@@ -2065,6 +2067,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
+ "tokio-tungstenite 0.21.0",
  "unicode-width 0.2.0",
  "uuid",
 ]

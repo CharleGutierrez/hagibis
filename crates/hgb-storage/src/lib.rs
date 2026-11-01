@@ -118,3 +118,15 @@ pub use shm_zero_copy_storage::{
     TAG_TELEMETRY_FRAME, TAG_TOKEN_STREAM, TAG_WASM_MEMORY,
 };
 
+// Pillar 3: True Zero-Copy Shared Memory for AI Inference Pipelines
+pub mod shm_inference_pipeline;
+pub use shm_inference_pipeline::{
+    resolve_infer_stream_path, InferControlHeader, InferDataType, TensorFrameHeader,
+    TensorStreamBenchReport, TensorStreamStatus, WasmDirectMemoryBridge,
+    ZeroCopyTensorConsumer, ZeroCopyTensorProducer, ZeroCopyTensorStream,
+    DEFAULT_INFER_STREAM_CAPACITY, FLAG_CHECKSUMMED, FLAG_INTERMEDIATE_ACTIVATION,
+    FLAG_IS_FINAL, FLAG_KV_CACHE, INFER_CONTROL_HEADER_SIZE, INFER_FRAME_HEADER_SIZE,
+    INFER_FRAME_MAGIC, INFER_STREAM_VERSION,
+};
+
+

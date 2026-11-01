@@ -45,6 +45,7 @@ futures-util = "0.3"
 ndarray = "0.15"
 notify = "6.1"
 wat = { path = "../wat" }
+ed25519-dalek = "3.0.0"
 
 [dev-dependencies]
 tempfile = "3.10"

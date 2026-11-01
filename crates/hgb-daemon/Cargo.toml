@@ -33,3 +33,6 @@ rusqlite = { workspace = true }
 memmap2 = { workspace = true }
 libc = "0.2"
 wasmtime = "18.0"
+
+[dev-dependencies]
+tokio-tungstenite = "0.21"

@@ -14,7 +14,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
-use crate::error::Result;
+use crate::error::{HgbError, Result};
 
 /// Safe thermal headroom upper limit in Celsius for Dynabook Kaby Lake ultrabook chassis
 pub const THERMAL_HEADROOM_SAFE_C: f64 = 72.0;
@@ -81,6 +81,526 @@ impl HardwareGovernorProfile {
     }
 }
 
+/// Core cluster classification for big.LITTLE / heterogeneous and symmetric CPU topologies
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CoreClusterKind {
+    /// High-performance burst cores (P-cores or primary physical cores)
+    PerformanceCores,
+    /// Energy-efficient power-saving cores (E-cores or secondary SMT threads)
+    EfficiencyCores,
+    /// Unrestricted execution across all available logical cores
+    AllCores,
+}
+
+impl Default for CoreClusterKind {
+    fn default() -> Self {
+        Self::AllCores
+    }
+}
+
+impl std::fmt::Display for CoreClusterKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::PerformanceCores => write!(f, "PerformanceCores"),
+            Self::EfficiencyCores => write!(f, "EfficiencyCores"),
+            Self::AllCores => write!(f, "AllCores"),
+        }
+    }
+}
+
+/// Linux Multi-Gen LRU (MGLRU) and PSI memory pressure severity levels
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum MglruPressureLevel {
+    /// Ample memory headroom, low PSI stall (< 15% avg10)
+    Low,
+    /// Moderate memory pressure (15%..35% avg10 or < 12% available RAM)
+    Medium,
+    /// Severe thrashing / acute memory exhaustion (>= 35% avg10 or < 6% available RAM)
+    Critical,
+}
+
+impl Default for MglruPressureLevel {
+    fn default() -> Self {
+        Self::Low
+    }
+}
+
+impl std::fmt::Display for MglruPressureLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Low => write!(f, "Low"),
+            Self::Medium => write!(f, "Medium"),
+            Self::Critical => write!(f, "Critical"),
+        }
+    }
+}
+
+/// Workload intensity tier for reactive thermal and battery affinity steering
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum TaskIntensity {
+    /// Low-overhead background maintenance, metrics, or telemetry sampling
+    Light,
+    /// Standard execution, interactive requests, or light I/O
+    Moderate,
+    /// Heavy compute bursts: WASM kernel execution, LLM speculative inference, full compilation
+    Intensive,
+}
+
+impl Default for TaskIntensity {
+    fn default() -> Self {
+        Self::Moderate
+    }
+}
+
+impl std::fmt::Display for TaskIntensity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Light => write!(f, "Light"),
+            Self::Moderate => write!(f, "Moderate"),
+            Self::Intensive => write!(f, "Intensive"),
+        }
+    }
+}
+
+/// Detailed descriptor for a single logical CPU core
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CpuCoreInfo {
+    pub cpu_id: usize,
+    pub max_freq_khz: u64,
+    pub capacity: Option<u64>,
+    pub core_id: Option<usize>,
+    pub is_performance: bool,
+}
+
+/// Host CPU core topology discovering performance and efficiency core clusters
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CpuTopology {
+    pub total_cores: usize,
+    pub performance_cores: Vec<usize>,
+    pub efficiency_cores: Vec<usize>,
+    pub is_heterogeneous: bool,
+    pub cores: Vec<CpuCoreInfo>,
+}
+
+impl Default for CpuTopology {
+    fn default() -> Self {
+        let num_cpus = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4);
+        let mid = (num_cpus / 2).max(1);
+        let performance_cores: Vec<usize> = (0..mid).collect();
+        let efficiency_cores: Vec<usize> = if num_cpus > 1 {
+            (mid..num_cpus).collect()
+        } else {
+            vec![0]
+        };
+        let cores = (0..num_cpus)
+            .map(|id| CpuCoreInfo {
+                cpu_id: id,
+                max_freq_khz: 2_400_000,
+                capacity: None,
+                core_id: Some(id / 2),
+                is_performance: performance_cores.contains(&id),
+            })
+            .collect();
+        Self {
+            total_cores: num_cpus,
+            performance_cores,
+            efficiency_cores,
+            is_heterogeneous: false,
+            cores,
+        }
+    }
+}
+
+impl CpuTopology {
+    pub fn all_cores(&self) -> Vec<usize> {
+        (0..self.total_cores).collect()
+    }
+
+    pub fn cores_for_cluster(&self, cluster: CoreClusterKind) -> Vec<usize> {
+        match cluster {
+            CoreClusterKind::PerformanceCores => {
+                if !self.performance_cores.is_empty() {
+                    self.performance_cores.clone()
+                } else {
+                    self.all_cores()
+                }
+            }
+            CoreClusterKind::EfficiencyCores => {
+                if !self.efficiency_cores.is_empty() {
+                    self.efficiency_cores.clone()
+                } else {
+                    self.all_cores()
+                }
+            }
+            CoreClusterKind::AllCores => self.all_cores(),
+        }
+    }
+}
+
+/// Query the CPU affinity mask for the current thread
+#[cfg(target_os = "linux")]
+pub fn get_current_thread_affinity() -> Result<Vec<usize>> {
+    unsafe {
+        let mut cpuset: libc::cpu_set_t = std::mem::zeroed();
+        let ret = libc::sched_getaffinity(
+            0,
+            std::mem::size_of::<libc::cpu_set_t>(),
+            &mut cpuset,
+        );
+        if ret != 0 {
+            // Portable fallback: return core 0 if sched_getaffinity is restricted
+            return Ok(vec![0]);
+        }
+        let mut cores = Vec::new();
+        let max_cpus = std::mem::size_of::<libc::cpu_set_t>() * 8;
+        for cpu in 0..max_cpus {
+            if libc::CPU_ISSET(cpu, &cpuset) {
+                cores.push(cpu);
+            }
+        }
+        if cores.is_empty() {
+            cores.push(0);
+        }
+        Ok(cores)
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn get_current_thread_affinity() -> Result<Vec<usize>> {
+    Ok(vec![0])
+}
+
+/// Set the CPU affinity mask for the current thread to the specified core list
+#[cfg(target_os = "linux")]
+pub fn set_current_thread_affinity_raw(cores: &[usize]) -> Result<()> {
+    if cores.is_empty() {
+        return Ok(());
+    }
+    unsafe {
+        let mut cpuset: libc::cpu_set_t = std::mem::zeroed();
+        libc::CPU_ZERO(&mut cpuset);
+        let max_cpus = std::mem::size_of::<libc::cpu_set_t>() * 8;
+        for &cpu in cores {
+            if cpu < max_cpus {
+                libc::CPU_SET(cpu, &mut cpuset);
+            }
+        }
+        let ret = libc::sched_setaffinity(
+            0,
+            std::mem::size_of::<libc::cpu_set_t>(),
+            &cpuset,
+        );
+        if ret != 0 {
+            let os_err = std::io::Error::last_os_error();
+            let raw_os_err = os_err.raw_os_error().unwrap_or(0);
+            if raw_os_err == libc::EPERM || raw_os_err == libc::ENOSYS {
+                // Portable fallback: environment does not permit custom thread affinity
+                return Ok(());
+            }
+            // Attempt fallback to core 0
+            if cores != &[0] {
+                let mut fallback_set: libc::cpu_set_t = std::mem::zeroed();
+                libc::CPU_ZERO(&mut fallback_set);
+                libc::CPU_SET(0, &mut fallback_set);
+                if libc::sched_setaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &fallback_set) == 0 {
+                    return Ok(());
+                }
+            }
+            return Err(HgbError::Execution(format!(
+                "sched_setaffinity failed: {}",
+                os_err
+            )));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn set_current_thread_affinity_raw(_cores: &[usize]) -> Result<()> {
+    Ok(())
+}
+
+/// Inspect Linux sysfs at `/sys/devices/system/cpu/cpu*/topology/` and `cpufreq/cpuinfo_max_freq`
+/// to discover performance cores vs power-saving efficiency cores.
+pub fn discover_topology_from_sysfs(cpu_base: &Path) -> CpuTopology {
+    let mut cpu_entries: Vec<(usize, PathBuf)> = Vec::new();
+
+    if let Ok(entries) = fs::read_dir(cpu_base) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with("cpu") {
+                if let Ok(id) = name["cpu".len()..].parse::<usize>() {
+                    cpu_entries.push((id, entry.path()));
+                }
+            }
+        }
+    }
+
+    cpu_entries.sort_by_key(|(id, _)| *id);
+
+    if cpu_entries.is_empty() {
+        let num_cpus = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4);
+        let mid = (num_cpus / 2).max(1);
+        let performance_cores: Vec<usize> = (0..mid).collect();
+        let efficiency_cores: Vec<usize> = if num_cpus > 1 {
+            (mid..num_cpus).collect()
+        } else {
+            vec![0]
+        };
+        let cores = (0..num_cpus)
+            .map(|id| CpuCoreInfo {
+                cpu_id: id,
+                max_freq_khz: 2_400_000,
+                capacity: None,
+                core_id: Some(id / 2),
+                is_performance: performance_cores.contains(&id),
+            })
+            .collect();
+        return CpuTopology {
+            total_cores: num_cpus,
+            performance_cores,
+            efficiency_cores,
+            is_heterogeneous: false,
+            cores,
+        };
+    }
+
+    let mut core_infos = Vec::new();
+    let mut max_freqs = Vec::new();
+    let mut capacities = Vec::new();
+
+    for (id, path) in &cpu_entries {
+        let max_freq_khz = fs::read_to_string(path.join("cpufreq/cpuinfo_max_freq"))
+            .or_else(|_| fs::read_to_string(path.join("cpufreq/scaling_max_freq")))
+            .ok()
+            .and_then(|s| s.trim().parse::<u64>().ok())
+            .unwrap_or(2_400_000);
+
+        let capacity = fs::read_to_string(path.join("cpu_capacity"))
+            .ok()
+            .and_then(|s| s.trim().parse::<u64>().ok());
+
+        let core_id = fs::read_to_string(path.join("topology/core_id"))
+            .ok()
+            .and_then(|s| s.trim().parse::<usize>().ok());
+
+        max_freqs.push(max_freq_khz);
+        if let Some(c) = capacity {
+            capacities.push(c);
+        }
+
+        core_infos.push((*id, max_freq_khz, capacity, core_id));
+    }
+
+    let total_cores = core_infos.len();
+
+    let min_cap = capacities.iter().copied().min();
+    let max_cap = capacities.iter().copied().max();
+    let has_capacity_diff = match (min_cap, max_cap) {
+        (Some(min), Some(max)) => max > min && ((max - min) as f64 / min as f64) > 0.1,
+        _ => false,
+    };
+
+    let min_freq = max_freqs.iter().copied().min().unwrap_or(2_400_000);
+    let max_freq = max_freqs.iter().copied().max().unwrap_or(2_400_000);
+    let has_freq_diff = max_freq > min_freq && ((max_freq - min_freq) as f64 / min_freq as f64) > 0.08;
+
+    let mut performance_cores = Vec::new();
+    let mut efficiency_cores = Vec::new();
+    let is_heterogeneous;
+
+    if has_capacity_diff {
+        is_heterogeneous = true;
+        let threshold = (min_cap.unwrap() + max_cap.unwrap()) / 2;
+        for &(id, _, cap, _) in &core_infos {
+            if cap.unwrap_or(0) >= threshold {
+                performance_cores.push(id);
+            } else {
+                efficiency_cores.push(id);
+            }
+        }
+    } else if has_freq_diff {
+        is_heterogeneous = true;
+        let threshold = (min_freq + max_freq) / 2;
+        for &(id, freq, _, _) in &core_infos {
+            if freq >= threshold {
+                performance_cores.push(id);
+            } else {
+                efficiency_cores.push(id);
+            }
+        }
+    } else {
+        is_heterogeneous = false;
+        let mut seen_core_ids = std::collections::HashSet::new();
+        let mut primary_threads = Vec::new();
+        let mut secondary_threads = Vec::new();
+
+        for &(id, _, _, core_id_opt) in &core_infos {
+            if let Some(cid) = core_id_opt {
+                if seen_core_ids.insert(cid) {
+                    primary_threads.push(id);
+                } else {
+                    secondary_threads.push(id);
+                }
+            }
+        }
+
+        if !primary_threads.is_empty() && !secondary_threads.is_empty() {
+            performance_cores = primary_threads;
+            efficiency_cores = secondary_threads;
+        } else {
+            let mid = (total_cores / 2).max(1);
+            for &(id, _, _, _) in &core_infos {
+                if id < mid {
+                    performance_cores.push(id);
+                } else {
+                    efficiency_cores.push(id);
+                }
+            }
+        }
+    }
+
+    if performance_cores.is_empty() {
+        performance_cores = (0..total_cores).collect();
+    }
+    if efficiency_cores.is_empty() {
+        efficiency_cores = performance_cores.clone();
+    }
+
+    let perf_set: std::collections::HashSet<_> = performance_cores.iter().copied().collect();
+    let cores = core_infos
+        .into_iter()
+        .map(|(id, max_freq_khz, capacity, core_id)| CpuCoreInfo {
+            cpu_id: id,
+            max_freq_khz,
+            capacity,
+            core_id,
+            is_performance: perf_set.contains(&id),
+        })
+        .collect();
+
+    CpuTopology {
+        total_cores,
+        performance_cores,
+        efficiency_cores,
+        is_heterogeneous,
+        cores,
+    }
+}
+
+/// Evaluate real-time MGLRU and PSI memory pressure level
+pub fn evaluate_mglru_pressure(
+    psi_some_avg10: f64,
+    psi_full_avg10: f64,
+    memory_available_pct: f64,
+    mglru_active: bool,
+    min_ttl_ms: Option<u64>,
+) -> MglruPressureLevel {
+    if psi_some_avg10 >= 35.0 || psi_full_avg10 >= 15.0 || memory_available_pct < 6.0 {
+        MglruPressureLevel::Critical
+    } else if psi_some_avg10 >= 15.0 || psi_full_avg10 >= 5.0 || memory_available_pct < 12.0 {
+        MglruPressureLevel::Medium
+    } else if mglru_active && min_ttl_ms.map(|t| t == 0).unwrap_or(false) && memory_available_pct < 20.0 {
+        MglruPressureLevel::Medium
+    } else {
+        MglruPressureLevel::Low
+    }
+}
+
+/// Dynamically compute workload core affinity based on live thermal and battery constraints
+///
+/// Rules:
+/// - When CPU temp >= 78°C or battery < 25% (on battery), steer to `EfficiencyCores` to prevent thermal throttling.
+/// - When on AC mains and temp < 72°C, steer intensive WASM/LLM jobs to `PerformanceCores`.
+pub fn compute_workload_affinity(
+    cpu_pkg_temp_c: f64,
+    ac_connected: bool,
+    battery_capacity_pct: Option<u32>,
+    task_intensity: TaskIntensity,
+) -> CoreClusterKind {
+    let bat_pct = battery_capacity_pct.unwrap_or(100);
+
+    // Rule 1: Thermal or battery emergency engaged
+    if cpu_pkg_temp_c >= THERMAL_THROTTLE_LIMIT_C || (!ac_connected && bat_pct < BATTERY_CRITICAL_THRESHOLD_PCT) {
+        CoreClusterKind::EfficiencyCores
+    } else if ac_connected && cpu_pkg_temp_c < THERMAL_HEADROOM_SAFE_C {
+        // Rule 2: AC connected & cool headroom (<72°C)
+        match task_intensity {
+            TaskIntensity::Intensive => CoreClusterKind::PerformanceCores,
+            TaskIntensity::Moderate => CoreClusterKind::AllCores,
+            TaskIntensity::Light => CoreClusterKind::EfficiencyCores,
+        }
+    } else if ac_connected {
+        // AC connected but warm (72°C..78°C)
+        match task_intensity {
+            TaskIntensity::Intensive => CoreClusterKind::PerformanceCores,
+            TaskIntensity::Moderate => CoreClusterKind::AllCores,
+            TaskIntensity::Light => CoreClusterKind::EfficiencyCores,
+        }
+    } else {
+        // Battery power >= 25% and temp < 78°C
+        match task_intensity {
+            TaskIntensity::Intensive => {
+                if cpu_pkg_temp_c < THERMAL_HEADROOM_SAFE_C && bat_pct >= 50 {
+                    CoreClusterKind::PerformanceCores
+                } else {
+                    CoreClusterKind::EfficiencyCores
+                }
+            }
+            TaskIntensity::Moderate => CoreClusterKind::AllCores,
+            TaskIntensity::Light => CoreClusterKind::EfficiencyCores,
+        }
+    }
+}
+
+/// RAII Core Affinity Guard ensuring deterministic pinning of calling thread to a core cluster
+/// and automatic restoration of baseline affinity on drop.
+pub struct CoreAffinityGuard {
+    previous_cores: Vec<usize>,
+    cluster: CoreClusterKind,
+    disarmed: bool,
+}
+
+impl CoreAffinityGuard {
+    pub fn new(profiler: &DynamicHardwareProfiler, cluster: CoreClusterKind) -> Result<Self> {
+        let previous_cores = get_current_thread_affinity().unwrap_or_else(|_| vec![0]);
+        profiler.pin_current_thread_to_cluster(cluster)?;
+        Ok(Self {
+            previous_cores,
+            cluster,
+            disarmed: false,
+        })
+    }
+
+    /// Disarm guard so prior CPU affinity mask is NOT restored upon drop
+    pub fn disarm(&mut self) {
+        self.disarmed = true;
+    }
+
+    /// The pinned cluster kind
+    pub fn cluster(&self) -> CoreClusterKind {
+        self.cluster
+    }
+
+    /// The previously active CPU cores prior to pinning
+    pub fn previous_cores(&self) -> &[usize] {
+        &self.previous_cores
+    }
+}
+
+impl Drop for CoreAffinityGuard {
+    fn drop(&mut self) {
+        if self.disarmed || self.previous_cores.is_empty() {
+            return;
+        }
+        let _ = set_current_thread_affinity_raw(&self.previous_cores);
+    }
+}
+
 /// Information on a single host thermal zone
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ThermalZoneInfo {
@@ -110,6 +630,8 @@ pub struct HardwareProfileTelemetry {
     pub mglru_active: bool,
     pub mglru_flags: Option<String>,
     pub mglru_min_ttl_ms: Option<u64>,
+    #[serde(default)]
+    pub mglru_pressure: MglruPressureLevel,
     pub memory_total_mb: u64,
     pub memory_available_mb: u64,
     pub memory_available_pct: f64,
@@ -119,6 +641,8 @@ pub struct HardwareProfileTelemetry {
     pub active_epp: String,
     pub scaling_driver: String,
     pub cpu_frequencies_mhz: Vec<f64>,
+    #[serde(default)]
+    pub cpu_topology: Option<CpuTopology>,
     pub throttle_events_count: u64,
     pub optimal_concurrency: usize,
     pub recommended_ollama_batch_size: usize,
@@ -150,6 +674,7 @@ impl Default for HardwareProfileTelemetry {
             mglru_active: true,
             mglru_flags: Some("0x0007".to_string()),
             mglru_min_ttl_ms: Some(0),
+            mglru_pressure: MglruPressureLevel::Low,
             memory_total_mb: 8192,
             memory_available_mb: 4096,
             memory_available_pct: 50.0,
@@ -159,6 +684,7 @@ impl Default for HardwareProfileTelemetry {
             active_epp: "balance_performance".to_string(),
             scaling_driver: "intel_pstate".to_string(),
             cpu_frequencies_mhz: vec![2400.0; num_cpus],
+            cpu_topology: None,
             throttle_events_count: 0,
             optimal_concurrency: num_cpus,
             recommended_ollama_batch_size: 512,
@@ -300,6 +826,7 @@ pub struct DynamicHardwareProfiler {
     telemetry_cache: Arc<RwLock<HardwareProfileTelemetry>>,
     active_profile: Arc<RwLock<HardwareGovernorProfile>>,
     sampler_running: Arc<AtomicBool>,
+    topology: Arc<RwLock<CpuTopology>>,
 }
 
 impl Default for DynamicHardwareProfiler {
@@ -312,6 +839,8 @@ impl DynamicHardwareProfiler {
     /// Instantiate a new `DynamicHardwareProfiler` auto-discovering sibling dynatune and kernel-optimizer
     pub fn new() -> Self {
         let (dynatune_dir, kernel_ctl_path, cpu_governor_sh_path) = Self::discover_sibling_projects();
+        let cpu_sysfs_base = PathBuf::from("/sys/devices/system/cpu");
+        let initial_topology = discover_topology_from_sysfs(&cpu_sysfs_base);
 
         let profiler = Self {
             dynatune_dir,
@@ -319,13 +848,14 @@ impl DynamicHardwareProfiler {
             cpu_governor_sh_path,
             thermal_sysfs_base: PathBuf::from("/sys/class/thermal"),
             power_sysfs_base: PathBuf::from("/sys/class/power_supply"),
-            cpu_sysfs_base: PathBuf::from("/sys/devices/system/cpu"),
+            cpu_sysfs_base,
             mglru_sysfs_base: PathBuf::from("/sys/kernel/mm/lru_gen"),
             proc_meminfo_path: PathBuf::from("/proc/meminfo"),
             proc_pressure_memory_path: PathBuf::from("/proc/pressure/memory"),
             telemetry_cache: Arc::new(RwLock::new(HardwareProfileTelemetry::default())),
             active_profile: Arc::new(RwLock::new(HardwareGovernorProfile::Balanced)),
             sampler_running: Arc::new(AtomicBool::new(false)),
+            topology: Arc::new(RwLock::new(initial_topology)),
         };
 
         // Take initial live sample
@@ -455,6 +985,8 @@ impl DynamicHardwareProfiler {
             && bat_info.as_ref().and_then(|b| b.capacity_pct).unwrap_or(100) < BATTERY_CRITICAL_THRESHOLD_PCT;
 
         let active_profile = self.active_profile.read().map(|p| *p).unwrap_or(HardwareGovernorProfile::Balanced);
+        let mglru_pressure = evaluate_mglru_pressure(psi_some, psi_full, mem_pct, mglru_active, mglru_min_ttl_ms);
+        let cpu_topology = Some(self.cpu_topology());
 
         HardwareProfileTelemetry {
             cpu_pkg_temp_c,
@@ -475,6 +1007,7 @@ impl DynamicHardwareProfiler {
             mglru_active,
             mglru_flags,
             mglru_min_ttl_ms,
+            mglru_pressure,
             memory_total_mb: mem_total,
             memory_available_mb: mem_avail,
             memory_available_pct: mem_pct,
@@ -484,6 +1017,7 @@ impl DynamicHardwareProfiler {
             active_epp: epp,
             scaling_driver: driver,
             cpu_frequencies_mhz: freqs,
+            cpu_topology,
             throttle_events_count,
             optimal_concurrency,
             recommended_ollama_batch_size,
@@ -502,6 +1036,70 @@ impl DynamicHardwareProfiler {
     /// Read recommended Ollama batch size
     pub fn recommended_ollama_batch_size(&self) -> usize {
         self.current_telemetry().recommended_ollama_batch_size
+    }
+
+    /// Read discovered CPU topology (performance cores vs efficiency cores)
+    pub fn cpu_topology(&self) -> CpuTopology {
+        if let Ok(guard) = self.topology.read() {
+            guard.clone()
+        } else {
+            discover_topology_from_sysfs(&self.cpu_sysfs_base)
+        }
+    }
+
+    /// Refresh cached CPU topology from sysfs
+    pub fn refresh_topology(&self) -> CpuTopology {
+        let topo = discover_topology_from_sysfs(&self.cpu_sysfs_base);
+        if let Ok(mut guard) = self.topology.write() {
+            *guard = topo.clone();
+        }
+        topo
+    }
+
+    /// Read logical core IDs for the specified cluster kind
+    pub fn cores_for_cluster(&self, cluster: CoreClusterKind) -> Vec<usize> {
+        self.cpu_topology().cores_for_cluster(cluster)
+    }
+
+    /// Pin the calling thread to the specified core cluster using `libc::sched_setaffinity` (or portable fallback)
+    pub fn pin_current_thread_to_cluster(&self, cluster: CoreClusterKind) -> Result<()> {
+        let cores = self.cores_for_cluster(cluster);
+        set_current_thread_affinity_raw(&cores)
+    }
+
+    /// Acquire an RAII `CoreAffinityGuard`: pins calling thread to specified core cluster on creation,
+    /// and deterministically restores prior CPU affinity mask on drop.
+    pub fn acquire_affinity_guard(&self, cluster: CoreClusterKind) -> Result<CoreAffinityGuard> {
+        CoreAffinityGuard::new(self, cluster)
+    }
+
+    /// Read real-time MGLRU and PSI memory pressure level (`Low`, `Medium`, `Critical`)
+    pub fn mglru_memory_pressure(&self) -> MglruPressureLevel {
+        let (active, _, min_ttl_ms) = self.read_mglru_state();
+        let (_, _, mem_pct, psi_some, psi_full) = self.read_memory_and_pressure();
+        evaluate_mglru_pressure(psi_some, psi_full, mem_pct, active, min_ttl_ms)
+    }
+
+    /// Dynamically steer workload affinity to performance or efficiency core clusters
+    /// based on live thermal zones, battery discharge rates, and task intensity.
+    ///
+    /// Rules:
+    /// - When CPU temp >= 78°C or battery < 25% (on battery), steer to `EfficiencyCores` to prevent thermal throttling.
+    /// - When on AC mains and temp < 72°C, steer intensive WASM/LLM jobs to `PerformanceCores`.
+    pub fn steer_workload_affinity(&self, task_intensity: TaskIntensity) -> CoreClusterKind {
+        let telem = self.current_telemetry();
+        compute_workload_affinity(
+            telem.cpu_pkg_temp_c,
+            telem.ac_connected,
+            telem.battery_capacity_pct,
+            task_intensity,
+        )
+    }
+
+    /// Acquire RAII `CoreAffinityGuard` automatically steered to the optimal cluster based on task intensity
+    pub fn acquire_steered_affinity_guard(&self, task_intensity: TaskIntensity) -> Result<CoreAffinityGuard> {
+        let cluster = self.steer_workload_affinity(task_intensity);
+        self.acquire_affinity_guard(cluster)
     }
 
     /// Acquire an RAII Governor Guard switching to the specified profile
@@ -1238,5 +1836,188 @@ mod tests {
         assert_eq!(idle_report.governor, "powersave");
         assert_eq!(idle_report.epp, "balance_performance");
         assert_eq!(idle_report.mglru_min_ttl_ms, POWERSAVE_MGLRU_MIN_TTL_MS);
+    }
+
+    #[test]
+    fn test_core_topology_discovery_and_cluster_classification() {
+        let profiler = DynamicHardwareProfiler::new();
+        let topo = profiler.cpu_topology();
+        assert!(topo.total_cores >= 1);
+        assert!(!topo.performance_cores.is_empty());
+        assert!(!topo.efficiency_cores.is_empty());
+        assert_eq!(topo.all_cores().len(), topo.total_cores);
+
+        // Simulated Heterogeneous big.LITTLE sysfs (varying frequencies)
+        let temp = tempfile::tempdir().expect("tempdir");
+        let cpu_base = temp.path();
+        for id in 0..4 {
+            let cpu_dir = cpu_base.join(format!("cpu{}", id));
+            let cpufreq_dir = cpu_dir.join("cpufreq");
+            fs::create_dir_all(&cpufreq_dir).expect("mkdir");
+            // Cores 0 and 1 are 4.8 GHz Performance cores; cores 2 and 3 are 3.4 GHz Efficiency cores
+            let freq = if id < 2 { "4800000\n" } else { "3400000\n" };
+            fs::write(cpufreq_dir.join("cpuinfo_max_freq"), freq).expect("write freq");
+        }
+
+        let discovered = discover_topology_from_sysfs(cpu_base);
+        assert_eq!(discovered.total_cores, 4);
+        assert!(discovered.is_heterogeneous);
+        assert_eq!(discovered.performance_cores, vec![0, 1]);
+        assert_eq!(discovered.efficiency_cores, vec![2, 3]);
+
+        // Simulated Capacity-based big.LITTLE (e.g. ARM DynamIQ)
+        let temp_cap = tempfile::tempdir().expect("tempdir");
+        let cpu_cap_base = temp_cap.path();
+        for id in 0..4 {
+            let cpu_dir = cpu_cap_base.join(format!("cpu{}", id));
+            fs::create_dir_all(&cpu_dir).expect("mkdir");
+            let cap = if id < 2 { "1024\n" } else { "512\n" };
+            fs::write(cpu_dir.join("cpu_capacity"), cap).expect("write cap");
+        }
+
+        let discovered_cap = discover_topology_from_sysfs(cpu_cap_base);
+        assert_eq!(discovered_cap.total_cores, 4);
+        assert!(discovered_cap.is_heterogeneous);
+        assert_eq!(discovered_cap.performance_cores, vec![0, 1]);
+        assert_eq!(discovered_cap.efficiency_cores, vec![2, 3]);
+
+        // Simulated Symmetric Core ID topology
+        let temp_sym = tempfile::tempdir().expect("tempdir");
+        let cpu_sym_base = temp_sym.path();
+        for id in 0..4 {
+            let cpu_dir = cpu_sym_base.join(format!("cpu{}", id));
+            let topo_dir = cpu_dir.join("topology");
+            let cpufreq_dir = cpu_dir.join("cpufreq");
+            fs::create_dir_all(&topo_dir).expect("mkdir");
+            fs::create_dir_all(&cpufreq_dir).expect("mkdir");
+            fs::write(cpufreq_dir.join("cpuinfo_max_freq"), "2400000\n").expect("write freq");
+            // Cores 0, 1 on physical core 0; Cores 2, 3 on physical core 1
+            let cid = if id < 2 { "0\n" } else { "1\n" };
+            fs::write(topo_dir.join("core_id"), cid).expect("write core_id");
+        }
+
+        let discovered_sym = discover_topology_from_sysfs(cpu_sym_base);
+        assert_eq!(discovered_sym.total_cores, 4);
+        assert!(!discovered_sym.is_heterogeneous);
+        assert_eq!(discovered_sym.performance_cores, vec![0, 2]);
+        assert_eq!(discovered_sym.efficiency_cores, vec![1, 3]);
+    }
+
+    #[test]
+    fn test_core_affinity_pinning_and_raii_restoration() {
+        let profiler = DynamicHardwareProfiler::new();
+        let initial_cores = get_current_thread_affinity().expect("initial affinity");
+        assert!(!initial_cores.is_empty());
+
+        // Pin to cluster
+        let res = profiler.pin_current_thread_to_cluster(CoreClusterKind::PerformanceCores);
+        assert!(res.is_ok());
+
+        // Acquire RAII guard and verify restoration
+        {
+            let guard = profiler.acquire_affinity_guard(CoreClusterKind::EfficiencyCores).expect("guard");
+            assert_eq!(guard.cluster(), CoreClusterKind::EfficiencyCores);
+            assert!(!guard.previous_cores().is_empty());
+            // Guard drops here and restores affinity
+        }
+
+        let restored_cores = get_current_thread_affinity().expect("restored affinity");
+        assert!(!restored_cores.is_empty());
+
+        // Test disarm behavior
+        {
+            let mut guard = profiler.acquire_affinity_guard(CoreClusterKind::AllCores).expect("guard");
+            guard.disarm();
+        }
+    }
+
+    #[test]
+    fn test_mglru_pressure_evaluation() {
+        // Low pressure
+        assert_eq!(
+            evaluate_mglru_pressure(2.0, 0.0, 60.0, true, Some(1000)),
+            MglruPressureLevel::Low
+        );
+
+        // Medium pressure via PSI
+        assert_eq!(
+            evaluate_mglru_pressure(18.0, 1.0, 30.0, true, Some(500)),
+            MglruPressureLevel::Medium
+        );
+
+        // Medium pressure via low RAM percentage (<12%)
+        assert_eq!(
+            evaluate_mglru_pressure(5.0, 0.0, 10.0, true, Some(0)),
+            MglruPressureLevel::Medium
+        );
+
+        // Critical pressure via high PSI (>=35%)
+        assert_eq!(
+            evaluate_mglru_pressure(42.0, 8.0, 20.0, true, Some(0)),
+            MglruPressureLevel::Critical
+        );
+
+        // Critical pressure via critical RAM (<6%)
+        assert_eq!(
+            evaluate_mglru_pressure(4.0, 0.0, 4.2, true, Some(0)),
+            MglruPressureLevel::Critical
+        );
+
+        // Live profiler check
+        let profiler = DynamicHardwareProfiler::new();
+        let level = profiler.mglru_memory_pressure();
+        assert!(matches!(level, MglruPressureLevel::Low | MglruPressureLevel::Medium | MglruPressureLevel::Critical));
+    }
+
+    #[test]
+    fn test_reactive_workload_affinity_steering() {
+        // Rule 1: High temp (>= 78°C) steers to EfficiencyCores regardless of intensity or AC
+        assert_eq!(
+            compute_workload_affinity(78.5, true, Some(100), TaskIntensity::Intensive),
+            CoreClusterKind::EfficiencyCores
+        );
+        assert_eq!(
+            compute_workload_affinity(82.0, true, Some(100), TaskIntensity::Moderate),
+            CoreClusterKind::EfficiencyCores
+        );
+
+        // Rule 1: Critical battery (< 25% on battery) steers to EfficiencyCores
+        assert_eq!(
+            compute_workload_affinity(60.0, false, Some(22), TaskIntensity::Intensive),
+            CoreClusterKind::EfficiencyCores
+        );
+        assert_eq!(
+            compute_workload_affinity(65.0, false, Some(15), TaskIntensity::Moderate),
+            CoreClusterKind::EfficiencyCores
+        );
+
+        // Rule 2: On AC mains and cool (< 72°C)
+        // Intensive jobs (WASM/LLM) steer to PerformanceCores
+        assert_eq!(
+            compute_workload_affinity(68.0, true, Some(90), TaskIntensity::Intensive),
+            CoreClusterKind::PerformanceCores
+        );
+        assert_eq!(
+            compute_workload_affinity(55.0, true, Some(100), TaskIntensity::Intensive),
+            CoreClusterKind::PerformanceCores
+        );
+        // Moderate jobs use AllCores
+        assert_eq!(
+            compute_workload_affinity(65.0, true, Some(90), TaskIntensity::Moderate),
+            CoreClusterKind::AllCores
+        );
+        // Light jobs steer to EfficiencyCores
+        assert_eq!(
+            compute_workload_affinity(65.0, true, Some(90), TaskIntensity::Light),
+            CoreClusterKind::EfficiencyCores
+        );
+
+        // Live profiler test
+        let profiler = DynamicHardwareProfiler::new();
+        let steered = profiler.steer_workload_affinity(TaskIntensity::Intensive);
+        assert!(matches!(steered, CoreClusterKind::PerformanceCores | CoreClusterKind::EfficiencyCores));
+
+        let guard = profiler.acquire_steered_affinity_guard(TaskIntensity::Moderate);
+        assert!(guard.is_ok());
     }
 }

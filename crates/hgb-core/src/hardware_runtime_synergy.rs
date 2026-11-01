@@ -341,35 +341,44 @@ impl HardwareRuntimeSynergy {
 
     /// Probe local Ollama server health, measuring live round-trip latency and model count
     pub fn probe_ollama_health(&self, timeout: Duration) -> (bool, u64, usize) {
-        let client = match reqwest::blocking::Client::builder().timeout(timeout).build() {
-            Ok(c) => c,
-            Err(_) => return (false, 0, 0),
+        let endpoint = self.ollama_probe_endpoint.clone();
+        let probe = move || {
+            let client = match reqwest::blocking::Client::builder().timeout(timeout).build() {
+                Ok(c) => c,
+                Err(_) => return (false, 0, 0),
+            };
+
+            let start = Instant::now();
+            let resp = match client.get(&endpoint).send() {
+                Ok(r) => r,
+                Err(_) => return (false, 0, 0),
+            };
+
+            let latency_ms = start.elapsed().as_millis() as u64;
+
+            if !resp.status().is_success() {
+                return (false, latency_ms, 0);
+            }
+
+            let json_body: serde_json::Value = match resp.json() {
+                Ok(v) => v,
+                Err(_) => return (true, latency_ms, 0),
+            };
+
+            let models_count = json_body
+                .get("models")
+                .and_then(|m| m.as_array())
+                .map(|arr| arr.len())
+                .unwrap_or(0);
+
+            (true, latency_ms, models_count)
         };
 
-        let start = Instant::now();
-        let resp = match client.get(&self.ollama_probe_endpoint).send() {
-            Ok(r) => r,
-            Err(_) => return (false, 0, 0),
-        };
-
-        let latency_ms = start.elapsed().as_millis() as u64;
-
-        if !resp.status().is_success() {
-            return (false, latency_ms, 0);
+        if tokio::runtime::Handle::try_current().is_ok() {
+            std::thread::spawn(probe).join().unwrap_or((false, 0, 0))
+        } else {
+            probe()
         }
-
-        let json_body: serde_json::Value = match resp.json() {
-            Ok(v) => v,
-            Err(_) => return (true, latency_ms, 0),
-        };
-
-        let models_count = json_body
-            .get("models")
-            .and_then(|m| m.as_array())
-            .map(|arr| arr.len())
-            .unwrap_or(0);
-
-        (true, latency_ms, models_count)
     }
 
     /// Read Linux sysfs thermal sensor temperatures and calculate TjMax headroom
