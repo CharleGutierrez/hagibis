@@ -1550,6 +1550,17 @@ pub fn read_leb128_u32(bytes: &[u8], offset: &mut usize) -> Result<u32> {
 }
 
 // ============================================================================
+// Pillar 4: Hybrid Zig + Wasm Hot-Reloading Kernels
+// ============================================================================
+
+#[path = "zig_wasm_hot_reloader.rs"]
+pub mod zig_wasm_hot_reloader;
+pub use zig_wasm_hot_reloader::{
+    HotReloadReceipt, ZigWasmHotReloader,
+    MEMORY_LIMIT_16MB_PAGES, MEMORY_LIMIT_32MB_PAGES, MEMORY_LIMIT_64MB_PAGES,
+};
+
+// ============================================================================
 // Comprehensive Unit Tests
 // ============================================================================
 

@@ -146,5 +146,18 @@ pub use hybrid_rag_vector_index::{
     VectorMetric as RagVectorMetric, BM25_B, BM25_K1, DEFAULT_RRF_K, HYBRID_RAG_MAGIC,
 };
 
+// Pillar 1: Vector-Native SQLite & In-Process HNSW Storage
+pub mod vector_native_sqlite_vss;
+pub use vector_native_sqlite_vss::{
+    as_f32_slice as as_vss_f32_slice, cosine_distance as vss_cosine_distance,
+    cosine_similarity as vss_cosine_similarity, decode_blob_into as vss_decode_blob_into,
+    decode_blob_to_vector as vss_decode_blob_to_vector, dot_product as vss_dot_product,
+    encode_vector_to_blob as vss_encode_vector_to_blob, FastRng as VssFastRng,
+    VectorIndexConfig as VssIndexConfig, VectorNativeSearchResult, VectorNativeSqliteStore,
+    VectorRecord as VssVectorRecord, VectorSearchResult as VssSearchResult,
+    VectorStoreStats as VssStoreStats,
+};
+
+
 
 

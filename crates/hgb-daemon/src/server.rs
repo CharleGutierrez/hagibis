@@ -221,6 +221,10 @@ pub struct DaemonState {
     pub distributed_scheduler: Arc<hgb_core::distributed_microvm_scheduler::DistributedMicroVmScheduler>,
     pub wasm_plugin_healer: Arc<hgb_core::autonomous_wasm_plugin_healer::AutonomousWasmPluginHealer>,
     pub dynamic_mcp_registry: Arc<crate::dynamic_mcp_registry::DynamicMcpRegistry>,
+    // Pillar 2: Autonomous Self-Profiling & PGO Feedback Loops
+    pub pgo_feedback: Arc<crate::pgo_feedback_loop::PgoFeedbackLoop>,
+    // Pillar 3: Distributed Firecracker MicroVM Swarms
+    pub microvm_work_stealing_queue: Arc<crate::microvm_work_stealing_queue::MicrovmWorkStealingQueue>,
 }
 
 impl DaemonState {
@@ -486,6 +490,16 @@ impl DaemonState {
             )
         );
 
+        let pgo_feedback = Arc::new(crate::pgo_feedback_loop::PgoFeedbackLoop::new(&ws_dir));
+        let microvm_work_stealing_queue = Arc::new(crate::microvm_work_stealing_queue::MicrovmWorkStealingQueue::new(&ws_dir));
+        {
+            let pgo_clone = Arc::clone(&pgo_feedback);
+            let queue_clone = Arc::clone(&microvm_work_stealing_queue);
+            tokio::spawn(async move {
+                queue_clone.connect_pgo_feedback(pgo_clone).await;
+            });
+        }
+
         Self {
             start_time: std::time::Instant::now(),
             socket_path,
@@ -561,6 +575,8 @@ impl DaemonState {
             distributed_scheduler,
             wasm_plugin_healer,
             dynamic_mcp_registry,
+            pgo_feedback,
+            microvm_work_stealing_queue,
         }
     }
 
@@ -1027,6 +1043,14 @@ impl HagibisDaemon {
         // Start Autonomous Telemetry & Closed-Loop Self-Healing Watchdog
         let _telemetry_watchdog_handle = self.state.governor_watchdog.start_autonomous_telemetry_loop(std::time::Duration::from_secs(5));
         println!("🛡️ Unified Autonomous Telemetry & Self-Healing Watchdog active");
+
+        // Start Pillar 2: Autonomous Self-Profiling & PGO Feedback Loop Engine
+        let _pgo_loop_handle = Arc::clone(&self.state.pgo_feedback).start_monitoring_loop(std::time::Duration::from_secs(5));
+        println!("📈 Autonomous Self-Profiling & PGO Feedback Loop Engine active");
+
+        // Start Pillar 3: Distributed Firecracker MicroVM Swarm Work-Stealing Workers
+        self.state.microvm_work_stealing_queue.start().await;
+        println!("🐝 Distributed Firecracker MicroVM Work-Stealing Swarm active");
 
         // Start Cockpit PWA WebSocket HUD service (/ws/cockpit_hud)
         let hud_port = std::env::var("HGB_COCKPIT_HUD_PORT")
@@ -5351,9 +5375,40 @@ impl HagibisDaemon {
             // Pillar 2: Distributed Multi-Tier Sandboxing via Firecracker & WASM
             HgbRequest::MultiTierSandboxExec { request } => {
                 let _ = state.governor_watchdog.on_queue_active().await;
-                match state.multi_tier_sandbox.execute(&request) {
-                    Ok(outcome) => HgbResponse::MultiTierSandboxResult(outcome),
-                    Err(e) => HgbResponse::Error(format!("Multi-tier sandbox execution failed: {}", e)),
+                // Pillar 3: Route untrusted code through Distributed Firecracker MicroVM Work-Stealing Queue
+                if matches!(request.tier_preference, Some(hgb_core::multi_tier_sandbox::SandboxExecutionTier::Tier2FirecrackerMicroVm)) {
+                    let job_id = format!("job_{}", &uuid::Uuid::new_v4().simple().to_string()[..10]);
+                    let job = crate::microvm_work_stealing_queue::MicrovmJob {
+                        id: job_id,
+                        command: Vec::new(),
+                        code: request.code.clone(),
+                        language: request.language.clone(),
+                        patch_content: None,
+                        working_dir: None,
+                        env_vars: std::collections::HashMap::new(),
+                        timeout_ms: request.timeout_ms,
+                        memory_mb: 256,
+                        vcpu: 2,
+                        priority: 10,
+                        submitted_at: std::time::Instant::now(),
+                        result_tx: None,
+                    };
+                    let result = state.microvm_work_stealing_queue.execute_job_direct(job, 0, false).await;
+                    let outcome = hgb_core::multi_tier_sandbox::SandboxExecutionOutcome {
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                        exit_code: result.exit_code,
+                        tier_used: hgb_core::multi_tier_sandbox::SandboxExecutionTier::Tier2FirecrackerMicroVm,
+                        duration_ms: result.duration_ms,
+                        memory_bytes_used: (result.memory_consumed_mb as u64) * 1024 * 1024,
+                        fuel_consumed: None,
+                    };
+                    HgbResponse::MultiTierSandboxResult(outcome)
+                } else {
+                    match state.multi_tier_sandbox.execute(&request) {
+                        Ok(outcome) => HgbResponse::MultiTierSandboxResult(outcome),
+                        Err(e) => HgbResponse::Error(format!("Multi-tier sandbox execution failed: {}", e)),
+                    }
                 }
             }
         }

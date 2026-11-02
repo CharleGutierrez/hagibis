@@ -1999,6 +1999,20 @@ pub use autonomous_wasm_plugin_healer::{
     MAX_PLUGIN_MEMORY_PAGES_16MB, MAX_PLUGIN_MEMORY_PAGES_32MB,
 };
 
+// Pillar 1: Zero-Copy Shared Memory IPC Fast-Path
+pub mod shm_ipc_fastpath;
+pub use shm_ipc_fastpath::{
+    align_up_64 as shm_ipc_align_up_64, blake3_checksum as shm_ipc_blake3_checksum,
+    crc32_checksum as shm_ipc_crc32_checksum, resolve_shm_path as resolve_fastpath_shm_path,
+    OwnedShmFrame, ShmChannelBiDirHeader, ShmFrame as ShmFastFrame,
+    ShmFrameHeader as ShmFastFrameHeader, ShmIpcFastClient, ShmIpcFastServer, ShmOpCode,
+    ShmRingBuffer as ShmFastRingBuffer, ShmRingControlHeader, DEFAULT_FASTPATH_CAPACITY,
+    FLAG_WRAP as SHM_FASTPATH_FLAG_WRAP, FRAME_HEADER_SIZE as SHM_FASTPATH_FRAME_HEADER_SIZE,
+    RING_CONTROL_SIZE as SHM_FASTPATH_RING_CONTROL_SIZE, SHM_IPC_MAGIC, SHM_IPC_VERSION,
+};
+
+
+
 
 
 

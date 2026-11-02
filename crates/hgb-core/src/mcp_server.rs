@@ -541,6 +541,9 @@ pub const CORE_TOOLS: &[&str] = &[
     "hgb_distributed_scheduler_dispatch",
     "hgb_distributed_node_status",
     "hgb_distributed_node_register",
+    "hgb_mcp_mesh_broadcast",
+    "hgb_mcp_mesh_nodes",
+    "hgb_zig_kernel_hot_reload",
 ];
 
 /// Backward-compatible alias for CORE_TOOLS
@@ -652,6 +655,44 @@ impl HagibisMcpServer {
                         "input_payload": { "type": "string", "description": "Input JSON string or payload" }
                     },
                     "required": ["wasm_path"]
+                }
+            },
+            {
+                "name": "hgb_mcp_mesh_broadcast",
+                "description": "Broadcasts a task, prompt, or context update across all federated models (Ollama, Claude, GPT-4o, Sovereign) in the MCP native mesh",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "title": { "type": "string", "description": "Title or summary of broadcast task" },
+                        "message": { "type": "string", "description": "Context content or instruction to replicate" },
+                        "origin_node_id": { "type": "string", "description": "Optional originator node ID" },
+                        "metadata": { "type": "object", "description": "Optional metadata payload map" }
+                    },
+                    "required": ["title", "message"]
+                }
+            },
+            {
+                "name": "hgb_mcp_mesh_nodes",
+                "description": "Queries active AI model nodes in the federated MCP mesh, their context capacities, real-time latencies, and shared tool registries",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "filter_available": { "type": "boolean", "description": "Filter to only currently available active nodes", "default": true },
+                        "provider": { "type": "string", "description": "Optional provider filter (ollama, anthropic, openai, sovereign)" }
+                    }
+                }
+            },
+            {
+                "name": "hgb_zig_kernel_hot_reload",
+                "description": "Triggers dynamic compilation, bounds validation, and zero-downtime hot-reloading of Zig compute primitives (bpe_tokenizer, cosine_distance, kalman_filter, matrix_vector_product)",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "primitive_name": { "type": "string", "description": "Primitive name (e.g. bpe_tokenizer, cosine_distance, kalman_filter, matrix_vector_product)" },
+                        "zig_source": { "type": "string", "description": "Optional custom Zig source code (uses optimized built-in freestanding Zig template if omitted)" },
+                        "memory_limit_mb": { "type": "integer", "description": "Memory ceiling in MB (16, 32, or 64 MB)", "default": 32 }
+                    },
+                    "required": ["primitive_name"]
                 }
             },
             {

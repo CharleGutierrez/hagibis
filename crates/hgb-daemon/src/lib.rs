@@ -468,3 +468,21 @@ pub use dynamic_mcp_registry::{
     DynamicMcpRegistry, DynamicMcpRegistryReport, DynamicMcpTool,
 };
 
+// Pillar 2: Autonomous Self-Profiling & PGO Feedback Loops
+pub mod pgo_feedback_loop;
+pub use pgo_feedback_loop::{
+    HardwareGovernorSynergy, HardwareProfileTelemetry, LatencyPercentiles,
+    PgoFeedbackLoop, PgoFeedbackStatusReport, PgoHotspotSnapshot, PgoTriggerReport,
+    TokenStreamStats, ToolCallStats, DEFAULT_HOTSPOT_TOOL_CALL_THRESHOLD,
+    DEFAULT_LATENCY_SLA_P99_THRESHOLD_MS, DEFAULT_PGO_COOLDOWN_SECS,
+    THERMAL_THROTTLE_TEMP_C, THERMAL_CRITICAL_TEMP_C,
+    BATTERY_DISCHARGE_CRITICAL_PCT, BURST_MGLRU_MIN_TTL_MS, IDLE_MGLRU_MIN_TTL_MS,
+};
+
+// Pillar 3: Distributed Firecracker MicroVM Swarms
+pub mod microvm_work_stealing_queue;
+pub use microvm_work_stealing_queue::{
+    MicrovmJob, MicrovmJobResult, MicrovmQueueStatus, MicrovmWorkStealingQueue,
+    WorkStealingQueue, DEFAULT_MAX_SPINUP_TARGET_MS,
+};
+

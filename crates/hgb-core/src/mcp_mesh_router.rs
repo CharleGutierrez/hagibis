@@ -693,6 +693,19 @@ impl DistributedMcpMeshRouter {
     }
 }
 
+// ============================================================================
+// Pillar 5: Advanced MCP Native Mesh
+// ============================================================================
+
+#[path = "mcp_multi_model_mesh.rs"]
+pub mod mcp_multi_model_mesh;
+pub use mcp_multi_model_mesh::{
+    McpMeshEvent, McpMeshEventType, McpMultiModelMeshRouter, MeshBroadcastReport,
+    MeshNodeDescriptor, MeshRoutingDecision as MultiModelMeshRoutingDecision,
+    MeshTaskRequirement, MeshToolDescriptor, MeshToolExecutionRequest,
+    MeshToolExecutionResponse, ModelProvider, ModelTier, SharedStateEntry,
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
