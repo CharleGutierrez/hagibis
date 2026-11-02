@@ -175,6 +175,7 @@ pub mod store_release_orchestrator;
 pub mod speech_synthesis_engine;
 pub mod visual_canvas_studio;
 
+
 pub use ci_streamer::{
     CiEventKind, CiExecutionConfig, CiExecutionSummary, CiOutputFormat, CiStreamerEngine,
 };
@@ -2010,6 +2011,36 @@ pub use shm_ipc_fastpath::{
     FLAG_WRAP as SHM_FASTPATH_FLAG_WRAP, FRAME_HEADER_SIZE as SHM_FASTPATH_FRAME_HEADER_SIZE,
     RING_CONTROL_SIZE as SHM_FASTPATH_RING_CONTROL_SIZE, SHM_IPC_MAGIC, SHM_IPC_VERSION,
 };
+
+// Pillar 1: Unified Zero-Copy Memory Bus
+pub mod zero_copy_memory_bus;
+pub use zero_copy_memory_bus::{
+    blake3_checksum as membus_blake3_checksum, crc32_checksum as membus_crc32_checksum,
+    current_epoch_ms as membus_current_epoch_ms, CacheAligned as MembusCacheAligned,
+    MemoryBusEnvelope, MemoryBusFrameHeader, MemoryBusRecord, MemoryBusSlot, MemoryBusStatus,
+    ZeroCopyMemoryBus, DEFAULT_BROADCAST_CAPACITY as MEMBUS_DEFAULT_BROADCAST_CAPACITY,
+    DEFAULT_BUS_CAPACITY, FLAG_HAS_EMBEDDING as MEMBUS_FLAG_HAS_EMBEDDING,
+    FLAG_HAS_TTL as MEMBUS_FLAG_HAS_TTL, FLAG_PERSISTED as MEMBUS_FLAG_PERSISTED,
+    FRAME_HEADER_SIZE as MEMBUS_FRAME_HEADER_SIZE, MEMORY_BUS_MAGIC, MEMORY_BUS_VERSION,
+};
+
+// Pillar 2: Dynamic Wasm Kernel Hot-Swapping
+pub mod dynamic_wasm_wit_loader;
+pub use dynamic_wasm_wit_loader::{
+    DynamicToolAttestation, DynamicToolInvocationReport, DynamicWasmWitLoader,
+    DEFAULT_DYNAMIC_TOOL_FUEL_LIMIT, DEFAULT_DYNAMIC_TOOL_MAX_PAGES,
+};
+
+// Pillar 3: Native Rust Autonomous Agent Loops
+pub mod native_autonomous_agent_loop;
+pub use native_autonomous_agent_loop::{
+    AutonomousConsensusCertificate, AutonomousExecutionTier, CandidateOutput,
+    NativeAutonomousLoopEngine, NativeAutonomousLoopReport, ReflectionVerdict,
+    SelfReflectionGate, TokenBudgetStatus, TokenBudgetTracker, ToolFallbackOutcome,
+    ToolSelectionFallbackEngine, DEFAULT_TOKEN_HARD_CUTOFF_PCT,
+    DEFAULT_TOKEN_WARN_THRESHOLD_PCT, HIGH_TOKEN_BURN_RATE_THRESHOLD,
+};
+
 
 
 

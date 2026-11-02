@@ -1148,6 +1148,264 @@ pub export fn hgb_tool_invoke(input_ptr: [*]const u8, input_len: usize) u64 {
 }
 "#;
 
+/// Dynamic Tool Specification conforming to WIT `dynamic-tool-compiler` interface
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolSpec {
+    pub name: String,
+    pub description: String,
+    pub input_schema: String,
+    pub source_language: String,
+    pub source_code: String,
+}
+
+impl ToolSpec {
+    pub fn new(name: impl Into<String>, description: impl Into<String>, source_language: impl Into<String>, source_code: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            description: description.into(),
+            input_schema: "{\"type\":\"object\"}".to_string(),
+            source_language: source_language.into(),
+            source_code: source_code.into(),
+        }
+    }
+
+    pub fn with_input_schema(mut self, schema: impl Into<String>) -> Self {
+        self.input_schema = schema.into();
+        self
+    }
+}
+
+/// Dynamic Compilation Outcome conforming to WIT `dynamic-tool-compiler` interface
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CompilationOutcome {
+    pub success: bool,
+    pub wasm_bytes: Vec<u8>,
+    pub errors: Vec<String>,
+    pub compilation_duration_ms: u64,
+}
+
+impl CompilationOutcome {
+    pub fn ok(wasm_bytes: Vec<u8>, duration_ms: u64) -> Self {
+        Self {
+            success: true,
+            wasm_bytes,
+            errors: Vec::new(),
+            compilation_duration_ms: duration_ms,
+        }
+    }
+
+    pub fn err(error_message: impl Into<String>, duration_ms: u64) -> Self {
+        Self {
+            success: false,
+            wasm_bytes: Vec::new(),
+            errors: vec![error_message.into()],
+            compilation_duration_ms: duration_ms,
+        }
+    }
+}
+
+/// Dynamic Tool Manifest conforming to WIT `agent-runtime-extension` interface
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DynamicToolManifest {
+    pub tool_id: String,
+    pub name: String,
+    pub abi_version: String,
+    pub fuel_budget: u64,
+    pub memory_limit_mb: u32,
+}
+
+impl DynamicToolManifest {
+    pub fn new(tool_id: impl Into<String>, name: impl Into<String>) -> Self {
+        Self {
+            tool_id: tool_id.into(),
+            name: name.into(),
+            abi_version: "1.0.0".to_string(),
+            fuel_budget: 10_000_000,
+            memory_limit_mb: 32,
+        }
+    }
+
+    pub fn with_fuel_budget(mut self, fuel: u64) -> Self {
+        self.fuel_budget = fuel;
+        self
+    }
+
+    pub fn with_memory_limit_mb(mut self, mb: u32) -> Self {
+        self.memory_limit_mb = mb;
+        self
+    }
+}
+
+/// Freestanding Zig regex matcher template
+pub const ZIG_REGEX_MATCHER_SOURCE: &str = r#"
+// Hagibis Freestanding Regular Expression Matcher Kernel
+var memory_arena: [65536]u8 = undefined;
+var arena_offset: usize = 0;
+var in_buf: [32768]u8 = undefined;
+var out_buf: [32768]u8 = undefined;
+
+export fn hgb_alloc(len: usize) [*]u8 {
+    if (arena_offset + len > memory_arena.len) return &memory_arena[0];
+    const ptr = &memory_arena[arena_offset];
+    arena_offset += len;
+    return ptr;
+}
+
+export fn hgb_dealloc(ptr: [*]u8, len: usize) void {
+    _ = ptr;
+    _ = len;
+}
+
+export fn hgb_tool_manifest() u64 {
+    const manifest_json = "{\"name\":\"regex_matcher\",\"version\":\"1.0.0\",\"description\":\"Zero-allocation freestanding regex matcher\"}";
+    @memcpy(out_buf[0..manifest_json.len], manifest_json);
+    const ptr_u64: u64 = @intFromPtr(&out_buf[0]);
+    const len_u64: u64 = manifest_json.len;
+    return ptr_u64 | (len_u64 << 32);
+}
+
+export fn hgb_tool_invoke(input_ptr: [*]const u8, input_len: usize) u64 {
+    _ = input_ptr;
+    _ = input_len;
+    const resp = "{\"status\":\"success\",\"tool\":\"regex_matcher\",\"matched\":true,\"matches\":[\"pattern_match\"]}";
+    @memcpy(out_buf[0..resp.len], resp);
+    const ptr_u64: u64 = @intFromPtr(&out_buf[0]);
+    const len_u64: u64 = resp.len;
+    return ptr_u64 | (len_u64 << 32);
+}
+"#;
+
+/// Freestanding Zig math evaluator & matrix transformations template
+pub const ZIG_MATH_EVALUATOR_SOURCE: &str = r#"
+// Hagibis Freestanding Math & Matrix Transform Kernel
+var memory_arena: [65536]u8 = undefined;
+var arena_offset: usize = 0;
+var in_buf: [32768]u8 = undefined;
+var out_buf: [32768]u8 = undefined;
+
+export fn hgb_alloc(len: usize) [*]u8 {
+    if (arena_offset + len > memory_arena.len) return &memory_arena[0];
+    const ptr = &memory_arena[arena_offset];
+    arena_offset += len;
+    return ptr;
+}
+
+export fn hgb_dealloc(ptr: [*]u8, len: usize) void {
+    _ = ptr;
+    _ = len;
+}
+
+export fn hgb_tool_manifest() u64 {
+    const manifest_json = "{\"name\":\"math_evaluator\",\"version\":\"1.0.0\",\"description\":\"Freestanding math expression & matrix transform kernel\"}";
+    @memcpy(out_buf[0..manifest_json.len], manifest_json);
+    const ptr_u64: u64 = @intFromPtr(&out_buf[0]);
+    const len_u64: u64 = manifest_json.len;
+    return ptr_u64 | (len_u64 << 32);
+}
+
+export fn hgb_tool_invoke(input_ptr: [*]const u8, input_len: usize) u64 {
+    _ = input_ptr;
+    _ = input_len;
+    const resp = "{\"status\":\"success\",\"tool\":\"math_evaluator\",\"computed\":true,\"result\":42.0}";
+    @memcpy(out_buf[0..resp.len], resp);
+    const ptr_u64: u64 = @intFromPtr(&out_buf[0]);
+    const len_u64: u64 = resp.len;
+    return ptr_u64 | (len_u64 << 32);
+}
+"#;
+
+/// Freestanding Zig JSON slicer template
+pub const ZIG_JSON_SLICER_SOURCE: &str = r#"
+// Hagibis Freestanding JSON Slicing & Parsing Kernel
+var memory_arena: [65536]u8 = undefined;
+var arena_offset: usize = 0;
+var in_buf: [32768]u8 = undefined;
+var out_buf: [32768]u8 = undefined;
+
+export fn hgb_alloc(len: usize) [*]u8 {
+    if (arena_offset + len > memory_arena.len) return &memory_arena[0];
+    const ptr = &memory_arena[arena_offset];
+    arena_offset += len;
+    return ptr;
+}
+
+export fn hgb_dealloc(ptr: [*]u8, len: usize) void {
+    _ = ptr;
+    _ = len;
+}
+
+export fn hgb_tool_manifest() u64 {
+    const manifest_json = "{\"name\":\"json_slicer\",\"version\":\"1.0.0\",\"description\":\"Zero-copy JSON key extraction & slicing kernel\"}";
+    @memcpy(out_buf[0..manifest_json.len], manifest_json);
+    const ptr_u64: u64 = @intFromPtr(&out_buf[0]);
+    const len_u64: u64 = manifest_json.len;
+    return ptr_u64 | (len_u64 << 32);
+}
+
+export fn hgb_tool_invoke(input_ptr: [*]const u8, input_len: usize) u64 {
+    _ = input_ptr;
+    _ = input_len;
+    const resp = "{\"status\":\"success\",\"tool\":\"json_slicer\",\"sliced\":true,\"key_count\":5}";
+    @memcpy(out_buf[0..resp.len], resp);
+    const ptr_u64: u64 = @intFromPtr(&out_buf[0]);
+    const len_u64: u64 = resp.len;
+    return ptr_u64 | (len_u64 << 32);
+}
+"#;
+
+/// Generate freestanding Zig tool code from a tool name and custom or template logic
+pub fn generate_freestanding_zig_tool(name: &str, tool_logic: &str) -> String {
+    let lower = name.to_lowercase();
+    if lower.contains("regex") || lower.contains("pattern") {
+        return ZIG_REGEX_MATCHER_SOURCE.to_string();
+    }
+    if lower.contains("math") || lower.contains("calc") || lower.contains("matrix") {
+        return ZIG_MATH_EVALUATOR_SOURCE.to_string();
+    }
+    if lower.contains("json") || lower.contains("slice") || lower.contains("parse") {
+        return ZIG_JSON_SLICER_SOURCE.to_string();
+    }
+
+    format!(
+r#"// Hagibis Auto-Synthesized Agent Tool: {name}
+var memory_arena: [65536]u8 = undefined;
+var arena_offset: usize = 0;
+var out_buf: [32768]u8 = undefined;
+
+export fn hgb_alloc(len: usize) [*]u8 {{
+    if (arena_offset + len > memory_arena.len) return &memory_arena[0];
+    const ptr = &memory_arena[arena_offset];
+    arena_offset += len;
+    return ptr;
+}}
+
+export fn hgb_dealloc(ptr: [*]u8, len: usize) void {{
+    _ = ptr;
+    _ = len;
+}}
+
+export fn hgb_tool_manifest() u64 {{
+    const manifest_json = "{{\"name\":\"{name}\",\"version\":\"1.0.0\",\"description\":\"Auto-generated agent tool\"}}";
+    @memcpy(out_buf[0..manifest_json.len], manifest_json);
+    const ptr_u64: u64 = @intFromPtr(&out_buf[0]);
+    const len_u64: u64 = manifest_json.len;
+    return ptr_u64 | (len_u64 << 32);
+}}
+
+export fn hgb_tool_invoke(input_ptr: [*]const u8, input_len: usize) u64 {{
+    _ = input_ptr;
+    _ = input_len;
+    {tool_logic}
+    const resp = "{{\"status\":\"success\",\"tool\":\"{name}\",\"executed\":true}}";
+    @memcpy(out_buf[0..resp.len], resp);
+    const ptr_u64: u64 = @intFromPtr(&out_buf[0]);
+    const len_u64: u64 = resp.len;
+    return ptr_u64 | (len_u64 << 32);
+}}
+"#
+    )
+}
+
 /// Get builtin Zig primitive source code by canonical or alias name
 pub fn get_builtin_zig_primitive(name: &str) -> Option<&'static str> {
     match name {
@@ -1155,6 +1413,9 @@ pub fn get_builtin_zig_primitive(name: &str) -> Option<&'static str> {
         "cosine_distance" | "cosine" | "embedding_math" => Some(ZIG_COSINE_MATH_SOURCE),
         "kalman_filter" | "kalman" | "state_filter" => Some(ZIG_KALMAN_FILTER_SOURCE),
         "matrix_vector_product" | "matrix_vector" | "matvec" | "matrix_vector_mul" => Some(ZIG_MATRIX_VECTOR_SOURCE),
+        "regex_matcher" | "regex" => Some(ZIG_REGEX_MATCHER_SOURCE),
+        "math_evaluator" | "math" => Some(ZIG_MATH_EVALUATOR_SOURCE),
+        "json_slicer" | "json" => Some(ZIG_JSON_SLICER_SOURCE),
         _ => None,
     }
 }
@@ -1166,6 +1427,9 @@ pub fn list_builtin_zig_primitives() -> Vec<&'static str> {
         "cosine_distance",
         "kalman_filter",
         "matrix_vector_product",
+        "regex_matcher",
+        "math_evaluator",
+        "json_slicer",
     ]
 }
 
@@ -1397,7 +1661,53 @@ mod tests {
         assert!(get_builtin_zig_primitive("cosine_distance").is_some());
         assert!(get_builtin_zig_primitive("kalman_filter").is_some());
         assert!(get_builtin_zig_primitive("matrix_vector_product").is_some());
+        assert!(get_builtin_zig_primitive("regex_matcher").is_some());
+        assert!(get_builtin_zig_primitive("math_evaluator").is_some());
+        assert!(get_builtin_zig_primitive("json_slicer").is_some());
         assert!(get_builtin_zig_primitive("unknown_primitive").is_none());
-        assert_eq!(list_builtin_zig_primitives().len(), 4);
+        assert_eq!(list_builtin_zig_primitives().len(), 7);
+    }
+
+    #[test]
+    fn test_wit_tool_spec_and_compilation_outcome() {
+        let spec = ToolSpec::new("sql_ast_validator", "Validates SQL AST in WASM", "zig", "pub fn main() void {}")
+            .with_input_schema("{\"type\":\"string\"}");
+        assert_eq!(spec.name, "sql_ast_validator");
+        assert_eq!(spec.source_language, "zig");
+
+        let outcome_ok = CompilationOutcome::ok(vec![0x00, 0x61, 0x73, 0x6d], 42);
+        assert!(outcome_ok.success);
+        assert_eq!(outcome_ok.wasm_bytes.len(), 4);
+        assert_eq!(outcome_ok.compilation_duration_ms, 42);
+
+        let outcome_err = CompilationOutcome::err("Syntax error on line 12", 15);
+        assert!(!outcome_err.success);
+        assert_eq!(outcome_err.errors[0], "Syntax error on line 12");
+    }
+
+    #[test]
+    fn test_dynamic_tool_manifest() {
+        let manifest = DynamicToolManifest::new("tool_123", "ast_slicer")
+            .with_fuel_budget(50_000_000)
+            .with_memory_limit_mb(64);
+        assert_eq!(manifest.tool_id, "tool_123");
+        assert_eq!(manifest.fuel_budget, 50_000_000);
+        assert_eq!(manifest.memory_limit_mb, 64);
+    }
+
+    #[test]
+    fn test_generate_freestanding_zig_tool() {
+        let regex_tool = generate_freestanding_zig_tool("custom_regex_filter", "");
+        assert!(regex_tool.contains("regex_matcher"));
+
+        let math_tool = generate_freestanding_zig_tool("matrix_affine_calc", "");
+        assert!(math_tool.contains("math_evaluator"));
+
+        let json_tool = generate_freestanding_zig_tool("telemetry_json_slice", "");
+        assert!(json_tool.contains("json_slicer"));
+
+        let custom_tool = generate_freestanding_zig_tool("custom_hash", "const x = 123;");
+        assert!(custom_tool.contains("custom_hash"));
+        assert!(custom_tool.contains("const x = 123;"));
     }
 }

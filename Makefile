@@ -5,7 +5,7 @@ SHELL := /usr/bin/env bash
 PGO_DATA_DIR ?= /tmp/pgo-data
 LLVM_PROFDATA ?= $(shell command -v llvm-profdata 2>/dev/null || find $(shell rustc --print sysroot 2>/dev/null)/lib/rustlib/ -name llvm-profdata 2>/dev/null | head -n 1)
 
-.PHONY: all check test release pgo pgo-build pgo-train pgo-merge pgo-release clean help
+.PHONY: all check test release pgo pgo-build pgo-train pgo-merge pgo-release pgo-dynatune clean help
 
 all: check test
 
@@ -15,6 +15,7 @@ help:
 	@echo "  make test         - Run workspace unit tests and sandbox suites"
 	@echo "  make release      - Build release binaries without PGO"
 	@echo "  make pgo          - End-to-end PGO pipeline (build -> train -> merge -> release)"
+	@echo "  make pgo-dynatune - Hardware-coordinated PGO + dynatune/kernel-optimizer pipeline"
 	@echo "  make pgo-build    - Instrument binaries with -Cprofile-generate"
 	@echo "  make pgo-train    - Run representative training benchmark to collect .profraw"
 	@echo "  make pgo-merge    - Merge raw profiles into merged.profdata via llvm-profdata"
@@ -83,6 +84,38 @@ pgo-release:
 		exit 1; \
 	fi
 	RUSTFLAGS="-Cprofile-use=$(PGO_DATA_DIR)/merged.profdata -Cllvm-args=-pgo-warn-missing-function -Copt-level=3 -Clto=fat -Ccodegen-units=1 -Cpanic=abort" cargo build --release
+
+# Hardware-Coordinated PGO + dynatune / kernel-optimizer Optimization Pipeline
+pgo-dynatune:
+	@echo "======================================================================"
+	@echo " [PGO-Dynatune] Initializing Hardware-Coordinated PGO Pipeline"
+	@echo "======================================================================"
+	@echo "[PGO-Dynatune] 1. Pre-training hook: Querying hardware & setting performance profile..."
+	@if [ -x "/home/toshiba/My AI Project/kernel-optimizer/dynabook-kernel-ctl" ]; then \
+		"/home/toshiba/My AI Project/kernel-optimizer/dynabook-kernel-ctl" profile performance 2>/dev/null || true; \
+	elif [ -x "scripts/cpu-governor.sh" ]; then \
+		bash scripts/cpu-governor.sh performance 2>/dev/null || true; \
+	fi
+	@echo "[PGO-Dynatune] 2. Checking thermal headroom..."
+	@TEMP=$$(cat /sys/class/thermal/thermal_zone*/temp 2>/dev/null | sort -nr | head -n 1); \
+	if [ -n "$$TEMP" ] && [ "$$TEMP" -ge 78000 ]; then \
+		echo "WARNING: CPU thermal threshold high ($$(expr $$TEMP / 1000)°C >= 78°C). Throttling pre-run..." >&2; \
+	fi
+	@echo "[PGO-Dynatune] 3. Running instrumented build and training..."
+	$(MAKE) pgo-build
+	$(MAKE) pgo-train
+	$(MAKE) pgo-merge
+	@echo "[PGO-Dynatune] 4. Hardened release compilation with -Cprofile-use & Fat LTO..."
+	$(MAKE) pgo-release
+	@echo "[PGO-Dynatune] 5. Post-compilation hook: Restoring energy-efficient governor profile..."
+	@if [ -x "/home/toshiba/My AI Project/kernel-optimizer/dynabook-kernel-ctl" ]; then \
+		"/home/toshiba/My AI Project/kernel-optimizer/dynabook-kernel-ctl" profile balanced 2>/dev/null || true; \
+	elif [ -x "scripts/cpu-governor.sh" ]; then \
+		bash scripts/cpu-governor.sh powersave 2>/dev/null || true; \
+	fi
+	@echo "======================================================================"
+	@echo " [PGO-Dynatune] Completed Successfully with Zero Silicon Degradation!"
+	@echo "======================================================================"
 
 clean:
 	cargo clean

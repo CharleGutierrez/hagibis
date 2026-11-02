@@ -158,6 +158,183 @@ pub use vector_native_sqlite_vss::{
     VectorStoreStats as VssStoreStats,
 };
 
+// ============================================================================
+// Pillar 1: Unified Zero-Copy Memory Bus & SQLite Hot-Path Cache
+// ============================================================================
+
+pub use hgb_core::zero_copy_memory_bus::{
+    MemoryBusEnvelope, MemoryBusFrameHeader, MemoryBusRecord, MemoryBusStatus, ZeroCopyMemoryBus,
+    DEFAULT_BUS_CAPACITY, MEMORY_BUS_MAGIC, MEMORY_BUS_VERSION,
+};
+
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use hgb_core::Result;
+
+/// Telemetry metrics for hot-path cache preceding SQLite reads
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MemoryBusCacheStats {
+    pub hits: u64,
+    pub misses: u64,
+    pub hit_ratio: f64,
+    pub total_operations: u64,
+    pub hot_path_keys_count: usize,
+    pub capacity: usize,
+}
+
+/// Unified in-memory hot-path cache wired ahead of persistent SQLite storage.
+///
+/// Bypasses disk I/O on hot-path memory lookups (<10us latency), automatically populates
+/// cache on miss from SQLite disk, and provides asynchronous write-behind persistence.
+pub struct ZeroCopySqliteStore {
+    bus: Arc<ZeroCopyMemoryBus>,
+    db_path: PathBuf,
+    cache_hits: AtomicU64,
+    cache_misses: AtomicU64,
+}
+
+impl ZeroCopySqliteStore {
+    /// Initialize with SQLite persistence file path and ring buffer capacity
+    pub fn new<P: AsRef<Path>>(db_path: P, capacity: usize) -> Result<Self> {
+        let path = db_path.as_ref().to_path_buf();
+        let cap = if capacity == 0 { DEFAULT_BUS_CAPACITY } else { capacity };
+        let bus = Arc::new(ZeroCopyMemoryBus::with_sqlite_persistence(cap, &path)?);
+        Ok(Self {
+            bus,
+            db_path: path,
+            cache_hits: AtomicU64::new(0),
+            cache_misses: AtomicU64::new(0),
+        })
+    }
+
+    /// Wrap an existing shared ZeroCopyMemoryBus instance
+    pub fn with_bus<P: AsRef<Path>>(bus: Arc<ZeroCopyMemoryBus>, db_path: P) -> Result<Self> {
+        let path = db_path.as_ref().to_path_buf();
+        Ok(Self {
+            bus,
+            db_path: path,
+            cache_hits: AtomicU64::new(0),
+            cache_misses: AtomicU64::new(0),
+        })
+    }
+
+    /// Access reference to the underlying ZeroCopyMemoryBus
+    pub fn bus(&self) -> &Arc<ZeroCopyMemoryBus> {
+        &self.bus
+    }
+
+    /// Path to persistent SQLite database
+    pub fn db_path(&self) -> &Path {
+        &self.db_path
+    }
+
+    /// Read hot-path memory record. Checks in-memory lock-free bus first (<10us, 0 disk I/O).
+    /// If cache miss, queries SQLite disk storage and populates in-memory hot-path cache.
+    pub fn get(&self, memory_key: &str) -> Result<Option<MemoryBusRecord>> {
+        // 1. Hot-path DRAM check
+        if let Some(record) = self.bus.get_hot_path(memory_key) {
+            self.cache_hits.fetch_add(1, Ordering::Relaxed);
+            return Ok(Some(record));
+        }
+
+        // 2. Cache miss -> query SQLite disk
+        self.cache_misses.fetch_add(1, Ordering::Relaxed);
+        if let Some(disk_record) = self.bus.query_sqlite_record(memory_key)? {
+            // Warm the in-memory cache so subsequent queries hit the hot path
+            let _ = self.bus.publish_record(disk_record.clone());
+            return Ok(Some(disk_record));
+        }
+
+        Ok(None)
+    }
+
+    /// Store a memory record. Publishes to the zero-copy memory bus immediately (hot-path sub-10us),
+    /// which asynchronously drains to SQLite via write-behind persistence.
+    pub fn put(&self, record: MemoryBusRecord) -> Result<u64> {
+        self.bus.publish_record(record)
+    }
+
+    /// Retrieve session timeline. Checks in-memory hot path first, falling back to disk if needed.
+    pub fn get_session_timeline(&self, session_id: &str) -> Result<Vec<MemoryBusRecord>> {
+        let in_memory_timeline = self.bus.get_session_timeline(session_id);
+        if !in_memory_timeline.is_empty() {
+            return Ok(in_memory_timeline);
+        }
+        self.bus.query_sqlite_session_timeline(session_id)
+    }
+
+    /// Trigger synchronous checkpoint flush to SQLite disk
+    pub fn flush_checkpoint(&self) -> Result<usize> {
+        self.bus.flush_checkpoint()
+    }
+
+    /// Telemetry metrics for hot-path cache
+    pub fn stats(&self) -> MemoryBusCacheStats {
+        let hits = self.cache_hits.load(Ordering::Relaxed);
+        let misses = self.cache_misses.load(Ordering::Relaxed);
+        let total = hits + misses;
+        let hit_ratio = if total > 0 {
+            hits as f64 / total as f64
+        } else {
+            0.0
+        };
+        let bus_status: MemoryBusStatus = self.bus.status();
+
+        MemoryBusCacheStats {
+            hits,
+            misses,
+            hit_ratio,
+            total_operations: total,
+            hot_path_keys_count: bus_status.hot_path_keys_count,
+            capacity: bus_status.capacity,
+        }
+    }
+}
+
+/// Type alias for backward compatibility and ergonomic naming
+pub type CachedSqliteMemoryStore = ZeroCopySqliteStore;
+
+#[cfg(test)]
+mod zero_copy_store_tests {
+    use super::*;
+
+    #[test]
+    fn test_zero_copy_sqlite_store_cache_layer() {
+        let db_path = std::env::temp_dir().join(format!(
+            "hgb_zero_copy_storage_{}.db",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+
+        let store = ZeroCopySqliteStore::new(&db_path, 256).expect("store init");
+
+        let rec = MemoryBusRecord::new("sess-hgb", "agent.pref", b"vibe_coding".to_vec())
+            .with_step_index(10);
+        let seq = store.put(rec).expect("put");
+        assert_eq!(seq, 1);
+
+        // Immediate read: Cache hit in DRAM
+        let hit = store.get("agent.pref").expect("get").expect("record exists");
+        assert_eq!(hit.payload, b"vibe_coding");
+        assert_eq!(store.stats().hits, 1);
+        assert_eq!(store.stats().misses, 0);
+
+        // Flush checkpoint to SQLite disk
+        let flushed = store.flush_checkpoint().expect("flush");
+        assert!(flushed >= 1);
+
+        // Miss check
+        assert!(store.get("unknown.key").expect("get").is_none());
+        assert_eq!(store.stats().misses, 1);
+
+        let _ = std::fs::remove_file(db_path);
+    }
+}
+
+
 
 
 

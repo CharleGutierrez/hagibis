@@ -641,9 +641,32 @@ impl PgoFeedbackLoop {
     }
 
     /// Record telemetry for LLM token streaming (tokens count and stream chunk latency)
+    /// Automatically applies hardware boost and MGLRU compaction when burn rate >= 80 tok/s,
+    /// with strict thermal clamping at >= 78°C.
     pub async fn record_token_streaming(&self, tokens: usize, duration_ms: f64) {
-        let mut stats = self.token_telemetry.write().await;
-        stats.record(tokens, duration_ms);
+        let burn_rate = if duration_ms > 0.0 {
+            (tokens as f64) / (duration_ms / 1000.0)
+        } else {
+            0.0
+        };
+
+        {
+            let mut stats = self.token_telemetry.write().await;
+            stats.record(tokens, duration_ms);
+        }
+
+        // Hardware-Coordinated Thermal & Governor Binding:
+        // Proactively boost CPU and configure MGLRU when token burn rate >= 80 tokens/sec
+        if burn_rate >= 80.0 {
+            let temp_c = self.hardware_synergy.read_cpu_temp_c().await;
+            let (battery_pct, is_discharging) = self.hardware_synergy.read_battery_state().await;
+
+            if temp_c >= THERMAL_THROTTLE_TEMP_C || (is_discharging && battery_pct <= BATTERY_DISCHARGE_CRITICAL_PCT) {
+                let _ = self.hardware_synergy.set_thermal_warning(temp_c, battery_pct, is_discharging).await;
+            } else {
+                let _ = self.hardware_synergy.set_heavy_workload_boost().await;
+            }
+        }
     }
 
     /// Record an execution latency sample in milliseconds

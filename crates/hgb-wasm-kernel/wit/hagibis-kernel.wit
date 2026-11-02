@@ -179,10 +179,48 @@ interface dynamic-component-plugin {
     unload-plugin: func(plugin-name: string) -> result<bool, string>;
 }
 
+/// Dynamic Agent Tool Compiler Interface (Pillar 2: Dynamic Wasm Kernel Hot-Swapping)
+interface dynamic-tool-compiler {
+    record tool-spec {
+        name: string,
+        description: string,
+        input-schema: string,
+        source-language: string,
+        source-code: string,
+    }
+
+    record compilation-outcome {
+        success: bool,
+        wasm-bytes: list<u8>,
+        errors: list<string>,
+        compilation-duration-ms: u64,
+    }
+
+    /// Compile agent tool snippet dynamically to WebAssembly component / module bytecode
+    compile-tool-snippet: func(spec: tool-spec) -> result<compilation-outcome, string>;
+}
+
+/// Agent Runtime Extension Interface (Pillar 2: Dynamic Wasm Kernel Hot-Swapping)
+interface agent-runtime-extension {
+    record dynamic-tool-manifest {
+        tool-id: string,
+        name: string,
+        abi-version: string,
+        fuel-budget: u64,
+        memory-limit-mb: u32,
+    }
+
+    /// Invoke dynamically hot-loaded agent tool inside sandboxed linear memory store
+    invoke-dynamic-tool: func(tool-id: string, function-name: string, payload: list<u8>) -> result<list<u8>, string>;
+}
+
 world hagibis-wasm-engine {
     export state-sync;
     export executor;
     export zero-copy-ipc;
     export wasi-nn;
     export dynamic-component-plugin;
+    export dynamic-tool-compiler;
+    export agent-runtime-extension;
 }
+
