@@ -3823,12 +3823,13 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
         state.add_node(node3);
 
         if headless {
-            println!("{}", "🎛️ Hagibis Interactive Cockpit (Headless Mode) 🎛️".bold().cyan());
-            let buffer = state.render_headless(100, 30);
-            println!("  ✔ Rendered virtual TUI buffer ({} cells)", buffer.content.len());
+            println!("{}", "🎛️ Hagibis Interactive Cockpit TUI (Headless Mode) 🎛️".bold().cyan());
+            let mut tui_state = hgb_cli::cockpit_tui::CockpitTuiState::new();
+            let rendered = tui_state.render_headless(120, 35);
+            println!("{}", rendered);
             return Ok(());
         } else {
-            return hgb_nextgen::cockpit::CockpitApp::run().await;
+            return hgb_cli::cockpit_tui::run_cockpit_tui().await;
         }
     }
 

@@ -462,7 +462,9 @@ pub use autonomous_daemon_loop::{
     AutonomousDaemonLoopService, AutonomousDaemonLoopStatusReport, AutonomousDaemonRequest,
 };
 
-
-
-
+// Enhancement 4: Dynamic MCP Plugin Registry
+pub mod dynamic_mcp_registry;
+pub use dynamic_mcp_registry::{
+    DynamicMcpRegistry, DynamicMcpRegistryReport, DynamicMcpTool,
+};
 

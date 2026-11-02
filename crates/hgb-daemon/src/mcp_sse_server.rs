@@ -153,6 +153,7 @@ pub struct McpSseState {
     pub mcp_server: Arc<HagibisMcpServer>,
     pub port: u16,
     pub auth_token: String,
+    pub dynamic_registry: Arc<std::sync::RwLock<Option<Arc<crate::dynamic_mcp_registry::DynamicMcpRegistry>>>>,
 }
 
 impl McpSseState {
@@ -172,7 +173,18 @@ impl McpSseState {
             mcp_server: Arc::new(HagibisMcpServer::new(ws)),
             port,
             auth_token: auth_token.into(),
+            dynamic_registry: Arc::new(std::sync::RwLock::new(None)),
         }
+    }
+
+    pub async fn set_dynamic_registry(&self, reg: Arc<crate::dynamic_mcp_registry::DynamicMcpRegistry>) {
+        let mut guard = self.dynamic_registry.write().unwrap();
+        *guard = Some(reg);
+    }
+
+    pub fn set_dynamic_registry_sync(&self, reg: Arc<crate::dynamic_mcp_registry::DynamicMcpRegistry>) {
+        let mut guard = self.dynamic_registry.write().unwrap();
+        *guard = Some(reg);
     }
 
     /// Emit an SSE event to a specific session
@@ -229,6 +241,35 @@ impl McpSseServer {
     /// Launch the background MCP SSE HTTP server on localhost (127.0.0.1)
     pub async fn spawn_background(workspace_root: PathBuf, port: u16) -> tokio::task::JoinHandle<()> {
         let server = Self::new(workspace_root, port);
+        let router = Self::create_router(server.state());
+        let addr = SocketAddr::from(([127, 0, 0, 1], port));
+
+        tokio::spawn(async move {
+            if let Ok(listener) = tokio::net::TcpListener::bind(addr).await {
+                let _ = axum::serve(listener, router).await;
+            }
+        })
+    }
+
+    /// Construct MCP SSE server pre-wired with DynamicMcpRegistry
+    pub fn with_dynamic_registry<P: AsRef<Path>>(
+        workspace_root: P,
+        port: u16,
+        dynamic_registry: Arc<crate::dynamic_mcp_registry::DynamicMcpRegistry>,
+    ) -> Self {
+        let state = Arc::new(McpSseState::new(workspace_root, port));
+        state.set_dynamic_registry_sync(Arc::clone(&dynamic_registry));
+        dynamic_registry.attach_sse_state_sync(Arc::clone(&state));
+        Self { state }
+    }
+
+    /// Launch background MCP SSE HTTP server pre-wired with DynamicMcpRegistry
+    pub async fn spawn_background_with_registry(
+        workspace_root: PathBuf,
+        port: u16,
+        dynamic_registry: Arc<crate::dynamic_mcp_registry::DynamicMcpRegistry>,
+    ) -> tokio::task::JoinHandle<()> {
+        let server = Self::with_dynamic_registry(workspace_root, port, dynamic_registry);
         let router = Self::create_router(server.state());
         let addr = SocketAddr::from(([127, 0, 0, 1], port));
 
@@ -350,12 +391,38 @@ pub async fn handle_client_message(
         "tools/list" => {
             let profile_str = query.profile.as_deref().or_else(|| params.get("profile").and_then(|p| p.as_str()));
             let profile = hgb_core::HgbMcpProfile::from_str_opt(profile_str);
-            let tools = HagibisMcpServer::list_tools_for_profile(profile);
+            let mut tools_val = HagibisMcpServer::list_tools_for_profile(profile);
+
+            // Dynamically inject dynamic registry tools & prompt-driven tool creation interface
+            if let Some(arr) = tools_val.as_array_mut() {
+                arr.push(serde_json::json!({
+                    "name": "hgb_mcp_request_tool",
+                    "description": "On-demand prompt-driven WASM tool generation and dynamic hot-swapping into MCP registry",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "tool_name": { "type": "string", "description": "Unique identifier for the dynamic tool" },
+                            "intent": { "type": "string", "description": "Natural language prompt or intent specifying tool behavior" },
+                            "schema": { "type": "object", "description": "Optional JSON schema describing expected input arguments" }
+                        },
+                        "required": ["tool_name", "intent"]
+                    }
+                }));
+
+                let reg_opt = state.dynamic_registry.read().unwrap().clone();
+                if let Some(reg) = reg_opt {
+                    let dynamic_tools = reg.list_tools_mcp_format().await;
+                    for dt in dynamic_tools {
+                        arr.push(dt);
+                    }
+                }
+            }
+
             let resp = serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": id,
                 "result": {
-                    "tools": tools
+                    "tools": tools_val
                 }
             });
             (StatusCode::OK, Json(resp))
@@ -396,10 +463,48 @@ pub async fn handle_client_message(
                 let _ = tx_clone.send((pct, msg.to_string()));
             };
 
-            // Execute the tool with streaming progress feedback
-            let result_str = match state.mcp_server.execute_tool_with_progress(tool_name, &arguments, progress_cb).await {
-                Ok(res) => res,
-                Err(e) => format!("Error executing {}: {}", tool_name, e),
+            let dyn_reg_opt = state.dynamic_registry.read().unwrap().clone();
+            let is_dynamic = tool_name == "hgb_mcp_request_tool"
+                || match dyn_reg_opt.as_ref() {
+                    Some(reg) => reg.has_tool(tool_name).await,
+                    None => false,
+                };
+
+            let (result_str, is_err) = if is_dynamic {
+                if let Some(ref reg) = dyn_reg_opt {
+                    progress_cb(50, &format!("Dispatching dynamic tool '{}'...", tool_name));
+                    match reg.intercept_or_dispatch(tool_name, &arguments).await {
+                        Ok(val) => (serde_json::to_string_pretty(&val).unwrap_or_else(|_| val.to_string()), false),
+                        Err(e) => (format!("Error executing dynamic tool {}: {}", tool_name, e), true),
+                    }
+                } else {
+                    ("DynamicMcpRegistry not available".to_string(), true)
+                }
+            } else {
+                // Execute standard tool with fallback to prompt-driven synthesis
+                match state.mcp_server.execute_tool_with_progress(tool_name, &arguments, progress_cb).await {
+                    Ok(res) => {
+                        if res.contains("recognized by Hagibis MCP dispatcher") && dyn_reg_opt.is_some() {
+                            let reg = dyn_reg_opt.as_ref().unwrap();
+                            match reg.intercept_or_dispatch(tool_name, &arguments).await {
+                                Ok(val) => (serde_json::to_string_pretty(&val).unwrap_or_else(|_| val.to_string()), false),
+                                Err(_) => (res, false),
+                            }
+                        } else {
+                            (res, false)
+                        }
+                    }
+                    Err(e) => {
+                        if let Some(ref reg) = dyn_reg_opt {
+                            match reg.intercept_or_dispatch(tool_name, &arguments).await {
+                                Ok(val) => (serde_json::to_string_pretty(&val).unwrap_or_else(|_| val.to_string()), false),
+                                Err(_) => (format!("Error executing {}: {}", tool_name, e), true),
+                            }
+                        } else {
+                            (format!("Error executing {}: {}", tool_name, e), true)
+                        }
+                    }
+                }
             };
 
             // Close progress channel and wait for pump to flush
@@ -417,7 +522,7 @@ pub async fn handle_client_message(
                             "text": result_str
                         }
                     ],
-                    "isError": false
+                    "isError": is_err
                 }
             });
 

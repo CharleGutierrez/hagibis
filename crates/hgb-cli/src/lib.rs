@@ -7,6 +7,7 @@ pub mod init_vibe;
 pub mod setup_ide;
 pub mod pgo_benchmark;
 pub mod vibe_autonomous_loop;
+pub mod cockpit_tui;
 
 pub use canvas::{ChatCanvas, ToolCallCard, ToolCardStatus};
 pub use client::HgbClient;
@@ -20,4 +21,8 @@ pub use vibe_autonomous_loop::{
     CodebaseSelfOptimizer, CowSandboxVerifier, EventDebouncer, OptimizationReport,
     PatchFile, PatchHunk, PatchLine, SpeculativeTestRunner, TestFailureDetail,
     TestRunReport, UnifiedPatch, VibeAutonomousConfig, VibeAutonomousLoop, VibeAutonomousStatus,
+};
+pub use cockpit_tui::{
+    run_cockpit_tui, CockpitTab, CockpitTuiState, HardwareTelemetry, McpToolCallEvent,
+    MemoryTelemetry, AgentLoopTelemetry,
 };

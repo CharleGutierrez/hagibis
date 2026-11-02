@@ -220,6 +220,7 @@ pub struct DaemonState {
     pub hud_broadcast: tokio::sync::broadcast::Sender<CockpitHudTelemetry>,
     pub distributed_scheduler: Arc<hgb_core::distributed_microvm_scheduler::DistributedMicroVmScheduler>,
     pub wasm_plugin_healer: Arc<hgb_core::autonomous_wasm_plugin_healer::AutonomousWasmPluginHealer>,
+    pub dynamic_mcp_registry: Arc<crate::dynamic_mcp_registry::DynamicMcpRegistry>,
 }
 
 impl DaemonState {
@@ -478,6 +479,13 @@ impl DaemonState {
         );
         autonomous_daemon_loop.set_wasm_healer(wasm_plugin_healer.clone());
 
+        let dynamic_mcp_registry = Arc::new(
+            crate::dynamic_mcp_registry::DynamicMcpRegistry::new(
+                ws_dir.clone(),
+                wasm_plugin_healer.clone(),
+            )
+        );
+
         Self {
             start_time: std::time::Instant::now(),
             socket_path,
@@ -552,6 +560,7 @@ impl DaemonState {
             },
             distributed_scheduler,
             wasm_plugin_healer,
+            dynamic_mcp_registry,
         }
     }
 
@@ -985,9 +994,13 @@ impl HagibisDaemon {
 
         println!("🚀 Hagibis Daemon (hgbd) listening on {:?}", socket_path);
 
-        // Spawn Native MCP Server-Sent Events (SSE) server
+        // Spawn Native MCP Server-Sent Events (SSE) server with Dynamic MCP Registry
         let ws_dir = self.state.socket_path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
-        crate::mcp_sse_server::McpSseServer::spawn_background(ws_dir, self.state.mcp_sse_port).await;
+        crate::mcp_sse_server::McpSseServer::spawn_background_with_registry(
+            ws_dir,
+            self.state.mcp_sse_port,
+            Arc::clone(&self.state.dynamic_mcp_registry),
+        ).await;
         println!("⚡ Native MCP SSE Streaming server active on http://127.0.0.1:{}", self.state.mcp_sse_port);
 
         // Start Zero-Overhead SHM-IPC Streaming Bridge

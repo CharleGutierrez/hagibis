@@ -445,6 +445,172 @@ impl SandboxedWasmPlugin {
         Ok(res.output)
     }
 
+    /// Fast-path zero-copy multi-modal tensor execution via WasmShmWitBridge
+    pub fn execute_with_shm_tensor(
+        &self,
+        tensor_meta: &crate::wasm_shm_wit_bridge::ShmTensorMeta,
+        tensor_data: &[u8],
+    ) -> Result<SandboxedExecutionResult> {
+        let fuel_limit = self.capabilities.fuel_limit;
+        let limits = StoreLimitsBuilder::new()
+            .memory_size(self.capabilities.max_memory_bytes)
+            .build();
+
+        let host_state = SandboxedWasmHostState {
+            capabilities: self.capabilities.clone(),
+            logs: Vec::new(),
+            kv_store: HashMap::new(),
+            violations: Vec::new(),
+            limits,
+        };
+
+        let mut store = Store::new(&self.engine, host_state);
+        store.limiter(|state| &mut state.limits);
+        store.set_fuel(fuel_limit).map_err(|e| {
+            HgbError::Execution(format!("Failed to configure WASM fuel limit: {}", e))
+        })?;
+
+        let mut linker = Linker::new(&self.engine);
+        self.bind_capabilities(&mut linker)?;
+
+        let instance = match linker.instantiate(&mut store, &self.module) {
+            Ok(inst) => inst,
+            Err(e) => {
+                let err_str = e.to_string();
+                return Ok(SandboxedExecutionResult {
+                    success: false,
+                    exit_code: None,
+                    output: serde_json::json!({ "error": err_str }),
+                    fuel_consumed: fuel_limit.saturating_sub(store.get_fuel().unwrap_or(0)),
+                    logs: store.data().logs.clone(),
+                    trapped: true,
+                    trap_reason: Some(format!("Instantiation error: {}", err_str)),
+                });
+            }
+        };
+
+        // If linear memory is exported, bridge tensor data directly
+        if let Some(mem) = instance.get_memory(&mut store, "memory") {
+            let cap = mem.data_size(&store);
+            let ptr = mem.data_mut(&mut store).as_mut_ptr();
+            let mut bridge = match crate::wasm_shm_wit_bridge::WasmShmWitBridge::from_linear_memory(
+                &self.manifest.name,
+                ptr,
+                cap,
+                0,
+                crate::wasm_shm_wit_bridge::SHM_FLAG_READWRITE,
+            ) {
+                Ok(b) => b,
+                Err(e) => {
+                    return Ok(SandboxedExecutionResult {
+                        success: false,
+                        exit_code: None,
+                        output: serde_json::json!({ "error": format!("SHM bridge init failed: {}", e) }),
+                        fuel_consumed: 0,
+                        logs: store.data().logs.clone(),
+                        trapped: true,
+                        trap_reason: Some(format!("SHM Bridge error: {}", e)),
+                    });
+                }
+            };
+
+            if let Err(e) = bridge.write_tensor(tensor_meta, tensor_data) {
+                return Ok(SandboxedExecutionResult {
+                    success: false,
+                    exit_code: None,
+                    output: serde_json::json!({ "error": format!("SHM tensor write failed: {}", e) }),
+                    fuel_consumed: 0,
+                    logs: store.data().logs.clone(),
+                    trapped: true,
+                    trap_reason: Some(format!("SHM Bounds error: {}", e)),
+                });
+            }
+        }
+
+        // Call entrypoint if available
+        let result = if let Ok(func) = instance.get_typed_func::<(u32, u32), u32>(&mut store, "hgb_shm_process_tensor") {
+            match func.call(&mut store, (tensor_meta.data_offset, tensor_meta.byte_length)) {
+                Ok(token) => {
+                    let fuel_left = store.get_fuel().unwrap_or(0);
+                    SandboxedExecutionResult {
+                        success: true,
+                        exit_code: Some(0),
+                        output: serde_json::json!({
+                            "status": "zero_copy_success",
+                            "token": token,
+                            "tensor": tensor_meta.name,
+                            "bytes": tensor_meta.byte_length,
+                        }),
+                        fuel_consumed: fuel_limit.saturating_sub(fuel_left),
+                        logs: store.data().logs.clone(),
+                        trapped: false,
+                        trap_reason: None,
+                    }
+                }
+                Err(trap) => {
+                    SandboxedExecutionResult {
+                        success: false,
+                        exit_code: None,
+                        output: serde_json::json!({ "status": "trapped", "error": trap.to_string() }),
+                        fuel_consumed: fuel_limit,
+                        logs: store.data().logs.clone(),
+                        trapped: true,
+                        trap_reason: Some(trap.to_string()),
+                    }
+                }
+            }
+        } else if let Ok(run_func) = instance.get_typed_func::<(), i32>(&mut store, "run") {
+            match run_func.call(&mut store, ()) {
+                Ok(code) => {
+                    let fuel_left = store.get_fuel().unwrap_or(0);
+                    SandboxedExecutionResult {
+                        success: true,
+                        exit_code: Some(code),
+                        output: serde_json::json!({
+                            "status": "zero_copy_success",
+                            "exit_code": code,
+                            "tensor": tensor_meta.name,
+                            "bytes": tensor_meta.byte_length,
+                        }),
+                        fuel_consumed: fuel_limit.saturating_sub(fuel_left),
+                        logs: store.data().logs.clone(),
+                        trapped: false,
+                        trap_reason: None,
+                    }
+                }
+                Err(trap) => {
+                    SandboxedExecutionResult {
+                        success: false,
+                        exit_code: None,
+                        output: serde_json::json!({ "status": "trapped", "error": trap.to_string() }),
+                        fuel_consumed: fuel_limit,
+                        logs: store.data().logs.clone(),
+                        trapped: true,
+                        trap_reason: Some(trap.to_string()),
+                    }
+                }
+            }
+        } else {
+            let fuel_left = store.get_fuel().unwrap_or(0);
+            SandboxedExecutionResult {
+                success: true,
+                exit_code: Some(0),
+                output: serde_json::json!({
+                    "status": "zero_copy_verified",
+                    "plugin": self.manifest.name,
+                    "tensor": tensor_meta.name,
+                    "bytes": tensor_meta.byte_length,
+                }),
+                fuel_consumed: fuel_limit.saturating_sub(fuel_left),
+                logs: store.data().logs.clone(),
+                trapped: false,
+                trap_reason: None,
+            }
+        };
+
+        Ok(result)
+    }
+
     /// Bind host syscalls enforcing capability security
     fn bind_capabilities(&self, linker: &mut Linker<SandboxedWasmHostState>) -> Result<()> {
         // Safe logging
@@ -1173,5 +1339,22 @@ mod tests {
         let row = rows.next().expect("read row").expect("has match");
         let path: String = row.get(0).expect("get path");
         assert_eq!(path, "src/lib.rs");
+    }
+
+    #[test]
+    fn test_execute_with_shm_tensor_zero_copy() {
+        let wasm_bytes = generate_valid_wasm(0);
+        let caps = PluginCapabilities::new().with_fuel_limit(100_000);
+        let plugin = SandboxedWasmPlugin::load_from_bytes(&wasm_bytes, None, caps).expect("wasm load");
+
+        let meta = crate::wasm_shm_wit_bridge::ShmTensorMeta::new(
+            "test_tensor",
+            crate::wasm_shm_wit_bridge::ShmTensorDType::F32,
+            vec![2, 4],
+            128,
+        );
+        let data = vec![1u8; meta.byte_length as usize];
+        let res = plugin.execute_with_shm_tensor(&meta, &data).expect("execute with tensor");
+        assert!(res.success);
     }
 }

@@ -139,5 +139,12 @@ pub use mmap_vector_index::{
     HEADER_SIZE as MMAP_HEADER_SIZE, METADATA_ENTRY_SIZE, MMAP_VECTOR_MAGIC, MMAP_VECTOR_VERSION,
 };
 
+// Enhancement 2: Embedded Hybrid RAG Vector Index Engine
+pub mod hybrid_rag_vector_index;
+pub use hybrid_rag_vector_index::{
+    HybridDocument, HybridRagConfig, HybridRagSearchResult, HybridRagVectorIndex,
+    VectorMetric as RagVectorMetric, BM25_B, BM25_K1, DEFAULT_RRF_K, HYBRID_RAG_MAGIC,
+};
+
 
 

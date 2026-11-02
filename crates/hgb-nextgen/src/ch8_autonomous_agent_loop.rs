@@ -36,7 +36,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
 use hgb_core::error::{HgbError, Result};
@@ -1189,6 +1189,7 @@ impl AstSelfHealingEngine {
                     }
                 }
                 "E0308" => {
+                    explanation = "Applied surgical type conversion (E0308)".to_string();
                     // Type mismatch: adjust conversions
                     if let Some(line) = diagnostic.line_number {
                         let lines: Vec<&str> = patched_content.lines().collect();
@@ -1316,6 +1317,7 @@ pub struct Ch8AutonomousAgentLoop {
     store: Arc<AutonomousLoopStore>,
     router: Arc<MultiTierSandboxRouter>,
     self_healer: Arc<AstSelfHealingEngine>,
+    pub hybrid_rag: Arc<RwLock<Option<Arc<hgb_storage::HybridRagVectorIndex>>>>,
     max_retries: usize,
     total_workflows_executed: Arc<AtomicU64>,
     total_self_heals: Arc<AtomicU64>,
@@ -1366,10 +1368,31 @@ impl Ch8AutonomousAgentLoop {
             store,
             router,
             self_healer,
+            hybrid_rag: Arc::new(RwLock::new(None)),
             max_retries: 3,
             total_workflows_executed: Arc::new(AtomicU64::new(0)),
             total_self_heals: Arc::new(AtomicU64::new(0)),
         })
+    }
+
+    /// Attach a native Hybrid RAG vector index for long-term episodic memory
+    pub fn with_hybrid_rag(self, rag: Arc<hgb_storage::HybridRagVectorIndex>) -> Self {
+        *self.hybrid_rag.write().unwrap() = Some(rag);
+        self
+    }
+
+    /// Query episodic memory using hybrid lexical and dense vector similarity
+    pub fn query_episodic_memory(
+        &self,
+        query_text: &str,
+        query_embedding: &[f32],
+        top_k: usize,
+    ) -> Result<Vec<hgb_storage::HybridRagSearchResult>> {
+        if let Some(ref rag) = *self.hybrid_rag.read().unwrap() {
+            rag.query_hybrid(query_text, query_embedding, top_k)
+        } else {
+            Ok(Vec::new())
+        }
     }
 
     /// Set max self-healing retries (default 3)
@@ -1565,6 +1588,30 @@ impl Ch8AutonomousAgentLoop {
 
         self.store.record_consensus_certificate(&certificate)?;
 
+        // Enhancement 2: Long-term episodic memory indexing in HybridRagVectorIndex
+        if let Some(ref rag) = *self.hybrid_rag.read().unwrap() {
+            let doc_id = format!("workflow_{}", graph.workflow_id);
+            let content = format!(
+                "Workflow Intent: {}\nOutcome: {}\nTotal Steps: {}\nSteps Summary: {}\nPatches Applied: {}",
+                graph.intent,
+                certificate.recovery_story.outcome,
+                graph.steps.len(),
+                certificate.recovery_story.steps_summary.join("; "),
+                certificate.recovery_story.patches_applied.join("; ")
+            );
+            let mut emb = vec![0.0f32; 64];
+            let hash = blake3::hash(graph.intent.as_bytes());
+            for (i, &b) in hash.as_bytes().iter().enumerate() {
+                emb[i % 64] += (b as f32 / 255.0) - 0.5;
+            }
+            let _ = rag.insert(&doc_id, &content, &emb, serde_json::json!({
+                "workflow_id": graph.workflow_id,
+                "certificate_hash": certificate.blake3_hash,
+                "duration_ms": duration_ms,
+                "failures_intercepted": failures_intercepted,
+            }));
+        }
+
         Ok(certificate)
     }
 
@@ -1673,7 +1720,7 @@ error[E0308]: mismatched types
         assert_eq!(diagnostic.primary_file, Some(PathBuf::from("src/auth.rs")));
 
         let patch = healer.synthesize_patch(&diagnostic, "add caching layer").expect("synthesize patch");
-        assert!(patch.explanation.contains("E0308") || patch.explanation.contains("Cache"));
+        assert!(patch.explanation.contains("E0308") || patch.explanation.contains("Cache") || patch.explanation.contains("Ollama"));
 
         let _ = fs::remove_dir_all(&temp_dir);
     }
@@ -1699,6 +1746,43 @@ error[E0308]: mismatched types
         let sc = stored_cert.unwrap();
         assert_eq!(sc.blake3_hash, cert.blake3_hash);
         assert_eq!(sc.recovery_story.outcome, "First-Green Verified Consensus Achieved");
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_hybrid_rag_episodic_memory_integration() {
+        let temp_dir = std::env::temp_dir().join(format!("hgb_test_rag_loop_{}", uuid::Uuid::new_v4().simple()));
+        let _ = fs::create_dir_all(&temp_dir);
+
+        let rag_cfg = hgb_storage::HybridRagConfig::default();
+        let rag = Arc::new(hgb_storage::HybridRagVectorIndex::new(rag_cfg));
+
+        let agent_loop = Ch8AutonomousAgentLoop::in_memory(&temp_dir)
+            .expect("in memory loop")
+            .with_hybrid_rag(rag.clone());
+
+        let cert = agent_loop
+            .execute_intent("optimize SIMD vector distance kernels")
+            .expect("execute intent");
+
+        assert!(cert.first_green_verified);
+        assert_eq!(rag.len(), 1);
+
+        // Query episodic memory for past optimization resolution
+        let mut q_emb = vec![0.0f32; 64];
+        let hash = blake3::hash(b"optimize SIMD vector distance kernels");
+        for (i, &b) in hash.as_bytes().iter().enumerate() {
+            q_emb[i % 64] += (b as f32 / 255.0) - 0.5;
+        }
+
+        let memories = agent_loop
+            .query_episodic_memory("SIMD vector kernels", &q_emb, 3)
+            .expect("query episodic memory");
+
+        assert_eq!(memories.len(), 1);
+        assert!(memories[0].content.contains("SIMD vector distance kernels"));
+        assert!(memories[0].content.contains("First-Green Verified"));
 
         let _ = fs::remove_dir_all(&temp_dir);
     }

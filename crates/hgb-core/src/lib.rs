@@ -927,7 +927,7 @@ pub use vibe_autonomous_loop::{
 pub mod wasm_hot_pool;
 pub use wasm_hot_pool::{
     CachedModuleInfo, ModulePrewarmReport, WasmHotExecReport, WasmHotPool, WasmHotPoolStatus,
-    DEFAULT_WASM_FUEL,
+    WasmShmTensorReport, WasmZeroCopyContextReport, DEFAULT_WASM_FUEL,
 };
 
 // Adaptive Power-Aware Scheduler (Ollama + Dynatune) exports
@@ -1092,6 +1092,15 @@ pub use unified_shm_wasm_bridge::{
     FLAG_DIRECT_POINTER_MAP, FLAG_MODEL_TENSOR_WEIGHTS, FLAG_STREAM_CHUNK, FLAG_STREAM_FINAL,
     FLAG_URGENT, FLAG_ZERO_COPY_VERIFIED, UNIFIED_HEADER_SIZE, UNIFIED_RING_CONTROL_MAGIC,
     UNIFIED_SHM_MAGIC,
+};
+
+// Strategic Enhancement 1: Zero-Copy Shared-Memory & WIT WebAssembly Bridge
+pub mod wasm_shm_wit_bridge;
+pub use wasm_shm_wit_bridge::{
+    RawTensorHeader, ShmBenchLatencyReport, ShmBridgeError, ShmTensorDType, ShmTensorMeta,
+    WasmShmFrameHeader, WasmShmWitBridge, FRAME_TYPE_CONTEXT, FRAME_TYPE_RAW_BYTES,
+    FRAME_TYPE_TENSOR, FRAME_TYPE_TOKENS, HGB_WSHM_MAGIC, MAX_TENSOR_DIMS, MAX_TENSOR_NAME_LEN,
+    RAW_TENSOR_HEADER_SIZE, SHM_FRAME_HEADER_SIZE, TENSOR_METADATA_MAGIC,
 };
 
 pub use wasmtime;

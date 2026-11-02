@@ -41,19 +41,44 @@ interface types {
         state: execution-state,
     }
 
+    enum tensor-data-type {
+        f32,
+        f16,
+        bf16,
+        q8-0,
+    }
+
+    record tensor-header {
+        name: string,
+        dtype: tensor-data-type,
+        shape: list<u32>,
+        byte-length: u32,
+        data-offset: u32,
+    }
+
     /// Zero-Copy Shared Linear Memory Buffer Descriptor
     record shm-buffer-descriptor {
-        offset: u32,
-        length: u32,
-        capacity: u32,
+        shm-id: string,
+        base-offset: u32,
+        capacity-bytes: u32,
+        head-offset: u32,
+        tail-offset: u32,
         flags: u32,
-        checksum: u64,
     }
 }
 
 /// Zero-Copy WASM-to-Daemon IPC Interface
 interface zero-copy-ipc {
-    use types.{shm-buffer-descriptor};
+    use types.{shm-buffer-descriptor, tensor-header};
+
+    /// Attach shared linear memory buffer in guest space
+    hgb-shm-attach: func(descriptor: shm-buffer-descriptor) -> result<_, string>;
+
+    /// Read tensor header directly from attached shared memory
+    hgb-shm-read-tensor-header: func() -> result<tensor-header, string>;
+
+    /// Stream prompt token array directly to shared memory
+    hgb-shm-write-token-stream: func(tokens: list<u32>) -> result<u32, string>;
 
     /// Allocate shared linear memory buffer in guest space
     shm-alloc: func(capacity: u32, flags: u32) -> result<shm-buffer-descriptor, string>;
