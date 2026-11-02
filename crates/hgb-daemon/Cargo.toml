@@ -31,6 +31,7 @@ base64 = { workspace = true }
 blake3 = { workspace = true }
 rusqlite = { workspace = true }
 memmap2 = { workspace = true }
+regex = { workspace = true }
 libc = "0.2"
 wasmtime = "18.0"
 

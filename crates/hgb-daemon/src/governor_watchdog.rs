@@ -739,6 +739,30 @@ impl GovernorWatchdog {
         self.dynatune_fuse.acquire_guard(workload)
     }
 
+    /// Acquire RAII DynatuneWorkloadGuard bound to the fuse (direct alias)
+    pub fn acquire_dynatune_guard(&self, workload: &str) -> DynatuneWorkloadBoostGuard {
+        self.dynatune_fuse.acquire_guard(workload)
+    }
+
+    /// Read the number of active heavy tasks monitored by DynatuneSubsystemFuse
+    pub fn active_heavy_tasks_count(&self) -> usize {
+        self.dynatune_fuse.active_heavy_tasks()
+    }
+
+    /// Set simulated CPU temperature for deterministic unit testing
+    pub fn set_simulated_temp(&self, temp_c: Option<f64>) {
+        self.dynatune_fuse.set_simulated_temp(temp_c);
+    }
+
+    /// Set simulated battery telemetry for deterministic unit testing
+    pub fn set_simulated_battery(&self, pct: Option<f64>, discharging: bool) {
+        if let Some(p) = pct {
+            self.dynatune_fuse.set_simulated_battery(Some((p as u32, discharging, 15.0, 10.0)));
+        } else {
+            self.dynatune_fuse.set_simulated_battery(None);
+        }
+    }
+
     /// Explicit workload start trigger boosting CPU and memory bandwidth
     pub fn on_workload_started(&self) {
         let _ = self.dynatune_fuse.boost_performance("workload_started");

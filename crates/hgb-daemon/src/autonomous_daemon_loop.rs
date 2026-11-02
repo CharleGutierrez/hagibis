@@ -173,6 +173,11 @@ impl AutonomousDaemonLoopService {
 
     /// Execute high-level user intent through autonomous multi-step planning and self-healing
     pub fn execute_workflow(&self, intent: &str, max_retries: usize) -> Result<AutonomousConsensusCertificate> {
+        let _governor_guard = hgb_core::dynatune_subsystem_fuse::DynatuneWorkloadGuard::acquire_for_workspace(
+            &self.workspace_root,
+            "autonomous_daemon_loop",
+        );
+
         let loop_orchestrator = (*self.agent_loop).clone().with_max_retries(max_retries);
 
         // Publish event if bus configured

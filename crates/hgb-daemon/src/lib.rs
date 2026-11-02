@@ -495,3 +495,12 @@ pub use workload_shedder::{
     BATTERY_CRITICAL_THRESHOLD_PCT, THROTTLED_CONCURRENCY_WORKERS,
 };
 
+// Pillar 4: Native Fully Autonomous Self-Healing Daemon Engine (Masterclass Chapter 8)
+pub mod native_self_healing_daemon;
+pub use native_self_healing_daemon::{
+    AutonomousConsensusCertificate, CandidatePatch, DiagnosticLocation, HealingIncidentReport,
+    IncidentKind, NativeSelfHealingDaemon, RamCowOverlaySandbox, SelfHealingLogStore,
+    VerificationResult, DEFAULT_BENCHMARK_REGRESSION_THRESHOLD_PCT, DEFAULT_MAX_RETRIES,
+};
+
+

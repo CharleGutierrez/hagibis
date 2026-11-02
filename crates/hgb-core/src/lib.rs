@@ -1973,7 +1973,7 @@ pub use mcp_mesh_router::{
 pub mod dynatune_subsystem_fuse;
 pub use dynatune_subsystem_fuse::{
     BatteryTelemetryRecord, CpuGovernorRecord, DynatuneSubsystemFuse,
-    DynatuneWorkloadBoostGuard, FuseGovernorMode, MglruTelemetryRecord,
+    DynatuneWorkloadBoostGuard, DynatuneWorkloadGuard, FuseGovernorMode, MglruTelemetryRecord,
     PreviousSubsystemState, SafeguardState, SubsystemPaths,
     SubsystemTelemetrySnapshot, ThermalZoneRecord,
     DEFAULT_DYNATUNE_BIN, DEFAULT_DYNATUNE_SOCK, DEFAULT_KERNEL_CTL_BIN,
@@ -2039,6 +2039,13 @@ pub use native_autonomous_agent_loop::{
     SelfReflectionGate, TokenBudgetStatus, TokenBudgetTracker, ToolFallbackOutcome,
     ToolSelectionFallbackEngine, DEFAULT_TOKEN_HARD_CUTOFF_PCT,
     DEFAULT_TOKEN_WARN_THRESHOLD_PCT, HIGH_TOKEN_BURN_RATE_THRESHOLD,
+};
+
+// Pillar 1: Precompiled WebAssembly Module Cache & Metered Sandbox Runner
+pub mod precompiled_wasm_cache;
+pub use precompiled_wasm_cache::{
+    PrecompiledCacheStats, PrecompiledWasmCache, CACHE_FILE_EXTENSION,
+    COMPILER_VERSION_TAG, DEFAULT_MAX_MEMORY_ENTRIES,
 };
 
 

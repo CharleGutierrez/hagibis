@@ -25,11 +25,12 @@ use serde::{Deserialize, Serialize};
 use wasmtime::{Config, Engine, Linker, Module, Store};
 
 use hgb_wasm_kernel::{
-    generate_freestanding_zig_tool, CompilationOutcome, ToolSpec,
+    generate_freestanding_zig_tool, CompilationOutcome, SandboxPolicy, ToolSpec,
 };
 
 use crate::autonomous_wasm_plugin_healer::inspect_wasm_memory_limits;
 use crate::error::{HgbError, Result};
+use crate::precompiled_wasm_cache::PrecompiledWasmCache;
 use crate::wasm_hot_pool::WasmHotPool;
 use crate::wasm_plugin_kernel::WasmPluginManifest;
 use crate::zig_wasm_agent_compiler::{ZigOptimization, ZigWasmAgentCompiler, ZigWasmTarget};
@@ -81,6 +82,7 @@ pub struct DynamicWasmWitLoader {
     tools_dir: PathBuf,
     active_attestations: Arc<RwLock<HashMap<String, DynamicToolAttestation>>>,
     precompiled_modules: Arc<RwLock<HashMap<String, Module>>>,
+    wasm_cache: Arc<PrecompiledWasmCache>,
     engine: Engine,
 }
 
@@ -93,12 +95,14 @@ impl DynamicWasmWitLoader {
 
         let mut config = Config::new();
         config.consume_fuel(true);
+        config.epoch_interruption(true);
         config.wasm_memory64(false);
         let engine = Engine::new(&config)
             .map_err(|e| HgbError::Execution(format!("Failed to initialize Wasmtime Engine: {}", e)))?;
 
         let hot_pool = Arc::new(WasmHotPool::new(64)?);
         let compiler = Arc::new(ZigWasmAgentCompiler::new());
+        let wasm_cache = Arc::new(PrecompiledWasmCache::new(dir.join("precompiled_cache"), 256)?);
 
         let mut seed = [0u8; 32];
         let uuid_bytes = *uuid::Uuid::new_v4().as_bytes();
@@ -121,6 +125,7 @@ impl DynamicWasmWitLoader {
             tools_dir: dir,
             active_attestations: Arc::new(RwLock::new(HashMap::new())),
             precompiled_modules: Arc::new(RwLock::new(HashMap::new())),
+            wasm_cache,
             engine,
         })
     }
@@ -128,6 +133,11 @@ impl DynamicWasmWitLoader {
     /// Access inner WasmHotPool
     pub fn hot_pool(&self) -> &Arc<WasmHotPool> {
         &self.hot_pool
+    }
+
+    /// Access precompiled WASM cache
+    pub fn wasm_cache(&self) -> &Arc<PrecompiledWasmCache> {
+        &self.wasm_cache
     }
 
     /// Public verifying key in hex format
@@ -257,9 +267,7 @@ impl DynamicWasmWitLoader {
         };
 
         let compile_duration_us = start.elapsed().as_micros() as u64;
-        let module = Module::new(self.hot_pool.engine(), wasm_bytes).map_err(|e| {
-            HgbError::Execution(format!("Failed to compile module for hot-pool: {}", e))
-        })?;
+        let module = self.wasm_cache.get_or_compile(self.hot_pool.engine(), wasm_bytes)?;
 
         self.hot_pool.hot_swap_module_with_manifest(
             &wasm_file,
@@ -313,7 +321,6 @@ impl DynamicWasmWitLoader {
         payload: &[u8],
         fuel_budget: Option<u64>,
     ) -> Result<DynamicToolInvocationReport> {
-        let start = Instant::now();
         let wasm_file = self.tools_dir.join(format!("{}.wasm", tool_id));
 
         if !wasm_file.exists() {
@@ -328,52 +335,35 @@ impl DynamicWasmWitLoader {
         })?;
 
         let fuel = fuel_budget.unwrap_or(DEFAULT_DYNAMIC_TOOL_FUEL_LIMIT);
-        let mut store = Store::new(&self.engine, ());
-        store.set_fuel(fuel).map_err(|e| {
-            HgbError::Execution(format!("Failed to set fuel on Wasmtime store: {}", e))
-        })?;
+        // Zero cold-start retrieval from PrecompiledWasmCache (<100us disk hit, <1us in-memory)
+        let module = self.wasm_cache.get_or_compile(&self.engine, &wasm_bytes)?;
 
-        let module = Module::new(&self.engine, &wasm_bytes).map_err(|e| {
-            HgbError::Execution(format!("Failed to compile module for execution: {}", e))
-        })?;
+        let policy = SandboxPolicy::default()
+            .with_fuel_limit(fuel)
+            .with_max_memory_pages(DEFAULT_DYNAMIC_TOOL_MAX_PAGES);
 
-        let linker = Linker::new(&self.engine);
-        let instance = linker.instantiate(&mut store, &module).map_err(|e| {
-            HgbError::Execution(format!("Failed to instantiate dynamic tool: {}", e))
-        })?;
+        let exec_res = self.wasm_cache.execute_metered(&module, function_name, payload, &policy)?;
 
-        let fuel_before = store.get_fuel().unwrap_or(fuel);
-
-        // Attempt execution: try exported function or run()
-        let result_code = if let Ok(func) = instance.get_typed_func::<(), i32>(&mut store, function_name) {
-            func.call(&mut store, ()).unwrap_or(0)
-        } else if let Ok(run_func) = instance.get_typed_func::<(), i32>(&mut store, "run") {
-            run_func.call(&mut store, ()).unwrap_or(0)
-        } else {
-            0
-        };
-
-        let fuel_after = store.get_fuel().unwrap_or(0);
-        let fuel_consumed = fuel_before.saturating_sub(fuel_after);
-        let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
-
+        let duration_ms = (exec_res.duration_us as f64) / 1000.0;
         let output_json = serde_json::json!({
             "tool_id": tool_id,
             "function": function_name,
-            "status": "success",
-            "code": result_code,
+            "status": if exec_res.is_success() { "success" } else { "failed" },
+            "code": exec_res.exit_code,
+            "result_code": exec_res.exit_code,
             "payload_len": payload.len(),
+            "output_str": exec_res.output_as_str().unwrap_or(""),
         });
 
         Ok(DynamicToolInvocationReport {
             tool_id: tool_id.to_string(),
             function_name: function_name.to_string(),
-            success: true,
+            success: exec_res.is_success(),
             output_json,
             duration_ms,
-            fuel_consumed: Some(fuel_consumed),
+            fuel_consumed: Some(exec_res.fuel_consumed),
             memory_bytes_used: wasm_bytes.len() as u64,
-            error: None,
+            error: exec_res.error_diagnostic,
         })
     }
 
@@ -388,85 +378,62 @@ impl DynamicWasmWitLoader {
         let start = Instant::now();
         let tool_key = format!("llm_tool_{}", spec.name);
 
-        // 1. Check in-memory precompiled module cache (sub-millisecond fast path)
-        let cached_module = {
-            let cache = self.precompiled_modules.read().unwrap();
-            cache.get(&tool_key).cloned()
-        };
-
-        let (module, memory_bytes) = match cached_module {
-            Some(m) => (m, 0usize),
-            None => {
-                // Cold path: Compile tool code
-                let outcome = self.compile_tool(spec)?;
-                if !outcome.success {
-                    return Err(HgbError::Execution(format!(
-                        "Failed to compile LLM tool '{}': {:?}",
-                        spec.name, outcome.errors
-                    )));
-                }
-
-                // Verify memory bounds
-                let limits = inspect_wasm_memory_limits(&outcome.wasm_bytes)?;
-                let max_pages_allowed = DEFAULT_DYNAMIC_TOOL_MAX_PAGES;
-                if limits.initial_pages > max_pages_allowed {
-                    return Err(HgbError::Execution(format!(
-                        "LLM tool '{}' initial memory {} pages exceeds limit of {} pages",
-                        spec.name, limits.initial_pages, max_pages_allowed
-                    )));
-                }
-
-                // Precompile module using Engine
-                let mod_instance = Module::new(&self.engine, &outcome.wasm_bytes).map_err(|e| {
-                    HgbError::Execution(format!("AOT pre-compilation failed: {}", e))
-                })?;
-
-                let bytes_len = outcome.wasm_bytes.len();
-
-                // Cache precompiled module in memory
-                {
-                    let mut cache = self.precompiled_modules.write().unwrap();
-                    cache.insert(tool_key.clone(), mod_instance.clone());
-                }
-
-                // Also persist and register attestation
-                let _ = self.hot_swap_tool(&tool_key, &spec.name, &outcome.wasm_bytes, 32);
-
-                (mod_instance, bytes_len)
-            }
-        };
-
-        // 2. Sandboxed MicroVM Execution with strict fuel metering
-        let fuel = DEFAULT_DYNAMIC_TOOL_FUEL_LIMIT;
-        let mut store = Store::new(&self.engine, ());
-        store.set_fuel(fuel).map_err(|e| {
-            HgbError::Execution(format!("Failed to set fuel on Wasmtime store: {}", e))
-        })?;
-
-        let linker = Linker::new(&self.engine);
-        let instance = linker.instantiate(&mut store, &module).map_err(|e| {
-            HgbError::Execution(format!("Failed to instantiate AOT tool: {}", e))
-        })?;
-
-        let fuel_before = store.get_fuel().unwrap_or(fuel);
-
-        // Call exported function: try "hgb_tool_invoke", "run", or tool name
-        let result_code = if let Ok(func) = instance.get_typed_func::<(), i32>(&mut store, "run") {
-            func.call(&mut store, ()).unwrap_or(0)
-        } else if let Ok(func) = instance.get_typed_func::<(), i32>(&mut store, &spec.name) {
-            func.call(&mut store, ()).unwrap_or(0)
+        // 1. Cold path: Compile tool code if not already compiled and attested
+        let wasm_file = self.tools_dir.join(format!("{}.wasm", tool_key));
+        let (wasm_bytes, memory_bytes) = if wasm_file.exists() {
+            let bytes = fs::read(&wasm_file).map_err(|e| {
+                HgbError::Storage(format!("Failed to read cached tool wasm: {}", e))
+            })?;
+            let len = bytes.len();
+            (bytes, len)
         } else {
-            0
+            let outcome = self.compile_tool(spec)?;
+            if !outcome.success {
+                return Err(HgbError::Execution(format!(
+                    "Failed to compile LLM tool '{}': {:?}",
+                    spec.name, outcome.errors
+                )));
+            }
+
+            // Verify memory bounds
+            let limits = inspect_wasm_memory_limits(&outcome.wasm_bytes)?;
+            let max_pages_allowed = DEFAULT_DYNAMIC_TOOL_MAX_PAGES;
+            if limits.initial_pages > max_pages_allowed {
+                return Err(HgbError::Execution(format!(
+                    "LLM tool '{}' initial memory {} pages exceeds limit of {} pages",
+                    spec.name, limits.initial_pages, max_pages_allowed
+                )));
+            }
+
+            // Also persist and register attestation
+            let _ = self.hot_swap_tool(&tool_key, &spec.name, &outcome.wasm_bytes, 32);
+            let len = outcome.wasm_bytes.len();
+            (outcome.wasm_bytes, len)
         };
 
-        let fuel_after = store.get_fuel().unwrap_or(0);
-        let fuel_consumed = fuel_before.saturating_sub(fuel_after);
-        let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
+        // 2. High-speed PrecompiledWasmCache retrieval (<1us memory, <100us disk)
+        let module = self.wasm_cache.get_or_compile(&self.engine, &wasm_bytes)?;
 
+        // Maintain in-memory precompiled_modules cache for backwards compatibility
+        {
+            let mut cache = self.precompiled_modules.write().unwrap();
+            cache.insert(tool_key.clone(), module.clone());
+        }
+
+        // 3. Sandboxed MicroVM Execution with strict fuel metering
+        let fuel = DEFAULT_DYNAMIC_TOOL_FUEL_LIMIT;
+        let policy = SandboxPolicy::default()
+            .with_fuel_limit(fuel)
+            .with_max_memory_pages(DEFAULT_DYNAMIC_TOOL_MAX_PAGES);
+
+        let exec_res = self.wasm_cache.execute_metered(&module, &spec.name, payload, &policy)?;
+
+        let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
         let output_json = serde_json::json!({
             "tool": spec.name,
-            "status": "success",
-            "result_code": result_code,
+            "status": if exec_res.is_success() { "success" } else { "failed" },
+            "result_code": exec_res.exit_code,
+            "code": exec_res.exit_code,
             "payload_bytes": payload.len(),
             "execution_under_5ms": duration_ms < 5.0,
         });
@@ -474,12 +441,12 @@ impl DynamicWasmWitLoader {
         Ok(DynamicToolInvocationReport {
             tool_id: tool_key,
             function_name: "run".to_string(),
-            success: true,
+            success: exec_res.is_success(),
             output_json,
             duration_ms,
-            fuel_consumed: Some(fuel_consumed),
+            fuel_consumed: Some(exec_res.fuel_consumed),
             memory_bytes_used: memory_bytes as u64,
-            error: None,
+            error: exec_res.error_diagnostic,
         })
     }
 

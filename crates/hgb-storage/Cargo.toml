@@ -7,6 +7,8 @@ license.workspace = true
 
 [dependencies]
 hgb-core = { path = "../hgb-core" }
+hgb-wasm-kernel = { path = "../hgb-wasm-kernel" }
+wasmtime = "18.0"
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -16,3 +18,7 @@ blake3 = { workspace = true }
 memmap2 = { workspace = true }
 chrono = { workspace = true }
 regex = { workspace = true }
+
+[dev-dependencies]
+wat = { path = "../wat" }
+tempfile = "3.10"

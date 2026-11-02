@@ -1436,6 +1436,12 @@ impl Ch8AutonomousAgentLoop {
 
     /// Execute a planned graph with closed-loop self-healing and BLAKE3 consensus certificate
     pub fn execute_workflow(&self, mut graph: AutonomousPlanGraph) -> Result<AutonomousConsensusCertificate> {
+        // Enforce kernel performance governor boost while autonomous loop is executing
+        let _governor_guard = hgb_core::dynatune_subsystem_fuse::DynatuneWorkloadGuard::acquire_for_workspace(
+            &self.workspace_root,
+            "ch8_autonomous_agent_loop",
+        );
+
         let start_time = Instant::now();
         self.store.persist_plan_graph(&graph)?;
         self.store.update_workflow_status(&graph.workflow_id, WorkflowStatus::Running, None)?;

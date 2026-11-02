@@ -1496,6 +1496,141 @@ pub fn list_builtin_zig_primitives() -> Vec<&'static str> {
     ]
 }
 
+// ============================================================================
+// UNTRUSTED SANDBOX RUNNER INTERFACE (Pillar 1: Supercharge WASM Kernel & Edge Isolation)
+// ============================================================================
+
+/// Policy and strict resource limits for executing untrusted agent-generated code
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SandboxPolicy {
+    pub fuel_limit: u64,
+    pub epoch_deadline_ms: u64,
+    pub max_memory_pages: u32,
+    pub allow_stdout: bool,
+    pub allow_env: bool,
+}
+
+impl Default for SandboxPolicy {
+    fn default() -> Self {
+        Self {
+            fuel_limit: 10_000_000,
+            epoch_deadline_ms: 1000,
+            max_memory_pages: 256, // 16 MiB (256 * 64 KiB)
+            allow_stdout: false,
+            allow_env: false,
+        }
+    }
+}
+
+impl SandboxPolicy {
+    /// Create a new policy with custom fuel, epoch deadline, and max memory pages
+    pub fn new(fuel_limit: u64, epoch_deadline_ms: u64, max_memory_pages: u32) -> Self {
+        Self {
+            fuel_limit,
+            epoch_deadline_ms,
+            max_memory_pages,
+            allow_stdout: false,
+            allow_env: false,
+        }
+    }
+
+    /// Strict sandboxed policy for untrusted agent-generated code
+    pub fn strict() -> Self {
+        Self {
+            fuel_limit: 5_000_000,
+            epoch_deadline_ms: 500,
+            max_memory_pages: 128, // 8 MiB
+            allow_stdout: false,
+            allow_env: false,
+        }
+    }
+
+    /// Permissive policy for trusted tools
+    pub fn permissive() -> Self {
+        Self {
+            fuel_limit: 50_000_000,
+            epoch_deadline_ms: 5000,
+            max_memory_pages: 1024, // 64 MiB
+            allow_stdout: true,
+            allow_env: true,
+        }
+    }
+
+    pub fn with_fuel_limit(mut self, fuel: u64) -> Self {
+        self.fuel_limit = fuel;
+        self
+    }
+
+    pub fn with_epoch_deadline_ms(mut self, deadline_ms: u64) -> Self {
+        self.epoch_deadline_ms = deadline_ms;
+        self
+    }
+
+    pub fn with_max_memory_pages(mut self, pages: u32) -> Self {
+        self.max_memory_pages = pages;
+        self
+    }
+
+    pub fn with_allow_stdout(mut self, allow: bool) -> Self {
+        self.allow_stdout = allow;
+        self
+    }
+
+    pub fn with_allow_env(mut self, allow: bool) -> Self {
+        self.allow_env = allow;
+        self
+    }
+
+    /// Memory limit in bytes (pages * 64 KiB)
+    pub fn max_memory_bytes(&self) -> usize {
+        (self.max_memory_pages as usize) * 64 * 1024
+    }
+}
+
+/// Execution telemetry and output from metered sandbox execution
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MeteredExecutionResult {
+    pub exit_code: i32,
+    pub fuel_consumed: u64,
+    pub duration_us: u64,
+    pub output: Vec<u8>,
+    pub error_diagnostic: Option<String>,
+}
+
+impl MeteredExecutionResult {
+    /// Construct a successful execution result
+    pub fn ok(exit_code: i32, fuel_consumed: u64, duration_us: u64, output: Vec<u8>) -> Self {
+        Self {
+            exit_code,
+            fuel_consumed,
+            duration_us,
+            output,
+            error_diagnostic: None,
+        }
+    }
+
+    /// Construct an execution result with error/trap diagnostic
+    pub fn err(exit_code: i32, fuel_consumed: u64, duration_us: u64, diagnostic: impl Into<String>) -> Self {
+        Self {
+            exit_code,
+            fuel_consumed,
+            duration_us,
+            output: Vec::new(),
+            error_diagnostic: Some(diagnostic.into()),
+        }
+    }
+
+    /// Whether execution succeeded without traps/errors (non-negative exit code and no error diagnostic)
+    pub fn is_success(&self) -> bool {
+        self.error_diagnostic.is_none() && self.exit_code >= 0
+    }
+
+    /// Interpret output as UTF-8 string slice
+    pub fn output_as_str(&self) -> Result<&str, std::str::Utf8Error> {
+        std::str::from_utf8(&self.output)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1772,5 +1907,58 @@ mod tests {
         let custom_tool = generate_freestanding_zig_tool("custom_hash", "const x = 123;");
         assert!(custom_tool.contains("custom_hash"));
         assert!(custom_tool.contains("const x = 123;"));
+    }
+
+    #[test]
+    fn test_untrusted_sandbox_policy_and_metered_result() {
+        let default_policy = SandboxPolicy::default();
+        assert_eq!(default_policy.fuel_limit, 10_000_000);
+        assert_eq!(default_policy.epoch_deadline_ms, 1000);
+        assert_eq!(default_policy.max_memory_pages, 256);
+        assert_eq!(default_policy.max_memory_bytes(), 16 * 1024 * 1024);
+        assert!(!default_policy.allow_stdout);
+        assert!(!default_policy.allow_env);
+
+        let strict_policy = SandboxPolicy::strict();
+        assert_eq!(strict_policy.fuel_limit, 5_000_000);
+        assert_eq!(strict_policy.epoch_deadline_ms, 500);
+        assert_eq!(strict_policy.max_memory_pages, 128);
+
+        let permissive_policy = SandboxPolicy::permissive();
+        assert_eq!(permissive_policy.fuel_limit, 50_000_000);
+        assert_eq!(permissive_policy.max_memory_pages, 1024);
+        assert!(permissive_policy.allow_stdout);
+
+        let custom_policy = SandboxPolicy::new(1_000_000, 200, 64)
+            .with_allow_stdout(true)
+            .with_allow_env(false);
+        assert_eq!(custom_policy.fuel_limit, 1_000_000);
+        assert_eq!(custom_policy.epoch_deadline_ms, 200);
+        assert_eq!(custom_policy.max_memory_pages, 64);
+        assert!(custom_policy.allow_stdout);
+
+        // Serialization roundtrip
+        let json = serde_json::to_string(&custom_policy).expect("serialize policy");
+        let deserialized: SandboxPolicy = serde_json::from_str(&json).expect("deserialize policy");
+        assert_eq!(custom_policy, deserialized);
+
+        // MeteredExecutionResult tests
+        let ok_res = MeteredExecutionResult::ok(0, 42_000, 85, b"hello_sandbox".to_vec());
+        assert!(ok_res.is_success());
+        assert_eq!(ok_res.exit_code, 0);
+        assert_eq!(ok_res.fuel_consumed, 42_000);
+        assert_eq!(ok_res.duration_us, 85);
+        assert_eq!(ok_res.output_as_str().unwrap(), "hello_sandbox");
+        assert!(ok_res.error_diagnostic.is_none());
+
+        let err_res = MeteredExecutionResult::err(-1, 5_000_000, 520, "Fuel limit exceeded");
+        assert!(!err_res.is_success());
+        assert_eq!(err_res.exit_code, -1);
+        assert_eq!(err_res.fuel_consumed, 5_000_000);
+        assert_eq!(err_res.error_diagnostic.as_deref(), Some("Fuel limit exceeded"));
+
+        let res_json = serde_json::to_string(&ok_res).expect("serialize result");
+        let res_deser: MeteredExecutionResult = serde_json::from_str(&res_json).expect("deserialize result");
+        assert_eq!(ok_res, res_deser);
     }
 }

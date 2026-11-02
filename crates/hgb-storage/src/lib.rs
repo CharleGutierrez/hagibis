@@ -28,8 +28,23 @@ pub use style::{StyleFeedbackRecord, StyleMemoryVault};
 pub use vector::{cosine_similarity, VectorEntry, VectorIndex};
 pub use simd_vector_index::{SimdSearchMatch, SimdVectorIndex, SimdVectorRecord};
 pub use semantic_cache::{
-    SemanticCacheEntry, SemanticCacheHit, SemanticCacheStats, SemanticQueryCache,
+    blob_to_embedding, canonicalize_json_str, compute_entry_id, dot_product_scalar,
+    dot_product_simd, embedding_to_blob, simd_cosine_similarity as simd_cache_cosine_similarity,
+    CachedSemanticResponse, SemanticCacheEntry, SemanticCacheHit, SemanticCacheStats,
+    SemanticQueryCache, SemanticResponseCache, SemanticResponseCacheStats,
+    DEFAULT_CACHE_CAPACITY, DEFAULT_CACHE_TTL_SECS, DEFAULT_EMBEDDING_DIM,
+    DEFAULT_SIMILARITY_THRESHOLD,
 };
+
+/// Pillar 3: Semantic Response Cache module
+pub mod semantic_response_cache {
+    pub use crate::semantic_cache::{
+        blob_to_embedding, canonicalize_json_str, compute_entry_id, dot_product_scalar,
+        dot_product_simd, embedding_to_blob, simd_cosine_similarity, CachedSemanticResponse,
+        SemanticResponseCache, SemanticResponseCacheStats, DEFAULT_CACHE_CAPACITY,
+        DEFAULT_CACHE_TTL_SECS, DEFAULT_EMBEDDING_DIM, DEFAULT_SIMILARITY_THRESHOLD,
+    };
+}
 pub use distributed_vector_engine::{
     DistributedVectorEngine, VectorEngineStatus, VectorSearchResult, VectorStreamEvent,
 };
@@ -108,7 +123,7 @@ pub use fts5_hnsw_hybrid::{
 pub mod simd_runtime_dispatch;
 pub use simd_runtime_dispatch::{
     active_simd_target_name, cosine_similarity_scalar, detect_simd_architecture,
-    detect_simd_capabilities, dot_product_scalar, euclidean_distance_scalar,
+    detect_simd_capabilities, dot_product_scalar as simd_dot_product_scalar, euclidean_distance_scalar,
     euclidean_distance_sq_scalar, normalize_inplace_scalar, simd_cosine_similarity,
     simd_dot_product, simd_euclidean_distance, simd_euclidean_distance_sq,
     simd_normalize_inplace, SimdArchitecture, SimdCapabilities,
@@ -163,6 +178,15 @@ pub use vector_native_sqlite_vss::{
     VectorIndexConfig as VssIndexConfig, VectorNativeSearchResult, VectorNativeSqliteStore,
     VectorRecord as VssVectorRecord, VectorSearchResult as VssSearchResult,
     VectorStoreStats as VssStoreStats,
+};
+
+// ============================================================================
+// Pillar 1: Supercharge the WASM Kernel & Edge Isolation (Precompiled Module Cache)
+// ============================================================================
+pub mod precompiled_wasm_cache;
+pub use precompiled_wasm_cache::{
+    PrecompiledCacheStats, PrecompiledWasmCache, CACHE_FILE_EXTENSION,
+    COMPILER_VERSION_TAG, DEFAULT_MAX_MEMORY_ENTRIES,
 };
 
 // ============================================================================

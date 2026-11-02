@@ -1,5 +1,18 @@
 {
   "tools": {
+    "hgb_semantic_cache_stats": {
+      "description": "Inspect semantic response cache metrics including hit count, miss count, hit ratio, saved tokens, memory usage, and cached entry count",
+      "parameters": {
+        "detailed": { "type": "boolean", "description": "Include per-tool breakdown of cached entries", "default": false }
+      }
+    },
+    "hgb_semantic_cache_purge": {
+      "description": "Purge expired entries or clear specific tool namespaces from the SIMD semantic response cache",
+      "parameters": {
+        "tool_name": { "type": "string", "description": "Optional specific tool namespace to invalidate" },
+        "purge_all": { "type": "boolean", "description": "Purge all cached responses across all tools", "default": false }
+      }
+    },
     "hgb_mcp_mesh_broadcast": {
       "description": "Broadcasts a task, prompt, or context update across all federated models (Ollama, Claude, GPT-4o, Sovereign) in the MCP native mesh",
       "parameters": {

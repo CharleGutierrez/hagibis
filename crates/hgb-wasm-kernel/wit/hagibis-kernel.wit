@@ -214,6 +214,28 @@ interface agent-runtime-extension {
     invoke-dynamic-tool: func(tool-id: string, function-name: string, payload: list<u8>) -> result<list<u8>, string>;
 }
 
+/// Untrusted Sandbox Runner Interface (Pillar 1: Supercharge WASM Kernel & Edge Isolation)
+interface untrusted-sandbox-runner {
+    record sandbox-policy {
+        fuel-limit: u64,
+        epoch-deadline-ms: u64,
+        max-memory-pages: u32,
+        allow-stdout: bool,
+        allow-env: bool,
+    }
+
+    record metered-execution-result {
+        exit-code: i32,
+        fuel-consumed: u64,
+        duration-us: u64,
+        output: list<u8>,
+        error-diagnostic: option<string>,
+    }
+
+    /// Execute untrusted agent-generated code with strict fuel, epoch deadline, and memory limits
+    execute-untrusted-code: func(wasm-bytes: list<u8>, entrypoint: string, input-payload: list<u8>, policy: sandbox-policy) -> result<metered-execution-result, string>;
+}
+
 world hagibis-wasm-engine {
     export state-sync;
     export executor;
@@ -222,5 +244,6 @@ world hagibis-wasm-engine {
     export dynamic-component-plugin;
     export dynamic-tool-compiler;
     export agent-runtime-extension;
+    export untrusted-sandbox-runner;
 }
 

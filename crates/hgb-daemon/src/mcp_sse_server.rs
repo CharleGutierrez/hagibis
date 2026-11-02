@@ -154,6 +154,7 @@ pub struct McpSseState {
     pub port: u16,
     pub auth_token: String,
     pub dynamic_registry: Arc<std::sync::RwLock<Option<Arc<crate::dynamic_mcp_registry::DynamicMcpRegistry>>>>,
+    pub semantic_cache: Arc<hgb_storage::semantic_response_cache::SemanticResponseCache>,
 }
 
 impl McpSseState {
@@ -164,6 +165,12 @@ impl McpSseState {
 
     pub fn with_auth_token<P: AsRef<Path>>(workspace_root: P, port: u16, auth_token: impl Into<String>) -> Self {
         let ws = workspace_root.as_ref().to_path_buf();
+        let cache_db = ws.join(".hgb").join("semantic_cache.db");
+        let semantic_cache = Arc::new(
+            hgb_storage::semantic_response_cache::SemanticResponseCache::open(&cache_db, 10000, 0.92, 3600)
+                .unwrap_or_else(|_| hgb_storage::semantic_response_cache::SemanticResponseCache::in_memory(10000, 0.92, 3600))
+        );
+
         Self {
             workspace_root: ws.clone(),
             sessions: Arc::new(RwLock::new(HashMap::new())),
@@ -174,6 +181,7 @@ impl McpSseState {
             port,
             auth_token: auth_token.into(),
             dynamic_registry: Arc::new(std::sync::RwLock::new(None)),
+            semantic_cache,
         }
     }
 
@@ -431,6 +439,104 @@ pub async fn handle_client_message(
         "tools/call" => {
             let tool_name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
             let arguments = params.get("arguments").cloned().unwrap_or(serde_json::json!({}));
+            let args_str = arguments.to_string();
+
+            // Intercept semantic cache inspection and purge tools directly
+            if tool_name == "hgb_semantic_cache_stats" {
+                let stats = state.semantic_cache.stats();
+                let resp_str = serde_json::to_string_pretty(&stats).unwrap_or_default();
+                let resp = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {
+                        "content": [{ "type": "text", "text": resp_str }],
+                        "isError": false
+                    }
+                });
+                return (StatusCode::OK, Json(resp));
+            } else if tool_name == "hgb_semantic_cache_purge" {
+                let purge_all = arguments.get("purge_all").and_then(|v| v.as_bool()).unwrap_or(false);
+                let target_tool = arguments.get("tool_name").and_then(|v| v.as_str());
+
+                let purged = if purge_all {
+                    state.semantic_cache.purge_all()
+                } else if let Some(t) = target_tool {
+                    state.semantic_cache.purge_tool(t)
+                } else {
+                    state.semantic_cache.prune_expired()
+                };
+
+                let report = serde_json::json!({
+                    "status": "purged",
+                    "purged_entries": purged,
+                    "purge_all": purge_all,
+                    "target_tool": target_tool
+                });
+                let resp = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {
+                        "content": [{ "type": "text", "text": serde_json::to_string_pretty(&report).unwrap_or_default() }],
+                        "isError": false
+                    }
+                });
+                return (StatusCode::OK, Json(resp));
+            }
+
+            // 1. Semantic cache lookup before dispatching
+            let query_emb = hgb_core::deterministic_semantic_embedding(&args_str, 768);
+            if let Some(cached) = state.semantic_cache.lookup_semantic(tool_name, &args_str, &query_emb, 0.92) {
+                let sim = cached.similarity_score.unwrap_or(1.0);
+                let saved_ms = cached.execution_duration_ms;
+
+                // Emit SSE chunk with metadata tag
+                if !session_id.is_empty() {
+                    let meta_evt = Event::default().event("message").data(
+                        serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "method": "notifications/message",
+                            "params": {
+                                "level": "info",
+                                "logger": "semantic_cache",
+                                "data": {
+                                    "cached": true,
+                                    "semantic_similarity": sim,
+                                    "saved_ms": saved_ms
+                                }
+                            }
+                        })
+                        .to_string(),
+                    );
+                    state.emit_to_session(&session_id, meta_evt).await;
+                }
+
+                let resp = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": cached.response_text
+                            }
+                        ],
+                        "_meta": {
+                            "cached": true,
+                            "semantic_similarity": sim,
+                            "saved_ms": saved_ms
+                        },
+                        "isError": false
+                    }
+                });
+                return (StatusCode::OK, Json(resp));
+            }
+
+            let _governor_guard = hgb_core::dynatune_subsystem_fuse::DynatuneWorkloadGuard::acquire_for_workspace(
+                &state.workspace_root,
+                tool_name,
+            );
+
+            let exec_start = std::time::Instant::now();
 
             let (progress_tx, mut progress_rx) = mpsc::unbounded_channel::<(u32, String)>();
             let state_clone = Arc::clone(&state);
@@ -510,6 +616,18 @@ pub async fn handle_client_message(
             // Close progress channel and wait for pump to flush
             drop(progress_tx);
             let _ = progress_pump.await;
+
+            let execution_duration_ms = exec_start.elapsed().as_secs_f64() * 1000.0;
+            if !is_err && tool_name != "hgb_semantic_cache_stats" && tool_name != "hgb_semantic_cache_purge" {
+                state.semantic_cache.insert(
+                    tool_name,
+                    &args_str,
+                    query_emb,
+                    result_str.clone(),
+                    execution_duration_ms,
+                    Some(3600),
+                );
+            }
 
             // Return standardized MCP tool call content result
             let resp = serde_json::json!({
@@ -718,6 +836,104 @@ mod tests {
             .unwrap();
         let resp = app.clone().oneshot(unauth_sse).await.unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_mcp_sse_semantic_cache_hit_and_telemetry() {
+        let temp_dir = std::env::temp_dir().join(format!("hgb_mcp_cache_test_{}", uuid::Uuid::new_v4().simple()));
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let token = "test_cache_token_999";
+        let state = Arc::new(McpSseState::with_auth_token(&temp_dir, 8083, token));
+
+        // Pre-populate semantic cache with a response
+        let tool = "hgb_system_inspect";
+        let args_str = r#"{"component":"kernel","mode":"fast"}"#;
+        let response_text = r#"{"kernel":"Linux","status":"optimal"}"#;
+        let query_emb = hgb_core::deterministic_semantic_embedding(args_str, 768);
+
+        state.semantic_cache.insert(
+            tool,
+            args_str,
+            query_emb,
+            response_text.to_string(),
+            35.5,
+            Some(3600),
+        );
+
+        // Register session channel
+        let session_id = "test-session-cache-uuid".to_string();
+        let (tx, mut rx) = mpsc::unbounded_channel::<Event>();
+        {
+            let mut sess = state.sessions.write().await;
+            sess.insert(session_id.clone(), tx);
+        }
+
+        // Call tools/call with matching arguments
+        let query = MessageQuery { session_id: Some(session_id), profile: None };
+        let req = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 101,
+            "method": "tools/call",
+            "params": {
+                "name": tool,
+                "arguments": {
+                    "mode": "fast",
+                    "component": "kernel"
+                }
+            }
+        });
+
+        let resp = handle_client_message(State(state.clone()), Query(query), Json(req)).await;
+        assert_eq!(resp.0, StatusCode::OK);
+
+        let body_val = &resp.1 .0;
+        let result = body_val.get("result").expect("result field");
+        assert_eq!(result["_meta"]["cached"], true);
+        assert_eq!(result["_meta"]["saved_ms"], 35.5);
+        assert_eq!(result["_meta"]["semantic_similarity"], 1.0);
+        assert_eq!(result["content"][0]["text"], response_text);
+
+        // Verify that SSE session received cache telemetry metadata notification
+        let mut cache_event_received = false;
+        while let Ok(evt) = rx.try_recv() {
+            let s = format!("{:?}", evt);
+            if s.contains("semantic_cache") && s.contains("cached") {
+                cache_event_received = true;
+            }
+        }
+        assert!(cache_event_received, "Expected SSE notification with cache hit metadata");
+
+        // Verify stats tool inspection
+        let stats_req = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 102,
+            "method": "tools/call",
+            "params": {
+                "name": "hgb_semantic_cache_stats",
+                "arguments": {}
+            }
+        });
+        let stats_resp = handle_client_message(State(state.clone()), Query(MessageQuery { session_id: None, profile: None }), Json(stats_req)).await;
+        assert_eq!(stats_resp.0, StatusCode::OK);
+        let stats_text = stats_resp.1 .0["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(stats_text.contains("\"hit_count\": 1"));
+
+        // Verify purge tool
+        let purge_req = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 103,
+            "method": "tools/call",
+            "params": {
+                "name": "hgb_semantic_cache_purge",
+                "arguments": { "purge_all": true }
+            }
+        });
+        let purge_resp = handle_client_message(State(state.clone()), Query(MessageQuery { session_id: None, profile: None }), Json(purge_req)).await;
+        assert_eq!(purge_resp.0, StatusCode::OK);
+        let purge_text = purge_resp.1 .0["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(purge_text.contains("\"status\": \"purged\""));
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }

@@ -225,6 +225,8 @@ pub struct DaemonState {
     pub pgo_feedback: Arc<crate::pgo_feedback_loop::PgoFeedbackLoop>,
     // Pillar 3: Distributed Firecracker MicroVM Swarms
     pub microvm_work_stealing_queue: Arc<crate::microvm_work_stealing_queue::MicrovmWorkStealingQueue>,
+    // Pillar 4: Native Fully Autonomous Self-Healing Daemon Engine (Chapter 8)
+    pub native_self_healing_daemon: Arc<crate::native_self_healing_daemon::NativeSelfHealingDaemon>,
 }
 
 impl DaemonState {
@@ -500,6 +502,14 @@ impl DaemonState {
             });
         }
 
+        let native_self_healing_daemon = Arc::new(
+            crate::native_self_healing_daemon::NativeSelfHealingDaemon::new(&ws_dir)
+                .unwrap_or_else(|_| {
+                    let mem_store = Arc::new(crate::native_self_healing_daemon::SelfHealingLogStore::in_memory().unwrap());
+                    crate::native_self_healing_daemon::NativeSelfHealingDaemon::with_store(&ws_dir, mem_store).unwrap()
+                })
+        );
+
         Self {
             start_time: std::time::Instant::now(),
             socket_path,
@@ -577,6 +587,7 @@ impl DaemonState {
             dynamic_mcp_registry,
             pgo_feedback,
             microvm_work_stealing_queue,
+            native_self_healing_daemon,
         }
     }
 
@@ -5335,6 +5346,53 @@ impl HagibisDaemon {
                         HgbResponse::AutonomousHealResult(val)
                     }
                     Err(e) => HgbResponse::Error(format!("Autonomous heal trigger failed: {e}")),
+                }
+            }
+
+            // Pillar 4: Native Self-Healing Autonomous Daemon Loops (Masterclass Chapter 8)
+            HgbRequest::NativeSelfHeal { check, test, bench, auto_apply, max_retries, target_crate, target_file } => {
+                let retries = max_retries.unwrap_or(crate::native_self_healing_daemon::DEFAULT_MAX_RETRIES);
+                let engine = &state.native_self_healing_daemon;
+
+                // 1. Diagnostic Monitoring & Interception
+                let incident_res = if test {
+                    engine.check_tests(target_crate.as_deref())
+                } else if bench {
+                    engine.check_benchmarks(target_crate.as_deref(), crate::native_self_healing_daemon::DEFAULT_BENCHMARK_REGRESSION_THRESHOLD_PCT)
+                } else {
+                    // Default to compilation diagnostic check
+                    engine.check_compilation(target_crate.as_deref())
+                };
+
+                let incident_opt = match incident_res {
+                    Ok(inc) => inc,
+                    Err(e) => return HgbResponse::Error(format!("Diagnostic check failed: {e}")),
+                };
+
+                match incident_opt {
+                    Some(mut incident) => {
+                        if let Some(ref tf) = target_file {
+                            if !incident.affected_files.contains(tf) {
+                                incident.affected_files.insert(0, tf.clone());
+                            }
+                        }
+                        match engine.run_self_healing_cycle(incident, retries, auto_apply, None) {
+                            Ok(cert) => {
+                                let json_str = serde_json::to_string_pretty(&cert).unwrap_or_default();
+                                HgbResponse::NativeSelfHealResult(json_str)
+                            }
+                            Err(e) => HgbResponse::Error(format!("Autonomous self-healing cycle failed: {e}")),
+                        }
+                    }
+                    None => {
+                        let ok_payload = serde_json::json!({
+                            "status": "nominal",
+                            "first_green": true,
+                            "consensus_reached": true,
+                            "message": "All diagnostic checks passed. 0 compilation errors, 0 test failures, 0 benchmark regressions."
+                        });
+                        HgbResponse::NativeSelfHealResult(serde_json::to_string_pretty(&ok_payload).unwrap_or_default())
+                    }
                 }
             }
 

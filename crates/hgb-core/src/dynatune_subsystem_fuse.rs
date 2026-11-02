@@ -11,10 +11,11 @@
 //! - Automatic idle drop: when task queues drain, immediately drops CPU governors back to `powersave`
 //! - RAII `DynatuneWorkloadBoostGuard` ensuring automatic cleanup and baseline restoration upon drop
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
@@ -35,6 +36,8 @@ pub const SIBLING_KERNEL_CTL_BIN: &str = "/home/toshiba/My AI Project/kernel-opt
 pub const THERMAL_THROTTLE_THRESHOLD_C: f64 = 78.0;
 /// Severe thermal critical threshold where workload is aggressively serialized to 1 worker (85.0°C)
 pub const THERMAL_CRITICAL_TEMP_C: f64 = 85.0;
+/// Thermal recovery threshold where throttling safely disengages and nominal concurrency restores (70.0°C)
+pub const THERMAL_RECOVERY_THRESHOLD_C: f64 = 70.0;
 /// Critical battery percentage threshold on discharge (20%)
 pub const BATTERY_CRITICAL_THRESHOLD_PCT: u32 = 20;
 
@@ -196,6 +199,7 @@ pub struct SubsystemPaths {
     pub dynatune_bin: PathBuf,
     pub dynatune_sock: PathBuf,
     pub kernel_ctl_bin: PathBuf,
+    pub governor_script: PathBuf,
 }
 
 impl Default for SubsystemPaths {
@@ -215,6 +219,14 @@ impl SubsystemPaths {
             PathBuf::from(DEFAULT_KERNEL_CTL_BIN)
         };
 
+        let gov_script = if Path::new("scripts/cpu-governor.sh").exists() {
+            PathBuf::from("scripts/cpu-governor.sh")
+        } else if Path::new("/home/toshiba/My AI Project/hagibis/scripts/cpu-governor.sh").exists() {
+            PathBuf::from("/home/toshiba/My AI Project/hagibis/scripts/cpu-governor.sh")
+        } else {
+            PathBuf::from("scripts/cpu-governor.sh")
+        };
+
         Self {
             power_supply_dir: PathBuf::from("/sys/class/power_supply"),
             cpufreq_dir: PathBuf::from("/sys/devices/system/cpu/cpufreq"),
@@ -224,6 +236,7 @@ impl SubsystemPaths {
             dynatune_bin: PathBuf::from(DEFAULT_DYNATUNE_BIN),
             dynatune_sock: PathBuf::from(DEFAULT_DYNATUNE_SOCK),
             kernel_ctl_bin: kernel_ctl,
+            governor_script: gov_script,
         }
     }
 
@@ -247,7 +260,14 @@ impl SubsystemPaths {
             dynatune_bin: dynatune_bin.into(),
             dynatune_sock: dynatune_sock.into(),
             kernel_ctl_bin: kernel_ctl_bin.into(),
+            governor_script: PathBuf::from("scripts/cpu-governor.sh"),
         }
+    }
+
+    /// Set explicit governor script path
+    pub fn with_governor_script(mut self, path: impl Into<PathBuf>) -> Self {
+        self.governor_script = path.into();
+        self
     }
 }
 
@@ -257,6 +277,10 @@ pub struct DynatuneSubsystemFuse {
     is_boosted: Arc<AtomicBool>,
     last_safeguard: Arc<std::sync::RwLock<SafeguardState>>,
     boost_counter: Arc<AtomicU64>,
+    active_heavy_tasks: Arc<AtomicUsize>,
+    simulated_temp_c: Arc<std::sync::RwLock<Option<f64>>>,
+    simulated_battery: Arc<std::sync::RwLock<Option<(u32, bool, f64, f64)>>>,
+    simulated_mglru_ttl: Arc<std::sync::RwLock<Option<u64>>>,
 }
 
 impl Default for DynatuneSubsystemFuse {
@@ -281,6 +305,10 @@ impl DynatuneSubsystemFuse {
                 recommended_concurrency: base_concurrency,
             })),
             boost_counter: Arc::new(AtomicU64::new(0)),
+            active_heavy_tasks: Arc::new(AtomicUsize::new(0)),
+            simulated_temp_c: Arc::new(std::sync::RwLock::new(None)),
+            simulated_battery: Arc::new(std::sync::RwLock::new(None)),
+            simulated_mglru_ttl: Arc::new(std::sync::RwLock::new(None)),
         }
     }
 
@@ -369,6 +397,15 @@ impl DynatuneSubsystemFuse {
 
     /// Query thermal zones and compute package temperature
     pub fn query_thermal(&self) -> (f64, f64, Vec<ThermalZoneRecord>) {
+        if let Some(sim) = *self.simulated_temp_c.read().unwrap() {
+            let zones = vec![ThermalZoneRecord {
+                name: "sim_zone0".to_string(),
+                zone_type: "x86_pkg_temp".to_string(),
+                temp_c: sim,
+            }];
+            return (sim, sim, zones);
+        }
+
         let mut zones = Vec::new();
         let mut cpu_temp_milli = None;
         let mut max_milli = 0i64;
@@ -457,6 +494,20 @@ impl DynatuneSubsystemFuse {
 
     /// Query primary battery metrics, capacity percentage, and instantaneous discharge rate in Watts
     pub fn query_battery(&self) -> Option<BatteryTelemetryRecord> {
+        if let Some((cap, discharging, draw_w, _drop_rate)) = *self.simulated_battery.read().unwrap() {
+            let is_critical = cap < BATTERY_CRITICAL_THRESHOLD_PCT && discharging;
+            return Some(BatteryTelemetryRecord {
+                name: "BAT_SIM".to_string(),
+                status: if discharging { "Discharging".to_string() } else { "Charging".to_string() },
+                capacity_pct: cap,
+                discharge_rate_w: draw_w,
+                is_discharging: discharging,
+                is_critical,
+                energy_now_wh: 30.0,
+                energy_full_wh: 40.0,
+            });
+        }
+
         let entries = fs::read_dir(&self.paths.power_supply_dir).ok()?;
         for entry in entries.flatten() {
             let path = entry.path();
@@ -521,6 +572,14 @@ impl DynatuneSubsystemFuse {
 
     /// Query host Linux Multi-Gen LRU (MGLRU) parameters
     pub fn query_mglru(&self) -> MglruTelemetryRecord {
+        if let Some(ttl) = *self.simulated_mglru_ttl.read().unwrap() {
+            return MglruTelemetryRecord {
+                enabled: true,
+                flags: "0x0007".to_string(),
+                min_ttl_ms: ttl,
+            };
+        }
+
         let enabled_path = self.paths.mglru_dir.join("enabled");
         let min_ttl_path = self.paths.mglru_dir.join("min_ttl_ms");
 
@@ -646,6 +705,19 @@ impl DynatuneSubsystemFuse {
             }
         }
 
+        // 4. Dynatune Safeguard Thermal Hysteresis: If previously throttled, enforce powersave until cooled (< 70.0°C)
+        let is_previously_throttled = self.last_safeguard.read().map(|g| g.is_throttled()).unwrap_or(false);
+        if is_previously_throttled && cpu_pkg_temp_c >= THERMAL_RECOVERY_THRESHOLD_C {
+            let limit = if base_concurrency <= 2 { 1 } else { 2 };
+            return SafeguardState::Throttled {
+                cpu_temp_c: cpu_pkg_temp_c,
+                battery_pct: battery.as_ref().map(|b| b.capacity_pct).unwrap_or(100),
+                is_discharging: battery.as_ref().map(|b| b.is_discharging).unwrap_or(false),
+                reason: format!("Thermal hysteresis active: cool-down in progress ({:.1}°C >= {:.1}°C recovery floor)", cpu_pkg_temp_c, THERMAL_RECOVERY_THRESHOLD_C),
+                restricted_concurrency: limit,
+            };
+        }
+
         SafeguardState::Optimal {
             recommended_concurrency: base_concurrency,
         }
@@ -678,15 +750,20 @@ impl DynatuneSubsystemFuse {
         self.write_all_cpufreq("scaling_governor", "powersave");
         self.write_all_cpufreq("energy_performance_preference", target_epp);
 
-        // 2. Throttle Intel P-State if present
+        // 2. Throttle Intel P-State if present (disable turbo boost)
+        let _ = fs::write(self.paths.intel_pstate_dir.join("no_turbo"), "1\n");
         let _ = fs::write(self.paths.intel_pstate_dir.join("max_perf_pct"), "70\n");
         let _ = fs::write(self.paths.intel_pstate_dir.join("hwp_dynamic_boost"), "0\n");
 
         // 3. Relax MGLRU min_ttl_ms back to 0
         self.set_mglru_min_ttl_ms(IDLE_MGLRU_MIN_TTL_MS);
 
-        // 4. Invoke sibling dynabook-kernel-ctl if available
-        if self.is_kernel_ctl_available() {
+        // 4. Invoke governor_script or sibling dynabook-kernel-ctl if available
+        if self.paths.governor_script.exists() {
+            let _ = Command::new(&self.paths.governor_script)
+                .arg("powersave")
+                .output();
+        } else if self.is_kernel_ctl_available() {
             let _ = Command::new(&self.paths.kernel_ctl_bin)
                 .args(["profile", "battery"])
                 .output();
@@ -790,8 +867,12 @@ impl DynatuneSubsystemFuse {
         // 5. Configure Linux MGLRU min_ttl_ms 1000 to prioritize memory bandwidth
         self.set_mglru_min_ttl_ms(BURST_MGLRU_MIN_TTL_MS);
 
-        // 6. Invoke sibling dynabook-kernel-ctl if available
-        if self.is_kernel_ctl_available() {
+        // 6. Invoke cpu-governor.sh or sibling dynabook-kernel-ctl if available
+        if self.paths.governor_script.exists() {
+            let _ = Command::new(&self.paths.governor_script)
+                .arg("performance")
+                .output();
+        } else if self.is_kernel_ctl_available() {
             let _ = Command::new(&self.paths.kernel_ctl_bin)
                 .args(["profile", "performance"])
                 .output();
@@ -854,16 +935,22 @@ impl DynatuneSubsystemFuse {
         self.write_all_cpufreq("scaling_governor", "powersave");
         self.write_all_cpufreq("energy_performance_preference", target_epp);
 
-        // 2. Configure Intel P-State (max_perf_pct=80 on battery, 100 on AC)
+        // 2. Configure Intel P-State (max_perf_pct=80 on battery, 100 on AC, no_turbo=1)
         let target_perf = if ac { "100" } else { "80" };
+        let _ = fs::write(self.paths.intel_pstate_dir.join("no_turbo"), "1\n");
         let _ = fs::write(self.paths.intel_pstate_dir.join("max_perf_pct"), format!("{}\n", target_perf));
         let _ = fs::write(self.paths.intel_pstate_dir.join("hwp_dynamic_boost"), "0\n");
 
         // 3. Reset MGLRU min_ttl_ms to 0
         self.set_mglru_min_ttl_ms(IDLE_MGLRU_MIN_TTL_MS);
 
-        // 4. Invoke sibling dynabook-kernel-ctl if available
-        if self.is_kernel_ctl_available() {
+        // 4. Invoke cpu-governor.sh or sibling dynabook-kernel-ctl if available
+        if self.paths.governor_script.exists() {
+            let script_mode = if ac { "balanced" } else { "powersave" };
+            let _ = Command::new(&self.paths.governor_script)
+                .arg(script_mode)
+                .output();
+        } else if self.is_kernel_ctl_available() {
             let target_profile = if ac { "balanced" } else { "battery" };
             let _ = Command::new(&self.paths.kernel_ctl_bin)
                 .args(["profile", target_profile])
@@ -879,6 +966,10 @@ impl DynatuneSubsystemFuse {
 
     /// Set Linux Multi-Gen LRU min_ttl_ms sysfs parameter
     pub fn set_mglru_min_ttl_ms(&self, ttl_ms: u64) -> bool {
+        if self.simulated_mglru_ttl.read().unwrap().is_some() {
+            *self.simulated_mglru_ttl.write().unwrap() = Some(ttl_ms);
+            return true;
+        }
         let min_ttl_file = self.paths.mglru_dir.join("min_ttl_ms");
         if min_ttl_file.exists() {
             fs::write(&min_ttl_file, format!("{}\n", ttl_ms)).is_ok()
@@ -1147,19 +1238,56 @@ impl DynatuneSubsystemFuse {
         })
     }
 
-    /// Acquire RAII `DynatuneWorkloadBoostGuard` bound to this fuse
-    pub fn acquire_guard(self: &Arc<Self>, workload: &str) -> DynatuneWorkloadBoostGuard {
-        DynatuneWorkloadBoostGuard::acquire(self, workload)
+    /// Query current active heavy tasks reference count
+    pub fn active_heavy_tasks(&self) -> usize {
+        self.active_heavy_tasks.load(Ordering::SeqCst)
     }
 
-    /// Helper to write sysfs value across all CPU policy folders
+    /// Set simulated CPU temperature for testing
+    pub fn set_simulated_temp(&self, temp_c: Option<f64>) {
+        *self.simulated_temp_c.write().unwrap() = temp_c;
+    }
+
+    /// Set simulated battery telemetry for testing
+    pub fn set_simulated_battery(&self, battery: Option<(u32, bool, f64, f64)>) {
+        *self.simulated_battery.write().unwrap() = battery;
+    }
+
+    /// Set simulated MGLRU min_ttl_ms for testing
+    pub fn set_simulated_mglru_min_ttl_ms(&self, ttl: Option<u64>) {
+        *self.simulated_mglru_ttl.write().unwrap() = ttl;
+    }
+
+    /// Acquire RAII `DynatuneWorkloadGuard` bound to this fuse
+    pub fn acquire_guard(self: &Arc<Self>, workload: &str) -> DynatuneWorkloadGuard {
+        DynatuneWorkloadGuard::acquire(self, workload)
+    }
+
+    /// Acquire RAII `DynatuneWorkloadGuard` bound to this fuse (alias)
+    pub fn acquire_workload_guard(self: &Arc<Self>, workload: &str) -> DynatuneWorkloadGuard {
+        DynatuneWorkloadGuard::acquire(self, workload)
+    }
+
+    /// Helper to write sysfs value across all CPU policy folders and per-core cpufreq
     fn write_all_cpufreq(&self, file_name: &str, value: &str) -> usize {
         let mut modified = 0;
         if let Ok(entries) = fs::read_dir(&self.paths.cpufreq_dir) {
             for entry in entries.flatten() {
                 let p = entry.path();
-                if p.file_name().unwrap_or_default().to_string_lossy().starts_with("policy") {
+                let fname = p.file_name().unwrap_or_default().to_string_lossy();
+                if fname.starts_with("policy") || fname.starts_with("cpu") {
                     let target_file = p.join(file_name);
+                    if target_file.exists() && fs::write(&target_file, format!("{}\n", value)).is_ok() {
+                        modified += 1;
+                    }
+                }
+            }
+        }
+        if let Ok(entries) = fs::read_dir("/sys/devices/system/cpu") {
+            for entry in entries.flatten() {
+                let fname = entry.file_name().to_string_lossy().to_string();
+                if fname.starts_with("cpu") && fname[3..].chars().all(|c| c.is_ascii_digit()) {
+                    let target_file = entry.path().join("cpufreq").join(file_name);
                     if target_file.exists() && fs::write(&target_file, format!("{}\n", value)).is_ok() {
                         modified += 1;
                     }
@@ -1171,12 +1299,12 @@ impl DynatuneSubsystemFuse {
 }
 
 // ---------------------------------------------------------------------------
-// 4. RAII DynatuneWorkloadBoostGuard
+// 4. RAII DynatuneWorkloadGuard (Workload Reference-Counted Hardware Governor Guard)
 // ---------------------------------------------------------------------------
 
-/// RAII Guard that applies performance boost on creation and automatically restores
-/// baseline governor, EPP, Intel P-state, and MGLRU state on drop.
-pub struct DynatuneWorkloadBoostGuard {
+/// RAII Guard that manages active workload reference counting, automatic governor boost,
+/// and thermal protection across local LLM inference passes, tool executions, and multi-agent loops.
+pub struct DynatuneWorkloadGuard {
     fuse: Arc<DynatuneSubsystemFuse>,
     workload: String,
     previous_state: Option<PreviousSubsystemState>,
@@ -1184,13 +1312,14 @@ pub struct DynatuneWorkloadBoostGuard {
     active: bool,
 }
 
-impl DynatuneWorkloadBoostGuard {
-    /// Create RAII guard, evaluating thermal safeguard and boosting if safe
+impl DynatuneWorkloadGuard {
+    /// Create RAII guard, evaluating thermal safeguard and boosting if safe (reference-counted)
     pub fn acquire(fuse: &Arc<DynatuneSubsystemFuse>, workload: &str) -> Self {
         let safeguard = fuse.check_thermal_safeguard();
 
         if safeguard.is_throttled() {
-            // Safeguard engaged: do not apply boost; guard runs with restricted concurrency
+            // Safeguard engaged: do not apply boost; enforce powersave
+            let _ = fuse.drop_to_powersave();
             Self {
                 fuse: Arc::clone(fuse),
                 workload: workload.to_string(),
@@ -1199,23 +1328,31 @@ impl DynatuneWorkloadBoostGuard {
                 active: true,
             }
         } else {
-            match fuse.boost_performance(workload) {
-                Ok(prev) => Self {
-                    fuse: Arc::clone(fuse),
-                    workload: workload.to_string(),
-                    previous_state: Some(prev),
-                    safeguard,
-                    active: true,
-                },
-                Err(_) => Self {
-                    fuse: Arc::clone(fuse),
-                    workload: workload.to_string(),
-                    previous_state: None,
-                    safeguard,
-                    active: true,
-                },
+            let prev_cnt = fuse.active_heavy_tasks.fetch_add(1, Ordering::SeqCst);
+            let prev_state = if prev_cnt == 0 {
+                fuse.boost_performance(workload).ok()
+            } else {
+                None
+            };
+            Self {
+                fuse: Arc::clone(fuse),
+                workload: workload.to_string(),
+                previous_state: prev_state,
+                safeguard,
+                active: true,
             }
         }
+    }
+
+    /// Acquire guard using global fuse singleton
+    pub fn acquire_global(workload: &str) -> Self {
+        Self::acquire(&global_fuse(), workload)
+    }
+
+    /// Acquire guard for a specific workspace root
+    pub fn acquire_for_workspace(workspace_root: &Path, workload: &str) -> Self {
+        let fuse = get_or_create_workspace_fuse(workspace_root);
+        Self::acquire(&fuse, workload)
     }
 
     /// Name or category of the active workload
@@ -1238,6 +1375,11 @@ impl DynatuneWorkloadBoostGuard {
         &self.safeguard
     }
 
+    /// Current count of active heavy workloads
+    pub fn active_tasks_count(&self) -> usize {
+        self.fuse.active_heavy_tasks()
+    }
+
     /// Disarm guard without restoring on drop
     pub fn disarm(&mut self) -> Option<PreviousSubsystemState> {
         self.active = false;
@@ -1245,17 +1387,59 @@ impl DynatuneWorkloadBoostGuard {
     }
 }
 
-impl Drop for DynatuneWorkloadBoostGuard {
+impl Drop for DynatuneWorkloadGuard {
     fn drop(&mut self) {
         if self.active {
-            if let Some(ref prev) = self.previous_state {
-                let _ = self.fuse.restore_state(prev);
+            if !self.safeguard.is_throttled() {
+                let prev_cnt = self.fuse.active_heavy_tasks.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |cnt| {
+                    Some(cnt.saturating_sub(1))
+                });
+                if let Ok(count_before) = prev_cnt {
+                    if count_before == 1 {
+                        // Count dropped from 1 to 0: all heavy workloads finished!
+                        let _ = self.fuse.drop_to_powersave();
+                    }
+                }
             } else {
                 let _ = self.fuse.drop_to_powersave();
             }
             self.active = false;
         }
     }
+}
+
+/// Backward compatibility alias
+pub type DynatuneWorkloadBoostGuard = DynatuneWorkloadGuard;
+
+static GLOBAL_FUSE: std::sync::OnceLock<Arc<DynatuneSubsystemFuse>> = std::sync::OnceLock::new();
+static WORKSPACE_FUSES: std::sync::OnceLock<std::sync::RwLock<HashMap<PathBuf, Arc<DynatuneSubsystemFuse>>>> = std::sync::OnceLock::new();
+
+/// Access global process-wide singleton DynatuneSubsystemFuse
+pub fn global_fuse() -> Arc<DynatuneSubsystemFuse> {
+    GLOBAL_FUSE.get_or_init(|| Arc::new(DynatuneSubsystemFuse::new())).clone()
+}
+
+/// Access or construct a DynatuneSubsystemFuse bound to a specific workspace root
+pub fn get_or_create_workspace_fuse(workspace_root: &Path) -> Arc<DynatuneSubsystemFuse> {
+    let map_lock = WORKSPACE_FUSES.get_or_init(|| std::sync::RwLock::new(HashMap::new()));
+    {
+        let map = map_lock.read().unwrap();
+        if let Some(fuse) = map.get(workspace_root) {
+            return Arc::clone(fuse);
+        }
+    }
+    let mut map = map_lock.write().unwrap();
+    if let Some(fuse) = map.get(workspace_root) {
+        return Arc::clone(fuse);
+    }
+    let gov_script = workspace_root.join("scripts/cpu-governor.sh");
+    let mut paths = SubsystemPaths::default_linux();
+    if gov_script.exists() {
+        paths.governor_script = gov_script;
+    }
+    let fuse = Arc::new(DynatuneSubsystemFuse::with_paths(paths));
+    map.insert(workspace_root.to_path_buf(), Arc::clone(&fuse));
+    fuse
 }
 
 // ---------------------------------------------------------------------------

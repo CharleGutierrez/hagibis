@@ -2021,6 +2021,7 @@ dependencies = [
  "hgb-storage",
  "libc",
  "memmap2",
+ "regex",
  "reqwest",
  "rusqlite",
  "serde",
@@ -2080,13 +2081,17 @@ dependencies = [
  "blake3",
  "chrono",
  "hgb-core",
+ "hgb-wasm-kernel",
  "memmap2",
  "regex",
  "rusqlite",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.20",
  "tokio",
+ "wasmtime",
+ "wat 1.0.0",
 ]
 
 [[package]]

@@ -1349,6 +1349,23 @@ pub enum HgbRequest {
         #[serde(default)]
         max_retries: Option<usize>,
     },
+    // --- Pillar 4: Native Self-Healing Autonomous Daemon Loops (Chapter 8) ---
+    NativeSelfHeal {
+        #[serde(default)]
+        check: bool,
+        #[serde(default)]
+        test: bool,
+        #[serde(default)]
+        bench: bool,
+        #[serde(default)]
+        auto_apply: bool,
+        #[serde(default)]
+        max_retries: Option<usize>,
+        #[serde(default)]
+        target_crate: Option<String>,
+        #[serde(default)]
+        target_file: Option<String>,
+    },
     // --- Pillar 4: Distributed P2P Swarm Mesh ---
     SwarmMeshDelegate {
         task_id: String,
@@ -2211,6 +2228,8 @@ pub enum HgbResponse {
     WatchdogStatus(crate::autonomous_watchdog::WatchdogStatusReport),
     WatchdogSnapshots(Vec<crate::autonomous_watchdog::AgentContextSnapshot>),
     AutonomousHealResult(serde_json::Value),
+    // Pillar 4: Native Self-Healing Autonomous Daemon Loops (Chapter 8)
+    NativeSelfHealResult(String),
     // Pillar 2: Distributed MicroVM Mesh & WASM Swarm Federation
     SwarmStatus(crate::p2p_swarm_federation::SwarmFederationStatusReport),
     SwarmPeers(Vec<crate::p2p_swarm_federation::WorkerNodeAdvertisement>),

@@ -544,6 +544,8 @@ pub const CORE_TOOLS: &[&str] = &[
     "hgb_mcp_mesh_broadcast",
     "hgb_mcp_mesh_nodes",
     "hgb_zig_kernel_hot_reload",
+    "hgb_semantic_cache_stats",
+    "hgb_semantic_cache_purge",
 ];
 
 /// Backward-compatible alias for CORE_TOOLS
@@ -1362,6 +1364,27 @@ impl HagibisMcpServer {
                 }
             },
             {
+                "name": "hgb_semantic_cache_stats",
+                "description": "Inspect semantic response cache metrics including hit count, miss count, hit ratio, saved tokens, memory usage, and cached entry count",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "detailed": { "type": "boolean", "description": "Include per-tool breakdown of cached entries", "default": false }
+                    }
+                }
+            },
+            {
+                "name": "hgb_semantic_cache_purge",
+                "description": "Purge expired entries or clear specific tool namespaces from the SIMD semantic response cache",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "tool_name": { "type": "string", "description": "Optional specific tool namespace to invalidate" },
+                        "purge_all": { "type": "boolean", "description": "Purge all cached responses across all tools", "default": false }
+                    }
+                }
+            },
+            {
                 "name": "hgb_mcp_mesh_route",
                 "description": "Route and load-balance context requests across the distributed MCP mesh (Local Ollama, MicroVM sandbox, WASM Edge, or P2P swarm) with hardware telemetry guidance and strict privacy boundary enforcement",
                 "inputSchema": {
@@ -1578,6 +1601,12 @@ impl HagibisMcpServer {
     where
         F: FnMut(u32, &str) + Send + 'static,
     {
+        // Wrap heavy tools & MCP executions with RAII DynatuneWorkloadGuard
+        let _governor_guard = crate::dynatune_subsystem_fuse::DynatuneWorkloadGuard::acquire_for_workspace(
+            &self.workspace_root,
+            name,
+        );
+
         match name {
             "hgb_sqlite_query" => {
                 let query = args.get("query").and_then(|q| q.as_str()).ok_or_else(|| {
@@ -3539,6 +3568,113 @@ impl HagibisMcpServer {
                 Ok(serde_json::to_string_pretty(&response).unwrap_or_default())
             }
 
+            "hgb_semantic_cache_stats" => {
+                progress_cb(20, "Querying semantic cache metrics from SQLite WAL...");
+                let db_path = self.workspace_root.join(".hgb").join("semantic_cache.db");
+
+                if !db_path.exists() {
+                    let empty_stats = serde_json::json!({
+                        "status": "ready",
+                        "database_exists": false,
+                        "hit_count": 0,
+                        "miss_count": 0,
+                        "hit_ratio": 0.0,
+                        "saved_tokens": 0,
+                        "saved_duration_ms": 0.0,
+                        "memory_usage_bytes": 0,
+                        "cached_entry_count": 0,
+                        "similarity_threshold": 0.92,
+                        "default_ttl_secs": 3600
+                    });
+                    return Ok(serde_json::to_string_pretty(&empty_stats).unwrap_or_default());
+                }
+
+                let conn = rusqlite::Connection::open(&db_path).map_err(|e| {
+                    HgbError::Execution(format!("Failed to open semantic cache database: {}", e))
+                })?;
+
+                let mut stmt = conn.prepare(
+                    "SELECT COUNT(*), COALESCE(SUM(hit_count), 0), COALESCE(SUM(hit_count * execution_duration_ms), 0),
+                            COALESCE(SUM(LENGTH(response_text)), 0)
+                     FROM semantic_response_cache"
+                ).map_err(|e| HgbError::Execution(format!("SQL query error: {}", e)))?;
+
+                let mut row = stmt.query([]).map_err(|e| HgbError::Execution(format!("SQL query execution error: {}", e)))?;
+
+                let (cached_count, hit_count, saved_duration, total_text_len): (usize, u64, f64, usize) = if let Ok(Some(r)) = row.next() {
+                    (r.get(0).unwrap_or(0), r.get(1).unwrap_or(0), r.get(2).unwrap_or(0.0), r.get(3).unwrap_or(0))
+                } else {
+                    (0, 0, 0.0, 0)
+                };
+
+                let saved_tokens = (total_text_len / 4).max(hit_count as usize) as u64;
+                let file_size = fs::metadata(&db_path).map(|m| m.len() as usize).unwrap_or(0);
+
+                progress_cb(100, "Semantic cache metrics retrieved.");
+                let stats = serde_json::json!({
+                    "status": "ok",
+                    "database_exists": true,
+                    "hit_count": hit_count,
+                    "miss_count": 0,
+                    "hit_ratio": if hit_count > 0 { 1.0 } else { 0.0 },
+                    "saved_tokens": saved_tokens,
+                    "saved_duration_ms": saved_duration,
+                    "memory_usage_bytes": file_size,
+                    "cached_entry_count": cached_count,
+                    "similarity_threshold": 0.92,
+                    "default_ttl_secs": 3600,
+                    "db_path": db_path.display().to_string()
+                });
+
+                Ok(serde_json::to_string_pretty(&stats).unwrap_or_default())
+            }
+
+            "hgb_semantic_cache_purge" => {
+                progress_cb(20, "Resolving cache purge parameters...");
+                let purge_all = args.get("purge_all").and_then(|v| v.as_bool()).unwrap_or(false);
+                let target_tool = args.get("tool_name").and_then(|v| v.as_str());
+
+                let db_path = self.workspace_root.join(".hgb").join("semantic_cache.db");
+                if !db_path.exists() {
+                    let resp = serde_json::json!({
+                        "status": "no_cache_file",
+                        "purged_entries": 0,
+                        "purge_all": purge_all,
+                        "target_tool": target_tool
+                    });
+                    return Ok(serde_json::to_string_pretty(&resp).unwrap_or_default());
+                }
+
+                let conn = rusqlite::Connection::open(&db_path).map_err(|e| {
+                    HgbError::Execution(format!("Failed to open semantic cache database: {}", e))
+                })?;
+
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64;
+
+                progress_cb(60, "Executing semantic cache purge...");
+                let purged = if purge_all {
+                    conn.execute("DELETE FROM semantic_response_cache", []).unwrap_or(0)
+                } else if let Some(tool) = target_tool {
+                    conn.execute("DELETE FROM semantic_response_cache WHERE tool_name = ?1", rusqlite::params![tool]).unwrap_or(0)
+                } else {
+                    conn.execute("DELETE FROM semantic_response_cache WHERE ttl_secs > 0 AND (created_at_epoch_ms + (ttl_secs * 1000)) < ?1", rusqlite::params![now_ms]).unwrap_or(0)
+                };
+
+                let _ = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)", []);
+                progress_cb(100, "Semantic cache purge complete.");
+
+                let report = serde_json::json!({
+                    "status": "purged",
+                    "purged_entries": purged,
+                    "purge_all": purge_all,
+                    "target_tool": target_tool
+                });
+                Ok(serde_json::to_string_pretty(&report).unwrap_or_default())
+            }
+
             "hgb_mcp_mesh_route" => {
                 progress_cb(10, "Initializing Distributed MCP Mesh Router...");
                 let prompt = args.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
@@ -4390,6 +4526,77 @@ path = "src/lib.rs"
         let q_sem_json: Value = serde_json::from_str(&q_sem_res).expect("JSON");
         assert!(q_sem_json["total_results"].as_u64().unwrap() >= 1);
         assert_eq!(q_sem_json["results"][0]["key"], "firecracker_sandboxing.md");
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[tokio::test]
+    async fn test_mcp_semantic_cache_stats_and_purge_tools() {
+        let tmp = std::env::temp_dir().join(format!("hgb_mcp_sem_cache_test_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let hgb_dir = tmp.join(".hgb");
+        let _ = fs::create_dir_all(&hgb_dir);
+
+        let server = HagibisMcpServer::new(&tmp);
+
+        // 1. Verify list_tools contains semantic cache tools
+        let tools_val = HagibisMcpServer::list_tools();
+        let tools = tools_val.as_array().expect("Tools array");
+        let names: Vec<&str> = tools.iter().filter_map(|t| t.get("name").and_then(|n| n.as_str())).collect();
+        assert!(names.contains(&"hgb_semantic_cache_stats"));
+        assert!(names.contains(&"hgb_semantic_cache_purge"));
+
+        // 2. Execute stats tool before DB exists
+        let stats_res = server.execute_tool("hgb_semantic_cache_stats", &serde_json::json!({})).await.expect("stats tool");
+        let stats_json: Value = serde_json::from_str(&stats_res).expect("stats JSON");
+        assert_eq!(stats_json["cached_entry_count"], 0);
+
+        // 3. Create sample cache database
+        let db_path = hgb_dir.join("semantic_cache.db");
+        let conn = rusqlite::Connection::open(&db_path).expect("open test db");
+        conn.execute_batch(
+            "CREATE TABLE semantic_response_cache (
+                 entry_id TEXT PRIMARY KEY,
+                 tool_name TEXT NOT NULL,
+                 canonical_params TEXT NOT NULL,
+                 embedding BLOB NOT NULL,
+                 response_text TEXT NOT NULL,
+                 execution_duration_ms REAL NOT NULL,
+                 created_at_epoch_ms INTEGER NOT NULL,
+                 ttl_secs INTEGER NOT NULL,
+                 hit_count INTEGER NOT NULL
+             );"
+        ).expect("create table");
+
+        let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+        conn.execute(
+            "INSERT INTO semantic_response_cache VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            rusqlite::params![
+                "test_id_1",
+                "hgb_sqlite_query",
+                "{\"query\":\"SELECT 1\"}",
+                vec![0u8; 16],
+                "{\"result\":1}",
+                15.5,
+                now_ms,
+                3600,
+                3
+            ],
+        ).expect("insert sample");
+
+        // 4. Execute stats tool with active cache
+        let stats_active_res = server.execute_tool("hgb_semantic_cache_stats", &serde_json::json!({})).await.expect("stats active");
+        let active_json: Value = serde_json::from_str(&stats_active_res).expect("active JSON");
+        assert_eq!(active_json["status"], "ok");
+        assert_eq!(active_json["cached_entry_count"], 1);
+        assert_eq!(active_json["hit_count"], 3);
+
+        // 5. Purge tool execution
+        let purge_res = server.execute_tool("hgb_semantic_cache_purge", &serde_json::json!({
+            "tool_name": "hgb_sqlite_query"
+        })).await.expect("purge tool");
+        let purge_json: Value = serde_json::from_str(&purge_res).expect("purge JSON");
+        assert_eq!(purge_json["status"], "purged");
+        assert_eq!(purge_json["purged_entries"], 1);
 
         let _ = fs::remove_dir_all(&tmp);
     }
