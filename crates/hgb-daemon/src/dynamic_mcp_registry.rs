@@ -254,6 +254,114 @@ impl DynamicMcpRegistry {
         Ok(loaded)
     }
 
+    /// Discover federated tools dynamically on startup from local plugins (.hgb/plugins/*.wasm),
+    /// custom scripts (.hgb/scripts/), and system utilities, merging into active tool sets.
+    pub async fn discover_federated_tools(&self) -> Result<usize> {
+        let mut discovered = 0usize;
+
+        // 1. First sync with declarative hagibis.mcp.json
+        if let Ok(c) = self.sync_with_mcp_json().await {
+            discovered += c;
+        }
+
+        // 2. Scan .hgb/plugins and .hgb/plugins/wasm for .wasm binaries
+        let search_dirs = [
+            self.workspace_root.join(".hgb").join("plugins"),
+            self.workspace_root.join(".hgb").join("plugins").join("wasm"),
+            self.workspace_root.join(".hgb").join("wasm_tools"),
+        ];
+
+        for dir in search_dirs {
+            if !dir.is_dir() {
+                continue;
+            }
+            if let Ok(entries) = fs::read_dir(&dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("wasm") {
+                        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                        if stem.is_empty() {
+                            continue;
+                        }
+                        let tool_name = format!("wasm_{}", stem.replace('-', "_"));
+                        let mut tools_guard = self.tools.write().await;
+                        if !tools_guard.contains_key(&tool_name) {
+                            let size = fs::metadata(&path).map(|m| m.len() as usize).unwrap_or(0);
+                            let tool = DynamicMcpTool {
+                                name: tool_name.clone(),
+                                description: format!("Federated WebAssembly plugin tool dynamically discovered at {}", path.display()),
+                                input_schema: serde_json::json!({
+                                    "type": "object",
+                                    "properties": {
+                                        "input": { "type": "string", "description": "Invocation payload" }
+                                    }
+                                }),
+                                wasm_path: path.clone(),
+                                wasm_size_bytes: size,
+                                language: "wasm".to_string(),
+                                created_at_epoch_ms: SystemTime::now()
+                                    .duration_since(UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_millis() as u64,
+                                is_active: true,
+                                invocations_count: 0,
+                                last_invoked_epoch_ms: 0,
+                            };
+                            tools_guard.insert(tool_name.clone(), tool);
+                            discovered += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. Scan .hgb/scripts for custom shell scripts
+        let script_dir = self.workspace_root.join(".hgb").join("scripts");
+        if script_dir.is_dir() {
+            if let Ok(entries) = fs::read_dir(&script_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_file() && (path.extension().and_then(|e| e.to_str()) == Some("sh") || path.extension().and_then(|e| e.to_str()) == Some("bash")) {
+                        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                        let tool_name = format!("script_{}", stem.replace('-', "_"));
+                        let mut tools_guard = self.tools.write().await;
+                        if !tools_guard.contains_key(&tool_name) {
+                            let size = fs::metadata(&path).map(|m| m.len() as usize).unwrap_or(0);
+                            let tool = DynamicMcpTool {
+                                name: tool_name.clone(),
+                                description: format!("Federated custom script tool discovered at {}", path.display()),
+                                input_schema: serde_json::json!({
+                                    "type": "object",
+                                    "properties": {
+                                        "args": { "type": "string", "description": "Script arguments" }
+                                    }
+                                }),
+                                wasm_path: path.clone(),
+                                wasm_size_bytes: size,
+                                language: "bash".to_string(),
+                                created_at_epoch_ms: SystemTime::now()
+                                    .duration_since(UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_millis() as u64,
+                                is_active: true,
+                                invocations_count: 0,
+                                last_invoked_epoch_ms: 0,
+                            };
+                            tools_guard.insert(tool_name.clone(), tool);
+                            discovered += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        if discovered > 0 {
+            self.broadcast_tools_changed().await;
+        }
+
+        Ok(discovered)
+    }
+
     /// Persist or update an MCP tool entry in `hagibis.mcp.json`
     pub async fn write_tool_to_mcp_json(
         &self,
@@ -662,6 +770,35 @@ mod tests {
 
         assert!(result.is_ok(), "Auto-instantiation must succeed: {:?}", result);
         assert!(registry.has_tool("hgb_unrecognized_hasher").await);
+
+        let _ = fs::remove_dir_all(&ws_root);
+    }
+
+    #[tokio::test]
+    async fn test_federated_tool_discovery() {
+        let ws_root = create_test_dir();
+        let plugin_dir = ws_root.join(".hgb/plugins/wasm");
+        let script_dir = ws_root.join(".hgb/scripts");
+        let _ = fs::create_dir_all(&plugin_dir);
+        let _ = fs::create_dir_all(&script_dir);
+
+        // Create a dummy discovered WASM plugin and script
+        let dummy_wasm = plugin_dir.join("image_scaler.wasm");
+        let _ = fs::write(&dummy_wasm, b"\0asm\x01\0\0\0");
+
+        let dummy_script = script_dir.join("clean_cache.sh");
+        let _ = fs::write(&dummy_script, b"#!/bin/bash\necho ok");
+
+        let hot_pool = Arc::new(WasmHotPool::new(2).expect("hot pool"));
+        let healer = Arc::new(
+            AutonomousWasmPluginHealer::new(hot_pool, &plugin_dir).expect("healer"),
+        );
+
+        let registry = DynamicMcpRegistry::new(&ws_root, healer);
+        let discovered = registry.discover_federated_tools().await.expect("discover");
+        assert!(discovered >= 2, "Expected at least 2 discovered tools, got {}", discovered);
+        assert!(registry.has_tool("wasm_image_scaler").await);
+        assert!(registry.has_tool("script_clean_cache").await);
 
         let _ = fs::remove_dir_all(&ws_root);
     }

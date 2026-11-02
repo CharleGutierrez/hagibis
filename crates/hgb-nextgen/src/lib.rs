@@ -198,7 +198,7 @@ pub mod ch8_autonomous_agent_loop;
 pub use ch8_autonomous_agent_loop::{
     AstSelfHealingEngine, AutonomousConsensusCertificate, AutonomousLoopStore,
     AutonomousPlanGraph, AutonomousPlanStep, AutonomousPlanningEngine,
-    AutonomousRecoveryStory, CandidatePatch, Ch8AutonomousAgentLoop, ExecutionTier,
+    AutonomousRecoveryStory, AutonomousReinforcementReport, CandidatePatch, Ch8AutonomousAgentLoop, ExecutionTier,
     InterceptedDiagnostic, MultiTierSandboxRouter, StepExecutionResult, StepStatus,
     WorkflowRunRecord, WorkflowStatus,
 };
@@ -210,6 +210,12 @@ pub use self_optimize_healer::{
     OptimizationReceipt, OptimizationStrategy, PatchGenerator, RegressionGuard,
     SandboxVerificationReceipt, SandboxedVerifier, SelfOptimizeHealer,
     SelfOptimizeReport, SelfOptimizeStore,
+};
+
+// Pillar 6: Polish Cockpit & PWA Experience
+pub mod cockpit_web_hud;
+pub use cockpit_web_hud::{
+    create_cockpit_router, spawn_cockpit_web_server, CockpitWebServerState, CockpitWebTelemetry,
 };
 
 

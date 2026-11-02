@@ -502,7 +502,7 @@ enum Commands {
     },
 
     /// Unified autonomous driver with RAM CoW isolation, GoT reasoning, and DPO distillation
-    #[command(alias = "auto", alias = "one")]
+    #[command(alias = "do-task", alias = "one")]
     Do {
         /// Task or feature specification
         spec: String,
@@ -897,6 +897,31 @@ enum Commands {
         /// Render in headless mode without spawning terminal interactive loop
         #[arg(long)]
         headless: bool,
+        /// Launch the lightweight native-feeling Web/Desktop cockpit HUD
+        #[arg(long)]
+        web: bool,
+        /// Port for the Web Cockpit HUD (default: 8084)
+        #[arg(long, default_value_t = 8084)]
+        port: u16,
+    },
+
+    /// Autonomous Reinforcement Vibe-Coding Loop (Masterclass Chapter 8)
+    Auto {
+        /// High-level autonomous optimization goal
+        #[arg(short, long)]
+        goal: String,
+        /// Target crate to benchmark and optimize (default: hgb-core)
+        #[arg(short, long)]
+        crate_name: Option<String>,
+        /// Max self-healing iterations before aborting (default: 3)
+        #[arg(long, default_value_t = 3)]
+        max_retries: usize,
+        /// Automatically commit verified First-Green improvements to git
+        #[arg(long)]
+        commit: bool,
+        /// Run profile-guided optimization passes
+        #[arg(long)]
+        pgo: bool,
     },
 
     /// Generate synthetic personas and relational seed batches with edge-case UTF-8
@@ -3788,7 +3813,18 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    if let Commands::Cockpit { vibe, headless } = command {
+    if let Commands::Cockpit { vibe, headless, web, port } = command {
+        if web {
+            println!("{}", "🛰️ Launching Hagibis Sovereign Web Cockpit HUD...".bold().cyan());
+            let ws_path = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let _handle = hgb_nextgen::spawn_cockpit_web_server(port, ws_path).await?;
+            println!("  [✓] Web Cockpit Dashboard: {}", format!("http://127.0.0.1:{}", port).bold().green());
+            println!("  [✓] Live WebSocket Stream: {}", format!("ws://127.0.0.1:{}/ws/telemetry", port).bold().green());
+            println!("  Press Ctrl+C to terminate Web Cockpit server.");
+            let _ = tokio::signal::ctrl_c().await;
+            return Ok(());
+        }
+
         if vibe {
             if headless {
                 println!("{}", "🎛️ Hagibis Interactive Vibe Cockpit (Headless Mode) 🎛️".bold().cyan());
@@ -11066,6 +11102,38 @@ async fn test_calc() { assert!(calculate(5)); }".to_string()
             }
 
             println!();
+            Ok(())
+        }
+        Commands::Auto { goal, crate_name, max_retries, commit, pgo } => {
+            println!("{}", "🤖 Hagibis Autonomous Reinforcement Vibe-Coding Loop 🤖".bold().magenta());
+            println!("  • Goal:             {}", goal.cyan());
+            println!("  • Target Crate:     {}", crate_name.as_deref().unwrap_or("hgb-core").yellow());
+            println!("  • PGO Optimization: {}", if pgo { "Enabled".green() } else { "Disabled".yellow() });
+            println!("  • Auto-Commit:      {}", if commit { "Enabled".green() } else { "Disabled".yellow() });
+
+            let ws_path = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let agent_loop = hgb_nextgen::ch8_autonomous_agent_loop::Ch8AutonomousAgentLoop::new(&ws_path)
+                .map_err(|e| Box::<dyn std::error::Error>::from(e.to_string()))?
+                .with_max_retries(max_retries);
+
+            println!("  Executing benchmark baseline, LLM code synthesis, and First-Green verification...");
+            match agent_loop.execute_reinforcement_optimization_loop(&goal, crate_name.as_deref(), pgo, commit) {
+                Ok(rep) => {
+                    println!("\n{}", "=== [✓] Autonomous Optimization Consensus Achieved ===".bold().green());
+                    println!("  • Baseline Latency:  {} ms", rep.baseline_bench_duration_ms);
+                    println!("  • Candidate Latency: {} ms", rep.candidate_bench_duration_ms);
+                    println!("  • Measured Speedup:  {}x", rep.speedup_ratio);
+                    println!("  • Memory Delta:      {} KB", rep.memory_delta_bytes / 1024);
+                    println!("  • Consensus Hash:    {}", rep.consensus_hash.cyan());
+                    if let Some(ch) = rep.commit_hash {
+                        println!("  • Committed to Git:  {}", ch.green());
+                    }
+                    println!("  {}", rep.message.green().bold());
+                }
+                Err(e) => {
+                    eprintln!("{}", format!("✖ Autonomous loop failed: {}", e).bold().red());
+                }
+            }
             Ok(())
         }
         Commands::SelfOptimize { target, profile, max_iterations, dry_run } => {

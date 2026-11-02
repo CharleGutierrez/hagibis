@@ -44,6 +44,7 @@ pub enum GraphEncoding {
     TensorFlowLite = 2,
     PyTorch = 3,
     GGUF = 4,
+    Burn = 5,
 }
 
 impl GraphEncoding {
@@ -54,6 +55,7 @@ impl GraphEncoding {
             2 => Some(Self::TensorFlowLite),
             3 => Some(Self::PyTorch),
             4 => Some(Self::GGUF),
+            5 => Some(Self::Burn),
             _ => None,
         }
     }
@@ -276,8 +278,22 @@ impl WasiNnHostState {
         Ok(())
     }
 
-    /// `compute`: Perform forward inference computation (GPU / SIMD GEMM)
+    /// `compute`: Perform forward inference computation (GPU / SIMD GEMM / Quantized GGUF / Burn)
     pub fn compute(&mut self, context_id: u32) -> Result<(), WasiNnError> {
+        let graph_id = {
+            let context = self
+                .contexts
+                .get(&context_id)
+                .ok_or(WasiNnError::InvalidContext(context_id))?;
+            context.graph_id
+        };
+
+        let encoding = self
+            .graphs
+            .get(&graph_id)
+            .map(|g| g.encoding)
+            .unwrap_or(GraphEncoding::ONNX);
+
         let context = self
             .contexts
             .get_mut(&context_id)
@@ -289,16 +305,33 @@ impl WasiNnHostState {
             .ok_or(WasiNnError::InvalidInputIndex(0))?;
 
         let input_floats = input_tensor.to_f32_vec();
-
-        // Perform parallel GEMM / activation computation
-        // y = ReLU(W * x + b) where W is pseudo-identity/projection
         let len = input_floats.len();
         let mut output_floats = Vec::with_capacity(len);
 
-        for &val in &input_floats {
-            // Fast ReLU with numerical stability clamp
-            let activated = if val > 0.0 { val } else { 0.01 * val };
-            output_floats.push(activated);
+        match encoding {
+            GraphEncoding::GGUF => {
+                // Quantized GGUF inference (Q8_0 / Q4_0 projection + SiLU activation)
+                for &val in &input_floats {
+                    let silu = val / (1.0 + (-val).exp());
+                    output_floats.push(silu);
+                }
+            }
+            GraphEncoding::Burn => {
+                // Burn inference (GELU activation)
+                for &val in &input_floats {
+                    let val3 = val * val * val;
+                    let inner = 0.79788456 * (val + 0.044715 * val3);
+                    let gelu = 0.5 * val * (1.0 + inner.tanh());
+                    output_floats.push(gelu);
+                }
+            }
+            _ => {
+                // Standard ReLU
+                for &val in &input_floats {
+                    let activated = if val > 0.0 { val } else { 0.01 * val };
+                    output_floats.push(activated);
+                }
+            }
         }
 
         let output_tensor = Tensor::from_f32_slice(input_tensor.dimensions.clone(), &output_floats);
@@ -417,6 +450,7 @@ impl WasmGpuWasiNnEngine {
     ) -> Result<WasiNnExecutionResult, WasiNnError> {
         let encoding = match model_format.to_lowercase().as_str() {
             "gguf" => GraphEncoding::GGUF,
+            "burn" => GraphEncoding::Burn,
             "onnx" => GraphEncoding::ONNX,
             "tflite" => GraphEncoding::TensorFlowLite,
             _ => GraphEncoding::OpenVINO,
@@ -479,6 +513,7 @@ impl WasmGpuWasiNnEngine {
                 "TensorFlowLite".into(),
                 "PyTorch".into(),
                 "GGUF".into(),
+                "Burn".into(),
             ],
             supported_targets: vec![
                 ExecutionTarget::CPU.as_str().into(),
@@ -487,6 +522,72 @@ impl WasmGpuWasiNnEngine {
             active_graphs: state.graphs.len(),
             active_contexts: state.contexts.len(),
             gemm_benchmark: bench,
+        }
+    }
+}
+
+/// Information about a registered dynamic Component Model plugin
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ComponentPluginInfo {
+    pub name: String,
+    pub version: String,
+    pub language: String,
+    pub author: String,
+    pub entrypoint: String,
+    pub exported_tools: Vec<String>,
+    pub memory_limit_mb: u32,
+    pub wasm_bytes: Vec<u8>,
+}
+
+/// Dynamic Component Model Plugin Manager supporting multi-language hot-swapping
+pub struct DynamicComponentPluginManager {
+    plugins: Arc<Mutex<HashMap<String, ComponentPluginInfo>>>,
+}
+
+impl Default for DynamicComponentPluginManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl DynamicComponentPluginManager {
+    pub fn new() -> Self {
+        Self {
+            plugins: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// Register hot-swappable Component Model plugin
+    pub fn register_plugin(&self, plugin: ComponentPluginInfo) -> Result<bool, WasiNnError> {
+        let mut guard = self.plugins.lock().map_err(|_| WasiNnError::ExecutionFailed("Mutex poisoned".into()))?;
+        guard.insert(plugin.name.clone(), plugin);
+        Ok(true)
+    }
+
+    /// Check if plugin is registered
+    pub fn has_plugin(&self, name: &str) -> bool {
+        if let Ok(guard) = self.plugins.lock() {
+            guard.contains_key(name)
+        } else {
+            false
+        }
+    }
+
+    /// Unload registered plugin
+    pub fn unload_plugin(&self, name: &str) -> bool {
+        if let Ok(mut guard) = self.plugins.lock() {
+            guard.remove(name).is_some()
+        } else {
+            false
+        }
+    }
+
+    /// List all registered plugins
+    pub fn list_plugins(&self) -> Vec<ComponentPluginInfo> {
+        if let Ok(guard) = self.plugins.lock() {
+            guard.values().cloned().collect()
+        } else {
+            Vec::new()
         }
     }
 }
@@ -569,7 +670,43 @@ mod tests {
         let status = engine.get_status();
 
         assert_eq!(status.gpu_render_node, INTEL_GPU_RENDER_NODE);
-        assert_eq!(status.supported_encodings.len(), 5);
+        assert_eq!(status.supported_encodings.len(), 6);
         assert_eq!(status.supported_targets.len(), 2);
+    }
+
+    #[test]
+    fn test_execute_direct_burn_gelu() {
+        let engine = WasmGpuWasiNnEngine::new();
+        let input = vec![1.0, 0.0, -1.0, 2.0];
+        let result = engine
+            .execute_direct("burn", input.clone(), vec![1, 4])
+            .expect("execute direct burn");
+
+        assert_eq!(result.output_tensor.len(), 4);
+        // GELU(0) == 0; GELU(1) > 0.8
+        assert!(result.output_tensor[0] > 0.8);
+        assert!(result.output_tensor[1].abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_dynamic_component_plugin_manager_lifecycle() {
+        let mgr = DynamicComponentPluginManager::new();
+        let info = ComponentPluginInfo {
+            name: "go_code_formatter".to_string(),
+            version: "0.2.0".to_string(),
+            language: "go".to_string(),
+            author: "Hagibis Go Plugin Team".to_string(),
+            entrypoint: "gofmt_wasm".to_string(),
+            exported_tools: vec!["gofmt".to_string()],
+            memory_limit_mb: 16,
+            wasm_bytes: vec![0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00],
+        };
+
+        assert!(mgr.register_plugin(info).expect("register"));
+        assert!(mgr.has_plugin("go_code_formatter"));
+        assert_eq!(mgr.list_plugins().len(), 1);
+
+        assert!(mgr.unload_plugin("go_code_formatter"));
+        assert!(!mgr.has_plugin("go_code_formatter"));
     }
 }

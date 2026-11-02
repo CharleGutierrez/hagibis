@@ -8,3 +8,19 @@ track_dirty_pages = false
 [boot-source]
 kernel_image_path = "/var/lib/hgb/vmlinux"
 boot_args = "console=ttyS0 reboot=k panic=1 pci=off quiet"
+
+[snapshot]
+enabled = true
+cache_dir = "/dev/shm/hgb_microvm_snapshots"
+fallback_dir = ".hgb/microvm_snapshots"
+snapshot_path = "/dev/shm/hgb_microvm_snapshots/base_template.snap"
+mem_file_path = "/dev/shm/hgb_microvm_snapshots/base_template.mem"
+resume_engine = "snapshot_resume"
+enable_diff = true
+instant_spinup_target_ms = 10
+
+[landlock_fallback]
+enabled = true
+ram_cow_base = "/dev/shm"
+isolation_level = "strict"
+

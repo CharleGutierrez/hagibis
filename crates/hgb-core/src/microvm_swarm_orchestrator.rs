@@ -27,7 +27,10 @@ use crate::hardware_aware_workload_router::{
     HardwareAwareWorkloadRouter, WorkloadAdaptiveGuard, WorkloadExecutionDecision,
     WorkloadExecutionProfile, WorkloadKind,
 };
-use crate::microvm_sandbox_executor::{EphemeralExecSpec, FirecrackerEphemeralSandbox};
+use crate::microvm_sandbox_executor::{
+    EphemeralExecSpec, FirecrackerEphemeralSandbox, FirecrackerSnapshotCache,
+    FirecrackerSpawnConfig, SnapshotPrewarmReport,
+};
 use crate::wasm_hot_pool::WasmHotPool;
 
 /// Computational complexity classification for incoming swarm tasks
@@ -279,6 +282,17 @@ impl MicroVmSwarmOrchestrator {
     /// Access reference to the Firecracker ephemeral sandbox
     pub fn firecracker_sandbox(&self) -> &Arc<FirecrackerEphemeralSandbox> {
         &self.firecracker_sandbox
+    }
+
+    /// Access reference to the internal Firecracker snapshot cache
+    pub fn snapshot_cache(&self) -> &Arc<FirecrackerSnapshotCache> {
+        self.firecracker_sandbox.snapshot_cache()
+    }
+
+    /// Pre-warm base microVM snapshot template state for instantaneous <10ms agent sandboxing
+    pub fn prewarm_snapshots(&self, config: Option<FirecrackerSpawnConfig>) -> Result<SnapshotPrewarmReport> {
+        let cfg = config.unwrap_or_default();
+        self.firecracker_sandbox.prewarm_snapshot(&cfg)
     }
 
     /// Classify task into `TaskComplexity::Lightweight` vs `TaskComplexity::HeavyUntrusted`

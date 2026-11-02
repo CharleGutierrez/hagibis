@@ -18,6 +18,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
+use rusqlite::{params, Connection};
 
 use crate::error::{HgbError, Result};
 
@@ -58,6 +59,31 @@ impl std::fmt::Display for FuseGovernorMode {
             Self::Balanced => write!(f, "balanced"),
         }
     }
+}
+
+/// Specifications for safe hardware tuning via MCP or daemon
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SafeHardwareTuneSpec {
+    pub governor: Option<String>,
+    pub epp: Option<String>,
+    pub mglru_min_ttl_ms: Option<u64>,
+    pub concurrency_limit: Option<usize>,
+}
+
+/// Execution outcome report from safe hardware tuning
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SafeHardwareTuneReport {
+    pub success: bool,
+    pub applied_governor: Option<String>,
+    pub applied_epp: Option<String>,
+    pub applied_mglru_min_ttl_ms: Option<u64>,
+    pub applied_concurrency_limit: Option<usize>,
+    pub throttled: bool,
+    pub safeguard_reason: Option<String>,
+    pub audit_recorded: bool,
+    pub audit_id: Option<i64>,
+    pub message: String,
+    pub timestamp_epoch_ms: u64,
 }
 
 /// Thermal and battery safeguarding status evaluation
@@ -821,9 +847,9 @@ impl DynatuneSubsystemFuse {
 
     /// Automatically scale-down: when tasks drain, drop CPU governors back to `powersave` and relax MGLRU
     pub fn drop_to_powersave(&self) -> Result<()> {
-        // 1. Shift governors to powersave and EPP to balance_performance (or power if on battery)
+        // 1. Shift governors to powersave and EPP to balance_power (clean baseline restoration)
         let ac = self.query_ac_status();
-        let target_epp = if ac { "balance_performance" } else { "power" };
+        let target_epp = "balance_power";
 
         self.write_all_cpufreq("scaling_governor", "powersave");
         self.write_all_cpufreq("energy_performance_preference", target_epp);
@@ -859,6 +885,266 @@ impl DynatuneSubsystemFuse {
         } else {
             false
         }
+    }
+
+    /// Record a hardware optimization audit event into SQLite table `telemetry_optimizations`
+    pub fn record_optimization_audit(
+        &self,
+        db_path: Option<&Path>,
+        trigger_reason: &str,
+        cpu_temp_c: f64,
+        battery_w: f64,
+        culprit_processes: &str,
+        governor_action: &str,
+        model_reasoning: &str,
+        status: &str,
+    ) -> Result<i64> {
+        let path = if let Some(p) = db_path {
+            p.to_path_buf()
+        } else {
+            let hgb_dir = Path::new(".hgb");
+            let _ = fs::create_dir_all(hgb_dir);
+            hgb_dir.join("autonomous_telemetry_optimizations.db")
+        };
+
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+
+        let conn = Connection::open(&path).map_err(|e| HgbError::Storage(e.to_string()))?;
+        conn.execute_batch(
+            "PRAGMA journal_mode = WAL;
+             PRAGMA synchronous = NORMAL;
+             CREATE TABLE IF NOT EXISTS telemetry_optimizations (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 timestamp TEXT NOT NULL,
+                 trigger_reason TEXT NOT NULL,
+                 cpu_temp_c REAL NOT NULL,
+                 battery_draw_w REAL NOT NULL,
+                 culprit_processes TEXT NOT NULL,
+                 governor_action TEXT NOT NULL,
+                 model_reasoning TEXT NOT NULL,
+                 status TEXT NOT NULL,
+                 blake3_hash TEXT NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS idx_telemetry_opt_timestamp ON telemetry_optimizations(timestamp);",
+        ).map_err(|e| HgbError::Storage(e.to_string()))?;
+
+        let now = chrono::Utc::now().to_rfc3339();
+        let blake3_hash = {
+            let mut hasher = blake3::Hasher::new();
+            hasher.update(now.as_bytes());
+            hasher.update(b":");
+            hasher.update(trigger_reason.as_bytes());
+            hasher.update(b":");
+            hasher.update(format!("{:.3}", cpu_temp_c).as_bytes());
+            hasher.update(b":");
+            hasher.update(format!("{:.3}", battery_w).as_bytes());
+            hasher.update(b":");
+            hasher.update(culprit_processes.as_bytes());
+            hasher.update(b":");
+            hasher.update(governor_action.as_bytes());
+            hasher.update(b":");
+            hasher.update(model_reasoning.as_bytes());
+            hasher.update(b":");
+            hasher.update(status.as_bytes());
+            hasher.finalize().to_hex().to_string()
+        };
+
+        conn.execute(
+            "INSERT INTO telemetry_optimizations (
+                timestamp, trigger_reason, cpu_temp_c, battery_draw_w,
+                culprit_processes, governor_action, model_reasoning, status, blake3_hash
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                &now,
+                trigger_reason,
+                cpu_temp_c,
+                battery_w,
+                culprit_processes,
+                governor_action,
+                model_reasoning,
+                status,
+                &blake3_hash,
+            ],
+        ).map_err(|e| HgbError::Storage(e.to_string()))?;
+
+        Ok(conn.last_insert_rowid())
+    }
+
+    /// Safely apply hardware tuning with strict safety limit validation, thermal safeguards, and SQLite audit logging
+    pub fn safe_hardware_tune(
+        &self,
+        spec: &SafeHardwareTuneSpec,
+        db_path: Option<&Path>,
+    ) -> Result<SafeHardwareTuneReport> {
+        let (cpu_pkg_temp_c, _, _) = self.query_thermal();
+        let battery = self.query_battery();
+        let battery_w = battery.as_ref().map(|b| b.discharge_rate_w).unwrap_or(0.0);
+        let safeguard = self.evaluate_safeguard(cpu_pkg_temp_c, &battery);
+        let is_throttled = safeguard.is_throttled();
+
+        // 1. Strictly validate governor parameter
+        if let Some(ref gov) = spec.governor {
+            let g = gov.trim().to_lowercase();
+            if g != "powersave" && g != "performance" {
+                return Err(HgbError::Execution(format!(
+                    "Invalid governor '{}': strictly only 'powersave' or 'performance' are permitted",
+                    gov
+                )));
+            }
+        }
+
+        // 2. Strictly validate EPP parameter
+        if let Some(ref epp) = spec.epp {
+            let e = epp.trim().to_lowercase();
+            if e != "power" && e != "balance_power" && e != "balance_performance" && e != "performance" {
+                return Err(HgbError::Execution(format!(
+                    "Invalid EPP '{}': strictly only 'power', 'balance_power', 'balance_performance', or 'performance' are permitted",
+                    epp
+                )));
+            }
+        }
+
+        let mut applied_governor = None;
+        let mut applied_epp = None;
+        let mut applied_mglru = None;
+        let applied_concurrency;
+        let mut safeguard_reason = None;
+
+        // 3. Enforce thermal & battery clamps if throttled (cannot set invalid governors or bypass thermal clamps)
+        if is_throttled {
+            let reason = match &safeguard {
+                SafeguardState::Throttled { reason, .. } => reason.clone(),
+                _ => "Hardware safeguard active".to_string(),
+            };
+            safeguard_reason = Some(reason);
+
+            // Thermal clamp: refuse boost! Cannot set performance governor
+            self.write_all_cpufreq("scaling_governor", "powersave");
+            self.is_boosted.store(false, Ordering::SeqCst);
+            if let Some(ref gov) = spec.governor {
+                if gov.trim().eq_ignore_ascii_case("performance") {
+                    applied_governor = Some("powersave (clamped)".to_string());
+                } else {
+                    applied_governor = Some("powersave".to_string());
+                }
+            } else {
+                applied_governor = Some("powersave".to_string());
+            }
+
+            // EPP clamp: cannot set performance or balance_performance
+            let clamped_epp = if cpu_pkg_temp_c >= THERMAL_CRITICAL_TEMP_C {
+                "power"
+            } else {
+                "balance_power"
+            };
+            self.write_all_cpufreq("energy_performance_preference", clamped_epp);
+            applied_epp = Some(format!("{} (clamped)", clamped_epp));
+
+            // Intel P-State max_perf_pct clamped to 70% and disable dynamic boost
+            let _ = fs::write(self.paths.intel_pstate_dir.join("max_perf_pct"), "70\n");
+            let _ = fs::write(self.paths.intel_pstate_dir.join("hwp_dynamic_boost"), "0\n");
+
+            // MGLRU clamp: reset to 0 or clamp to <= 250ms
+            if let Some(ttl) = spec.mglru_min_ttl_ms {
+                let clamped_ttl = ttl.min(250);
+                self.set_mglru_min_ttl_ms(clamped_ttl);
+                applied_mglru = Some(clamped_ttl);
+            } else {
+                self.set_mglru_min_ttl_ms(IDLE_MGLRU_MIN_TTL_MS);
+                applied_mglru = Some(IDLE_MGLRU_MIN_TTL_MS);
+            }
+
+            // Concurrency clamp: strictly cannot exceed safeguard concurrency limit
+            let max_concurrency = safeguard.concurrency_limit();
+            let limit = spec.concurrency_limit.map(|c| c.min(max_concurrency)).unwrap_or(max_concurrency);
+            applied_concurrency = Some(limit);
+        } else {
+            // Optimal conditions: apply requested values safely
+            if let Some(ref gov) = spec.governor {
+                let g = gov.trim().to_lowercase();
+                self.write_all_cpufreq("scaling_governor", &g);
+                if g == "performance" {
+                    self.is_boosted.store(true, Ordering::SeqCst);
+                    self.boost_counter.fetch_add(1, Ordering::Relaxed);
+                    // Also enable Intel P-State turbo
+                    let _ = fs::write(self.paths.intel_pstate_dir.join("no_turbo"), "0\n");
+                    let _ = fs::write(self.paths.intel_pstate_dir.join("max_perf_pct"), "100\n");
+                    let _ = fs::write(self.paths.intel_pstate_dir.join("hwp_dynamic_boost"), "1\n");
+                } else {
+                    self.is_boosted.store(false, Ordering::SeqCst);
+                }
+                applied_governor = Some(g);
+            }
+
+            if let Some(ref epp) = spec.epp {
+                let e = epp.trim().to_lowercase();
+                self.write_all_cpufreq("energy_performance_preference", &e);
+                applied_epp = Some(e);
+            }
+
+            if let Some(ttl) = spec.mglru_min_ttl_ms {
+                let valid_ttl = ttl.min(10000);
+                self.set_mglru_min_ttl_ms(valid_ttl);
+                applied_mglru = Some(valid_ttl);
+            }
+
+            if let Some(limit) = spec.concurrency_limit {
+                applied_concurrency = Some(limit.max(1));
+            } else {
+                applied_concurrency = Some(num_cpus());
+            }
+        }
+
+        let action_summary = format!(
+            "Governor: {:?} | EPP: {:?} | MGLRU: {:?} | Concurrency: {:?}",
+            applied_governor, applied_epp, applied_mglru, applied_concurrency
+        );
+
+        let status_str = if is_throttled { "ThrottledClamped" } else { "Applied" };
+        let reasoning = if is_throttled {
+            format!("Thermal or battery safeguard engaged ({:?}). Performance parameters clamped to prevent thermal runaway.", safeguard_reason)
+        } else {
+            "Host operating in optimal thermal window. Custom hardware tuning parameters safely applied.".to_string()
+        };
+
+        // Persist optimization audit event to SQLite
+        let audit_id = self.record_optimization_audit(
+            db_path,
+            "McpHardwareTune",
+            cpu_pkg_temp_c,
+            battery_w,
+            "hgb_mcp_server",
+            &action_summary,
+            &reasoning,
+            status_str,
+        ).ok();
+
+        let timestamp_epoch_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+
+        let message = if is_throttled {
+            format!("Hardware tune applied with thermal safeguarding: {}", action_summary)
+        } else {
+            format!("Hardware tune successfully applied: {}", action_summary)
+        };
+
+        Ok(SafeHardwareTuneReport {
+            success: true,
+            applied_governor,
+            applied_epp,
+            applied_mglru_min_ttl_ms: applied_mglru,
+            applied_concurrency_limit: applied_concurrency,
+            throttled: is_throttled,
+            safeguard_reason,
+            audit_recorded: audit_id.is_some(),
+            audit_id,
+            message,
+            timestamp_epoch_ms,
+        })
     }
 
     /// Acquire RAII `DynatuneWorkloadBoostGuard` bound to this fuse
@@ -1264,6 +1550,130 @@ mod tests {
         fuse.drop_to_powersave().expect("drop to powersave succeeded");
         assert!(!fuse.is_boosted());
         assert_eq!(fs::read_to_string(cpufreq_dir.join("policy0/scaling_governor")).unwrap().trim(), "powersave");
+        assert_eq!(fs::read_to_string(cpufreq_dir.join("policy0/energy_performance_preference")).unwrap().trim(), "balance_power");
+        assert_eq!(fs::read_to_string(mglru_dir.join("min_ttl_ms")).unwrap().trim(), "0");
+    }
+
+    #[test]
+    fn test_safe_hardware_tune_validation_and_thermal_boundary() {
+        let (dir, paths) = setup_test_sysfs();
+        let thermal_dir = paths.thermal_dir.clone();
+        let cpufreq_dir = paths.cpufreq_dir.clone();
+        let mglru_dir = paths.mglru_dir.clone();
+        let db_path = dir.path().join("audit.db");
+        let fuse = DynatuneSubsystemFuse::with_paths(paths);
+
+        // 1. Invalid governor validation
+        let invalid_gov_spec = SafeHardwareTuneSpec {
+            governor: Some("userspace".to_string()),
+            epp: None,
+            mglru_min_ttl_ms: None,
+            concurrency_limit: None,
+        };
+        let err1 = fuse.safe_hardware_tune(&invalid_gov_spec, Some(&db_path));
+        assert!(err1.is_err());
+        assert!(err1.unwrap_err().to_string().contains("only 'powersave' or 'performance' are permitted"));
+
+        // 2. Invalid EPP validation
+        let invalid_epp_spec = SafeHardwareTuneSpec {
+            governor: None,
+            epp: Some("ultra_performance".to_string()),
+            mglru_min_ttl_ms: None,
+            concurrency_limit: None,
+        };
+        let err2 = fuse.safe_hardware_tune(&invalid_epp_spec, Some(&db_path));
+        assert!(err2.is_err());
+        assert!(err2.unwrap_err().to_string().contains("only 'power', 'balance_power', 'balance_performance', or 'performance' are permitted"));
+
+        // 3. Thermal boundary clamp: simulate elevated temperature 80.5°C >= 78.0°C
+        fs::write(thermal_dir.join("thermal_zone0/temp"), "80500\n").unwrap();
+        let boost_spec = SafeHardwareTuneSpec {
+            governor: Some("performance".to_string()),
+            epp: Some("performance".to_string()),
+            mglru_min_ttl_ms: Some(1000),
+            concurrency_limit: Some(8),
+        };
+        let rep_throttled = fuse.safe_hardware_tune(&boost_spec, Some(&db_path)).expect("tune executes with clamp");
+        assert!(rep_throttled.throttled);
+        assert_eq!(rep_throttled.applied_governor.as_deref(), Some("powersave (clamped)"));
+        assert_eq!(rep_throttled.applied_epp.as_deref(), Some("balance_power (clamped)"));
+        assert_eq!(rep_throttled.applied_mglru_min_ttl_ms, Some(250)); // Clamped to <= 250
+        assert_eq!(rep_throttled.applied_concurrency_limit, Some(2)); // Clamped to safeguard limit
+        assert!(rep_throttled.audit_recorded);
+        assert!(rep_throttled.audit_id.is_some());
+
+        // Verify sysfs values were actually clamped
+        assert_eq!(fs::read_to_string(cpufreq_dir.join("policy0/scaling_governor")).unwrap().trim(), "powersave");
+        assert_eq!(fs::read_to_string(cpufreq_dir.join("policy0/energy_performance_preference")).unwrap().trim(), "balance_power");
+        assert_eq!(fs::read_to_string(mglru_dir.join("min_ttl_ms")).unwrap().trim(), "250");
+
+        // 4. Optimal conditions: reset temperature to 48.0°C
+        fs::write(thermal_dir.join("thermal_zone0/temp"), "48000\n").unwrap();
+        let rep_optimal = fuse.safe_hardware_tune(&boost_spec, Some(&db_path)).expect("tune executes optimal");
+        assert!(!rep_optimal.throttled);
+        assert_eq!(rep_optimal.applied_governor.as_deref(), Some("performance"));
+        assert_eq!(rep_optimal.applied_epp.as_deref(), Some("performance"));
+        assert_eq!(rep_optimal.applied_mglru_min_ttl_ms, Some(1000));
+        assert_eq!(rep_optimal.applied_concurrency_limit, Some(8));
+        assert!(rep_optimal.audit_recorded);
+
+        // Verify sysfs values updated to performance
+        assert_eq!(fs::read_to_string(cpufreq_dir.join("policy0/scaling_governor")).unwrap().trim(), "performance");
+        assert_eq!(fs::read_to_string(cpufreq_dir.join("policy0/energy_performance_preference")).unwrap().trim(), "performance");
+        assert_eq!(fs::read_to_string(mglru_dir.join("min_ttl_ms")).unwrap().trim(), "1000");
+    }
+
+    #[test]
+    fn test_dynamic_workload_boost_and_idle_drop_transitions() {
+        let (_dir, paths) = setup_test_sysfs();
+        let thermal_dir = paths.thermal_dir.clone();
+        let cpufreq_dir = paths.cpufreq_dir.clone();
+        let mglru_dir = paths.mglru_dir.clone();
+        let pstate_dir = paths.intel_pstate_dir.clone();
+        let power_supply_dir = paths.power_supply_dir.clone();
+        let fuse = DynatuneSubsystemFuse::with_paths(paths);
+
+        // 1. Dynamic Workload Boost: Heavy embedding or local LLM inference
+        let prev = fuse.boost_performance("local_llm_inference").expect("boost succeeds");
+        assert!(fuse.is_boosted());
+        assert_eq!(fs::read_to_string(cpufreq_dir.join("policy0/scaling_governor")).unwrap().trim(), "performance");
+        assert_eq!(fs::read_to_string(cpufreq_dir.join("policy0/energy_performance_preference")).unwrap().trim(), "performance");
+        assert_eq!(fs::read_to_string(pstate_dir.join("no_turbo")).unwrap().trim(), "0");
+        assert_eq!(fs::read_to_string(mglru_dir.join("min_ttl_ms")).unwrap().trim(), "1000");
+
+        // Restore baseline
+        fuse.restore_state(&prev).expect("restore state");
+        assert!(!fuse.is_boosted());
+
+        // 2. Thermal Safeguard Refusal: Spike temp to 79.0°C >= 78.0°C
+        fs::write(thermal_dir.join("thermal_zone0/temp"), "79000\n").unwrap();
+        let boost_blocked_thermal = fuse.boost_performance("batch_wasm");
+        assert!(boost_blocked_thermal.is_err());
+        assert!(boost_blocked_thermal.unwrap_err().to_string().contains("Thermal or battery safeguard active"));
+        assert_eq!(fs::read_to_string(cpufreq_dir.join("policy0/scaling_governor")).unwrap().trim(), "powersave");
+
+        // 3. Battery Safeguard Refusal: Reset temp, set battery to 15% on discharge (< 20%)
+        fs::write(thermal_dir.join("thermal_zone0/temp"), "48000\n").unwrap();
+        fs::write(power_supply_dir.join("BAT0/status"), "Discharging\n").unwrap();
+        fs::write(power_supply_dir.join("BAT0/capacity"), "15\n").unwrap();
+
+        let boost_blocked_battery = fuse.boost_performance("firecracker_spinup");
+        assert!(boost_blocked_battery.is_err());
+        assert!(boost_blocked_battery.unwrap_err().to_string().contains("Thermal or battery safeguard active"));
+        assert_eq!(fs::read_to_string(cpufreq_dir.join("policy0/scaling_governor")).unwrap().trim(), "powersave");
+
+        // 4. Return to AC power, perform workload, and then idle drop
+        fs::write(power_supply_dir.join("BAT0/status"), "Charging\n").unwrap();
+        fs::write(power_supply_dir.join("BAT0/capacity"), "80\n").unwrap();
+
+        let _ = fuse.boost_performance("firecracker_microvm").expect("boost on AC");
+        assert!(fuse.is_boosted());
+
+        // Workload finishes and queue drains -> drop_to_powersave
+        fuse.drop_to_powersave().expect("idle drop succeeds");
+        assert!(!fuse.is_boosted());
+        assert_eq!(fs::read_to_string(cpufreq_dir.join("policy0/scaling_governor")).unwrap().trim(), "powersave");
+        assert_eq!(fs::read_to_string(cpufreq_dir.join("policy0/energy_performance_preference")).unwrap().trim(), "balance_power");
         assert_eq!(fs::read_to_string(mglru_dir.join("min_ttl_ms")).unwrap().trim(), "0");
     }
 

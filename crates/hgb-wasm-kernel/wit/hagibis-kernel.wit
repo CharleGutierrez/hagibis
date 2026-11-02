@@ -65,6 +65,35 @@ interface types {
         tail-offset: u32,
         flags: u32,
     }
+
+    enum graph-encoding {
+        openvino,
+        onnx,
+        gguf,
+        burn,
+    }
+
+    enum execution-target {
+        cpu,
+        gpu,
+        tpu,
+    }
+
+    record wasi-nn-tensor {
+        dimensions: list<u32>,
+        dtype: tensor-data-type,
+        data: list<u8>,
+    }
+
+    record component-plugin-manifest {
+        name: string,
+        version: string,
+        language: string,
+        author: string,
+        entrypoint: string,
+        exported-tools: list<string>,
+        memory-limit-mb: u32,
+    }
 }
 
 /// Zero-Copy WASM-to-Daemon IPC Interface
@@ -116,8 +145,44 @@ interface executor {
     query-telemetry: func() -> string;
 }
 
+/// WebAssembly System Interface for Neural Networks (WASI-NN)
+interface wasi-nn {
+    use types.{graph-encoding, execution-target, wasi-nn-tensor};
+
+    /// Load neural network graph model bytecode into WASM sandbox
+    load: func(builders: list<list<u8>>, encoding: graph-encoding, target: execution-target) -> result<u32, string>;
+
+    /// Initialize execution context for loaded model graph
+    init-execution-context: func(graph-id: u32) -> result<u32, string>;
+
+    /// Set input tensor by index in active execution context
+    set-input: func(context-id: u32, index: u32, tensor: wasi-nn-tensor) -> result<_, string>;
+
+    /// Execute forward inference pass in WASM sandbox
+    compute: func(context-id: u32) -> result<_, string>;
+
+    /// Extract output tensor by index from execution context
+    get-output: func(context-id: u32, index: u32) -> result<wasi-nn-tensor, string>;
+}
+
+/// Dynamic Component Model Plugin Interface (Hot-Swappable Multi-Language Plugins)
+interface dynamic-component-plugin {
+    use types.{component-plugin-manifest};
+
+    /// Register a hot-swappable plugin manifest
+    register-plugin: func(manifest: component-plugin-manifest, wasm-module: list<u8>) -> result<bool, string>;
+
+    /// Invoke a specific exported tool on the registered plugin
+    invoke-plugin-tool: func(plugin-name: string, tool-name: string, input-json: string) -> result<string, string>;
+
+    /// Unload plugin and free linear memory
+    unload-plugin: func(plugin-name: string) -> result<bool, string>;
+}
+
 world hagibis-wasm-engine {
     export state-sync;
     export executor;
     export zero-copy-ipc;
+    export wasi-nn;
+    export dynamic-component-plugin;
 }

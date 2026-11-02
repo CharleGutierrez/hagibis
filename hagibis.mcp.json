@@ -7,7 +7,18 @@
         "mem_size_mib": { "type": "integer", "description": "Memory size in MiB (default: 1024)", "default": 1024 },
         "kernel_path": { "type": "string", "description": "Optional custom kernel image path (e.g. /var/lib/hgb/vmlinux)" },
         "rootfs_path": { "type": "string", "description": "Optional custom rootfs path" },
-        "timeout_secs": { "type": "integer", "description": "MicroVM execution timeout in seconds", "default": 60 }
+        "timeout_secs": { "type": "integer", "description": "MicroVM execution timeout in seconds", "default": 60 },
+        "use_snapshot": { "type": "boolean", "description": "Enable instantaneous snapshot-based resume (<10ms spin-up)", "default": false }
+      }
+    },
+    "hgb_microvm_snapshot_prewarm": {
+      "description": "Pre-boot and cache base Firecracker microVM template snapshot state in /dev/shm for instantaneous <10ms agent sandboxing",
+      "parameters": {
+        "vcpu_count": { "type": "integer", "description": "Number of vCPUs for base template (default: 2)", "default": 2 },
+        "mem_size_mib": { "type": "integer", "description": "Base template memory in MiB (default: 1024)", "default": 1024 },
+        "kernel_path": { "type": "string", "description": "Optional custom kernel image path" },
+        "rootfs_path": { "type": "string", "description": "Optional custom rootfs image path" },
+        "timeout_secs": { "type": "integer", "description": "Snapshot generation timeout in seconds", "default": 60 }
       }
     },
     "hgb_firecracker_exec": {
@@ -301,6 +312,15 @@
       "description": "Real-time system telemetry: CPU temperature, CPU frequency, active governor, EPP, battery percentage, RAM free/used, and MGLRU active indicator",
       "parameters": {
         "detailed": { "type": "boolean", "description": "Include per-core frequency and power supply uevent metrics", "default": false }
+      }
+    },
+    "hgb_hardware_tune": {
+      "description": "Safely tune system hardware governors, EPP, MGLRU, and concurrency with strict thermal safeguards and SQLite audit logging",
+      "parameters": {
+        "governor": { "type": "string", "enum": ["powersave", "performance"], "description": "CPU frequency scaling governor ('powersave' or 'performance')" },
+        "epp": { "type": "string", "enum": ["power", "balance_power", "balance_performance", "performance"], "description": "Energy Performance Preference (EPP)" },
+        "mglru_min_ttl_ms": { "type": "integer", "description": "Multi-Gen LRU min_ttl_ms cache retention threshold (0-10000ms)" },
+        "concurrency_limit": { "type": "integer", "description": "Explicit CPU concurrency execution worker limit (1-32)" }
       }
     },
     "hgb_cgroup_control": {

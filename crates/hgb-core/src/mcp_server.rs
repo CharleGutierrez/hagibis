@@ -527,6 +527,8 @@ pub const CORE_TOOLS: &[&str] = &[
     "hgb_hot_reload_component",
     "hgb_ollama_pipeline_accelerate",
     "hgb_ollama_mutation_vector_sync",
+    "hgb_hardware_tune",
+    "hgb_microvm_snapshot_prewarm",
     "hgb_firecracker_spawn",
     "hgb_firecracker_exec",
     "hgb_firecracker_destroy",
@@ -1225,6 +1227,33 @@ impl HagibisMcpServer {
                 }
             },
             {
+                "name": "hgb_hardware_tune",
+                "description": "Safely tune system hardware governors, EPP, MGLRU, and concurrency with strict thermal safeguards and SQLite audit logging",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "governor": { "type": "string", "description": "Target CPU governor ('powersave' or 'performance')", "enum": ["powersave", "performance"] },
+                        "epp": { "type": "string", "description": "Target Energy Performance Preference ('power', 'balance_power', 'balance_performance', 'performance')", "enum": ["power", "balance_power", "balance_performance", "performance"] },
+                        "mglru_min_ttl_ms": { "type": "integer", "description": "Linux Multi-Gen LRU min_ttl_ms memory preservation threshold (e.g. 1000 for heavy workloads, 0 for idle)" },
+                        "concurrency_limit": { "type": "integer", "description": "Maximum concurrent task worker threads limit" }
+                    }
+                }
+            },
+            {
+                "name": "hgb_microvm_snapshot_prewarm",
+                "description": "Pre-boot and cache base Firecracker microVM template snapshot state in /dev/shm for instantaneous <10ms agent sandboxing",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "vcpu_count": { "type": "integer", "description": "Number of virtual CPUs to allocate (default: 2)", "default": 2 },
+                        "mem_size_mib": { "type": "integer", "description": "Memory size in MiB (default: 1024)", "default": 1024 },
+                        "kernel_path": { "type": "string", "description": "Optional custom kernel image path" },
+                        "rootfs_path": { "type": "string", "description": "Optional custom rootfs path" },
+                        "timeout_secs": { "type": "integer", "description": "Pre-warming execution timeout in seconds (default: 60)", "default": 60 }
+                    }
+                }
+            },
+            {
                 "name": "hgb_firecracker_spawn",
                 "description": "Initialize and boot an isolated Firecracker microVM jail (or rootless Landlock LSM CoW jail fallback) for untrusted swarm workloads",
                 "inputSchema": {
@@ -1234,7 +1263,8 @@ impl HagibisMcpServer {
                         "mem_size_mib": { "type": "integer", "description": "Memory size in MiB (default: 1024)", "default": 1024 },
                         "kernel_path": { "type": "string", "description": "Optional custom kernel image path (e.g. /var/lib/firecracker/vmlinux.bin)" },
                         "rootfs_path": { "type": "string", "description": "Optional custom rootfs image path (e.g. /var/lib/firecracker/rootfs.ext4)" },
-                        "timeout_secs": { "type": "integer", "description": "Execution timeout in seconds (default: 60)", "default": 60 }
+                        "timeout_secs": { "type": "integer", "description": "Execution timeout in seconds (default: 60)", "default": 60 },
+                        "use_snapshot": { "type": "boolean", "description": "Enable instantaneous snapshot-based resume (<10ms spin-up)", "default": false }
                     }
                 }
             },
@@ -3082,8 +3112,31 @@ impl HagibisMcpServer {
                 }
             }
 
-            "hgb_firecracker_spawn" => {
-                progress_cb(15, "Parsing Firecracker microVM spawn specifications...");
+            "hgb_hardware_tune" => {
+                progress_cb(15, "Validating safe hardware tune parameters...");
+                let governor = args.get("governor").and_then(|v| v.as_str()).map(|s| s.to_string());
+                let epp = args.get("epp").and_then(|v| v.as_str()).map(|s| s.to_string());
+                let mglru_min_ttl_ms = args.get("mglru_min_ttl_ms").and_then(|v| v.as_u64());
+                let concurrency_limit = args.get("concurrency_limit").and_then(|v| v.as_u64()).map(|c| c as usize);
+
+                let spec = crate::dynatune_subsystem_fuse::SafeHardwareTuneSpec {
+                    governor,
+                    epp,
+                    mglru_min_ttl_ms,
+                    concurrency_limit,
+                };
+
+                progress_cb(50, "Evaluating thermal boundary and applying safe hardware tuning...");
+                let fuse = crate::dynatune_subsystem_fuse::DynatuneSubsystemFuse::new();
+                let db_path = self.workspace_root.join(".hgb/autonomous_telemetry_optimizations.db");
+                let report = fuse.safe_hardware_tune(&spec, Some(&db_path))?;
+
+                progress_cb(100, "Safe hardware tuning completed.");
+                Ok(serde_json::to_string_pretty(&report).unwrap_or_default())
+            }
+
+            "hgb_microvm_snapshot_prewarm" => {
+                progress_cb(15, "Parsing snapshot pre-warm configuration...");
                 let vcpu_count = args.get("vcpu_count").and_then(|v| v.as_u64()).unwrap_or(2) as u32;
                 let mem_size_mib = args.get("mem_size_mib").and_then(|v| v.as_u64()).unwrap_or(1024) as u32;
                 let kernel_path = args.get("kernel_path").and_then(|v| v.as_str()).map(|s| s.to_string());
@@ -3096,6 +3149,33 @@ impl HagibisMcpServer {
                     kernel_path,
                     rootfs_path,
                     timeout_secs,
+                    use_snapshot: true,
+                };
+
+                progress_cb(50, "Pre-booting base microVM template state in /dev/shm snapshot cache...");
+                let sandbox = FirecrackerEphemeralSandbox::new(&self.workspace_root);
+                let prewarm_report = sandbox.prewarm_snapshot(&config)?;
+
+                progress_cb(100, "Base microVM snapshot pre-warming completed.");
+                Ok(serde_json::to_string_pretty(&prewarm_report).unwrap_or_default())
+            }
+
+            "hgb_firecracker_spawn" => {
+                progress_cb(15, "Parsing Firecracker microVM spawn specifications...");
+                let vcpu_count = args.get("vcpu_count").and_then(|v| v.as_u64()).unwrap_or(2) as u32;
+                let mem_size_mib = args.get("mem_size_mib").and_then(|v| v.as_u64()).unwrap_or(1024) as u32;
+                let kernel_path = args.get("kernel_path").and_then(|v| v.as_str()).map(|s| s.to_string());
+                let rootfs_path = args.get("rootfs_path").and_then(|v| v.as_str()).map(|s| s.to_string());
+                let timeout_secs = args.get("timeout_secs").and_then(|v| v.as_u64()).unwrap_or(60);
+                let use_snapshot = args.get("use_snapshot").and_then(|v| v.as_bool()).unwrap_or(false);
+
+                let config = FirecrackerSpawnConfig {
+                    vcpu_count,
+                    mem_size_mib,
+                    kernel_path,
+                    rootfs_path,
+                    timeout_secs,
+                    use_snapshot,
                 };
 
                 progress_cb(50, "Initializing hardware microVM jail and Landlock fallback boundary...");
@@ -4024,6 +4104,8 @@ path = "src/lib.rs"
         let core_tools_val = HagibisMcpServer::list_tools();
         let core_tools = core_tools_val.as_array().expect("Array of tools");
         let core_names: Vec<&str> = core_tools.iter().filter_map(|t| t.get("name").and_then(|n| n.as_str())).collect();
+        assert!(core_names.contains(&"hgb_hardware_tune"));
+        assert!(core_names.contains(&"hgb_microvm_snapshot_prewarm"));
         assert!(core_names.contains(&"hgb_firecracker_spawn"));
         assert!(core_names.contains(&"hgb_firecracker_exec"));
         assert!(core_names.contains(&"hgb_firecracker_destroy"));
@@ -4041,6 +4123,7 @@ path = "src/lib.rs"
         assert!(spawn_props.get("kernel_path").is_some());
         assert!(spawn_props.get("rootfs_path").is_some());
         assert!(spawn_props.get("timeout_secs").is_some());
+        assert!(spawn_props.get("use_snapshot").is_some());
 
         let exec_tool = full_tools.iter().find(|t| t["name"] == "hgb_firecracker_exec").expect("hgb_firecracker_exec found");
         let exec_props = &exec_tool["inputSchema"]["properties"];
@@ -4133,6 +4216,55 @@ path = "src/lib.rs"
         // 5. Subsequent execution in destroyed jail must return error
         let failed_exec = server.execute_tool("hgb_firecracker_exec", &exec_args).await;
         assert!(failed_exec.is_err());
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[tokio::test]
+    async fn test_mcp_hardware_tune_and_snapshot_prewarm() {
+        let tmp = std::env::temp_dir().join(format!("hgb_tune_test_{}", std::process::id()));
+        let _ = fs::create_dir_all(&tmp);
+        let server = HagibisMcpServer::new(&tmp);
+
+        // 1. Execute hgb_hardware_tune with powersave governor and balance_power EPP
+        let tune_args = serde_json::json!({
+            "governor": "powersave",
+            "epp": "balance_power",
+            "mglru_min_ttl_ms": 0,
+            "concurrency_limit": 4
+        });
+        let tune_res = server.execute_tool("hgb_hardware_tune", &tune_args).await.expect("tune tool execute");
+        let tune_json: Value = serde_json::from_str(&tune_res).expect("JSON");
+        assert_eq!(tune_json["success"], true);
+        assert_eq!(tune_json["applied_governor"], "powersave");
+        assert_eq!(tune_json["applied_epp"], "balance_power");
+        assert!(tune_json["audit_recorded"].as_bool().unwrap_or(false));
+
+        // 2. Pre-warm microVM snapshot cache
+        let prewarm_args = serde_json::json!({
+            "vcpu_count": 2,
+            "mem_size_mib": 256,
+            "timeout_secs": 30
+        });
+        let prewarm_res = server.execute_tool("hgb_microvm_snapshot_prewarm", &prewarm_args).await.expect("prewarm tool execute");
+        let prewarm_json: Value = serde_json::from_str(&prewarm_res).expect("JSON");
+        assert_eq!(prewarm_json["success"], true);
+        assert_eq!(prewarm_json["snapshot_id"], "hgb_base_snapshot_v1");
+
+        // 3. Spawn microVM jail using snapshot resume
+        let spawn_snap_args = serde_json::json!({
+            "vcpu_count": 2,
+            "mem_size_mib": 256,
+            "use_snapshot": true
+        });
+        let spawn_snap_res = server.execute_tool("hgb_firecracker_spawn", &spawn_snap_args).await.expect("spawn with snapshot");
+        let spawn_snap_json: Value = serde_json::from_str(&spawn_snap_res).expect("JSON");
+        assert_eq!(spawn_snap_json["status"], "running");
+        assert_eq!(spawn_snap_json["snapshot_resumed"], true);
+        assert!(spawn_snap_json["boot_duration_ms"].as_u64().unwrap_or(999) < 10);
+
+        let snap_jail_id = spawn_snap_json["jail_id"].as_str().unwrap();
+        let _ = server.execute_tool("hgb_firecracker_destroy", &serde_json::json!({"jail_id": snap_jail_id})).await;
 
         let _ = fs::remove_dir_all(&tmp);
     }

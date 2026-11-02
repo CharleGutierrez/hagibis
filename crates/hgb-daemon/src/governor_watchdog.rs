@@ -827,24 +827,44 @@ impl GovernorWatchdog {
     }
 
     /// Boost CPU governor for heavy workload
+    /// Boost CPU governor for heavy workload
     pub async fn boost(&self, workload_str: &str) -> Result<GovernorWatchdogStatus> {
         let (workload, category, hw_kind) = match workload_str.to_lowercase().as_str() {
             "compile" | "heavycompile" | "build" => (WorkloadKind::HeavyCompile, WorkloadCategory::BuildCompile, HardwareWorkloadKind::HeavyCompilation),
             "test" | "testexecution" => (WorkloadKind::TestExecution, WorkloadCategory::TestExecution, HardwareWorkloadKind::HeavyCompilation),
-            "llm" | "inference" | "localllminference" => (WorkloadKind::LocalLlmInference, WorkloadCategory::LlmGeneration, HardwareWorkloadKind::HeavyInference),
-            "wasm" | "wasmexecution" => (WorkloadKind::WasmExecution, WorkloadCategory::WasmExecution, HardwareWorkloadKind::WasmSandboxed),
-            "vector" | "vectorbatch" => (WorkloadKind::HeavyCompile, WorkloadCategory::BuildCompile, HardwareWorkloadKind::VectorBatch),
+            "llm" | "inference" | "localllminference" | "local_llm_inference" => (WorkloadKind::LocalLlmInference, WorkloadCategory::LlmGeneration, HardwareWorkloadKind::HeavyInference),
+            "wasm" | "wasmexecution" | "batch_wasm" => (WorkloadKind::WasmExecution, WorkloadCategory::WasmExecution, HardwareWorkloadKind::WasmSandboxed),
+            "vector" | "vectorbatch" | "embedding" | "heavy_embedding" => (WorkloadKind::HeavyCompile, WorkloadCategory::BuildCompile, HardwareWorkloadKind::VectorBatch),
+            "firecracker" | "microvm" | "microvm_spinup" | "microvm_spawn" | "sandbox" => (WorkloadKind::HeavyCompile, WorkloadCategory::BuildCompile, HardwareWorkloadKind::HeavyCompilation),
             _ => (WorkloadKind::HeavyCompile, WorkloadCategory::BuildCompile, HardwareWorkloadKind::HeavyCompilation),
         };
 
+        // Thermal safeguard: if CPU package temp >= 78°C or battery < 20% on discharge, refuse boost and throttle to powersave
+        let safeguard = self.dynatune_fuse.check_thermal_safeguard();
+        if safeguard.is_throttled() {
+            let _ = self.governor.set_scaling_governor("powersave");
+            let _ = self.governor.set_epp("balance_power");
+            let _ = self.profiler.switch_profile(HardwareGovernorProfile::PowerSave);
+            let _ = self.dynatune_fuse.drop_to_powersave();
+            return Err(HgbError::Execution(format!(
+                "Hardware boost refused: Thermal or battery safeguard engaged ({})",
+                match safeguard {
+                    hgb_core::dynatune_subsystem_fuse::SafeguardState::Throttled { ref reason, .. } => reason,
+                    _ => "Safeguard throttled",
+                }
+            )));
+        }
+
         // 1. Dynamic governor boost
         let guard = self.governor.boost_for_workload(workload)?;
+        let _ = self.governor.set_scaling_governor("performance");
+        let _ = self.governor.set_epp("performance");
         {
             let mut active = self.active_guard.lock().await;
             *active = Some(guard);
         }
 
-        // 2. Dynatune bridge scaling shift & RAII guard (bursts governor, EPP, and MGLRU min_ttl_ms 1000)
+        // 2. Dynatune bridge scaling shift & RAII guard (bursts governor, EPP performance, and MGLRU min_ttl_ms 1000)
         let scaling_guard = self.dynatune_bridge.burst_guard(category)?;
         {
             let mut shift_lock = self.last_shift.lock().await;
@@ -866,6 +886,9 @@ impl GovernorWatchdog {
             let mut active_p = self.active_profiler_guard.lock().await;
             *active_p = Some(p_guard);
         }
+
+        // 5. DynatuneSubsystemFuse hardware performance boost (sets governor to performance, EPP performance, turbo, and MGLRU 1000)
+        let _ = self.dynatune_fuse.boost_performance(workload_str);
 
         Ok(self.status().await)
     }
@@ -898,8 +921,9 @@ impl GovernorWatchdog {
         }
 
         let _ = self.governor.set_scaling_governor("powersave");
-        let _ = self.governor.set_epp("balance_performance");
+        let _ = self.governor.set_epp("balance_power");
         let _ = self.profiler.switch_profile(HardwareGovernorProfile::PowerSave);
+        let _ = self.dynatune_fuse.drop_to_powersave();
 
         let shift = self.dynatune_bridge.shift_to_powersave_mode()?;
         {
@@ -914,8 +938,20 @@ impl GovernorWatchdog {
     /// ramp up thermal headroom, enable turbo, and prioritize memory bandwidth (MGLRU min_ttl_ms 1000)
     /// during heavy local LLM inference or WASM sandboxing tasks.
     pub async fn on_queue_active(&self) -> Result<GovernorWatchdogStatus> {
+        // Thermal safeguard check
+        let safeguard = self.dynatune_fuse.check_thermal_safeguard();
+        if safeguard.is_throttled() {
+            let _ = self.governor.set_scaling_governor("powersave");
+            let _ = self.governor.set_epp("balance_power");
+            let _ = self.profiler.switch_profile(HardwareGovernorProfile::PowerSave);
+            let _ = self.dynatune_fuse.drop_to_powersave();
+            return Ok(self.status().await);
+        }
+
         // 1. Dynamic governor boost
         let guard = self.governor.boost_for_workload(WorkloadKind::HeavyCompile)?;
+        let _ = self.governor.set_scaling_governor("performance");
+        let _ = self.governor.set_epp("performance");
         {
             let mut active = self.active_guard.lock().await;
             *active = Some(guard);
@@ -980,7 +1016,7 @@ impl GovernorWatchdog {
         }
 
         let _ = self.governor.set_scaling_governor("powersave");
-        let _ = self.governor.set_epp("balance_performance");
+        let _ = self.governor.set_epp("balance_power");
         let _ = self.profiler.on_queue_idle();
         let _ = self.dynatune_fuse.drop_to_powersave();
 
