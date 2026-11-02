@@ -433,12 +433,10 @@ impl<T: std::hash::Hash + Eq + Clone> OrSetMemory<T> {
             }
         }
 
-        let mut delta_rem = HashSet::new();
-        for tag in &self.remove_set {
-            if tag.lamport_ts > baseline.get(&tag.node_id) {
-                delta_rem.insert(tag.clone());
-            }
-        }
+        // In an OR-Set (Observed-Remove Set), remove_set contains tags that were tombstoned.
+        // All known tombstones are included in the delta to guarantee tombstone convergence
+        // across replicas regardless of which replica initially observed or created the element.
+        let delta_rem = self.remove_set.clone();
 
         OrSetMemory {
             add_set: delta_add,

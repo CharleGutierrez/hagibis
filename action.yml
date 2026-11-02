@@ -26,10 +26,14 @@ inputs:
     description: 'Post or update the GitHub Flavored Markdown status comment on the active PR'
     required: false
     default: 'true'
+  validate-masterclass:
+    description: 'Execute verification gates across all 8 masterclass chapters (ch1-ch8) via docs/masterclass/generate_pdf.py --validate-all'
+    required: false
+    default: 'true'
   regenerate-docs:
     description: 'Automatically regenerate masterclass chapters and PDF via docs/masterclass/generate_pdf.py'
     required: false
-    default: 'true'
+    default: 'false'
   github-token:
     description: 'GitHub token for PR comment authoring'
     required: false
@@ -48,6 +52,9 @@ outputs:
   verification-passed:
     description: 'Whether all golden invariants and compilation passed'
     value: ${{ steps.hagibis-runner.outputs.verification_passed }}
+  masterclass-validated:
+    description: 'Whether all 8 masterclass chapters passed verification gates'
+    value: ${{ steps.validate-masterclass-step.outputs.validated }}
 
 runs:
   using: 'composite'
@@ -85,6 +92,23 @@ runs:
           --task "$INPUT_TASK" \
           --summary
 
+    - name: Validate Masterclass Chapters (Ch1-Ch8 Invariant Verification)
+      id: validate-masterclass-step
+      if: inputs.validate-masterclass == 'true'
+      shell: bash
+      run: |
+        echo "Validating all 8 Masterclass Chapters..."
+        if command -v uv &> /dev/null; then
+          uv run --with reportlab python docs/masterclass/generate_pdf.py --validate-all
+        elif [ -f "$HOME/.local/bin/uv" ]; then
+          "$HOME/.local/bin/uv" run --with reportlab python docs/masterclass/generate_pdf.py --validate-all
+        elif command -v python3 &> /dev/null; then
+          python3 docs/masterclass/generate_pdf.py --validate-all
+        else
+          python docs/masterclass/generate_pdf.py --validate-all
+        fi
+        echo "validated=true" >> "$GITHUB_OUTPUT"
+
     - name: Automate Masterclass & Documentation Pipeline
       if: inputs.regenerate-docs == 'true'
       shell: bash
@@ -96,4 +120,3 @@ runs:
         else
           python3 docs/masterclass/generate_pdf.py || true
         fi
-

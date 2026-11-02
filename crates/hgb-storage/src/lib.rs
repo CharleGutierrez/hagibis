@@ -67,6 +67,13 @@ pub use distributed_crdt_mesh::{
     VectorEmbeddingRecord,
 };
 
+// Pillar III: Decentralized MicroVM State Sync (CRDT Engine)
+pub mod microvm_crdt_sync;
+pub use microvm_crdt_sync::{
+    EpisodicFact, MicroVmCrdtStateSync, MicroVmReplica, MicroVmSyncDelta, MicroVmSyncReport,
+    ScratchpadThought, SharedStateVariable, ToolArtifactRecord,
+};
+
 // Strategic Upgrade 5: Unified Embedded HNSW Vector Index (Pillar 2)
 pub mod hnsw_vector_index;
 pub use hnsw_vector_index::{

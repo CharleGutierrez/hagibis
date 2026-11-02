@@ -47,6 +47,23 @@ pub struct DynamicMcpTool {
     pub last_invoked_epoch_ms: u64,
 }
 
+/// Comprehensive performance benchmark telemetry for an MCP tool against hgb-core SLA (<5ms)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ToolBenchmarkMetrics {
+    pub tool_name: String,
+    pub iterations: usize,
+    pub p50_latency_ms: f64,
+    pub p90_latency_ms: f64,
+    pub p99_latency_ms: f64,
+    pub min_latency_ms: f64,
+    pub max_latency_ms: f64,
+    pub avg_latency_ms: f64,
+    pub memory_kb: f64,
+    pub fuel_consumed: u64,
+    pub meets_sla: bool,
+    pub sla_threshold_ms: f64,
+}
+
 /// Status telemetry report for DynamicMcpRegistry
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DynamicMcpRegistryReport {

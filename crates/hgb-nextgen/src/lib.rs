@@ -218,6 +218,15 @@ pub use cockpit_web_hud::{
     create_cockpit_router, spawn_cockpit_web_server, CockpitWebServerState, CockpitWebTelemetry,
 };
 
+// Pillar III: Edge Prompt Cache Router (Cloudflare Worker & Wasm Synergy)
+pub mod edge_prompt_cache_router;
+pub use edge_prompt_cache_router::{
+    CachedPrefixKv, CachedPromptResponse, CacheLookupResult, CloudflareRoutes,
+    EdgeCacheStats, EdgePromptCache, EdgePromptCacheRouter, EdgeRouteAction,
+    EdgeRouteDecision, HierarchicalPromptHash, PromptComponents, RoutingDestination,
+    WranglerConfig,
+};
+
 
 
 

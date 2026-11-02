@@ -166,6 +166,12 @@ pub struct HardwareProfileTelemetry {
     pub thermal_clamped: bool,
     pub current_concurrency_limit: usize,
     pub baseline_concurrency: usize,
+    #[serde(default)]
+    pub battery_draw_w: Option<f64>,
+    #[serde(default)]
+    pub battery_discharge_pct_per_hr: Option<f64>,
+    #[serde(default)]
+    pub psi_memory_avg10: Option<f64>,
 }
 
 /// Report snapshot captured to `.hgb/pgo_hotspots.json`
@@ -271,6 +277,11 @@ impl HardwareGovernorSynergy {
         *sim = battery;
     }
 
+    /// Access workspace root
+    pub fn workspace_root(&self) -> &Path {
+        &self.workspace_root
+    }
+
     /// Read live CPU temperature in Celsius
     pub async fn read_cpu_temp_c(&self) -> f64 {
         if let Some(sim) = *self.simulated_temp_c.lock().await {
@@ -279,22 +290,41 @@ impl HardwareGovernorSynergy {
 
         #[cfg(target_os = "linux")]
         {
-            // Try /sys/class/thermal/thermal_zone*/temp
+            // Try /sys/class/thermal/thermal_zone*/temp prioritizing x86_pkg_temp
             if let Ok(entries) = fs::read_dir("/sys/class/thermal") {
                 let mut max_temp = 0.0;
+                let mut pkg_temp = None;
                 for entry in entries.flatten() {
                     let name = entry.file_name().to_string_lossy().to_string();
                     if name.starts_with("thermal_zone") {
-                        let temp_file = entry.path().join("temp");
+                        let path = entry.path();
+                        let type_file = path.join("type");
+                        let temp_file = path.join("temp");
+
+                        let ztype = fs::read_to_string(&type_file)
+                            .unwrap_or_default()
+                            .trim()
+                            .to_string();
+
                         if let Ok(content) = fs::read_to_string(&temp_file) {
                             if let Ok(millidegrees) = content.trim().parse::<f64>() {
                                 let deg = millidegrees / 1000.0;
-                                if deg > max_temp {
-                                    max_temp = deg;
+                                if deg > 0.0 && deg < 125.0 {
+                                    if ztype == "x86_pkg_temp" {
+                                        pkg_temp = Some(deg);
+                                    } else if pkg_temp.is_none() && (ztype == "cpu-thermal" || ztype == "acpitz") {
+                                        pkg_temp = Some(deg);
+                                    }
+                                    if deg > max_temp {
+                                        max_temp = deg;
+                                    }
                                 }
                             }
                         }
                     }
+                }
+                if let Some(pkg) = pkg_temp {
+                    return pkg;
                 }
                 if max_temp > 0.0 {
                     return max_temp;
@@ -303,6 +333,91 @@ impl HardwareGovernorSynergy {
         }
 
         45.0 // Safe baseline fallback
+    }
+
+    /// Read instantaneous battery discharge rate in Watts and %/hour drop velocity
+    pub async fn read_battery_discharge_status(&self) -> (Option<f64>, Option<f64>) {
+        #[cfg(target_os = "linux")]
+        {
+            if let Ok(entries) = fs::read_dir("/sys/class/power_supply") {
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if name.starts_with("BAT") {
+                        let path = entry.path();
+                        let status = fs::read_to_string(path.join("status"))
+                            .unwrap_or_default()
+                            .trim()
+                            .to_string();
+                        let is_discharging = status.eq_ignore_ascii_case("discharging");
+
+                        let voltage_uv = fs::read_to_string(path.join("voltage_now"))
+                            .ok()
+                            .and_then(|s| s.trim().parse::<u64>().ok())
+                            .unwrap_or(7_600_000) as f64;
+
+                        let power_w = if let Some(p) = fs::read_to_string(path.join("power_now")).ok().and_then(|s| s.trim().parse::<u64>().ok()) {
+                            Some(p as f64 / 1_000_000.0)
+                        } else if let Some(c) = fs::read_to_string(path.join("current_now")).ok().and_then(|s| s.trim().parse::<u64>().ok()) {
+                            Some((c as f64 * voltage_uv) / 1_000_000_000_000.0)
+                        } else {
+                            None
+                        };
+
+                        let energy_full_wh = if let Some(e) = fs::read_to_string(path.join("energy_full")).ok().and_then(|s| s.trim().parse::<u64>().ok()) {
+                            e as f64 / 1_000_000.0
+                        } else if let Some(c) = fs::read_to_string(path.join("charge_full")).ok().and_then(|s| s.trim().parse::<u64>().ok()) {
+                            (c as f64 * voltage_uv) / 1_000_000_000_000.0
+                        } else {
+                            40.0
+                        };
+
+                        let drop_pct_per_hr = if is_discharging && energy_full_wh > 0.0 {
+                            power_w.map(|w| (w / energy_full_wh) * 100.0)
+                        } else {
+                            None
+                        };
+
+                        return (power_w, drop_pct_per_hr);
+                    }
+                }
+            }
+        }
+        (None, None)
+    }
+
+    /// Read Linux Multi-Gen LRU (MGLRU) min_ttl_ms directly from sysfs
+    pub async fn read_mglru_telemetry(&self) -> u64 {
+        #[cfg(target_os = "linux")]
+        {
+            let path = Path::new("/sys/kernel/mm/lru_gen/min_ttl_ms");
+            if let Ok(content) = fs::read_to_string(path) {
+                if let Ok(ttl) = content.trim().parse::<u64>() {
+                    return ttl;
+                }
+            }
+        }
+        self.mglru_min_ttl_ms.load(Ordering::SeqCst)
+    }
+
+    /// Read Linux PSI memory pressure (some avg10)
+    pub async fn read_psi_memory_pressure(&self) -> Option<f64> {
+        #[cfg(target_os = "linux")]
+        {
+            if let Ok(psi_str) = fs::read_to_string("/proc/pressure/memory") {
+                for line in psi_str.lines() {
+                    if line.starts_with("some") {
+                        for part in line.split_whitespace() {
+                            if let Some(rest) = part.strip_prefix("avg10=") {
+                                if let Ok(val) = rest.parse::<f64>() {
+                                    return Some(val);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// Read live battery capacity and discharging state
@@ -441,6 +556,8 @@ impl HardwareGovernorSynergy {
     pub async fn read_telemetry(&self) -> HardwareProfileTelemetry {
         let cpu_temp_c = self.read_cpu_temp_c().await;
         let (battery_pct, is_discharging) = self.read_battery_state().await;
+        let (battery_draw_w, battery_discharge_pct_per_hr) = self.read_battery_discharge_status().await;
+        let psi_memory_avg10 = self.read_psi_memory_pressure().await;
         let gov = self.current_governor.read().await.clone();
         let epp = self.current_epp.read().await.clone();
 
@@ -455,6 +572,9 @@ impl HardwareGovernorSynergy {
             thermal_clamped: self.thermal_clamped.load(Ordering::SeqCst),
             current_concurrency_limit: self.current_concurrency.load(Ordering::SeqCst),
             baseline_concurrency: self.baseline_concurrency,
+            battery_draw_w,
+            battery_discharge_pct_per_hr,
+            psi_memory_avg10,
         }
     }
 

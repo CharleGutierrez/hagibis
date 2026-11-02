@@ -465,7 +465,7 @@ pub use autonomous_daemon_loop::{
 // Enhancement 4: Dynamic MCP Plugin Registry
 pub mod dynamic_mcp_registry;
 pub use dynamic_mcp_registry::{
-    DynamicMcpRegistry, DynamicMcpRegistryReport, DynamicMcpTool,
+    DynamicMcpRegistry, DynamicMcpRegistryReport, DynamicMcpTool, ToolBenchmarkMetrics,
 };
 
 // Pillar 2: Autonomous Self-Profiling & PGO Feedback Loops
@@ -484,5 +484,14 @@ pub mod microvm_work_stealing_queue;
 pub use microvm_work_stealing_queue::{
     MicrovmJob, MicrovmJobResult, MicrovmQueueStatus, MicrovmWorkStealingQueue,
     WorkStealingQueue, DEFAULT_MAX_SPINUP_TARGET_MS,
+};
+
+// Pillar II: Hardware-Software Co-Design & Dynamic Workload Shedding
+pub mod workload_shedder;
+pub use workload_shedder::{
+    DynamicWorkloadShedder, HeavyWorkloadKind, BackgroundJobKind, BackgroundJobState,
+    ShedderState, HardwareTelemetrySnapshot, WorkloadShedderStatus, ShedderEvaluationReport,
+    WorkloadGuard, THERMAL_PEAK_THRESHOLD_C, THERMAL_RECOVERY_THRESHOLD_C,
+    BATTERY_CRITICAL_THRESHOLD_PCT, THROTTLED_CONCURRENCY_WORKERS,
 };
 

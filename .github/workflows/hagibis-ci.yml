@@ -34,6 +34,17 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
+      - name: Setup Python Environment
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+        continue-on-error: true
+
+      - name: Install Python Dependencies
+        run: |
+          python3 -m pip install --upgrade pip reportlab || true
+
       - name: Run Hagibis CI Action
         uses: ./
         with:
@@ -41,8 +52,19 @@ jobs:
           audit-blast-radius: 'true'
           slopsquatting-firewall: 'true'
           verify-specs: 'true'
+          validate-masterclass: 'true'
           comment-pr: 'true'
           github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Masterclass 8-Chapter Verification Gate
+        run: |
+          if command -v uv &> /dev/null; then
+            uv run --with reportlab python docs/masterclass/generate_pdf.py --validate-all
+          elif [ -f "$HOME/.local/bin/uv" ]; then
+            "$HOME/.local/bin/uv" run --with reportlab python docs/masterclass/generate_pdf.py --validate-all
+          else
+            python3 docs/masterclass/generate_pdf.py --validate-all
+          fi
 
       - name: Workspace Unit Test Verification
         run: |
