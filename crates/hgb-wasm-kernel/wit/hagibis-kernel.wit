@@ -117,6 +117,21 @@ interface zero-copy-ipc {
 
     /// Process context buffer in-place with zero memory copy
     shm-process-context: func(descriptor: shm-buffer-descriptor) -> result<u32, string>;
+
+    /// Stream raw f32 embedding vector directly into guest linear memory
+    stream-embedding-to-guest: func(dimensions: u32, raw-f32-bytes: list<u8>) -> result<u32, string>;
+
+    /// Compute cosine vector similarity between two embedding vectors in guest linear memory
+    compute-vector-similarity: func(vec-a-offset: u32, vec-b-offset: u32, dims: u32) -> result<f32, string>;
+}
+
+/// WebNN Tensor & GPU/SIMD Vector Acceleration Interface (Roadmap Pillar 2)
+interface webnn-tensor {
+    /// Stream raw f32 embedding vector directly into guest linear memory
+    stream-embedding-to-guest: func(dimensions: u32, raw-f32-bytes: list<u8>) -> result<u32, string>;
+
+    /// Compute cosine vector similarity between two embedding vectors in guest linear memory
+    compute-vector-similarity: func(vec-a-offset: u32, vec-b-offset: u32, dims: u32) -> result<f32, string>;
 }
 
 interface state-sync {
@@ -241,6 +256,7 @@ world hagibis-wasm-engine {
     export executor;
     export zero-copy-ipc;
     export wasi-nn;
+    export webnn-tensor;
     export dynamic-component-plugin;
     export dynamic-tool-compiler;
     export agent-runtime-extension;

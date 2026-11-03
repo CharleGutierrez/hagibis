@@ -1307,7 +1307,7 @@ pub use ollama_ecosystem_bridge::{
 // Pillar 3: True Zero-Copy Shared Memory for AI Inference Pipelines
 pub mod shm_inference_pipeline;
 pub use shm_inference_pipeline::{
-    resolve_infer_stream_path, InferControlHeader, InferDataType, TensorFrameHeader,
+    resolve_infer_stream_path, stream_ollama_embedding_to_wasm, InferControlHeader, InferDataType, TensorFrameHeader,
     TensorStreamBenchReport, TensorStreamStatus, WasmDirectMemoryBridge,
     ZeroCopyTensorConsumer, ZeroCopyTensorProducer, ZeroCopyTensorStream,
     DEFAULT_INFER_STREAM_CAPACITY, FLAG_CHECKSUMMED, FLAG_INTERMEDIATE_ACTIVATION,

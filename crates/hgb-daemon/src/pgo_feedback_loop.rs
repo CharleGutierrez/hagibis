@@ -16,7 +16,7 @@
 //!      clamps governor to `powersave`, EPP to `power`, and scales down task concurrency.
 //!    - Idle queue: Automatically drops back to `powersave` and EPP `balance_power`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -36,8 +36,12 @@ pub const DEFAULT_LATENCY_SLA_P99_THRESHOLD_MS: f64 = 500.0;
 pub const DEFAULT_PGO_COOLDOWN_SECS: u64 = 300;
 /// Critical CPU thermal throttling threshold (78.0°C)
 pub const THERMAL_THROTTLE_TEMP_C: f64 = 78.0;
+/// Thermal recovery threshold for restoring performance concurrency (72.0°C)
+pub const THERMAL_RECOVERY_TEMP_C: f64 = 72.0;
 /// Severe thermal critical threshold (85.0°C)
 pub const THERMAL_CRITICAL_TEMP_C: f64 = 85.0;
+/// Task error rate threshold triggering dynamic concurrency downscaling (20.0%)
+pub const TASK_ERROR_RATE_THROTTLE_THRESHOLD_PCT: f64 = 20.0;
 /// Battery reserve threshold on discharge (20%)
 pub const BATTERY_DISCHARGE_CRITICAL_PCT: u32 = 20;
 /// Target MGLRU min_ttl_ms when bursting during heavy workloads (1000 ms)
@@ -153,6 +157,42 @@ impl Default for LatencyPercentiles {
     }
 }
 
+/// Diagnostic failure captured during task or test suite execution
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TaskFailureDiagnosticSnapshot {
+    pub timestamp_rfc3339: String,
+    pub task_id: String,
+    pub error_summary: String,
+    pub failure_type: String,
+    pub diagnostics: Option<String>,
+}
+
+/// Aggregated task execution and error telemetry
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TaskExecutionTelemetry {
+    pub total_tasks: u64,
+    pub successful_tasks: u64,
+    pub failed_tasks: u64,
+    pub success_rate_pct: f64,
+    pub error_rate_pct: f64,
+    pub window_sample_count: usize,
+    pub recent_failures: Vec<TaskFailureDiagnosticSnapshot>,
+}
+
+/// Report snapshot produced by dynamic concurrency regulation
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ConcurrencyRegulationReport {
+    pub current_concurrency: usize,
+    pub baseline_concurrency: usize,
+    pub throttled: bool,
+    pub throttle_reasons: Vec<String>,
+    pub cpu_temp_c: f64,
+    pub error_rate_pct: f64,
+    pub task_success_rate_pct: f64,
+    pub total_tasks: u64,
+    pub active_workers: usize,
+}
+
 /// Live hardware governor and telemetry profile
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HardwareProfileTelemetry {
@@ -172,6 +212,12 @@ pub struct HardwareProfileTelemetry {
     pub battery_discharge_pct_per_hr: Option<f64>,
     #[serde(default)]
     pub psi_memory_avg10: Option<f64>,
+    #[serde(default)]
+    pub task_error_rate_pct: Option<f64>,
+    #[serde(default)]
+    pub concurrency_throttled: Option<bool>,
+    #[serde(default)]
+    pub throttle_reasons: Option<Vec<String>>,
 }
 
 /// Report snapshot captured to `.hgb/pgo_hotspots.json`
@@ -212,6 +258,10 @@ pub struct PgoFeedbackStatusReport {
     pub last_trigger_reason: Option<String>,
     pub last_trigger_epoch_secs: Option<u64>,
     pub trigger_count: u64,
+    #[serde(default)]
+    pub task_execution: Option<TaskExecutionTelemetry>,
+    #[serde(default)]
+    pub concurrency_regulation: Option<ConcurrencyRegulationReport>,
 }
 
 fn current_epoch_secs() -> u64 {
@@ -230,10 +280,12 @@ pub struct HardwareGovernorSynergy {
     baseline_concurrency: usize,
     current_concurrency: Arc<AtomicUsize>,
     thermal_clamped: Arc<AtomicBool>,
+    error_clamped: Arc<AtomicBool>,
     current_governor: Arc<RwLock<String>>,
     current_epp: Arc<RwLock<String>>,
     turbo_enabled: Arc<AtomicBool>,
     mglru_min_ttl_ms: Arc<AtomicU64>,
+    throttle_reasons: Arc<RwLock<Vec<String>>>,
     // Testing override flags
     simulated_temp_c: Arc<Mutex<Option<f64>>>,
     simulated_battery: Arc<Mutex<Option<(u32, bool)>>>,
@@ -256,10 +308,12 @@ impl HardwareGovernorSynergy {
             baseline_concurrency: default_concurrency,
             current_concurrency: Arc::new(AtomicUsize::new(default_concurrency)),
             thermal_clamped: Arc::new(AtomicBool::new(false)),
+            error_clamped: Arc::new(AtomicBool::new(false)),
             current_governor: Arc::new(RwLock::new("powersave".to_string())),
             current_epp: Arc::new(RwLock::new("balance_power".to_string())),
             turbo_enabled: Arc::new(AtomicBool::new(false)),
             mglru_min_ttl_ms: Arc::new(AtomicU64::new(IDLE_MGLRU_MIN_TTL_MS)),
+            throttle_reasons: Arc::new(RwLock::new(Vec::new())),
             simulated_temp_c: Arc::new(Mutex::new(None)),
             simulated_battery: Arc::new(Mutex::new(None)),
         }
@@ -485,6 +539,11 @@ impl HardwareGovernorSynergy {
         // Scale concurrency down to 1 or 2 workers
         let throttled_concurrency = (self.baseline_concurrency / 2).max(1);
         self.current_concurrency.store(throttled_concurrency, Ordering::SeqCst);
+        {
+            let mut tr = self.throttle_reasons.write().await;
+            tr.clear();
+            tr.push(format!("Thermal threshold reached: {:.1}°C", cpu_temp_c));
+        }
 
         // Update state
         {
@@ -514,11 +573,16 @@ impl HardwareGovernorSynergy {
         }
 
         // Recovery thresholds: temp < 72.0°C and battery >= 25% (or on AC)
-        let temp_recovered = cpu_temp_c < 72.0;
+        let temp_recovered = cpu_temp_c < THERMAL_RECOVERY_TEMP_C;
         let battery_recovered = !is_discharging || battery_pct >= 25;
 
         if temp_recovered && battery_recovered {
             self.thermal_clamped.store(false, Ordering::SeqCst);
+            self.error_clamped.store(false, Ordering::SeqCst);
+            {
+                let mut tr = self.throttle_reasons.write().await;
+                tr.clear();
+            }
             self.current_concurrency.store(self.baseline_concurrency, Ordering::SeqCst);
             eprintln!(
                 "✔ [Hardware Governor Synergy] Thermal warning cleared (temp: {:.1}°C, battery: {}%). Concurrency restored to {} workers.",
@@ -527,6 +591,142 @@ impl HardwareGovernorSynergy {
             true
         } else {
             false
+        }
+    }
+
+    /// Dynamically adjust thread pools, worker count, and task queuing concurrency based on
+    /// thermal headroom and task error rates:
+    /// - Throttle down when temp >= 78°C or error rate > 20%
+    /// - Boost up to performance when thermal headroom allows (temp < 72°C and error rate <= 20%)
+    pub async fn regulate_concurrency(
+        &self,
+        cpu_temp_c: f64,
+        battery_pct: u32,
+        is_discharging: bool,
+        task_error_rate_pct: f64,
+        task_success_rate_pct: f64,
+        total_tasks: u64,
+        active_workload_count: usize,
+    ) -> ConcurrencyRegulationReport {
+        let mut reasons = Vec::new();
+        let mut should_throttle = false;
+
+        if cpu_temp_c >= THERMAL_THROTTLE_TEMP_C {
+            should_throttle = true;
+            reasons.push(format!(
+                "CPU temperature ({:.1}°C) exceeds thermal limit ({:.1}°C)",
+                cpu_temp_c, THERMAL_THROTTLE_TEMP_C
+            ));
+        }
+
+        if task_error_rate_pct > TASK_ERROR_RATE_THROTTLE_THRESHOLD_PCT {
+            should_throttle = true;
+            reasons.push(format!(
+                "Task error rate ({:.1}%) exceeds error rate limit ({:.1}%)",
+                task_error_rate_pct, TASK_ERROR_RATE_THROTTLE_THRESHOLD_PCT
+            ));
+        }
+
+        if is_discharging && battery_pct <= BATTERY_DISCHARGE_CRITICAL_PCT {
+            should_throttle = true;
+            reasons.push(format!(
+                "Battery level ({}%) is critical on discharge (<= {}%)",
+                battery_pct, BATTERY_DISCHARGE_CRITICAL_PCT
+            ));
+        }
+
+        if should_throttle {
+            self.thermal_clamped.store(true, Ordering::SeqCst);
+            self.error_clamped.store(task_error_rate_pct > TASK_ERROR_RATE_THROTTLE_THRESHOLD_PCT, Ordering::SeqCst);
+            {
+                let mut tr = self.throttle_reasons.write().await;
+                *tr = reasons.clone();
+            }
+
+            // Downscale worker concurrency
+            let throttled_concurrency = if cpu_temp_c >= THERMAL_CRITICAL_TEMP_C || task_error_rate_pct >= 50.0 {
+                1
+            } else {
+                (self.baseline_concurrency / 2).max(1)
+            };
+            self.current_concurrency.store(throttled_concurrency, Ordering::SeqCst);
+
+            // Clamp governor and EPP to power saving
+            {
+                let mut gov = self.current_governor.write().await;
+                *gov = "powersave".to_string();
+                let mut epp = self.current_epp.write().await;
+                *epp = "power".to_string();
+            }
+            self.turbo_enabled.store(false, Ordering::SeqCst);
+            self.mglru_min_ttl_ms.store(IDLE_MGLRU_MIN_TTL_MS, Ordering::SeqCst);
+
+            self.apply_hardware_profile("powersave", "power", false, IDLE_MGLRU_MIN_TTL_MS).await;
+
+            ConcurrencyRegulationReport {
+                current_concurrency: throttled_concurrency,
+                baseline_concurrency: self.baseline_concurrency,
+                throttled: true,
+                throttle_reasons: reasons,
+                cpu_temp_c,
+                error_rate_pct: task_error_rate_pct,
+                task_success_rate_pct,
+                total_tasks,
+                active_workers: active_workload_count,
+            }
+        } else {
+            // Recovery headroom check
+            let temp_headroom = cpu_temp_c < THERMAL_RECOVERY_TEMP_C;
+            let error_headroom = task_error_rate_pct <= TASK_ERROR_RATE_THROTTLE_THRESHOLD_PCT;
+            let battery_headroom = !is_discharging || battery_pct >= 25;
+
+            if temp_headroom && error_headroom && battery_headroom {
+                let was_clamped = self.thermal_clamped.swap(false, Ordering::SeqCst);
+                self.error_clamped.store(false, Ordering::SeqCst);
+                {
+                    let mut tr = self.throttle_reasons.write().await;
+                    tr.clear();
+                }
+                self.current_concurrency.store(self.baseline_concurrency, Ordering::SeqCst);
+
+                if was_clamped || active_workload_count > 0 {
+                    if active_workload_count > 0 {
+                        // Workload active and thermal headroom allows -> boost up to performance!
+                        {
+                            let mut gov = self.current_governor.write().await;
+                            *gov = "performance".to_string();
+                            let mut epp = self.current_epp.write().await;
+                            *epp = "performance".to_string();
+                        }
+                        self.turbo_enabled.store(true, Ordering::SeqCst);
+                        self.mglru_min_ttl_ms.store(BURST_MGLRU_MIN_TTL_MS, Ordering::SeqCst);
+                        self.apply_hardware_profile("performance", "performance", true, BURST_MGLRU_MIN_TTL_MS).await;
+                    } else {
+                        // Workload idle -> powersave and balance_power
+                        {
+                            let mut gov = self.current_governor.write().await;
+                            *gov = "powersave".to_string();
+                            let mut epp = self.current_epp.write().await;
+                            *epp = "balance_power".to_string();
+                        }
+                        self.turbo_enabled.store(false, Ordering::SeqCst);
+                        self.mglru_min_ttl_ms.store(IDLE_MGLRU_MIN_TTL_MS, Ordering::SeqCst);
+                        self.apply_hardware_profile("powersave", "balance_power", false, IDLE_MGLRU_MIN_TTL_MS).await;
+                    }
+                }
+            }
+
+            ConcurrencyRegulationReport {
+                current_concurrency: self.current_concurrency.load(Ordering::SeqCst),
+                baseline_concurrency: self.baseline_concurrency,
+                throttled: false,
+                throttle_reasons: Vec::new(),
+                cpu_temp_c,
+                error_rate_pct: task_error_rate_pct,
+                task_success_rate_pct,
+                total_tasks,
+                active_workers: active_workload_count,
+            }
         }
     }
 
@@ -560,6 +760,8 @@ impl HardwareGovernorSynergy {
         let psi_memory_avg10 = self.read_psi_memory_pressure().await;
         let gov = self.current_governor.read().await.clone();
         let epp = self.current_epp.read().await.clone();
+        let tr = self.throttle_reasons.read().await.clone();
+        let is_throttled = self.thermal_clamped.load(Ordering::SeqCst);
 
         HardwareProfileTelemetry {
             governor: gov,
@@ -569,12 +771,15 @@ impl HardwareGovernorSynergy {
             cpu_temp_c,
             battery_pct,
             is_discharging,
-            thermal_clamped: self.thermal_clamped.load(Ordering::SeqCst),
+            thermal_clamped: is_throttled,
             current_concurrency_limit: self.current_concurrency.load(Ordering::SeqCst),
             baseline_concurrency: self.baseline_concurrency,
             battery_draw_w,
             battery_discharge_pct_per_hr,
             psi_memory_avg10,
+            task_error_rate_pct: None,
+            concurrency_throttled: Some(is_throttled),
+            throttle_reasons: Some(tr),
         }
     }
 
@@ -653,6 +858,13 @@ pub struct PgoFeedbackLoop {
     latency_history: Arc<RwLock<Vec<f64>>>,
     active_workload_counter: Arc<AtomicUsize>,
     hardware_synergy: Arc<HardwareGovernorSynergy>,
+    total_tasks_completed: Arc<AtomicU64>,
+    successful_tasks: Arc<AtomicU64>,
+    failed_tasks: Arc<AtomicU64>,
+    recent_task_results: Arc<RwLock<VecDeque<bool>>>,
+    recent_failure_diagnostics: Arc<RwLock<Vec<TaskFailureDiagnosticSnapshot>>>,
+    last_concurrency_report: Arc<RwLock<Option<ConcurrencyRegulationReport>>>,
+    self_healing_daemon: Arc<Mutex<Option<Arc<crate::native_self_healing_daemon::NativeSelfHealingDaemon>>>>,
     is_running: Arc<AtomicBool>,
 }
 
@@ -684,8 +896,188 @@ impl PgoFeedbackLoop {
             latency_history: Arc::new(RwLock::new(Vec::with_capacity(1000))),
             active_workload_counter: Arc::new(AtomicUsize::new(0)),
             hardware_synergy: hardware,
+            total_tasks_completed: Arc::new(AtomicU64::new(0)),
+            successful_tasks: Arc::new(AtomicU64::new(0)),
+            failed_tasks: Arc::new(AtomicU64::new(0)),
+            recent_task_results: Arc::new(RwLock::new(VecDeque::with_capacity(100))),
+            recent_failure_diagnostics: Arc::new(RwLock::new(Vec::with_capacity(50))),
+            last_concurrency_report: Arc::new(RwLock::new(None)),
+            self_healing_daemon: Arc::new(Mutex::new(None)),
             is_running: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// Attach an optional NativeSelfHealingDaemon instance for closed-loop coordination
+    pub async fn attach_self_healing_daemon(&self, daemon: Arc<crate::native_self_healing_daemon::NativeSelfHealingDaemon>) {
+        let mut d = self.self_healing_daemon.lock().await;
+        *d = Some(daemon);
+    }
+
+    /// Builder method to attach a NativeSelfHealingDaemon
+    pub fn with_self_healing_daemon(self, daemon: Arc<crate::native_self_healing_daemon::NativeSelfHealingDaemon>) -> Self {
+        *self.self_healing_daemon.try_lock().unwrap() = Some(daemon);
+        self
+    }
+
+    /// Record a successfully completed task execution
+    pub async fn record_task_success(&self) {
+        self.total_tasks_completed.fetch_add(1, Ordering::SeqCst);
+        self.successful_tasks.fetch_add(1, Ordering::SeqCst);
+
+        let mut queue = self.recent_task_results.write().await;
+        if queue.len() >= 100 {
+            queue.pop_front();
+        }
+        queue.push_back(true);
+    }
+
+    /// Record a failed task execution with diagnostic summary
+    pub async fn record_task_failure(
+        &self,
+        task_id: &str,
+        error_summary: &str,
+        failure_type: &str,
+        diagnostics: Option<&str>,
+    ) {
+        self.total_tasks_completed.fetch_add(1, Ordering::SeqCst);
+        self.failed_tasks.fetch_add(1, Ordering::SeqCst);
+
+        let snapshot = TaskFailureDiagnosticSnapshot {
+            timestamp_rfc3339: chrono::Utc::now().to_rfc3339(),
+            task_id: task_id.to_string(),
+            error_summary: error_summary.to_string(),
+            failure_type: failure_type.to_string(),
+            diagnostics: diagnostics.map(|d| d.to_string()),
+        };
+
+        {
+            let mut diags = self.recent_failure_diagnostics.write().await;
+            if diags.len() >= 50 {
+                diags.remove(0);
+            }
+            diags.push(snapshot);
+        }
+
+        let mut queue = self.recent_task_results.write().await;
+        if queue.len() >= 100 {
+            queue.pop_front();
+        }
+        queue.push_back(false);
+    }
+
+    /// Record a test suite failure diagnostic and forward to self-healing daemon if available
+    pub async fn record_test_failure_diagnostic(
+        &self,
+        suite_name: &str,
+        failed_test: &str,
+        assertion_failure: &str,
+        panic_trace: Option<&str>,
+    ) {
+        let full_diag = format!(
+            "Test: {} in suite: {}\nAssertion: {}\nTrace: {}",
+            failed_test,
+            suite_name,
+            assertion_failure,
+            panic_trace.unwrap_or("none")
+        );
+        self.record_task_failure(
+            failed_test,
+            assertion_failure,
+            "test_failure",
+            Some(&full_diag),
+        ).await;
+
+        let daemon_opt = {
+            let guard = self.self_healing_daemon.lock().await;
+            guard.clone()
+        };
+        if let Some(daemon) = daemon_opt {
+            let incident = crate::native_self_healing_daemon::HealingIncidentReport {
+                incident_id: uuid::Uuid::new_v4().to_string(),
+                kind: crate::native_self_healing_daemon::IncidentKind::TestFailure {
+                    suite_name: suite_name.to_string(),
+                    failed_tests: vec![failed_test.to_string()],
+                    assertion_failures: vec![assertion_failure.to_string()],
+                    panic_traces: panic_trace.map(|p| vec![p.to_string()]).unwrap_or_default(),
+                },
+                error_context: format!("Test failure in {}: {}", failed_test, assertion_failure),
+                affected_files: Vec::new(),
+                raw_stderr: assertion_failure.to_string(),
+                raw_stdout: String::new(),
+                exit_code: 1,
+                created_at: chrono::Utc::now().to_rfc3339(),
+                resolved: false,
+            };
+            let _ = daemon.store.record_incident(&incident);
+        }
+    }
+
+    /// Compute rolling task error rate as a percentage (0.0 to 100.0)
+    pub async fn task_error_rate_pct(&self) -> f64 {
+        let queue = self.recent_task_results.read().await;
+        if queue.is_empty() {
+            return 0.0;
+        }
+        let failed_count = queue.iter().filter(|&&passed| !passed).count();
+        (failed_count as f64 / queue.len() as f64) * 100.0
+    }
+
+    /// Compute rolling task success rate as a percentage (0.0 to 100.0)
+    pub async fn task_success_rate_pct(&self) -> f64 {
+        let queue = self.recent_task_results.read().await;
+        if queue.is_empty() {
+            return 100.0;
+        }
+        let success_count = queue.iter().filter(|&&passed| passed).count();
+        (success_count as f64 / queue.len() as f64) * 100.0
+    }
+
+    /// Retrieve full task execution telemetry snapshot
+    pub async fn task_telemetry(&self) -> TaskExecutionTelemetry {
+        let total_tasks = self.total_tasks_completed.load(Ordering::SeqCst);
+        let successful_tasks = self.successful_tasks.load(Ordering::SeqCst);
+        let failed_tasks = self.failed_tasks.load(Ordering::SeqCst);
+        let error_rate_pct = self.task_error_rate_pct().await;
+        let success_rate_pct = self.task_success_rate_pct().await;
+        let recent_failures = self.recent_failure_diagnostics.read().await.clone();
+        let window_sample_count = self.recent_task_results.read().await.len();
+
+        TaskExecutionTelemetry {
+            total_tasks,
+            successful_tasks,
+            failed_tasks,
+            success_rate_pct,
+            error_rate_pct,
+            window_sample_count,
+            recent_failures,
+        }
+    }
+
+    /// Perform dynamic concurrency regulation based on live thermal headroom and task error rates
+    pub async fn regulate_concurrency(&self) -> ConcurrencyRegulationReport {
+        let cpu_temp_c = self.hardware_synergy.read_cpu_temp_c().await;
+        let (battery_pct, is_discharging) = self.hardware_synergy.read_battery_state().await;
+        let error_rate = self.task_error_rate_pct().await;
+        let success_rate = self.task_success_rate_pct().await;
+        let total_tasks = self.total_tasks_completed.load(Ordering::SeqCst);
+        let active_workload = self.active_workload_counter.load(Ordering::SeqCst);
+
+        let report = self.hardware_synergy.regulate_concurrency(
+            cpu_temp_c,
+            battery_pct,
+            is_discharging,
+            error_rate,
+            success_rate,
+            total_tasks,
+            active_workload,
+        ).await;
+
+        {
+            let mut stored = self.last_concurrency_report.write().await;
+            *stored = Some(report.clone());
+        }
+
+        report
     }
 
     /// Configure custom hotspot threshold (tool call count)
@@ -1030,10 +1422,15 @@ impl PgoFeedbackLoop {
         let tool_types_count = self.tool_telemetry.read().await.len();
         let token_stats = self.token_telemetry.read().await.clone();
         let latency_percentiles = self.compute_latency_percentiles().await;
-        let hardware = self.hardware_synergy.read_telemetry().await;
+        let mut hardware = self.hardware_synergy.read_telemetry().await;
         let last_trigger_reason = self.last_trigger_reason.read().await.clone();
         let is_pgo_running = self.is_pgo_running.load(Ordering::SeqCst);
         let trigger_count = self.trigger_count.load(Ordering::SeqCst);
+        let error_rate = self.task_error_rate_pct().await;
+        hardware.task_error_rate_pct = Some(error_rate);
+
+        let task_execution = Some(self.task_telemetry().await);
+        let concurrency_regulation = self.last_concurrency_report.read().await.clone();
 
         PgoFeedbackStatusReport {
             is_active: self.is_running.load(Ordering::SeqCst),
@@ -1046,6 +1443,8 @@ impl PgoFeedbackLoop {
             last_trigger_reason,
             last_trigger_epoch_secs: self.last_pgo_trigger_time.lock().await.map(|_| current_epoch_secs()),
             trigger_count,
+            task_execution,
+            concurrency_regulation,
         }
     }
 
@@ -1057,8 +1456,8 @@ impl PgoFeedbackLoop {
             while self.is_running.load(Ordering::SeqCst) {
                 ticker.tick().await;
 
-                // 1. Evaluate hardware thermal states
-                let _ = self.evaluate_hardware_governor().await;
+                // 1. Evaluate hardware thermal states & dynamic concurrency regulation
+                let _ = self.regulate_concurrency().await;
 
                 // 2. Check idle queue state
                 if self.active_workload_counter.load(Ordering::SeqCst) == 0 {
@@ -1253,6 +1652,132 @@ mod tests {
         let telem5 = hw.read_telemetry().await;
         assert!(!telem5.thermal_clamped);
         assert_eq!(telem5.current_concurrency_limit, telem5.baseline_concurrency);
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_dynamic_concurrency_regulation_high_error_rate() {
+        let temp_dir = std::env::temp_dir().join(format!("pgo_err_reg_{}", uuid::Uuid::new_v4().simple()));
+        let _ = fs::create_dir_all(&temp_dir);
+
+        let engine = PgoFeedbackLoop::new(&temp_dir);
+        let hw = engine.hardware_synergy();
+        hw.set_simulated_temp(Some(45.0)).await; // Cool temperature
+
+        // Record 10 tasks: 7 successes, 3 failures -> 30% error rate (> 20% threshold)
+        for _ in 0..7 {
+            engine.record_task_success().await;
+        }
+        for i in 0..3 {
+            engine.record_task_failure(
+                &format!("task_{}", i),
+                "Task execution timeout",
+                "timeout",
+                Some("stack trace details"),
+            ).await;
+        }
+
+        let err_rate = engine.task_error_rate_pct().await;
+        assert_eq!(err_rate, 30.0);
+        let success_rate = engine.task_success_rate_pct().await;
+        assert_eq!(success_rate, 70.0);
+
+        // Regulate concurrency: must throttle due to error rate > 20%
+        let report = engine.regulate_concurrency().await;
+        assert!(report.throttled);
+        assert!(report.current_concurrency < report.baseline_concurrency || report.current_concurrency == 1);
+        assert!(report.throttle_reasons.iter().any(|r| r.contains("Task error rate")));
+
+        let telem = hw.read_telemetry().await;
+        assert_eq!(telem.governor, "powersave");
+        assert_eq!(telem.epp, "power");
+        assert_eq!(telem.mglru_min_ttl_ms, 0);
+
+        // Recover error rate by recording successful tasks
+        for _ in 0..20 {
+            engine.record_task_success().await;
+        }
+        let recovered_err_rate = engine.task_error_rate_pct().await;
+        assert!(recovered_err_rate <= 10.0);
+
+        let report2 = engine.regulate_concurrency().await;
+        assert!(!report2.throttled);
+        assert_eq!(report2.current_concurrency, report2.baseline_concurrency);
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_dynamic_concurrency_regulation_thermal_throttle_and_recovery() {
+        let temp_dir = std::env::temp_dir().join(format!("pgo_therm_reg_{}", uuid::Uuid::new_v4().simple()));
+        let _ = fs::create_dir_all(&temp_dir);
+
+        let engine = PgoFeedbackLoop::new(&temp_dir);
+        let hw = engine.hardware_synergy();
+
+        // 1. Nominal low error rate
+        for _ in 0..10 {
+            engine.record_task_success().await;
+        }
+
+        // 2. High temperature: 80.0°C (>= 78.0°C)
+        hw.set_simulated_temp(Some(80.0)).await;
+        let report = engine.regulate_concurrency().await;
+        assert!(report.throttled);
+        assert!(report.throttle_reasons.iter().any(|r| r.contains("CPU temperature")));
+        assert!(report.current_concurrency < report.baseline_concurrency || report.current_concurrency == 1);
+
+        // 3. Temperature recovers to 68.0°C (< 72.0°C) with active workload
+        hw.set_simulated_temp(Some(68.0)).await;
+        engine.on_task_started().await; // 1 active task
+        let report_rec = engine.regulate_concurrency().await;
+        assert!(!report_rec.throttled);
+        assert_eq!(report_rec.current_concurrency, report_rec.baseline_concurrency);
+
+        let telem = hw.read_telemetry().await;
+        assert_eq!(telem.governor, "performance");
+        assert_eq!(telem.epp, "performance");
+        assert!(telem.turbo_enabled);
+        assert_eq!(telem.mglru_min_ttl_ms, BURST_MGLRU_MIN_TTL_MS);
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_task_telemetry_and_failure_diagnostics() {
+        let temp_dir = std::env::temp_dir().join(format!("pgo_diag_test_{}", uuid::Uuid::new_v4().simple()));
+        let _ = fs::create_dir_all(&temp_dir);
+
+        let engine = PgoFeedbackLoop::new(&temp_dir);
+
+        engine.record_task_success().await;
+        engine.record_task_failure(
+            "subagent_step_4",
+            "WASM memory limit exceeded",
+            "runtime_error",
+            Some("Exceeded 256 heap pages limit"),
+        ).await;
+
+        engine.record_test_failure_diagnostic(
+            "hgb_core::unit_tests",
+            "test_memory_bus",
+            "assertion failed: left == right",
+            Some("at crates/hgb-core/src/zero_copy_memory_bus.rs:142"),
+        ).await;
+
+        let telem = engine.task_telemetry().await;
+        assert_eq!(telem.total_tasks, 3);
+        assert_eq!(telem.successful_tasks, 1);
+        assert_eq!(telem.failed_tasks, 2);
+        assert_eq!(telem.recent_failures.len(), 2);
+        assert_eq!(telem.recent_failures[0].task_id, "subagent_step_4");
+        assert_eq!(telem.recent_failures[1].task_id, "test_memory_bus");
+
+        let status = engine.status().await;
+        assert!(status.task_execution.is_some());
+        let task_exec = status.task_execution.unwrap();
+        assert_eq!(task_exec.total_tasks, 3);
 
         let _ = fs::remove_dir_all(&temp_dir);
     }

@@ -1270,4 +1270,123 @@ impl WasmDirectMemoryBridge {
         let mem_slice = memory.data(store);
         Self::bridge_guest_into_stream(stream, mem_slice, guest_offset, len, data_type, dims)
     }
+
+    /// Direct stream of an f32 embedding slice into WebAssembly linear memory
+    /// without intermediate JSON copies or IPC serialization overhead.
+    pub fn stream_embedding_f32_into_wasm<T>(
+        embedding: &[f32],
+        store: &mut Store<T>,
+        memory: &Memory,
+        guest_offset: usize,
+    ) -> Result<usize> {
+        let byte_len = embedding.len().checked_mul(4).ok_or_else(|| {
+            HgbError::Execution("Integer overflow calculating embedding byte length".to_string())
+        })?;
+        let mem_slice = memory.data_mut(store);
+        Self::validate_isolation_bounds(
+            mem_slice.len(),
+            guest_offset,
+            byte_len,
+            InferDataType::F32,
+        )?;
+
+        for (i, &val) in embedding.iter().enumerate() {
+            let offset = guest_offset + i * 4;
+            mem_slice[offset..offset + 4].copy_from_slice(&val.to_le_bytes());
+        }
+
+        Ok(byte_len)
+    }
+}
+
+/// Connect local Ollama embedding generation directly into WASM linear memory:
+/// Writes raw f32 embedding vectors directly into the guest linear memory space
+/// without intermediate JSON copies or IPC serialization overhead.
+pub async fn stream_ollama_embedding_to_wasm<T>(
+    ollama: &crate::providers::ollama::OllamaProvider,
+    model: &str,
+    prompt: &str,
+    store: &mut Store<T>,
+    memory: &Memory,
+    guest_offset: usize,
+) -> Result<usize> {
+    let embedding = ollama.embed_with_model(model, prompt).await?;
+    WasmDirectMemoryBridge::stream_embedding_f32_into_wasm(&embedding, store, memory, guest_offset)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wasmtime::{Engine, MemoryType, Store};
+
+    #[test]
+    fn test_zero_copy_tensor_embedding_streaming_into_wasm() {
+        let engine = Engine::default();
+        let mut store = Store::new(&engine, ());
+        let memory_type = MemoryType::new(1, Some(4)); // 1 page = 64 KiB
+        let memory = Memory::new(&mut store, memory_type).expect("create wasm memory");
+
+        let embedding: Vec<f32> = vec![0.123, -0.456, 0.789, 1.234, -5.678];
+        let guest_offset = 128; // 4-byte aligned offset
+
+        let written = WasmDirectMemoryBridge::stream_embedding_f32_into_wasm(
+            &embedding,
+            &mut store,
+            &memory,
+            guest_offset,
+        ).expect("stream embedding into wasm");
+
+        assert_eq!(written, embedding.len() * 4);
+
+        // Read back raw floats from guest linear memory
+        let data = memory.data(&store);
+        let written_bytes = &data[guest_offset..guest_offset + written];
+        for (i, &expected_val) in embedding.iter().enumerate() {
+            let offset = i * 4;
+            let val = f32::from_le_bytes([
+                written_bytes[offset],
+                written_bytes[offset + 1],
+                written_bytes[offset + 2],
+                written_bytes[offset + 3],
+            ]);
+            assert!((val - expected_val).abs() < 1e-6);
+        }
+
+        // Test boundary enforcement: writing past 64 KiB must fail
+        let oob_offset = 65536 - 8;
+        let oob_res = WasmDirectMemoryBridge::stream_embedding_f32_into_wasm(
+            &embedding,
+            &mut store,
+            &memory,
+            oob_offset,
+        );
+        assert!(oob_res.is_err());
+
+        // Test unaligned offset: offset 129 is not 4-byte aligned for F32
+        let unaligned_res = WasmDirectMemoryBridge::stream_embedding_f32_into_wasm(
+            &embedding,
+            &mut store,
+            &memory,
+            129,
+        );
+        assert!(unaligned_res.is_err());
+    }
+
+    #[test]
+    fn test_wasm_direct_memory_bridge_slice() {
+        let mut guest_mem = vec![0u8; 512];
+        let slice1 = [1u8, 2, 3, 4];
+        let slice2 = [5u8, 6, 7, 8];
+
+        let written = WasmDirectMemoryBridge::bridge_slice_into_guest(
+            &mut guest_mem,
+            64,
+            &slice1,
+            &slice2,
+            InferDataType::F32,
+        ).expect("bridge slice");
+
+        assert_eq!(written, 8);
+        assert_eq!(&guest_mem[64..72], &[1, 2, 3, 4, 5, 6, 7, 8]);
+    }
 }

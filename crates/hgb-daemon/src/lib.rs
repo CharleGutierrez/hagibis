@@ -471,11 +471,13 @@ pub use dynamic_mcp_registry::{
 // Pillar 2: Autonomous Self-Profiling & PGO Feedback Loops
 pub mod pgo_feedback_loop;
 pub use pgo_feedback_loop::{
-    HardwareGovernorSynergy, HardwareProfileTelemetry, LatencyPercentiles,
-    PgoFeedbackLoop, PgoFeedbackStatusReport, PgoHotspotSnapshot, PgoTriggerReport,
+    ConcurrencyRegulationReport, HardwareGovernorSynergy, HardwareProfileTelemetry,
+    LatencyPercentiles, PgoFeedbackLoop, PgoFeedbackStatusReport, PgoHotspotSnapshot,
+    PgoTriggerReport, TaskExecutionTelemetry, TaskFailureDiagnosticSnapshot,
     TokenStreamStats, ToolCallStats, DEFAULT_HOTSPOT_TOOL_CALL_THRESHOLD,
     DEFAULT_LATENCY_SLA_P99_THRESHOLD_MS, DEFAULT_PGO_COOLDOWN_SECS,
-    THERMAL_THROTTLE_TEMP_C, THERMAL_CRITICAL_TEMP_C,
+    TASK_ERROR_RATE_THROTTLE_THRESHOLD_PCT, THERMAL_CRITICAL_TEMP_C,
+    THERMAL_RECOVERY_TEMP_C, THERMAL_THROTTLE_TEMP_C,
     BATTERY_DISCHARGE_CRITICAL_PCT, BURST_MGLRU_MIN_TTL_MS, IDLE_MGLRU_MIN_TTL_MS,
 };
 

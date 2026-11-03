@@ -843,12 +843,17 @@ impl OllamaProvider {
         }
     }
 
-    /// Generate real embeddings by calling the Ollama embeddings API
+    /// Generate real embeddings by calling the Ollama embeddings API with default model
     pub async fn embed(&self, text: &str) -> Result<Vec<f32>> {
+        self.embed_with_model("nomic-embed-text", text).await
+    }
+
+    /// Generate real embeddings by calling the Ollama embeddings API with specified model
+    pub async fn embed_with_model(&self, model: &str, text: &str) -> Result<Vec<f32>> {
         let endpoint = format!("{}/api/embeddings", self.base_url);
         
-        let mut payload = serde_json::json!({
-            "model": "nomic-embed-text",
+        let payload = serde_json::json!({
+            "model": model,
             "prompt": text,
         });
 

@@ -216,6 +216,13 @@ pub use self_optimize_healer::{
 pub mod cockpit_web_hud;
 pub use cockpit_web_hud::{
     create_cockpit_router, spawn_cockpit_web_server, CockpitWebServerState, CockpitWebTelemetry,
+    McpToolInvocationRecord,
+};
+
+// Pillar 5: Enhanced Observability & Telemetry OpenTelemetry Integration
+pub mod otel_exporter;
+pub use otel_exporter::{
+    OtelMetricsExporter, OtelTraceSpan, OtelTraceStore, DEFAULT_MAX_TRACE_CAPACITY,
 };
 
 // Pillar III: Edge Prompt Cache Router (Cloudflare Worker & Wasm Synergy)

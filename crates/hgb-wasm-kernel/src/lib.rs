@@ -441,6 +441,123 @@ pub extern "C" fn hgb_shm_commit_write(bytes_written: usize) -> usize {
 }
 
 // ============================================================================
+// WEBNN TENSOR & VECTOR ACCELERATION (Roadmap Pillar 2)
+// ============================================================================
+
+/// Stream raw f32 embedding vector directly into guest linear memory
+///
+/// Validates that `raw_f32_bytes.len() == dimensions * 4`, writes into guest memory,
+/// and returns the guest linear memory byte offset where the vector begins.
+pub fn stream_embedding_to_guest(dimensions: u32, raw_f32_bytes: &[u8]) -> Result<u32, String> {
+    if dimensions == 0 {
+        return Err("Dimensions must be greater than zero".to_string());
+    }
+    let expected_len = (dimensions as usize).checked_mul(4)
+        .ok_or_else(|| "Dimension overflow".to_string())?;
+    if raw_f32_bytes.len() != expected_len {
+        return Err(format!(
+            "Embedding byte length mismatch: expected {} bytes ({} dimensions * 4), got {} bytes",
+            expected_len, dimensions, raw_f32_bytes.len()
+        ));
+    }
+
+    with_guest_shm(|state| {
+        if state.descriptor.is_none() {
+            state.descriptor = Some(ShmBufferDescriptor::default());
+        }
+        let desc = state.descriptor.as_mut().unwrap();
+
+        // 4-byte alignment
+        let current_tail = desc.tail_offset as usize;
+        let aligned_tail = (current_tail + 3) & !3;
+        let start = (desc.base_offset as usize) + aligned_tail;
+        let end = start + expected_len;
+
+        if (aligned_tail + expected_len) > desc.capacity_bytes as usize {
+            desc.capacity_bytes = (aligned_tail + expected_len + 65536) as u32;
+        }
+
+        if state.buffer.len() < end {
+            state.buffer.resize(end, 0);
+        }
+
+        state.buffer[start..end].copy_from_slice(raw_f32_bytes);
+        desc.tail_offset = (aligned_tail + expected_len) as u32;
+        Ok(start as u32)
+    })
+}
+
+/// Compute cosine vector similarity between two embedding vectors in guest linear memory
+pub fn compute_vector_similarity(vec_a_offset: u32, vec_b_offset: u32, dims: u32) -> Result<f32, String> {
+    if dims == 0 {
+        return Err("Dimensions must be greater than zero".to_string());
+    }
+    let byte_len = (dims as usize).checked_mul(4)
+        .ok_or_else(|| "Dimension overflow".to_string())?;
+
+    with_guest_shm(|state| {
+        let a_start = vec_a_offset as usize;
+        let a_end = a_start + byte_len;
+        let b_start = vec_b_offset as usize;
+        let b_end = b_start + byte_len;
+
+        if a_end > state.buffer.len() {
+            return Err(format!(
+                "Vector A bounds violation: range [{}..{}] exceeds buffer length {}",
+                a_start, a_end, state.buffer.len()
+            ));
+        }
+        if b_end > state.buffer.len() {
+            return Err(format!(
+                "Vector B bounds violation: range [{}..{}] exceeds buffer length {}",
+                b_start, b_end, state.buffer.len()
+            ));
+        }
+
+        let slice_a = &state.buffer[a_start..a_end];
+        let slice_b = &state.buffer[b_start..b_end];
+
+        let mut dot = 0.0f32;
+        let mut norm_a = 0.0f32;
+        let mut norm_b = 0.0f32;
+
+        for (chunk_a, chunk_b) in slice_a.chunks_exact(4).zip(slice_b.chunks_exact(4)) {
+            let val_a = f32::from_le_bytes([chunk_a[0], chunk_a[1], chunk_a[2], chunk_a[3]]);
+            let val_b = f32::from_le_bytes([chunk_b[0], chunk_b[1], chunk_b[2], chunk_b[3]]);
+            dot += val_a * val_b;
+            norm_a += val_a * val_a;
+            norm_b += val_b * val_b;
+        }
+
+        let denom = norm_a.sqrt() * norm_b.sqrt();
+        if denom > 1e-9 {
+            Ok((dot / denom).clamp(-1.0, 1.0))
+        } else {
+            Ok(0.0)
+        }
+    })
+}
+
+/// Exported C-ABI: Stream raw f32 embedding vector directly into guest linear memory
+#[no_mangle]
+pub extern "C" fn hgb_stream_embedding_to_guest(dimensions: u32, raw_ptr: *const u8, len: usize) -> i32 {
+    if raw_ptr.is_null() || len != (dimensions as usize) * 4 {
+        return -1;
+    }
+    let slice = unsafe { std::slice::from_raw_parts(raw_ptr, len) };
+    match stream_embedding_to_guest(dimensions, slice) {
+        Ok(offset) => offset as i32,
+        Err(_) => -1,
+    }
+}
+
+/// Exported C-ABI: Compute vector similarity between two guest memory offsets
+#[no_mangle]
+pub extern "C" fn hgb_compute_vector_similarity(vec_a_offset: u32, vec_b_offset: u32, dims: u32) -> f32 {
+    compute_vector_similarity(vec_a_offset, vec_b_offset, dims).unwrap_or(0.0)
+}
+
+// ============================================================================
 // WASI-NN (WebAssembly System Interface for Neural Networks) Guest Implementation
 // ============================================================================
 
@@ -1960,5 +2077,44 @@ mod tests {
         let res_json = serde_json::to_string(&ok_res).expect("serialize result");
         let res_deser: MeteredExecutionResult = serde_json::from_str(&res_json).expect("deserialize result");
         assert_eq!(ok_res, res_deser);
+    }
+
+    #[test]
+    fn test_stream_embedding_to_guest_and_vector_similarity() {
+        // Create two 4-dimensional vectors: v1 = [1.0, 0.0, 0.0, 0.0], v2 = [0.8, 0.6, 0.0, 0.0]
+        let v1: Vec<f32> = vec![1.0, 0.0, 0.0, 0.0];
+        let v2: Vec<f32> = vec![0.8, 0.6, 0.0, 0.0];
+
+        let mut bytes_v1 = Vec::new();
+        for &val in &v1 {
+            bytes_v1.extend_from_slice(&val.to_le_bytes());
+        }
+
+        let mut bytes_v2 = Vec::new();
+        for &val in &v2 {
+            bytes_v2.extend_from_slice(&val.to_le_bytes());
+        }
+
+        let offset1 = stream_embedding_to_guest(4, &bytes_v1).expect("stream v1");
+        let offset2 = stream_embedding_to_guest(4, &bytes_v2).expect("stream v2");
+        assert_ne!(offset1, offset2);
+
+        // Compute similarity: dot product of [1,0,0,0] and [0.8, 0.6, 0, 0] / (1.0 * 1.0) = 0.8
+        let sim = compute_vector_similarity(offset1, offset2, 4).expect("compute similarity");
+        assert!((sim - 0.8).abs() < 1e-4, "Expected ~0.8, got {}", sim);
+
+        // Identical vector similarity must be 1.0
+        let self_sim = compute_vector_similarity(offset1, offset1, 4).expect("self similarity");
+        assert!((self_sim - 1.0).abs() < 1e-4, "Expected ~1.0, got {}", self_sim);
+
+        // C-ABI functions test
+        let abi_offset = hgb_stream_embedding_to_guest(4, bytes_v1.as_ptr(), bytes_v1.len());
+        assert!(abi_offset >= 0);
+        let abi_sim = hgb_compute_vector_similarity(offset1, offset2, 4);
+        assert!((abi_sim - 0.8).abs() < 1e-4);
+
+        // Invalid dimension checks
+        assert!(stream_embedding_to_guest(0, &[]).is_err());
+        assert!(stream_embedding_to_guest(4, &[1, 2, 3]).is_err());
     }
 }

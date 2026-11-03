@@ -89,6 +89,12 @@ pub use microvm_crdt_sync::{
     ScratchpadThought, SharedStateVariable, ToolArtifactRecord,
 };
 
+// Advanced Sandboxing: Firecracker MicroVM Execution Logs & Artifacts Storage
+pub mod microvm_execution_log;
+pub use microvm_execution_log::{
+    MicrovmExecutionLogStore, MicrovmExecutionRecord,
+};
+
 // Strategic Upgrade 5: Unified Embedded HNSW Vector Index (Pillar 2)
 pub mod hnsw_vector_index;
 pub use hnsw_vector_index::{
@@ -143,7 +149,7 @@ pub use shm_zero_copy_storage::{
 // Pillar 3: True Zero-Copy Shared Memory for AI Inference Pipelines
 pub mod shm_inference_pipeline;
 pub use shm_inference_pipeline::{
-    resolve_infer_stream_path, InferControlHeader, InferDataType, TensorFrameHeader,
+    resolve_infer_stream_path, stream_ollama_embedding_to_wasm, InferControlHeader, InferDataType, TensorFrameHeader,
     TensorStreamBenchReport, TensorStreamStatus, WasmDirectMemoryBridge,
     ZeroCopyTensorConsumer, ZeroCopyTensorProducer, ZeroCopyTensorStream,
     DEFAULT_INFER_STREAM_CAPACITY, FLAG_CHECKSUMMED, FLAG_INTERMEDIATE_ACTIVATION,

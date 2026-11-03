@@ -20,7 +20,7 @@
 
 use std::collections::VecDeque;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -32,6 +32,7 @@ use hgb_core::microvm_sandbox_executor::{
     EphemeralExecSpec, FirecrackerEphemeralSandbox,
     FirecrackerSnapshotCache, FirecrackerSpawnConfig,
 };
+use hgb_storage::{MicrovmExecutionLogStore, MicrovmExecutionRecord, ToolArtifactRecord};
 use crate::pgo_feedback_loop::PgoFeedbackLoop;
 
 /// Default target spin-up latency ceiling in milliseconds (15ms)
@@ -144,6 +145,7 @@ pub struct MicrovmJobResult {
     pub worker_id: usize,
     pub was_stolen: bool,
     pub patch_applied: bool,
+    pub artifacts: Vec<ToolArtifactRecord>,
 }
 
 /// Telemetry status report of the work-stealing queue
@@ -304,6 +306,7 @@ pub struct MicrovmWorkStealingQueue {
     queue: Arc<WorkStealingQueue<MicrovmJob>>,
     sandbox: Arc<FirecrackerEphemeralSandbox>,
     snapshot_cache: Arc<FirecrackerSnapshotCache>,
+    log_store: Arc<Mutex<Option<Arc<MicrovmExecutionLogStore>>>>,
     pgo_feedback: Arc<Mutex<Option<Arc<PgoFeedbackLoop>>>>,
     is_running: Arc<AtomicBool>,
     active_workers_count: Arc<AtomicUsize>,
@@ -330,11 +333,17 @@ impl MicrovmWorkStealingQueue {
         let spawn_cfg = FirecrackerSpawnConfig::default();
         let _ = snapshot_cache.preboot_base_snapshot(&spawn_cfg);
 
+        let default_log_db = ws.join(".hgb").join("microvm_execution_logs.db");
+        let log_store = Arc::new(Mutex::new(
+            MicrovmExecutionLogStore::new(&default_log_db).ok().map(Arc::new)
+        ));
+
         Self {
             workspace_root: ws,
             queue: Arc::new(WorkStealingQueue::new(workers)),
             sandbox,
             snapshot_cache,
+            log_store,
             pgo_feedback: Arc::new(Mutex::new(None)),
             is_running: Arc::new(AtomicBool::new(false)),
             active_workers_count: Arc::new(AtomicUsize::new(0)),
@@ -356,11 +365,17 @@ impl MicrovmWorkStealingQueue {
         let spawn_cfg = FirecrackerSpawnConfig::default();
         let _ = snapshot_cache.preboot_base_snapshot(&spawn_cfg);
 
+        let default_log_db = ws.join(".hgb").join("microvm_execution_logs.db");
+        let log_store = Arc::new(Mutex::new(
+            MicrovmExecutionLogStore::new(&default_log_db).ok().map(Arc::new)
+        ));
+
         Self {
             workspace_root: ws,
             queue: Arc::new(WorkStealingQueue::new(workers)),
             sandbox,
             snapshot_cache,
+            log_store,
             pgo_feedback: Arc::new(Mutex::new(None)),
             is_running: Arc::new(AtomicBool::new(false)),
             active_workers_count: Arc::new(AtomicUsize::new(0)),
@@ -369,6 +384,42 @@ impl MicrovmWorkStealingQueue {
             total_spinup_time_ms: Arc::new(AtomicU64::new(0)),
             total_execution_time_ms: Arc::new(AtomicU64::new(0)),
             worker_handles: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    /// Access workspace root path
+    pub fn workspace_root(&self) -> &Path {
+        &self.workspace_root
+    }
+
+    /// Connect to persistent execution log store in hgb-storage
+    pub async fn connect_log_store(&self, store: Arc<MicrovmExecutionLogStore>) {
+        let mut slot = self.log_store.lock().await;
+        *slot = Some(store);
+    }
+
+    /// Access reference to active log store
+    pub async fn log_store(&self) -> Option<Arc<MicrovmExecutionLogStore>> {
+        self.log_store.lock().await.clone()
+    }
+
+    /// Query persisted execution logs from hgb-storage
+    pub async fn get_execution_logs(&self, limit: usize) -> Vec<MicrovmExecutionRecord> {
+        let slot = self.log_store.lock().await;
+        if let Some(ref store) = *slot {
+            store.query_logs(limit).unwrap_or_default()
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Get specific persisted execution log by job ID from hgb-storage
+    pub async fn get_execution_log(&self, job_id: &str) -> Option<MicrovmExecutionRecord> {
+        let slot = self.log_store.lock().await;
+        if let Some(ref store) = *slot {
+            store.get_log(job_id).unwrap_or(None)
+        } else {
+            None
         }
     }
 
@@ -452,6 +503,35 @@ impl MicrovmWorkStealingQueue {
                     outcome.isolation_tier
                 };
 
+                let mut artifacts = Vec::new();
+                if !outcome.stdout.is_empty() {
+                    artifacts.push(ToolArtifactRecord::new(
+                        format!("{}_stdout", job.id),
+                        &jail_id,
+                        "stdout.log",
+                        outcome.stdout.as_bytes(),
+                        "stdout",
+                    ));
+                }
+                if !outcome.stderr.is_empty() {
+                    artifacts.push(ToolArtifactRecord::new(
+                        format!("{}_stderr", job.id),
+                        &jail_id,
+                        "stderr.log",
+                        outcome.stderr.as_bytes(),
+                        "stderr",
+                    ));
+                }
+                if let Some(ref patch) = job.patch_content {
+                    artifacts.push(ToolArtifactRecord::new(
+                        format!("{}_patch", job.id),
+                        &jail_id,
+                        "patch.diff",
+                        patch.as_bytes(),
+                        "diff",
+                    ));
+                }
+
                 MicrovmJobResult {
                     job_id: job.id.clone(),
                     success: outcome.success,
@@ -466,23 +546,37 @@ impl MicrovmWorkStealingQueue {
                     worker_id,
                     was_stolen,
                     patch_applied: outcome.patch_applied,
+                    artifacts,
                 }
             }
-            Err(e) => MicrovmJobResult {
-                job_id: job.id.clone(),
-                success: false,
-                exit_code: -1,
-                stdout: String::new(),
-                stderr: format!("Execution sandbox failed: {}", e),
-                duration_ms: start_spinup.elapsed().as_millis() as u64,
-                spinup_duration_ms,
-                memory_consumed_mb: job.memory_mb,
-                blast_radius_bytes: 0,
-                isolation_tier: "SandboxExecutionError".to_string(),
-                worker_id,
-                was_stolen,
-                patch_applied: false,
-            },
+            Err(e) => {
+                let stderr = format!("Execution sandbox failed: {}", e);
+                let artifacts = vec![
+                    ToolArtifactRecord::new(
+                        format!("{}_error", job.id),
+                        &jail_id,
+                        "error.log",
+                        stderr.as_bytes(),
+                        "error",
+                    ),
+                ];
+                MicrovmJobResult {
+                    job_id: job.id.clone(),
+                    success: false,
+                    exit_code: -1,
+                    stdout: String::new(),
+                    stderr,
+                    duration_ms: start_spinup.elapsed().as_millis() as u64,
+                    spinup_duration_ms,
+                    memory_consumed_mb: job.memory_mb,
+                    blast_radius_bytes: 0,
+                    isolation_tier: "SandboxExecutionError".to_string(),
+                    worker_id,
+                    was_stolen,
+                    patch_applied: false,
+                    artifacts,
+                }
+            }
         };
 
         // 4. Update internal metrics
@@ -493,6 +587,28 @@ impl MicrovmWorkStealingQueue {
         }
         self.total_spinup_time_ms.fetch_add(result.spinup_duration_ms, Ordering::SeqCst);
         self.total_execution_time_ms.fetch_add(result.duration_ms, Ordering::SeqCst);
+
+        // 5. Persist execution log in SQLite store
+        {
+            let mut rec = MicrovmExecutionRecord::new(&job.id, &job.code, &job.language);
+            rec.success = result.success;
+            rec.exit_code = result.exit_code;
+            rec.stdout = result.stdout.clone();
+            rec.stderr = result.stderr.clone();
+            rec.duration_ms = result.duration_ms;
+            rec.spinup_duration_ms = result.spinup_duration_ms;
+            rec.memory_consumed_mb = result.memory_consumed_mb;
+            rec.blast_radius_bytes = result.blast_radius_bytes;
+            rec.isolation_tier = result.isolation_tier.clone();
+            rec.worker_id = worker_id;
+            rec.was_stolen = was_stolen;
+            rec.artifacts = result.artifacts.clone();
+
+            let log_slot = self.log_store.lock().await;
+            if let Some(ref store) = *log_slot {
+                let _ = store.record_execution(&rec);
+            }
+        }
 
         // 5. Feed per-tool telemetry into Pillar 2 PGO feedback loop
         if let Some(ref pgo) = pgo_opt {
@@ -542,6 +658,7 @@ impl MicrovmWorkStealingQueue {
             let queue = Arc::clone(&self.queue);
             let sandbox = Arc::clone(&self.sandbox);
             let snapshot_cache = Arc::clone(&self.snapshot_cache);
+            let log_store = Arc::clone(&self.log_store);
             let pgo_feedback = Arc::clone(&self.pgo_feedback);
             let is_running = Arc::clone(&self.is_running);
             let active_counter = Arc::clone(&self.active_workers_count);
@@ -593,6 +710,35 @@ impl MicrovmWorkStealingQueue {
                                     outcome.isolation_tier
                                 };
 
+                                let mut artifacts = Vec::new();
+                                if !outcome.stdout.is_empty() {
+                                    artifacts.push(ToolArtifactRecord::new(
+                                        format!("{}_stdout", job.id),
+                                        &jail_id,
+                                        "stdout.log",
+                                        outcome.stdout.as_bytes(),
+                                        "stdout",
+                                    ));
+                                }
+                                if !outcome.stderr.is_empty() {
+                                    artifacts.push(ToolArtifactRecord::new(
+                                        format!("{}_stderr", job.id),
+                                        &jail_id,
+                                        "stderr.log",
+                                        outcome.stderr.as_bytes(),
+                                        "stderr",
+                                    ));
+                                }
+                                if let Some(ref patch) = job.patch_content {
+                                    artifacts.push(ToolArtifactRecord::new(
+                                        format!("{}_patch", job.id),
+                                        &jail_id,
+                                        "patch.diff",
+                                        patch.as_bytes(),
+                                        "diff",
+                                    ));
+                                }
+
                                 MicrovmJobResult {
                                     job_id: job.id.clone(),
                                     success: outcome.success,
@@ -607,23 +753,37 @@ impl MicrovmWorkStealingQueue {
                                     worker_id,
                                     was_stolen,
                                     patch_applied: outcome.patch_applied,
+                                    artifacts,
                                 }
                             }
-                            Err(e) => MicrovmJobResult {
-                                job_id: job.id.clone(),
-                                success: false,
-                                exit_code: -1,
-                                stdout: String::new(),
-                                stderr: format!("Execution sandbox failed: {}", e),
-                                duration_ms: start_spinup.elapsed().as_millis() as u64,
-                                spinup_duration_ms,
-                                memory_consumed_mb: job.memory_mb,
-                                blast_radius_bytes: 0,
-                                isolation_tier: "SandboxExecutionError".to_string(),
-                                worker_id,
-                                was_stolen,
-                                patch_applied: false,
-                            },
+                            Err(e) => {
+                                let stderr = format!("Execution sandbox failed: {}", e);
+                                let artifacts = vec![
+                                    ToolArtifactRecord::new(
+                                        format!("{}_error", job.id),
+                                        &jail_id,
+                                        "error.log",
+                                        stderr.as_bytes(),
+                                        "error",
+                                    ),
+                                ];
+                                MicrovmJobResult {
+                                    job_id: job.id.clone(),
+                                    success: false,
+                                    exit_code: -1,
+                                    stdout: String::new(),
+                                    stderr,
+                                    duration_ms: start_spinup.elapsed().as_millis() as u64,
+                                    spinup_duration_ms,
+                                    memory_consumed_mb: job.memory_mb,
+                                    blast_radius_bytes: 0,
+                                    isolation_tier: "SandboxExecutionError".to_string(),
+                                    worker_id,
+                                    was_stolen,
+                                    patch_applied: false,
+                                    artifacts,
+                                }
+                            }
                         };
 
                         if result.success {
@@ -633,6 +793,28 @@ impl MicrovmWorkStealingQueue {
                         }
                         total_spinup_time_ms.fetch_add(result.spinup_duration_ms, Ordering::SeqCst);
                         total_execution_time_ms.fetch_add(result.duration_ms, Ordering::SeqCst);
+
+                        // Persist execution log in SQLite store
+                        {
+                            let mut rec = MicrovmExecutionRecord::new(&job.id, &job.code, &job.language);
+                            rec.success = result.success;
+                            rec.exit_code = result.exit_code;
+                            rec.stdout = result.stdout.clone();
+                            rec.stderr = result.stderr.clone();
+                            rec.duration_ms = result.duration_ms;
+                            rec.spinup_duration_ms = result.spinup_duration_ms;
+                            rec.memory_consumed_mb = result.memory_consumed_mb;
+                            rec.blast_radius_bytes = result.blast_radius_bytes;
+                            rec.isolation_tier = result.isolation_tier.clone();
+                            rec.worker_id = worker_id;
+                            rec.was_stolen = was_stolen;
+                            rec.artifacts = result.artifacts.clone();
+
+                            let log_slot = log_store.lock().await;
+                            if let Some(ref store) = *log_slot {
+                                let _ = store.record_execution(&rec);
+                            }
+                        }
 
                         if let Some(ref pgo) = pgo_opt {
                             pgo.record_wasm_invocation(&job.language, result.duration_ms as f64, !result.success).await;
@@ -829,6 +1011,45 @@ mod tests {
         assert!(pgo_status.latency_percentiles.sample_count >= 3);
 
         swarm.stop().await;
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_microvm_artifact_capture_and_storage_persistence() {
+        let temp_dir = std::env::temp_dir().join(format!("microvm_artifact_test_{}", uuid::Uuid::new_v4().simple()));
+        let _ = fs::create_dir_all(&temp_dir);
+
+        let swarm = MicrovmWorkStealingQueue::with_worker_count(&temp_dir, 2);
+
+        // Execute job with stdout output and a patch diff
+        let mut job = MicrovmJob::new_code("artifact_job_42", "echo 'Artifact Output Test'", "bash");
+        job.patch_content = Some("--- a/foo\n+++ b/foo\n@@ -1 +1 @@\n-old\n+new\n".to_string());
+
+        let result = swarm.execute_job_direct(job, 0, false).await;
+        assert_eq!(result.job_id, "artifact_job_42");
+        assert!(result.success);
+        assert!(result.stdout.contains("Artifact Output Test"));
+
+        // Verify artifact records were captured in MicrovmJobResult
+        assert!(!result.artifacts.is_empty());
+        let stdout_art = result.artifacts.iter().find(|a| a.path == "stdout.log");
+        assert!(stdout_art.is_some(), "stdout.log artifact must be captured");
+        let patch_art = result.artifacts.iter().find(|a| a.path == "patch.diff");
+        assert!(patch_art.is_some(), "patch.diff artifact must be captured");
+
+        // Verify record persistence in SQLite execution log store
+        let retrieved = swarm.get_execution_log("artifact_job_42").await;
+        assert!(retrieved.is_some(), "Execution record must be found in SQLite store");
+        let record = retrieved.unwrap();
+        assert_eq!(record.job_id, "artifact_job_42");
+        assert_eq!(record.success, true);
+        assert!(record.stdout.contains("Artifact Output Test"));
+        assert_eq!(record.artifacts.len(), result.artifacts.len());
+
+        let logs = swarm.get_execution_logs(10).await;
+        assert!(!logs.is_empty());
+        assert!(logs.iter().any(|l| l.job_id == "artifact_job_42"));
+
         let _ = fs::remove_dir_all(&temp_dir);
     }
 }
