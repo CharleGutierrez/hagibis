@@ -251,6 +251,23 @@ interface untrusted-sandbox-runner {
     execute-untrusted-code: func(wasm-bytes: list<u8>, entrypoint: string, input-payload: list<u8>, policy: sandbox-policy) -> result<metered-execution-result, string>;
 }
 
+/// Hardware-Accelerated Tensor & SIMD Operations Interface (Roadmap Pillar 2)
+interface hardware-accelerated-tensor {
+    record tensor-capability-policy {
+        allow-gpu-offload: bool,
+        allow-simd-128: bool,
+        max-vram-mb: u32,
+        max-tensor-dims: u32,
+        backend-preference: string,
+    }
+
+    matmul-f32: func(matrix-a: list<float32>, matrix-b: list<float32>, m: u32, k: u32, n: u32, policy: tensor-capability-policy) -> result<list<float32>, string>;
+
+    vector-dot-product-simd: func(vec-a: list<float32>, vec-b: list<float32>) -> result<float32, string>;
+
+    relu-activation-simd: func(tensor: list<float32>) -> result<list<float32>, string>;
+}
+
 world hagibis-wasm-engine {
     export state-sync;
     export executor;
@@ -261,5 +278,6 @@ world hagibis-wasm-engine {
     export dynamic-tool-compiler;
     export agent-runtime-extension;
     export untrusted-sandbox-runner;
+    export hardware-accelerated-tensor;
 }
 

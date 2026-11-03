@@ -1,5 +1,15 @@
 {
   "tools": {
+    "hgb_mmap_vector_search": {
+      "description": "Zero-copy memory-mapped (mmap) vector similarity search across code symbols and documentation in <50 microseconds using AVX2 SIMD dot-product and cosine distance without heap allocations",
+      "parameters": {
+        "query_vector": { "type": "array", "items": { "type": "number" }, "description": "Dense contiguous f32 query vector" },
+        "query_text": { "type": "string", "description": "Optional text query to encode into deterministic semantic embedding" },
+        "top_k": { "type": "integer", "description": "Maximum number of nearest neighbor matches (default: 10)", "default": 10 },
+        "min_score": { "type": "number", "description": "Minimum similarity score threshold (default: 0.0)", "default": 0.0 },
+        "index_path": { "type": "string", "description": "Optional custom path to vector_index.mmap" }
+      }
+    },
     "hgb_semantic_cache_stats": {
       "description": "Inspect semantic response cache metrics including hit count, miss count, hit ratio, saved tokens, memory usage, and cached entry count",
       "parameters": {

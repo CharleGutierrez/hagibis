@@ -3,8 +3,13 @@ pub mod ambient_service;
 pub mod proxy_server;
 pub mod remote_bot;
 pub mod mcp_sse_server;
+pub mod event_driven_pipeline_engine;
 pub use server::{DaemonState, HagibisDaemon};
 pub use ambient_service::{AmbientDaemonService, DreamJournal, DreamJournalEntry};
+pub use event_driven_pipeline_engine::{
+    evaluate_condition, DeclarativePipeline, EventDrivenPipelineEngine,
+    PipelineExecutionReport, PipelineStep, PipelineTrigger, StepExecutionReport,
+};
 pub use mcp_sse_server::{
     McpSseServer, McpSseServerStatus, McpSseState, DEFAULT_MCP_SSE_PORT,
 };
@@ -504,5 +509,17 @@ pub use native_self_healing_daemon::{
     IncidentKind, NativeSelfHealingDaemon, RamCowOverlaySandbox, SelfHealingLogStore,
     VerificationResult, DEFAULT_BENCHMARK_REGRESSION_THRESHOLD_PCT, DEFAULT_MAX_RETRIES,
 };
+
+// Pillar 1: Direct IPC & FFI Bridge with Dynatune & Kernel-Optimizer
+pub mod dynatune_ipc_governor;
+pub use dynatune_ipc_governor::{
+    DynatuneGovernorStatus, DynatuneIpcConfig, DynatuneIpcGovernor, DynatuneIpcMessage,
+    DynatuneIpcResponse, DynatuneWorkloadLease, GovernorMode, HeavyWorkloadType,
+    TelemetryOverride, BATTERY_CRITICAL_DISCHARGE_PCT,
+    CLAMPED_CONCURRENCY_LIMIT, DEFAULT_DYNATUNE_SOCK, DEFAULT_IDLE_GRACE_PERIOD_SECS,
+    DEFAULT_NOMINAL_CONCURRENCY_LIMIT, SIBLING_KERNEL_CTL_BIN,
+    SYSTEM_KERNEL_CTL_BIN, THERMAL_CLAMP_THRESHOLD_C,
+};
+
 
 

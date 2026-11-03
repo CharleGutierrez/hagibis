@@ -76,6 +76,7 @@ pub struct AutonomousDaemonLoopService {
     total_healed: Arc<AtomicU64>,
     event_bus: Option<Arc<DistributedEventBus>>,
     wasm_healer: Arc<RwLock<Option<Arc<AutonomousWasmPluginHealer>>>>,
+    ipc_governor: Arc<crate::dynatune_ipc_governor::DynatuneIpcGovernor>,
 }
 
 impl AutonomousDaemonLoopService {
@@ -92,6 +93,7 @@ impl AutonomousDaemonLoopService {
             total_healed: Arc::new(AtomicU64::new(0)),
             event_bus: None,
             wasm_healer: Arc::new(RwLock::new(None)),
+            ipc_governor: Arc::new(crate::dynatune_ipc_governor::DynatuneIpcGovernor::new()),
         })
     }
 
@@ -108,6 +110,7 @@ impl AutonomousDaemonLoopService {
             total_healed: Arc::new(AtomicU64::new(0)),
             event_bus: None,
             wasm_healer: Arc::new(RwLock::new(None)),
+            ipc_governor: Arc::new(crate::dynatune_ipc_governor::DynatuneIpcGovernor::new()),
         })
     }
 
@@ -124,6 +127,7 @@ impl AutonomousDaemonLoopService {
             total_healed: Arc::new(AtomicU64::new(0)),
             event_bus: None,
             wasm_healer: Arc::new(RwLock::new(None)),
+            ipc_governor: Arc::new(crate::dynatune_ipc_governor::DynatuneIpcGovernor::new()),
         })
     }
 
@@ -147,6 +151,11 @@ impl AutonomousDaemonLoopService {
     /// Access reference to autonomous WASM plugin healer
     pub fn wasm_healer(&self) -> Option<Arc<AutonomousWasmPluginHealer>> {
         self.wasm_healer.read().unwrap().clone()
+    }
+
+    /// Access reference to Dynatune IPC Governor
+    pub fn ipc_governor(&self) -> &Arc<crate::dynatune_ipc_governor::DynatuneIpcGovernor> {
+        &self.ipc_governor
     }
 
     /// Access underlying autonomous agent loop orchestrator
@@ -173,6 +182,7 @@ impl AutonomousDaemonLoopService {
 
     /// Execute high-level user intent through autonomous multi-step planning and self-healing
     pub fn execute_workflow(&self, intent: &str, max_retries: usize) -> Result<AutonomousConsensusCertificate> {
+        let _ipc_lease = self.ipc_governor.acquire_lease("autonomous_daemon_loop");
         let _governor_guard = hgb_core::dynatune_subsystem_fuse::DynatuneWorkloadGuard::acquire_for_workspace(
             &self.workspace_root,
             "autonomous_daemon_loop",

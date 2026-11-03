@@ -227,6 +227,11 @@ pub struct DaemonState {
     pub microvm_work_stealing_queue: Arc<crate::microvm_work_stealing_queue::MicrovmWorkStealingQueue>,
     // Pillar 4: Native Fully Autonomous Self-Healing Daemon Engine (Chapter 8)
     pub native_self_healing_daemon: Arc<crate::native_self_healing_daemon::NativeSelfHealingDaemon>,
+    // Pillar 3: Reactive Event Bus & Declarative Autonomous Pipelines
+    pub event_bus_store: Arc<hgb_storage::EventBusStore>,
+    pub pipeline_engine: Arc<crate::event_driven_pipeline_engine::EventDrivenPipelineEngine>,
+    // Pillar 1: Direct IPC & FFI Bridge with Dynatune & Kernel-Optimizer
+    pub dynatune_ipc_governor: Arc<crate::dynatune_ipc_governor::DynatuneIpcGovernor>,
 }
 
 impl DaemonState {
@@ -284,6 +289,16 @@ impl DaemonState {
     /// Read currently queued tasks count
     pub fn queued_tasks(&self) -> usize {
         self.queued_tasks_count.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Acquire RAII Workload Lease from Dynatune IPC Governor for proactive ramp-up
+    pub fn acquire_workload_lease(&self, workload: &str) -> crate::dynatune_ipc_governor::DynatuneWorkloadLease {
+        self.dynatune_ipc_governor.acquire_lease(workload)
+    }
+
+    /// Access Dynatune IPC Governor instance
+    pub fn dynatune_ipc_governor(&self) -> &Arc<crate::dynatune_ipc_governor::DynatuneIpcGovernor> {
+        &self.dynatune_ipc_governor
     }
 }
 
@@ -510,6 +525,23 @@ impl DaemonState {
                 })
         );
 
+        let event_bus_path = ws_dir.join(".hgb").join("system_event_bus.db");
+        let event_bus_store = Arc::new(
+            hgb_storage::EventBusStore::new(&event_bus_path)
+                .unwrap_or_else(|_| hgb_storage::EventBusStore::in_memory().expect("fallback in-memory event bus store"))
+        );
+        let pipeline_engine = Arc::new(
+            crate::event_driven_pipeline_engine::EventDrivenPipelineEngine::new(&ws_dir, event_bus_store.clone())
+        );
+        {
+            let p_engine = Arc::clone(&pipeline_engine);
+            tokio::spawn(async move {
+                let _ = p_engine.load_pipelines_from_disk().await;
+            });
+        }
+
+        let dynatune_ipc_governor = Arc::new(crate::dynatune_ipc_governor::DynatuneIpcGovernor::new());
+
         Self {
             start_time: std::time::Instant::now(),
             socket_path,
@@ -588,6 +620,9 @@ impl DaemonState {
             pgo_feedback,
             microvm_work_stealing_queue,
             native_self_healing_daemon,
+            event_bus_store,
+            pipeline_engine,
+            dynatune_ipc_governor,
         }
     }
 
@@ -2656,6 +2691,7 @@ impl HagibisDaemon {
                 HgbResponse::McpToolsList(all_tools)
             }
             HgbRequest::McpCallTool { server_name, tool_name, arguments, config_path } => {
+                let _workload_lease = state.acquire_workload_lease(&format!("mcp_{}_{}", server_name, tool_name));
                 let cfg = match if let Some(ref p) = config_path {
                     McpConfigFile::load_from_path(p)
                 } else {

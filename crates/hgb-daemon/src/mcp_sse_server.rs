@@ -155,6 +155,7 @@ pub struct McpSseState {
     pub auth_token: String,
     pub dynamic_registry: Arc<std::sync::RwLock<Option<Arc<crate::dynamic_mcp_registry::DynamicMcpRegistry>>>>,
     pub semantic_cache: Arc<hgb_storage::semantic_response_cache::SemanticResponseCache>,
+    pub ipc_governor: Arc<crate::dynatune_ipc_governor::DynatuneIpcGovernor>,
 }
 
 impl McpSseState {
@@ -182,6 +183,7 @@ impl McpSseState {
             auth_token: auth_token.into(),
             dynamic_registry: Arc::new(std::sync::RwLock::new(None)),
             semantic_cache,
+            ipc_governor: Arc::new(crate::dynatune_ipc_governor::DynatuneIpcGovernor::new()),
         }
     }
 
@@ -531,6 +533,7 @@ pub async fn handle_client_message(
                 return (StatusCode::OK, Json(resp));
             }
 
+            let _ipc_lease = state.ipc_governor.acquire_lease(tool_name);
             let _governor_guard = hgb_core::dynatune_subsystem_fuse::DynatuneWorkloadGuard::acquire_for_workspace(
                 &state.workspace_root,
                 tool_name,

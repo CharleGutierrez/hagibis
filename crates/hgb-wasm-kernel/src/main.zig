@@ -1077,3 +1077,109 @@ test "zero copy shm allocation and in-place context processing" {
     try std.testing.expect(desc.flags & SHM_FLAG_ZERO_COPY_VERIFIED != 0);
     try std.testing.expect(desc.checksum != 0);
 }
+
+// ============================================================================
+// 8. HARDWARE-ACCELERATED TENSOR & SIMD OPERATIONS (Roadmap Pillar 2)
+// ============================================================================
+
+pub export fn hgb_wasm_simd_dot_product(vec_a_ptr: [*]const f32, vec_b_ptr: [*]const f32, len: usize) callconv(.C) f32 {
+    if (len == 0) return 0.0;
+    const Vec4 = @Vector(4, f32);
+    const chunks = len / 4;
+    var acc: Vec4 = @splat(0.0);
+    var i: usize = 0;
+    while (i < chunks * 4) : (i += 4) {
+        const va: Vec4 = vec_a_ptr[i..][0..4].*;
+        const vb: Vec4 = vec_b_ptr[i..][0..4].*;
+        acc += va * vb;
+    }
+    var sum = @reduce(.Add, acc);
+    var rem = chunks * 4;
+    while (rem < len) : (rem += 1) {
+        sum += vec_a_ptr[rem] * vec_b_ptr[rem];
+    }
+    return sum;
+}
+
+pub export fn hgb_wasm_simd_matmul(
+    a_ptr: [*]const f32,
+    b_ptr: [*]const f32,
+    out_ptr: [*]f32,
+    m: usize,
+    k: usize,
+    n: usize,
+) callconv(.C) void {
+    if (m == 0 or k == 0 or n == 0) return;
+    const Vec4 = @Vector(4, f32);
+    @memset(out_ptr[0 .. m * n], 0.0);
+
+    var i: usize = 0;
+    while (i < m) : (i += 1) {
+        var p: usize = 0;
+        while (p < k) : (p += 1) {
+            const a_val = a_ptr[i * k + p];
+            if (a_val == 0.0) continue;
+            const a_vec: Vec4 = @splat(a_val);
+            const n_chunks = n / 4;
+            var j: usize = 0;
+            while (j < n_chunks * 4) : (j += 4) {
+                const b_vec: Vec4 = b_ptr[p * n + j ..][0..4].*;
+                const out_slice = out_ptr[i * n + j ..][0..4];
+                const out_vec: Vec4 = out_slice.*;
+                out_slice.* = out_vec + a_vec * b_vec;
+            }
+            var rem = n_chunks * 4;
+            while (rem < n) : (rem += 1) {
+                out_ptr[i * n + rem] += a_val * b_ptr[p * n + rem];
+            }
+        }
+    }
+}
+
+pub export fn hgb_wasm_simd_relu(tensor_ptr: [*]f32, len: usize) callconv(.C) void {
+    if (len == 0) return;
+    const Vec4 = @Vector(4, f32);
+    const zero_vec: Vec4 = @splat(0.0);
+    const chunks = len / 4;
+    var i: usize = 0;
+    while (i < chunks * 4) : (i += 4) {
+        const slice = tensor_ptr[i..][0..4];
+        const v: Vec4 = slice.*;
+        slice.* = @max(v, zero_vec);
+    }
+    var rem = chunks * 4;
+    while (rem < len) : (rem += 1) {
+        if (tensor_ptr[rem] < 0.0) {
+            tensor_ptr[rem] = 0.0;
+        }
+    }
+}
+
+test "simd 128-bit dot product and matmul" {
+    const a = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0 };
+    const b = [_]f32{ 2.0, 0.5, 1.0, -1.0, 2.0 };
+    // 1*2 + 2*0.5 + 3*1 + 4*(-1) + 5*2 = 2 + 1 + 3 - 4 + 10 = 12.0
+    const dot = hgb_wasm_simd_dot_product(&a, &b, 5);
+    try std.testing.expectApproxEqAbs(@as(f32, 12.0), dot, 0.001);
+
+    // Matmul test: 2x2 times 2x2
+    const mat_a = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+    const mat_b = [_]f32{ 2.0, 0.0, 1.0, 3.0 };
+    var mat_out: [4]f32 = undefined;
+    hgb_wasm_simd_matmul(&mat_a, &mat_b, &mat_out, 2, 2, 2);
+    // [1*2 + 2*1, 1*0 + 2*3] = [4, 6]
+    // [3*2 + 4*1, 3*0 + 4*3] = [10, 12]
+    try std.testing.expectApproxEqAbs(@as(f32, 4.0), mat_out[0], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 6.0), mat_out[1], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 10.0), mat_out[2], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 12.0), mat_out[3], 0.001);
+
+    // ReLU test
+    var relu_arr = [_]f32{ -1.0, 2.0, 0.0, -0.5, 3.5 };
+    hgb_wasm_simd_relu(&relu_arr, 5);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), relu_arr[0], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 2.0), relu_arr[1], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), relu_arr[2], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), relu_arr[3], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 3.5), relu_arr[4], 0.001);
+}

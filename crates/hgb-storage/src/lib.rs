@@ -187,6 +187,17 @@ pub use vector_native_sqlite_vss::{
 };
 
 // ============================================================================
+// Pillar 3: Reactive Event Bus & SQLite WAL Append-Only Event Log
+// ============================================================================
+pub mod append_only_event_bus;
+pub use append_only_event_bus::{
+    EventBusStore, GitCommitPushedPayload, MicroVmStateChangedPayload,
+    ModelWeightsDownloadedPayload, SystemEventRecord, SystemEventType,
+    ThermalThresholdBreachedPayload, ToolExecutionCompletedPayload,
+    DEFAULT_EVENT_BUS_CAPACITY as SQLITE_EVENT_BUS_CAPACITY,
+};
+
+// ============================================================================
 // Pillar 1: Supercharge the WASM Kernel & Edge Isolation (Precompiled Module Cache)
 // ============================================================================
 pub mod precompiled_wasm_cache;
