@@ -521,5 +521,27 @@ pub use dynatune_ipc_governor::{
     SYSTEM_KERNEL_CTL_BIN, THERMAL_CLAMP_THRESHOLD_C,
 };
 
+// Pillar 2: Event-Driven Actor Model (Masterclass Chapter 8)
+pub mod agent_actor_mesh;
+pub use agent_actor_mesh::{
+    ActorHandle, ActorHealthStatus, ActorMessage, ActorStatusSummary,
+    ActorSupervisor, AgentActor, DeadLetterRecord, SupervisorEvent,
+    DEFAULT_ACTOR_MAILBOX_CAPACITY, DEFAULT_HEARTBEAT_TIMEOUT_MS,
+};
+
+// Pillar 2: Autonomous Evaluation (Eval-Driven Development)
+pub mod eval_driven_gate;
+pub use eval_driven_gate::{
+    DeterministicAssertion, EvalDrivenGate, EvalMetrics, EvalSpec, EvalVerdict,
+    SpeculativeRamOverlay,
+};
+
+// Pillar 3: Dynamic Thermal/Power Awareness IPC Bridge
+pub mod hardware_telemetry_bridge;
+pub use hardware_telemetry_bridge::{
+    DynatuneIpcCommand, HardwareGovernor, HardwareProfile,
+    HardwareTelemetrySnapshot as BridgeHardwareTelemetrySnapshot,
+};
+
 
 

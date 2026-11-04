@@ -109,6 +109,18 @@ pub use vector_native_edge::{
     EdgeSearchResult, EdgeVectorItem, HybridSearchQuery, VectorNativeEdgeEngine,
 };
 
+// Pillar 2: Self-Healing State Machine & Persistent Checkpointing
+pub mod actor_checkpoint_store;
+pub use actor_checkpoint_store::{
+    ActorCheckpoint, ActorCheckpointStore, ActorGoalStatus, ActorStateSnapshot,
+};
+
+// Pillar 4: Edge-to-Core Sync with Cloudflare Workers
+pub mod edge_sync_tunnel;
+pub use edge_sync_tunnel::{
+    EdgeEventType, EdgeSyncConfig, EdgeSyncTunnel, HybridLogicalClock, SyncDecision, SyncEvent,
+};
+
 
 
 

@@ -148,6 +148,32 @@ impl DynamicMcpRegistry {
         tools.contains_key(name)
     }
 
+    /// Dynamically unload an MCP tool at runtime without restarting hgbd (Pillar 4.1)
+    pub async fn unload_tool(&self, name: &str, remove_from_mcp_json: bool) -> Result<bool> {
+        let removed = {
+            let mut tools = self.tools.write().await;
+            tools.remove(name).is_some()
+        };
+
+        if removed {
+            if remove_from_mcp_json && self.mcp_json_path.exists() {
+                if let Ok(content) = fs::read_to_string(&self.mcp_json_path) {
+                    if let Ok(mut val) = serde_json::from_str::<Value>(&content) {
+                        if let Some(tools_obj) = val.get_mut("tools").and_then(|t| t.as_object_mut()) {
+                            tools_obj.remove(name);
+                            if let Ok(pretty) = serde_json::to_string_pretty(&val) {
+                                let _ = fs::write(&self.mcp_json_path, pretty);
+                            }
+                        }
+                    }
+                }
+            }
+            self.broadcast_tools_changed().await;
+        }
+
+        Ok(removed)
+    }
+
     /// Retrieve a cloned copy of a dynamic tool's metadata
     pub async fn get_tool(&self, name: &str) -> Option<DynamicMcpTool> {
         let tools = self.tools.read().await;

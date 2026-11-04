@@ -2200,6 +2200,93 @@ pub fn hgb_wit_relu_activation_simd(tensor: Vec<f32>) -> Result<Vec<f32>, String
     Ok(hgb_simd_relu_f32(&tensor))
 }
 
+// ============================================================================
+// AGENT COMPONENT MODEL INTERFACE (Pillar 1: Component Model Support)
+// ============================================================================
+
+/// Dynamic Tool Invocation conforming to WIT `agent-component-model` interface
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentToolInvocation {
+    pub tool_id: String,
+    pub agent_id: String,
+    pub input_json: String,
+    pub gas_limit: u64,
+    pub allowed_read_paths: Vec<String>,
+    pub allow_network: bool,
+}
+
+impl AgentToolInvocation {
+    pub fn new(tool_id: impl Into<String>, agent_id: impl Into<String>, input_json: impl Into<String>) -> Self {
+        Self {
+            tool_id: tool_id.into(),
+            agent_id: agent_id.into(),
+            input_json: input_json.into(),
+            gas_limit: 10_000_000,
+            allowed_read_paths: Vec::new(),
+            allow_network: false,
+        }
+    }
+
+    pub fn with_gas_limit(mut self, gas_limit: u64) -> Self {
+        self.gas_limit = gas_limit;
+        self
+    }
+
+    pub fn with_allowed_read_path(mut self, path: impl Into<String>) -> Self {
+        self.allowed_read_paths.push(path.into());
+        self
+    }
+
+    pub fn with_allow_network(mut self, allow: bool) -> Self {
+        self.allow_network = allow;
+        self
+    }
+}
+
+/// Dynamic Tool Output conforming to WIT `agent-component-model` interface
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentToolOutput {
+    pub exit_code: i32,
+    pub gas_consumed: u64,
+    pub result_json: String,
+    pub error_diagnostic: Option<String>,
+}
+
+impl AgentToolOutput {
+    pub fn ok(gas_consumed: u64, result_json: impl Into<String>) -> Self {
+        Self {
+            exit_code: 0,
+            gas_consumed,
+            result_json: result_json.into(),
+            error_diagnostic: None,
+        }
+    }
+
+    pub fn err(exit_code: i32, gas_consumed: u64, diagnostic: impl Into<String>) -> Self {
+        Self {
+            exit_code,
+            gas_consumed,
+            result_json: String::new(),
+            error_diagnostic: Some(diagnostic.into()),
+        }
+    }
+
+    pub fn is_success(&self) -> bool {
+        self.exit_code >= 0 && self.error_diagnostic.is_none()
+    }
+}
+
+/// WIT High-Level Function Wrapper for Component Tool Invocation
+pub fn hgb_invoke_component_tool(
+    inv: AgentToolInvocation,
+    handler: impl FnOnce(&AgentToolInvocation) -> Result<String, String>,
+) -> Result<AgentToolOutput, String> {
+    match handler(&inv) {
+        Ok(res_json) => Ok(AgentToolOutput::ok(0, res_json)),
+        Err(err_msg) => Ok(AgentToolOutput::err(-1, 0, err_msg)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2691,5 +2778,24 @@ mod tests {
         assert!(src.contains("@Vector(4, f32)"));
         assert!(src.contains("hgb_wasm_simd_dot_product"));
         assert!(src.contains("hgb_wasm_simd_matmul"));
+    }
+
+    #[test]
+    fn test_agent_component_model_bindings() {
+        let inv = AgentToolInvocation::new("fs_reader", "agent-007", "{\"path\": \"/tmp\"}")
+            .with_gas_limit(5_000_000)
+            .with_allowed_read_path("/tmp")
+            .with_allow_network(false);
+        assert_eq!(inv.tool_id, "fs_reader");
+        assert_eq!(inv.gas_limit, 5_000_000);
+        assert!(!inv.allow_network);
+
+        let out = hgb_invoke_component_tool(inv, |req| {
+            assert_eq!(req.agent_id, "agent-007");
+            Ok("{\"status\": \"read_ok\"}".to_string())
+        }).expect("invoke component tool");
+
+        assert!(out.is_success());
+        assert_eq!(out.result_json, "{\"status\": \"read_ok\"}");
     }
 }

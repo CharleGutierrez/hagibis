@@ -232,6 +232,12 @@ pub struct DaemonState {
     pub pipeline_engine: Arc<crate::event_driven_pipeline_engine::EventDrivenPipelineEngine>,
     // Pillar 1: Direct IPC & FFI Bridge with Dynatune & Kernel-Optimizer
     pub dynatune_ipc_governor: Arc<crate::dynatune_ipc_governor::DynatuneIpcGovernor>,
+    // Pillar 2: Scale Autonomous Loops & Agentic Orchestration
+    pub actor_checkpoint_store: Arc<hgb_storage::ActorCheckpointStore>,
+    pub agent_actor_mesh: Arc<crate::agent_actor_mesh::ActorSupervisor>,
+    pub eval_driven_gate: Arc<crate::eval_driven_gate::EvalDrivenGate>,
+    // Pillar 3: Dynamic Thermal/Power Awareness IPC Bridge
+    pub hardware_telemetry_bridge: Arc<crate::hardware_telemetry_bridge::HardwareGovernor>,
 }
 
 impl DaemonState {
@@ -542,6 +548,27 @@ impl DaemonState {
 
         let dynatune_ipc_governor = Arc::new(crate::dynatune_ipc_governor::DynatuneIpcGovernor::new());
 
+        let actor_checkpoint_db = ws_dir.join(".hgb").join("actor_checkpoints.db");
+        let actor_checkpoint_store = Arc::new(
+            hgb_storage::ActorCheckpointStore::new(&actor_checkpoint_db)
+                .unwrap_or_else(|_| hgb_storage::ActorCheckpointStore::in_memory().expect("fallback in-memory actor checkpoint store"))
+        );
+        let agent_actor_mesh = Arc::new(
+            crate::agent_actor_mesh::ActorSupervisor::new(&ws_dir, actor_checkpoint_store.clone())
+        );
+        let eval_driven_gate = Arc::new(
+            crate::eval_driven_gate::EvalDrivenGate::new(&ws_dir)
+        );
+        let hardware_telemetry_bridge = Arc::new(
+            crate::hardware_telemetry_bridge::HardwareGovernor::new()
+        );
+        {
+            let supervisor_clone = Arc::clone(&agent_actor_mesh);
+            tokio::spawn(async move {
+                let _ = supervisor_clone.resume_incomplete_goals().await;
+            });
+        }
+
         Self {
             start_time: std::time::Instant::now(),
             socket_path,
@@ -623,6 +650,10 @@ impl DaemonState {
             event_bus_store,
             pipeline_engine,
             dynatune_ipc_governor,
+            actor_checkpoint_store,
+            agent_actor_mesh,
+            eval_driven_gate,
+            hardware_telemetry_bridge,
         }
     }
 

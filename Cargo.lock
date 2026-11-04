@@ -2082,16 +2082,20 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "chrono",
+ "hex",
  "hgb-core",
  "hgb-wasm-kernel",
+ "hmac 0.12.1",
  "memmap2",
  "regex",
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
+ "uuid",
  "wasmtime",
  "wat 1.0.0",
 ]
@@ -5478,6 +5482,7 @@ checksum = "97277d36b9c3ace13e58fa6e753f8b0bbbf302a18dd193240d70f9e29681059a"
 dependencies = [
  "getrandom 0.4.3",
  "js-sys",
+ "serde_core",
  "wasm-bindgen",
 ]
 

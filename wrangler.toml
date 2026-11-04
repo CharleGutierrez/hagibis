@@ -1,7 +1,23 @@
-name = "my-vibe-app"
+# Pillar 4.2: Edge-to-Core Sync Tunnel Configuration
+name = "hagibis-edge-core-sync"
+main = "worker/index.ts"
 compatibility_date = "2026-09-01"
 pages_build_output_dir = "."
 
 [vars]
 ENVIRONMENT = "production"
 DEPLOYED_BY = "hagibis-edge-deployer"
+TUNNEL_PROTOCOL_VERSION = "2"
+HMAC_ALGORITHM = "SHA-256"
+
+# Cloudflare KV for High-Frequency Telemetry & Model Cache
+[[kv_namespaces]]
+binding = "HAGIBIS_EDGE_KV"
+id = "c7d24e1098b644158141203091724"
+preview_id = "preview_c7d24e1098b644158141203091724"
+
+# Cloudflare D1 for Persistent Event Journal & Task Queues
+[[d1_databases]]
+binding = "HAGIBIS_D1_DB"
+database_name = "hagibis_edge_journal"
+database_id = "d1-3b7498c0-2647-4952-b8d1-729486c8a7b9"

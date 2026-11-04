@@ -2048,6 +2048,22 @@ pub use precompiled_wasm_cache::{
     COMPILER_VERSION_TAG, DEFAULT_MAX_MEMORY_ENTRIES,
 };
 
+// Pillar 1: WebAssembly Gas Metering, Capabilities Sandbox, & Component Engine
+pub mod wasm_gas_metering;
+pub use wasm_gas_metering::{GasExecutionOutcome, GasMeterEngine, GasStoreData};
+
+pub mod wasm_capability_sandbox;
+pub use wasm_capability_sandbox::{CapabilitySecurityViolation, WasmCapabilityPolicy, WasmCapabilitySandbox};
+
+pub mod wasm_component_engine;
+pub use wasm_component_engine::WasmComponentEngine;
+
+// Pillar 3: Hardware-Accelerated Fallback Router
+pub mod hardware_accelerator;
+pub use hardware_accelerator::{
+    AccelerationBackend, AccelerationRouter, AccelerationTelemetryReport, HardwareCapabilities,
+};
+
 
 
 

@@ -268,6 +268,27 @@ interface hardware-accelerated-tensor {
     relu-activation-simd: func(tensor: list<float32>) -> result<list<float32>, string>;
 }
 
+/// Agent Component Model Interface (Pillar 1: Supercharge the WebAssembly Sandbox)
+interface agent-component-model {
+    record agent-tool-invocation {
+        tool-id: string,
+        agent-id: string,
+        input-json: string,
+        gas-limit: u64,
+        allowed-read-paths: list<string>,
+        allow-network: bool,
+    }
+
+    record agent-tool-output {
+        exit-code: s32,
+        gas-consumed: u64,
+        result-json: string,
+        error-diagnostic: option<string>,
+    }
+
+    invoke-component-tool: func(inv: agent-tool-invocation) -> result<agent-tool-output, string>;
+}
+
 world hagibis-wasm-engine {
     export state-sync;
     export executor;
@@ -279,5 +300,6 @@ world hagibis-wasm-engine {
     export agent-runtime-extension;
     export untrusted-sandbox-runner;
     export hardware-accelerated-tensor;
+    export agent-component-model;
 }
 
