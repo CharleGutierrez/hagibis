@@ -532,6 +532,21 @@
         "public_key_hex": { "type": "string", "description": "Optional Ed25519 public key hex string" },
         "description": { "type": "string", "description": "Description of synthesized tool capability" }
       }
+    },
+    "hgb_hardware_telemetry_status": {
+      "description": "Inspect real-time Linux hardware telemetry (CPU package temperature °C, battery drain rate in mW, memory pressure PSI) and dynamic LLM generation / WASM pacing status",
+      "parameters": {
+        "force_refresh": { "type": "boolean", "description": "Force fresh reading of Linux sysfs, procfs PSI, and Dynatune socket", "default": true }
+      }
+    },
+    "hgb_multitenant_wasm_execute": {
+      "description": "Execute polyglot untrusted code (WASM, WAT, JavaScript, Python) securely inside the multi-tenant WebAssembly sandbox with strict fuel/gas caps, memory quotas, and streaming output",
+      "parameters": {
+        "tenant_id": { "type": "string", "description": "Unique tenant or agent workspace identifier", "required": true },
+        "language": { "type": "string", "description": "Language kind: wasm, wat, python, or javascript", "required": true },
+        "code_or_bytes": { "type": "string", "description": "Source code text, WAT script, or base64/hex WASM bytecode", "required": true },
+        "gas_limit": { "type": "integer", "description": "Optional CPU instruction gas budget cap (default: 15,000,000 instructions)" }
+      }
     }
   },
   "mcpServers": {

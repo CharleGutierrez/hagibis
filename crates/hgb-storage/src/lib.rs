@@ -121,6 +121,13 @@ pub use edge_sync_tunnel::{
     EdgeEventType, EdgeSyncConfig, EdgeSyncTunnel, HybridLogicalClock, SyncDecision, SyncEvent,
 };
 
+// Pillar 3.3: Persistent Vector Embedding Cache
+pub mod embedding_cache_store;
+pub use embedding_cache_store::{
+    EmbeddingBatchQuery, EmbeddingCacheRecord, EmbeddingCacheStats, EmbeddingCacheStore,
+    EmbeddingInsertEntry,
+};
+
 
 
 

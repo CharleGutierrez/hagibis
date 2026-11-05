@@ -543,5 +543,38 @@ pub use hardware_telemetry_bridge::{
     HardwareTelemetrySnapshot as BridgeHardwareTelemetrySnapshot,
 };
 
+// Pillar 1: Close the Loop Between Dynatune, Kernel-Optimizer, and Hagibis Daemon
+pub mod hardware_aware_ai_controller;
+pub use hardware_aware_ai_controller::{
+    HardwareAwareAiController, GenerationPacer, WorkloadThrottler,
+    HardwareTelemetry, PacingEvaluation, GovernorMode as HwGovernorMode,
+    ThermalZoneTelemetry, MemoryPressurePsi, PsiRecord,
+    BATTERY_CRITICAL_DISCHARGE_PCT as HW_BATTERY_CRITICAL_DISCHARGE_PCT,
+    BOOST_CONCURRENCY_LIMIT as HW_BOOST_CONCURRENCY_LIMIT,
+    NOMINAL_CONCURRENCY_LIMIT as HW_NOMINAL_CONCURRENCY_LIMIT,
+    THROTTLED_CONCURRENCY_LIMIT as HW_THROTTLED_CONCURRENCY_LIMIT,
+    THERMAL_CLAMP_THRESHOLD_C as HW_THERMAL_CLAMP_THRESHOLD_C,
+    THERMAL_COOL_BOOST_THRESHOLD_C as HW_THERMAL_COOL_BOOST_THRESHOLD_C,
+    THERMAL_RECOVERY_THRESHOLD_C as HW_THERMAL_RECOVERY_THRESHOLD_C,
+    THROTTLED_TOKEN_PACING_DELAY_MS,
+};
+
+// Pillar 2: Multi-Tenant WebAssembly MCP Tool Integration
+pub mod multitenant_mcp_tool;
+pub use multitenant_mcp_tool::{
+    MultitenantMcpRequest, MultitenantMcpResponse, MultitenantMcpTool, MultitenantMcpToolConfig,
+    MULTITENANT_WASM_TOOL_NAME,
+};
+
+// Pillar 4: Native Desktop Cockpit Launcher & Visual Monitor
+pub mod desktop_cockpit_launcher;
+pub use desktop_cockpit_launcher::{
+    build_desktop_cockpit_router, CockpitUnifiedMetrics, CpuGovernorTelemetry,
+    DesktopCockpitLauncher, ExecutionRuntimeMetrics, MasterclassBookmark,
+    McpAggregatedMetrics, McpToolCallTelemetry, SetGovernorPayload, SidecarHealthReport,
+    SidecarStatus, DEFAULT_DAEMON_SOCKET, MASTERCLASS_PDF_NAME,
+};
+
+
 
 

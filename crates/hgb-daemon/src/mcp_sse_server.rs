@@ -156,6 +156,7 @@ pub struct McpSseState {
     pub dynamic_registry: Arc<std::sync::RwLock<Option<Arc<crate::dynamic_mcp_registry::DynamicMcpRegistry>>>>,
     pub semantic_cache: Arc<hgb_storage::semantic_response_cache::SemanticResponseCache>,
     pub ipc_governor: Arc<crate::dynatune_ipc_governor::DynatuneIpcGovernor>,
+    pub tenant_manager: Arc<hgb_core::multitenant_wasm_sandbox::TenantSessionManager>,
 }
 
 impl McpSseState {
@@ -178,12 +179,15 @@ impl McpSseState {
             total_connections: AtomicU64::new(0),
             total_messages: AtomicU64::new(0),
             total_streamed_events: AtomicU64::new(0),
-            mcp_server: Arc::new(HagibisMcpServer::new(ws)),
+            mcp_server: Arc::new(HagibisMcpServer::new(ws.clone())),
             port,
             auth_token: auth_token.into(),
             dynamic_registry: Arc::new(std::sync::RwLock::new(None)),
             semantic_cache,
             ipc_governor: Arc::new(crate::dynatune_ipc_governor::DynatuneIpcGovernor::new()),
+            tenant_manager: Arc::new(hgb_core::multitenant_wasm_sandbox::TenantSessionManager::new().unwrap_or_else(|_| {
+                hgb_core::multitenant_wasm_sandbox::TenantSessionManager::with_base_root(ws.join(".hgb").join("tenants")).expect("tenant manager")
+            })),
         }
     }
 
@@ -405,6 +409,7 @@ pub async fn handle_client_message(
 
             // Dynamically inject dynamic registry tools & prompt-driven tool creation interface
             if let Some(arr) = tools_val.as_array_mut() {
+                arr.push(crate::multitenant_mcp_tool::MultitenantMcpTool::tool_definition());
                 arr.push(serde_json::json!({
                     "name": "hgb_mcp_request_tool",
                     "description": "On-demand prompt-driven WASM tool generation and dynamic hot-swapping into MCP registry",
@@ -442,6 +447,21 @@ pub async fn handle_client_message(
             let tool_name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
             let arguments = params.get("arguments").cloned().unwrap_or(serde_json::json!({}));
             let args_str = arguments.to_string();
+
+            // Intercept multi-tenant WASM sandbox tool execution
+            if tool_name == crate::multitenant_mcp_tool::MULTITENANT_WASM_TOOL_NAME {
+                let (res_val, _is_error) = crate::multitenant_mcp_tool::MultitenantMcpTool::handle_tool_call(
+                    &state,
+                    &arguments,
+                    &session_id,
+                ).await;
+                let resp = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": res_val
+                });
+                return (StatusCode::OK, Json(resp));
+            }
 
             // Intercept semantic cache inspection and purge tools directly
             if tool_name == "hgb_semantic_cache_stats" {

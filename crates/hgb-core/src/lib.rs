@@ -2064,6 +2064,34 @@ pub use hardware_accelerator::{
     AccelerationBackend, AccelerationRouter, AccelerationTelemetryReport, HardwareCapabilities,
 };
 
+// Pillar 2: Multi-Tenant WebAssembly Sandbox & Polyglot Runner
+pub mod multitenant_wasm_sandbox;
+pub use multitenant_wasm_sandbox::{
+    DEFAULT_TENANT_DEADLINE_MS, DEFAULT_TENANT_GAS_BUDGET, DEFAULT_TENANT_MEMORY_PAGES,
+    LanguageKind, PolyglotSnippetRunner, SandboxSecurityAttestation, StreamChunk, StreamKind,
+    TenantContext, TenantExecutionResult, TenantIsolationPolicy, TenantSessionInfo,
+    TenantSessionManager,
+};
+
+// Pillar 3.1: Local LLM & Ollama Zero-Overhead IPC Bridge
+pub mod ollama_ipc_bridge;
+pub use ollama_ipc_bridge::{
+    OllamaBridgeChatMessage, OllamaBridgeMetrics, OllamaChatBridgeRequest,
+    OllamaChatStreamChunk, OllamaEmbeddingRequest, OllamaEmbeddingResponse,
+    OllamaGenerateRequest, OllamaHealthStatus, OllamaIpcBridge, OllamaLoadedModel,
+    OllamaPsResponse, OllamaStreamChunk, OllamaTagsBridgeResponse, OllamaTransportMode,
+    DEFAULT_OLLAMA_HTTP_URL, DEFAULT_OLLAMA_UNIX_SOCKET, OLLAMA_SOCKET_FALLBACKS,
+};
+
+// Pillar 3.2: Speculative Decoding & Intelligent Prompt-Caching
+pub mod speculative_decoder;
+pub use speculative_decoder::{
+    PrefixCacheEntry, PrefixCacheMatch, PrefixCacheStats, PrefixKvCache,
+    SpeculativeDecoder, SpeculativeProposal, SpeculativeTelemetry, VerificationOutcome,
+    DEFAULT_DRAFT_K, DEFAULT_MAX_PREFIX_ENTRIES,
+};
+
+
 
 
 
