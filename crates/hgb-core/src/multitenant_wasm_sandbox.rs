@@ -815,7 +815,32 @@ impl TenantSessionManager {
         let session = self.get_or_create_session(tenant_id, None).await?;
         let code_hash = blake3::hash(code_or_bytes.as_bytes()).to_hex().to_string();
 
-        let wasm_bytes = PolyglotSnippetRunner::prepare_bytecode(language, code_or_bytes)?;
+        let wasm_bytes = match PolyglotSnippetRunner::prepare_bytecode(language, code_or_bytes) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                let attestation = Self::generate_attestation_sync(
+                    &self.signing_key,
+                    &self.verifying_key,
+                    tenant_id,
+                    &code_hash,
+                    0,
+                    0,
+                    false,
+                );
+                return Ok(TenantExecutionResult {
+                    tenant_id: tenant_id.to_string(),
+                    exit_code: -1,
+                    duration_ms: 0.0,
+                    gas_consumed: 0,
+                    gas_remaining: 0,
+                    stdout: String::new(),
+                    stderr: format!("{}", e),
+                    trapped: true,
+                    error_diagnostic: Some(format!("{}", e)),
+                    security_attestation: attestation,
+                });
+            }
+        };
 
         let engine = self.engine.clone();
         let signing_key = self.signing_key.clone();
@@ -889,9 +914,37 @@ impl TenantSessionManager {
         let mut linker = Linker::new(engine);
         Self::bind_tenant_syscalls(&mut linker)?;
 
-        let module = Module::new(engine, wasm_bytes).map_err(|e| {
-            HgbError::Execution(format!("Failed to compile WASM module for tenant {}: {}", tenant_id, e))
-        })?;
+        let module = match Module::new(engine, wasm_bytes) {
+            Ok(m) => m,
+            Err(e) => {
+                let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
+                let remaining = store.get_fuel().unwrap_or(0);
+                let gas_consumed = gas_budget.saturating_sub(remaining);
+
+                let attestation = Self::generate_attestation_sync(
+                    signing_key,
+                    verifying_key,
+                    tenant_id,
+                    code_hash,
+                    gas_consumed,
+                    0,
+                    false,
+                );
+
+                return Ok(TenantExecutionResult {
+                    tenant_id: tenant_id.to_string(),
+                    exit_code: -1,
+                    duration_ms,
+                    gas_consumed,
+                    gas_remaining: remaining,
+                    stdout: String::new(),
+                    stderr: format!("Failed to compile WASM module for tenant {}: {}", tenant_id, e),
+                    trapped: true,
+                    error_diagnostic: Some(format!("Failed to compile WASM module for tenant {}: {}", tenant_id, e)),
+                    security_attestation: attestation,
+                });
+            }
+        };
 
         let instance = match linker.instantiate(&mut store, &module) {
             Ok(inst) => inst,

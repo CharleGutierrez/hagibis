@@ -157,6 +157,8 @@ pub struct McpSseState {
     pub semantic_cache: Arc<hgb_storage::semantic_response_cache::SemanticResponseCache>,
     pub ipc_governor: Arc<crate::dynatune_ipc_governor::DynatuneIpcGovernor>,
     pub tenant_manager: Arc<hgb_core::multitenant_wasm_sandbox::TenantSessionManager>,
+    pub swarm_orchestrator: Arc<std::sync::RwLock<Option<Arc<crate::distributed_swarm_orchestrator::DistributedSwarmOrchestrator>>>>,
+    pub unified_hardware_loop: Arc<crate::unified_neural_hardware_loop::UnifiedNeuralHardwareLoop>,
 }
 
 impl McpSseState {
@@ -188,6 +190,8 @@ impl McpSseState {
             tenant_manager: Arc::new(hgb_core::multitenant_wasm_sandbox::TenantSessionManager::new().unwrap_or_else(|_| {
                 hgb_core::multitenant_wasm_sandbox::TenantSessionManager::with_base_root(ws.join(".hgb").join("tenants")).expect("tenant manager")
             })),
+            swarm_orchestrator: Arc::new(std::sync::RwLock::new(None)),
+            unified_hardware_loop: crate::unified_neural_hardware_loop::UnifiedNeuralHardwareLoop::new(),
         }
     }
 
@@ -410,6 +414,9 @@ pub async fn handle_client_message(
             // Dynamically inject dynamic registry tools & prompt-driven tool creation interface
             if let Some(arr) = tools_val.as_array_mut() {
                 arr.push(crate::multitenant_mcp_tool::MultitenantMcpTool::tool_definition());
+                for swarm_tool in crate::distributed_swarm_orchestrator::SwarmMcpTools::tool_definitions() {
+                    arr.push(swarm_tool);
+                }
                 arr.push(serde_json::json!({
                     "name": "hgb_mcp_request_tool",
                     "description": "On-demand prompt-driven WASM tool generation and dynamic hot-swapping into MCP registry",
@@ -455,6 +462,35 @@ pub async fn handle_client_message(
                     &arguments,
                     &session_id,
                 ).await;
+                let resp = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": res_val
+                });
+                return (StatusCode::OK, Json(resp));
+            }
+
+            // Intercept Distributed Swarm MicroVM tool calls
+            if tool_name == crate::distributed_swarm_orchestrator::SWARM_DISPATCH_TOOL_NAME {
+                let orch_opt = state.swarm_orchestrator.read().unwrap().clone();
+                let orch = match orch_opt {
+                    Some(o) => o,
+                    None => Arc::new(crate::distributed_swarm_orchestrator::DistributedSwarmOrchestrator::new(&state.workspace_root).unwrap()),
+                };
+                let (res_val, _is_err) = crate::distributed_swarm_orchestrator::SwarmMcpTools::handle_dispatch_tool_call(&orch, &arguments).await;
+                let resp = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": res_val
+                });
+                return (StatusCode::OK, Json(resp));
+            } else if tool_name == crate::distributed_swarm_orchestrator::SWARM_TELEMETRY_TOOL_NAME {
+                let orch_opt = state.swarm_orchestrator.read().unwrap().clone();
+                let orch = match orch_opt {
+                    Some(o) => o,
+                    None => Arc::new(crate::distributed_swarm_orchestrator::DistributedSwarmOrchestrator::new(&state.workspace_root).unwrap()),
+                };
+                let (res_val, _is_err) = crate::distributed_swarm_orchestrator::SwarmMcpTools::handle_telemetry_tool_call(&orch, &arguments).await;
                 let resp = serde_json::json!({
                     "jsonrpc": "2.0",
                     "id": id,

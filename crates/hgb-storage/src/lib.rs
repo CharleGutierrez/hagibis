@@ -128,9 +128,6 @@ pub use embedding_cache_store::{
     EmbeddingInsertEntry,
 };
 
-
-
-
 // ============================================================================
 // Additions to crates/hgb-storage/src/lib.rs
 // ============================================================================
@@ -191,6 +188,29 @@ pub mod hybrid_rag_vector_index;
 pub use hybrid_rag_vector_index::{
     HybridDocument, HybridRagConfig, HybridRagSearchResult, HybridRagVectorIndex,
     VectorMetric as RagVectorMetric, BM25_B, BM25_K1, DEFAULT_RRF_K, HYBRID_RAG_MAGIC,
+};
+
+// Pillar 2: Native Vector/Embedding Caching in hgb-storage with SIMD Acceleration
+pub mod native_simd_mmap_rag;
+pub use native_simd_mmap_rag::{
+    align_up_64 as simd_rag_align_up_64,
+    calculate_layout as simd_rag_calculate_layout,
+    compute_deterministic_embedding,
+    handle_simd_vector_rag_query,
+    handle_simd_vector_rag_upsert,
+    mcp_tools_definitions as simd_rag_mcp_tools_definitions,
+    resolve_rag_storage_path,
+    simd_cosine_distance as rag_simd_cosine_distance,
+    simd_cosine_similarity as rag_simd_cosine_similarity,
+    simd_dot_product as rag_simd_dot_product,
+    simd_euclidean_distance_sq as rag_simd_euclidean_distance_sq,
+    NativeSimdMmapRag, NativeSimdMmapReader, NativeSimdRagPipeline,
+    RagCategory, SimdRagBenchReport, SimdRagConfig, SimdRagContext,
+    SimdRagHeader, SimdRagMatch, SimdRagMetadataEntry, SimdRagStats,
+    SimdRagUpsertItem, VectorMetric as SimdRagVectorMetric,
+    DEFAULT_RAG_CAPACITY, DEFAULT_RAG_DIMENSION, MAX_SOURCE_ID_LEN as SIMD_RAG_MAX_SOURCE_ID_LEN,
+    MAX_TAG_LEN as SIMD_RAG_MAX_TAG_LEN, SIMD_RAG_HEADER_SIZE, SIMD_RAG_MAGIC,
+    SIMD_RAG_METADATA_SIZE, SIMD_RAG_VERSION,
 };
 
 // Pillar 1: Vector-Native SQLite & In-Process HNSW Storage

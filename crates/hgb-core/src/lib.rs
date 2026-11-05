@@ -2091,6 +2091,17 @@ pub use speculative_decoder::{
     DEFAULT_DRAFT_K, DEFAULT_MAX_PREFIX_ENTRIES,
 };
 
+// Pillar 3: Advanced Closed-Loop Autonomous Reflection Engine
+pub mod closed_loop_wasm_reflection;
+pub use closed_loop_wasm_reflection::{
+    ClosedLoopWasmReflectionEngine, ReflectionAstFixer, ReflectionAttempt,
+    ReflectionConsensusCertificate, ReflectionDiagnostic, ReflectionDiagnosticAnalyzer,
+    ReflectionEngineConfig, ReflectionErrorKind, ReflectionSessionReport,
+    DEFAULT_MAX_REFLECTION_RETRIES, DEFAULT_REFLECTION_GAS_BUDGET,
+    MAX_REFLECTION_RETRIES_CEILING,
+};
+
+
 
 
 

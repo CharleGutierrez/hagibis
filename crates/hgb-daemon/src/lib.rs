@@ -575,6 +575,39 @@ pub use desktop_cockpit_launcher::{
     SidecarStatus, DEFAULT_DAEMON_SOCKET, MASTERCLASS_PDF_NAME,
 };
 
+// Pillar 1: Distributed "Swarm" MicroVMs via Firecracker & WASM
+pub mod distributed_swarm_orchestrator;
+pub use distributed_swarm_orchestrator::{
+    DistributedSwarmOrchestrator, NodeHealthState, NodeLocation,
+    SwarmClusterTelemetry, SwarmDispatchResult, SwarmDispatchTask,
+    SwarmMcpTools, SwarmNodeProfile, TaskPriority, WorkerRuntimeKind,
+    SWARM_DISPATCH_TOOL_NAME, SWARM_TELEMETRY_TOOL_NAME,
+};
+
+// Pillar 3: Advanced Closed-Loop Autonomous Reflection Runner
+pub mod closed_loop_self_healing_runner;
+pub use closed_loop_self_healing_runner::{
+    AutonomousSelfHealRequest, AutonomousSelfHealResponse, ClosedLoopSelfHealingRunner,
+    AUTONOMOUS_SELF_HEAL_TOOL_NAME,
+};
+
+// Pillar 4: Unified Neural-Hardware Feedback Loop with dynatune & kernel-optimizer
+pub mod unified_neural_hardware_loop;
+pub use unified_neural_hardware_loop::{
+    AiWorkloadKind, HardwareBoostGuard, HardwareLoopPaths, NeuralGovernorProfile,
+    SafetyClampStatus, UnifiedHardwareTelemetry, UnifiedNeuralHardwareLoop,
+    BATTERY_CRITICAL_DISCHARGE_PCT as NEURAL_BATTERY_CRITICAL_DISCHARGE_PCT,
+    BATTERY_RECOVERY_DISCHARGE_PCT as NEURAL_BATTERY_RECOVERY_DISCHARGE_PCT,
+    BURST_MGLRU_MIN_TTL_MS as NEURAL_BURST_MGLRU_MIN_TTL_MS,
+    DEFAULT_DYNATUNE_SOCKET, DEFAULT_IDLE_GRACE_PERIOD_SECS as NEURAL_DEFAULT_IDLE_GRACE_PERIOD_SECS,
+    IDLE_MGLRU_MIN_TTL_MS as NEURAL_IDLE_MGLRU_MIN_TTL_MS,
+    NEURAL_HARDWARE_BOOST_TOOL_NAME,
+    THERMAL_CLAMP_THRESHOLD_C as NEURAL_THERMAL_CLAMP_THRESHOLD_C,
+    THERMAL_RECOVERY_THRESHOLD_C as NEURAL_THERMAL_RECOVERY_THRESHOLD_C,
+};
+
+
+
 
 
 
