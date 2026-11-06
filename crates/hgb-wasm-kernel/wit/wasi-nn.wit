@@ -1,0 +1,61 @@
+package wasi:nn@0.2.0-rc-2023-11-20;
+
+interface tensor {
+    enum error-code {
+        success,
+        invalid-argument,
+        invalid-encoding,
+        missing-memory,
+        busy,
+        runtime-error,
+        unsupported-operation,
+        too-large,
+        not-found,
+        security,
+    }
+
+    enum graph-encoding {
+        openvino,
+        onnx,
+        tensorflowlite,
+        pytorch,
+        gguf,
+        burn,
+    }
+
+    enum execution-target {
+        cpu,
+        gpu,
+        tpu,
+    }
+
+    enum tensor-type {
+        f16,
+        f32,
+        u8,
+        i32,
+    }
+
+    type graph = u32;
+    type graph-execution-context = u32;
+    type tensor-dimensions = list<u32>;
+
+    record tensor-data {
+        dimensions: tensor-dimensions,
+        tensor-type: tensor-type,
+        data: list<u8>,
+    }
+
+    type graph-builder = list<u8>;
+    type graph-builder-array = list<graph-builder>;
+
+    load: func(builders: graph-builder-array, encoding: graph-encoding, target: execution-target) -> result<graph, error-code>;
+    init-execution-context: func(graph: graph) -> result<graph-execution-context, error-code>;
+    set-input: func(context: graph-execution-context, index: u32, tensor: tensor-data) -> result<_, error-code>;
+    compute: func(context: graph-execution-context) -> result<_, error-code>;
+    get-output: func(context: graph-execution-context, index: u32) -> result<tensor-data, error-code>;
+}
+
+world ml-inference {
+    import tensor;
+}

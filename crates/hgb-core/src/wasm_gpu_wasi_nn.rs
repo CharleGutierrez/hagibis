@@ -13,7 +13,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use thiserror::Error;
-use wasmtime::{Engine, Linker, Store};
+use wasmtime::{AsContextMut, Caller, Engine, Linker, Store};
 
 /// DRM render node for Intel HD Graphics on Toshiba Dynabook VC72/B
 pub const INTEL_GPU_RENDER_NODE: &str = "/dev/dri/renderD128";
@@ -181,11 +181,11 @@ pub struct WasiNnStatusReport {
 
 /// Internal state for WASI-NN host bindings
 pub struct WasiNnHostState {
-    graphs: HashMap<u32, ModelGraph>,
-    contexts: HashMap<u32, ExecutionContext>,
-    next_graph_id: u32,
-    next_context_id: u32,
-    gpu_available: bool,
+    pub graphs: HashMap<u32, ModelGraph>,
+    pub contexts: HashMap<u32, ExecutionContext>,
+    pub next_graph_id: u32,
+    pub next_context_id: u32,
+    pub gpu_available: bool,
 }
 
 impl Default for WasiNnHostState {
@@ -746,6 +746,325 @@ impl DynamicComponentPluginManager {
             Vec::new()
         }
     }
+}
+
+// ============================================================================
+// WASI-NN (wasi_ephemeral_nn) HOST LINKER & ACCELERATOR OFF-LOADING
+// ============================================================================
+
+pub const WASI_NN_SUCCESS: u32 = 0;
+pub const WASI_NN_INVALID_ARGUMENT: u32 = 1;
+pub const WASI_NN_INVALID_ENCODING: u32 = 2;
+pub const WASI_NN_MISSING_MEMORY: u32 = 3;
+pub const WASI_NN_BUSY: u32 = 4;
+pub const WASI_NN_RUNTIME_ERROR: u32 = 5;
+pub const WASI_NN_UNSUPPORTED_OPERATION: u32 = 6;
+pub const WASI_NN_TOO_LARGE: u32 = 7;
+pub const WASI_NN_NOT_FOUND: u32 = 8;
+pub const WASI_NN_SECURITY: u32 = 9;
+
+/// Linear memory tensor header ABI layout
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct RawTensorDimensionsAbi {
+    pub buf: u32,
+    pub size: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct RawTensorAbi {
+    pub dimensions: RawTensorDimensionsAbi,
+    pub tensor_type: u32,
+    pub data: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct RawGraphBuilderAbi {
+    pub buf: u32,
+    pub size: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct RawGraphBuilderArrayAbi {
+    pub buf: u32,
+    pub size: u32,
+}
+
+/// Link standard WASI-NN (`wasi_ephemeral_nn`) functions into Wasmtime Linker
+pub fn link_wasi_nn<T: Send + 'static>(
+    linker: &mut Linker<T>,
+    get_state: impl Fn(&mut T) -> &mut WasiNnHostState + Send + Sync + Copy + 'static,
+) -> Result<(), wasmtime::Error> {
+    for module_name in &["wasi_ephemeral_nn", "wasi-nn"] {
+        // 1. load
+        linker.func_wrap(
+            module_name,
+            "load",
+            move |mut caller: Caller<'_, T>, builders_ptr: u32, encoding: u32, target: u32, graph_out_ptr: u32| -> u32 {
+                let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                    Some(m) => m,
+                    None => return WASI_NN_MISSING_MEMORY,
+                };
+                let mem_data = memory.data(&caller);
+
+                // Safe bounds check on builders_ptr (8 bytes: buf u32, size u32)
+                let b_offset = builders_ptr as usize;
+                if b_offset.saturating_add(8) > mem_data.len() {
+                    return WASI_NN_INVALID_ARGUMENT;
+                }
+
+                let builders_buf = u32::from_le_bytes(mem_data[b_offset..b_offset + 4].try_into().unwrap()) as usize;
+                let builders_count = u32::from_le_bytes(mem_data[b_offset + 4..b_offset + 8].try_into().unwrap()) as usize;
+
+                if builders_count == 0 {
+                    return WASI_NN_INVALID_ARGUMENT;
+                }
+
+                // Check builders array bounds
+                let builders_bytes = builders_count.checked_mul(8).unwrap_or(usize::MAX);
+                if builders_buf.saturating_add(builders_bytes) > mem_data.len() {
+                    return WASI_NN_INVALID_ARGUMENT;
+                }
+
+                let mut combined_model = Vec::new();
+                for i in 0..builders_count {
+                    let entry_offset = builders_buf + i * 8;
+                    let buf_ptr = u32::from_le_bytes(mem_data[entry_offset..entry_offset + 4].try_into().unwrap()) as usize;
+                    let buf_len = u32::from_le_bytes(mem_data[entry_offset + 4..entry_offset + 8].try_into().unwrap()) as usize;
+
+                    if buf_ptr.saturating_add(buf_len) > mem_data.len() {
+                        return WASI_NN_INVALID_ARGUMENT;
+                    }
+                    combined_model.extend_from_slice(&mem_data[buf_ptr..buf_ptr + buf_len]);
+                }
+
+                let enc = match GraphEncoding::from_u32(encoding) {
+                    Some(e) => e,
+                    None => return WASI_NN_INVALID_ENCODING,
+                };
+                let tgt = match ExecutionTarget::from_u32(target) {
+                    Some(t) => t,
+                    None => return WASI_NN_INVALID_ARGUMENT,
+                };
+
+                let state = get_state(caller.data_mut());
+                let graph_id = match state.load(&[&combined_model], enc, tgt) {
+                    Ok(id) => id,
+                    Err(_) => return WASI_NN_RUNTIME_ERROR,
+                };
+
+                // Write graph_id back to guest memory
+                let g_out = graph_out_ptr as usize;
+                let mem_mut = memory.data_mut(&mut caller);
+                if g_out.saturating_add(4) > mem_mut.len() {
+                    return WASI_NN_INVALID_ARGUMENT;
+                }
+                mem_mut[g_out..g_out + 4].copy_from_slice(&graph_id.to_le_bytes());
+
+                WASI_NN_SUCCESS
+            },
+        )?;
+
+        // 2. init_execution_context
+        linker.func_wrap(
+            module_name,
+            "init_execution_context",
+            move |mut caller: Caller<'_, T>, graph_id: u32, context_out_ptr: u32| -> u32 {
+                let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                    Some(m) => m,
+                    None => return WASI_NN_MISSING_MEMORY,
+                };
+
+                let state = get_state(caller.data_mut());
+                let ctx_id = match state.init_execution_context(graph_id) {
+                    Ok(id) => id,
+                    Err(WasiNnError::InvalidGraph(_)) => return WASI_NN_NOT_FOUND,
+                    Err(_) => return WASI_NN_RUNTIME_ERROR,
+                };
+
+                let c_out = context_out_ptr as usize;
+                let mem_mut = memory.data_mut(&mut caller);
+                if c_out.saturating_add(4) > mem_mut.len() {
+                    return WASI_NN_INVALID_ARGUMENT;
+                }
+                mem_mut[c_out..c_out + 4].copy_from_slice(&ctx_id.to_le_bytes());
+
+                WASI_NN_SUCCESS
+            },
+        )?;
+
+        // 3. set_input
+        linker.func_wrap(
+            module_name,
+            "set_input",
+            move |mut caller: Caller<'_, T>, context_id: u32, index: u32, tensor_ptr: u32| -> u32 {
+                let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                    Some(m) => m,
+                    None => return WASI_NN_MISSING_MEMORY,
+                };
+                let mem_data = memory.data(&caller);
+
+                // RawTensor layout: dimensions (buf u32, size u32), tensor_type u32, data u32 = 16 bytes
+                let t_offset = tensor_ptr as usize;
+                if t_offset.saturating_add(16) > mem_data.len() {
+                    return WASI_NN_INVALID_ARGUMENT;
+                }
+
+                let dims_buf = u32::from_le_bytes(mem_data[t_offset..t_offset + 4].try_into().unwrap()) as usize;
+                let dims_size = u32::from_le_bytes(mem_data[t_offset + 4..t_offset + 8].try_into().unwrap()) as usize;
+                let tensor_type_u32 = u32::from_le_bytes(mem_data[t_offset + 8..t_offset + 12].try_into().unwrap());
+                let data_buf = u32::from_le_bytes(mem_data[t_offset + 12..t_offset + 16].try_into().unwrap()) as usize;
+
+                if dims_size == 0 || dims_size > 8 {
+                    return WASI_NN_INVALID_ARGUMENT;
+                }
+
+                let dims_bytes = dims_size.checked_mul(4).unwrap_or(usize::MAX);
+                if dims_buf.saturating_add(dims_bytes) > mem_data.len() {
+                    return WASI_NN_INVALID_ARGUMENT;
+                }
+
+                let mut dimensions = Vec::with_capacity(dims_size);
+                let mut total_elements: usize = 1;
+                for i in 0..dims_size {
+                    let d_off = dims_buf + i * 4;
+                    let dim = u32::from_le_bytes(mem_data[d_off..d_off + 4].try_into().unwrap()) as usize;
+                    if dim == 0 {
+                        return WASI_NN_INVALID_ARGUMENT;
+                    }
+                    total_elements = match total_elements.checked_mul(dim) {
+                        Some(val) => val,
+                        None => return WASI_NN_TOO_LARGE,
+                    };
+                    dimensions.push(dim);
+                }
+
+                let tensor_type = match tensor_type_u32 {
+                    0 => TensorType::F16,
+                    1 => TensorType::F32,
+                    2 => TensorType::U8,
+                    3 => TensorType::I32,
+                    _ => return WASI_NN_INVALID_ARGUMENT,
+                };
+
+                let elem_size = match tensor_type {
+                    TensorType::F16 => 2,
+                    TensorType::F32 | TensorType::I32 => 4,
+                    TensorType::U8 => 1,
+                };
+
+                let byte_len = match total_elements.checked_mul(elem_size) {
+                    Some(len) => len,
+                    None => return WASI_NN_TOO_LARGE,
+                };
+
+                if data_buf.saturating_add(byte_len) > mem_data.len() {
+                    return WASI_NN_INVALID_ARGUMENT;
+                }
+
+                let tensor_bytes = mem_data[data_buf..data_buf + byte_len].to_vec();
+                let tensor = Tensor {
+                    dimensions,
+                    tensor_type,
+                    data: tensor_bytes,
+                };
+
+                let state = get_state(caller.data_mut());
+                match state.set_input(context_id, index, tensor) {
+                    Ok(_) => WASI_NN_SUCCESS,
+                    Err(WasiNnError::InvalidContext(_)) => WASI_NN_NOT_FOUND,
+                    Err(_) => WASI_NN_RUNTIME_ERROR,
+                }
+            },
+        )?;
+
+        // 4. compute (Gas/Fuel Metered & Hardware Offloaded)
+        linker.func_wrap(
+            module_name,
+            "compute",
+            move |mut caller: Caller<'_, T>, context_id: u32| -> u32 {
+                // Determine fuel consumption based on tensor workload
+                let ops = {
+                    let state = get_state(caller.data_mut());
+                    let context = match state.contexts.get(&context_id) {
+                        Some(c) => c,
+                        None => return WASI_NN_NOT_FOUND,
+                    };
+                    let input = match context.inputs.get(&0) {
+                        Some(inp) => inp,
+                        None => return WASI_NN_INVALID_ARGUMENT,
+                    };
+                    // 2 FLOPs per float element for activation/GEMM
+                    (input.data.len() as u64) * 2
+                };
+
+                // Deduct fuel from Wasmtime store
+                let fuel_needed = ops.max(1_000);
+                if let Ok(cur_fuel) = caller.as_context_mut().get_fuel() {
+                    if cur_fuel < fuel_needed {
+                        return WASI_NN_RUNTIME_ERROR;
+                    }
+                    let _ = caller.as_context_mut().set_fuel(cur_fuel.saturating_sub(fuel_needed));
+                }
+
+                let state = get_state(caller.data_mut());
+                match state.compute(context_id) {
+                    Ok(_) => WASI_NN_SUCCESS,
+                    Err(WasiNnError::InvalidContext(_)) => WASI_NN_NOT_FOUND,
+                    Err(WasiNnError::InvalidInputIndex(_)) => WASI_NN_INVALID_ARGUMENT,
+                    Err(_) => WASI_NN_RUNTIME_ERROR,
+                }
+            },
+        )?;
+
+        // 5. get_output
+        linker.func_wrap(
+            module_name,
+            "get_output",
+            move |mut caller: Caller<'_, T>, context_id: u32, index: u32, out_buf_ptr: u32, max_len: u32, out_len_ptr: u32| -> u32 {
+                let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                    Some(m) => m,
+                    None => return WASI_NN_MISSING_MEMORY,
+                };
+
+                let output_tensor = {
+                    let state = get_state(caller.data_mut());
+                    match state.get_output(context_id, index) {
+                        Ok(t) => t,
+                        Err(WasiNnError::InvalidContext(_)) => return WASI_NN_NOT_FOUND,
+                        Err(WasiNnError::InvalidOutputIndex(_)) => return WASI_NN_INVALID_ARGUMENT,
+                        Err(_) => return WASI_NN_RUNTIME_ERROR,
+                    }
+                };
+
+                let out_bytes = &output_tensor.data;
+                if out_bytes.len() > max_len as usize {
+                    return WASI_NN_TOO_LARGE;
+                }
+
+                let dest = out_buf_ptr as usize;
+                let len_dest = out_len_ptr as usize;
+                let mem_mut = memory.data_mut(&mut caller);
+
+                if dest.saturating_add(out_bytes.len()) > mem_mut.len()
+                    || len_dest.saturating_add(4) > mem_mut.len()
+                {
+                    return WASI_NN_INVALID_ARGUMENT;
+                }
+
+                mem_mut[dest..dest + out_bytes.len()].copy_from_slice(out_bytes);
+                let actual_len = out_bytes.len() as u32;
+                mem_mut[len_dest..len_dest + 4].copy_from_slice(&actual_len.to_le_bytes());
+
+                WASI_NN_SUCCESS
+            },
+        )?;
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

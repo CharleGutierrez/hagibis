@@ -1155,6 +1155,359 @@ pub export fn hgb_wasm_simd_relu(tensor_ptr: [*]f32, len: usize) callconv(.C) vo
     }
 }
 
+// ----------------------------------------------------------------------------
+// Advanced Hardware SIMD Kernels: Softmax, RMSNorm, LayerNorm, & Embeddings
+// ----------------------------------------------------------------------------
+
+pub export fn hgb_wasm_simd_softmax(tensor_ptr: [*]f32, len: usize) callconv(.C) void {
+    if (len == 0) return;
+
+    var max_val: f32 = tensor_ptr[0];
+    for (1..len) |i| {
+        if (tensor_ptr[i] > max_val) {
+            max_val = tensor_ptr[i];
+        }
+    }
+
+    var sum_exp: f32 = 0.0;
+    for (0..len) |i| {
+        const e = @exp(tensor_ptr[i] - max_val);
+        tensor_ptr[i] = e;
+        sum_exp += e;
+    }
+
+    if (sum_exp > 0.0) {
+        const inv_sum = 1.0 / sum_exp;
+        for (0..len) |i| {
+            tensor_ptr[i] *= inv_sum;
+        }
+    }
+}
+
+pub export fn hgb_wasm_simd_rmsnorm(
+    tensor_ptr: [*]f32,
+    weight_ptr: ?[*]const f32,
+    len: usize,
+    eps: f32,
+) callconv(.C) void {
+    if (len == 0) return;
+
+    var sum_sq: f32 = 0.0;
+    for (0..len) |i| {
+        sum_sq += tensor_ptr[i] * tensor_ptr[i];
+    }
+    const rms = @sqrt((sum_sq / @as(f32, @floatFromInt(len))) + eps);
+    const inv_rms = if (rms > 0.0) 1.0 / rms else 1.0;
+
+    if (weight_ptr) |w| {
+        for (0..len) |i| {
+            tensor_ptr[i] = (tensor_ptr[i] * inv_rms) * w[i];
+        }
+    } else {
+        for (0..len) |i| {
+            tensor_ptr[i] *= inv_rms;
+        }
+    }
+}
+
+pub export fn hgb_wasm_simd_layernorm(
+    tensor_ptr: [*]f32,
+    gamma_ptr: ?[*]const f32,
+    beta_ptr: ?[*]const f32,
+    len: usize,
+    eps: f32,
+) callconv(.C) void {
+    if (len == 0) return;
+
+    var sum: f32 = 0.0;
+    for (0..len) |i| {
+        sum += tensor_ptr[i];
+    }
+    const mean = sum / @as(f32, @floatFromInt(len));
+
+    var sum_sq_diff: f32 = 0.0;
+    for (0..len) |i| {
+        const diff = tensor_ptr[i] - mean;
+        sum_sq_diff += diff * diff;
+    }
+    const variance = sum_sq_diff / @as(f32, @floatFromInt(len));
+    const inv_std = 1.0 / @sqrt(variance + eps);
+
+    for (0..len) |i| {
+        var norm = (tensor_ptr[i] - mean) * inv_std;
+        if (gamma_ptr) |g| {
+            norm *= g[i];
+        }
+        if (beta_ptr) |b| {
+            norm += b[i];
+        }
+        tensor_ptr[i] = norm;
+    }
+}
+
+pub export fn hgb_wasm_simd_token_embedding_lookup(
+    indices_ptr: [*]const u32,
+    num_tokens: usize,
+    table_ptr: [*]const f32,
+    embedding_dim: usize,
+    out_ptr: [*]f32,
+) callconv(.C) void {
+    if (num_tokens == 0 or embedding_dim == 0) return;
+
+    const Vec4 = @Vector(4, f32);
+    const chunks = embedding_dim / 4;
+
+    for (0..num_tokens) |t| {
+        const token_idx = indices_ptr[t];
+        const table_row = table_ptr + (@as(usize, token_idx) * embedding_dim);
+        const out_row = out_ptr + (t * embedding_dim);
+
+        var j: usize = 0;
+        while (j < chunks * 4) : (j += 4) {
+            const v: Vec4 = table_row[j..][0..4].*;
+            out_row[j..][0..4].* = v;
+        }
+        var rem = chunks * 4;
+        while (rem < embedding_dim) : (rem += 1) {
+            out_row[rem] = table_row[rem];
+        }
+    }
+}
+
+// ============================================================================
+// 9. WASI-NN (Neural Network) STANDARD PROPOSAL IMPLEMENTATION
+// ============================================================================
+
+pub const NnErrno = enum(u32) {
+    success = 0,
+    invalid_argument = 1,
+    invalid_encoding = 2,
+    missing_memory = 3,
+    busy = 4,
+    runtime_error = 5,
+    unsupported_operation = 6,
+    too_large = 7,
+    not_found = 8,
+    security = 9,
+};
+
+pub const WasiNnGraphEncoding = enum(u32) {
+    openvino = 0,
+    onnx = 1,
+    tensorflowlite = 2,
+    pytorch = 3,
+    gguf = 4,
+    burn = 5,
+};
+
+pub const WasiNnExecutionTarget = enum(u32) {
+    cpu = 0,
+    gpu = 1,
+    tpu = 2,
+};
+
+pub const WasiNnTensorType = enum(u32) {
+    f16 = 0,
+    f32 = 1,
+    u8 = 2,
+    i32 = 3,
+};
+
+pub const TensorDimensions = extern struct {
+    buf: [*]const u32,
+    size: u32,
+};
+
+pub const WasiNnTensor = extern struct {
+    dimensions: TensorDimensions,
+    tensor_type: u32,
+    data: [*]const u8,
+};
+
+pub const GraphBuilder = extern struct {
+    buf: [*]const u8,
+    size: u32,
+};
+
+pub const GraphBuilderArray = extern struct {
+    buf: [*]const GraphBuilder,
+    size: u32,
+};
+
+// Extern host bindings for wasi_ephemeral_nn
+const host_wasi_nn = struct {
+    extern "wasi_ephemeral_nn" fn load(builders: *const GraphBuilderArray, encoding: u32, target: u32, graph: *u32) u32;
+    extern "wasi_ephemeral_nn" fn init_execution_context(graph: u32, context: *u32) u32;
+    extern "wasi_ephemeral_nn" fn set_input(context: u32, index: u32, tensor: *const WasiNnTensor) u32;
+    extern "wasi_ephemeral_nn" fn compute(context: u32) u32;
+    extern "wasi_ephemeral_nn" fn get_output(context: u32, index: u32, out_buffer: [*]u8, max_len: u32, out_len: *u32) u32;
+};
+
+// Fallback in-memory state for native test verification
+const NativeWasiNnModel = struct {
+    encoding: u32,
+    target: u32,
+    data: []const u8,
+};
+
+const NativeWasiNnContext = struct {
+    graph_id: u32,
+    input_data: [4096]u8,
+    input_len: usize,
+    input_dims: [8]u32,
+    input_dims_count: u32,
+    input_type: u32,
+    output_data: [4096]u8,
+    output_len: usize,
+    output_dims: [8]u32,
+    output_dims_count: u32,
+};
+
+var native_models: [16]NativeWasiNnModel = undefined;
+var native_models_count: u32 = 0;
+var native_contexts: [16]NativeWasiNnContext = undefined;
+var native_contexts_count: u32 = 0;
+
+pub fn wasiNnLoad(builders: *const GraphBuilderArray, encoding: u32, target: u32, graph: *u32) u32 {
+    if (is_wasm) {
+        return host_wasi_nn.load(builders, encoding, target, graph);
+    } else {
+        if (builders.size == 0) return @intFromEnum(NnErrno.invalid_argument);
+        if (native_models_count >= native_models.len) return @intFromEnum(NnErrno.busy);
+
+        native_models_count += 1;
+        const id = native_models_count;
+        native_models[id - 1] = NativeWasiNnModel{
+            .encoding = encoding,
+            .target = target,
+            .data = builders.buf[0].buf[0..builders.buf[0].size],
+        };
+        graph.* = id;
+        return @intFromEnum(NnErrno.success);
+    }
+}
+
+pub fn wasiNnInitExecutionContext(graph: u32, context: *u32) u32 {
+    if (is_wasm) {
+        return host_wasi_nn.init_execution_context(graph, context);
+    } else {
+        if (graph == 0 or graph > native_models_count) return @intFromEnum(NnErrno.invalid_argument);
+        if (native_contexts_count >= native_contexts.len) return @intFromEnum(NnErrno.busy);
+
+        native_contexts_count += 1;
+        const id = native_contexts_count;
+        var ctx = &native_contexts[id - 1];
+        ctx.graph_id = graph;
+        ctx.input_len = 0;
+        ctx.output_len = 0;
+        ctx.input_dims_count = 0;
+        ctx.output_dims_count = 0;
+        context.* = id;
+        return @intFromEnum(NnErrno.success);
+    }
+}
+
+pub fn wasiNnSetInput(context: u32, index: u32, tensor: *const WasiNnTensor) u32 {
+    if (is_wasm) {
+        return host_wasi_nn.set_input(context, index, tensor);
+    } else {
+        if (context == 0 or context > native_contexts_count) return @intFromEnum(NnErrno.invalid_argument);
+        if (index != 0) return @intFromEnum(NnErrno.invalid_argument);
+        if (tensor.dimensions.size == 0) return @intFromEnum(NnErrno.invalid_argument);
+
+        var ctx = &native_contexts[context - 1];
+        var total_elems: usize = 1;
+        for (0..tensor.dimensions.size) |i| {
+            const dim = tensor.dimensions.buf[i];
+            if (dim == 0) return @intFromEnum(NnErrno.invalid_argument);
+            total_elems *= dim;
+            if (i < ctx.input_dims.len) {
+                ctx.input_dims[i] = dim;
+            }
+        }
+        ctx.input_dims_count = tensor.dimensions.size;
+        ctx.input_type = tensor.tensor_type;
+
+        const elem_size: usize = if (tensor.tensor_type == @intFromEnum(WasiNnTensorType.f32)) 4 else 1;
+        const byte_len = total_elems * elem_size;
+        if (byte_len > ctx.input_data.len) return @intFromEnum(NnErrno.too_large);
+
+        @memcpy(ctx.input_data[0..byte_len], tensor.data[0..byte_len]);
+        ctx.input_len = byte_len;
+        return @intFromEnum(NnErrno.success);
+    }
+}
+
+pub fn wasiNnCompute(context: u32) u32 {
+    if (is_wasm) {
+        return host_wasi_nn.compute(context);
+    } else {
+        if (context == 0 or context > native_contexts_count) return @intFromEnum(NnErrno.invalid_argument);
+        var ctx = &native_contexts[context - 1];
+        if (ctx.input_len == 0) return @intFromEnum(NnErrno.invalid_argument);
+
+        const num_floats = ctx.input_len / 4;
+        const in_floats: [*]const f32 = @ptrCast(@alignCast(&ctx.input_data[0]));
+        const out_floats: [*]f32 = @ptrCast(@alignCast(&ctx.output_data[0]));
+
+        const model = native_models[ctx.graph_id - 1];
+        for (0..num_floats) |i| {
+            const val = in_floats[i];
+            if (model.encoding == @intFromEnum(WasiNnGraphEncoding.gguf)) {
+                // SiLU
+                const silu = val / (1.0 + @exp(-val));
+                out_floats[i] = silu;
+            } else {
+                // ReLU
+                out_floats[i] = if (val > 0.0) val else 0.0;
+            }
+        }
+
+        ctx.output_len = ctx.input_len;
+        ctx.output_dims_count = ctx.input_dims_count;
+        for (0..ctx.input_dims_count) |i| {
+            ctx.output_dims[i] = ctx.input_dims[i];
+        }
+        return @intFromEnum(NnErrno.success);
+    }
+}
+
+pub fn wasiNnGetOutput(context: u32, index: u32, out_buffer: [*]u8, max_len: u32, out_len: *u32) u32 {
+    if (is_wasm) {
+        return host_wasi_nn.get_output(context, index, out_buffer, max_len, out_len);
+    } else {
+        if (context == 0 or context > native_contexts_count) return @intFromEnum(NnErrno.invalid_argument);
+        if (index != 0) return @intFromEnum(NnErrno.invalid_argument);
+
+        const ctx = &native_contexts[context - 1];
+        if (ctx.output_len > max_len) return @intFromEnum(NnErrno.too_large);
+
+        @memcpy(out_buffer[0..ctx.output_len], ctx.output_data[0..ctx.output_len]);
+        out_len.* = @as(u32, @intCast(ctx.output_len));
+        return @intFromEnum(NnErrno.success);
+    }
+}
+
+pub export fn wasi_ephemeral_nn_load(builders: *const GraphBuilderArray, encoding: u32, target: u32, graph: *u32) callconv(.C) u32 {
+    return wasiNnLoad(builders, encoding, target, graph);
+}
+
+pub export fn wasi_ephemeral_nn_init_execution_context(graph: u32, context: *u32) callconv(.C) u32 {
+    return wasiNnInitExecutionContext(graph, context);
+}
+
+pub export fn wasi_ephemeral_nn_set_input(context: u32, index: u32, tensor: *const WasiNnTensor) callconv(.C) u32 {
+    return wasiNnSetInput(context, index, tensor);
+}
+
+pub export fn wasi_ephemeral_nn_compute(context: u32) callconv(.C) u32 {
+    return wasiNnCompute(context);
+}
+
+pub export fn wasi_ephemeral_nn_get_output(context: u32, index: u32, out_buffer: [*]u8, max_len: u32, out_len: *u32) callconv(.C) u32 {
+    return wasiNnGetOutput(context, index, out_buffer, max_len, out_len);
+}
+
 test "simd 128-bit dot product and matmul" {
     const a = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0 };
     const b = [_]f32{ 2.0, 0.5, 1.0, -1.0, 2.0 };
@@ -1182,4 +1535,91 @@ test "simd 128-bit dot product and matmul" {
     try std.testing.expectApproxEqAbs(@as(f32, 0.0), relu_arr[2], 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 0.0), relu_arr[3], 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 3.5), relu_arr[4], 0.001);
+}
+
+test "simd softmax, rmsnorm, and layernorm" {
+    // Softmax
+    var sm_arr = [_]f32{ 1.0, 2.0, 3.0 };
+    hgb_wasm_simd_softmax(&sm_arr, 3);
+    const sum = sm_arr[0] + sm_arr[1] + sm_arr[2];
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), sum, 0.001);
+    try std.testing.expect(sm_arr[2] > sm_arr[1] and sm_arr[1] > sm_arr[0]);
+
+    // RMSNorm
+    var rms_arr = [_]f32{ 2.0, 2.0, 2.0, 2.0 };
+    hgb_wasm_simd_rmsnorm(&rms_arr, null, 4, 1e-5);
+    // RMS = sqrt(16/4) = 2.0 -> elements should be ~1.0
+    for (rms_arr) |v| {
+        try std.testing.expectApproxEqAbs(@as(f32, 1.0), v, 0.01);
+    }
+
+    // LayerNorm
+    var ln_arr = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+    hgb_wasm_simd_layernorm(&ln_arr, null, null, 4, 1e-5);
+    var ln_sum: f32 = 0.0;
+    for (ln_arr) |v| ln_sum += v;
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), ln_sum, 0.01);
+
+    // Token embedding lookup
+    const table = [_]f32{
+        0.1, 0.2, 0.3, 0.4, // token 0
+        1.1, 1.2, 1.3, 1.4, // token 1
+        2.1, 2.2, 2.3, 2.4, // token 2
+    };
+    const tokens = [_]u32{ 2, 0 };
+    var out_embeds: [8]f32 = undefined;
+    hgb_wasm_simd_token_embedding_lookup(&tokens, 2, &table, 4, &out_embeds);
+    try std.testing.expectApproxEqAbs(@as(f32, 2.1), out_embeds[0], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 2.4), out_embeds[3], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.1), out_embeds[4], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.4), out_embeds[7], 0.001);
+}
+
+test "wasi-nn native contract execution" {
+    const dummy_bytes = "dummy_model_bytes";
+    const builders_arr = [_]GraphBuilder{.{
+        .buf = dummy_bytes.ptr,
+        .size = @as(u32, @intCast(dummy_bytes.len)),
+    }};
+    const builders = GraphBuilderArray{
+        .buf = @ptrCast(&builders_arr[0]),
+        .size = 1,
+    };
+
+    var graph_id: u32 = 0;
+    const rc_load = wasiNnLoad(&builders, @intFromEnum(WasiNnGraphEncoding.onnx), @intFromEnum(WasiNnExecutionTarget.cpu), &graph_id);
+    try std.testing.expectEqual(@as(u32, 0), rc_load);
+    try std.testing.expect(graph_id > 0);
+
+    var ctx_id: u32 = 0;
+    const rc_ctx = wasiNnInitExecutionContext(graph_id, &ctx_id);
+    try std.testing.expectEqual(@as(u32, 0), rc_ctx);
+    try std.testing.expect(ctx_id > 0);
+
+    const in_dims = [_]u32{ 1, 4 };
+    const in_floats = [_]f32{ -1.5, 2.0, -0.5, 4.0 };
+    const in_bytes: [*]const u8 = @ptrCast(@alignCast(&in_floats[0]));
+    const tensor = WasiNnTensor{
+        .dimensions = .{ .buf = &in_dims, .size = 2 },
+        .tensor_type = @intFromEnum(WasiNnTensorType.f32),
+        .data = in_bytes,
+    };
+
+    const rc_set = wasiNnSetInput(ctx_id, 0, &tensor);
+    try std.testing.expectEqual(@as(u32, 0), rc_set);
+
+    const rc_comp = wasiNnCompute(ctx_id);
+    try std.testing.expectEqual(@as(u32, 0), rc_comp);
+
+    var out_buf: [16]u8 = undefined;
+    var out_len: u32 = 0;
+    const rc_out = wasiNnGetOutput(ctx_id, 0, &out_buf, 16, &out_len);
+    try std.testing.expectEqual(@as(u32, 0), rc_out);
+    try std.testing.expectEqual(@as(u32, 16), out_len);
+
+    const out_floats: [*]const f32 = @ptrCast(@alignCast(&out_buf[0]));
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), out_floats[0], 0.001); // ReLU on -1.5
+    try std.testing.expectApproxEqAbs(@as(f32, 2.0), out_floats[1], 0.001); // ReLU on 2.0
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), out_floats[2], 0.001); // ReLU on -0.5
+    try std.testing.expectApproxEqAbs(@as(f32, 4.0), out_floats[3], 0.001); // ReLU on 4.0
 }
