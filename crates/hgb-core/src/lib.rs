@@ -2012,6 +2012,26 @@ pub use shm_ipc_fastpath::{
     RING_CONTROL_SIZE as SHM_FASTPATH_RING_CONTROL_SIZE, SHM_IPC_MAGIC, SHM_IPC_VERSION,
 };
 
+// Power-Up 1: Production-Grade Zero-Copy Shared Memory Conduit
+pub mod zero_copy_shm_conduit;
+pub use zero_copy_shm_conduit::{
+    align_up_64 as conduit_align_up_64, blake3_digest_16 as conduit_blake3_digest_16,
+    blake3_hash as conduit_blake3_hash, crc32_checksum as conduit_crc32_checksum,
+    resolve_conduit_shm_path, BorrowedConduitFrame, ConduitBenchmarkStats,
+    ConduitFrameHeader, ConduitMasterHeader, ConduitOpCode, ConduitRole,
+    ConduitTelemetryFrame, InferenceTokenChunk, OwnedConduitFrame,
+    ZeroCopyDescriptor, ZeroCopyShmConduit, CACHELINE_SIZE as CONDUIT_CACHELINE_SIZE,
+    CONDUIT_MAGIC, CONDUIT_VERSION, DEFAULT_RING_CAPACITY as CONDUIT_DEFAULT_RING_CAPACITY,
+    DEFAULT_SLAB_CAPACITY as CONDUIT_DEFAULT_SLAB_CAPACITY,
+    DESCRIPTOR_SIZE as CONDUIT_DESCRIPTOR_SIZE, FLAG_DESCRIPTOR as CONDUIT_FLAG_DESCRIPTOR,
+    FLAG_REQUEST as CONDUIT_FLAG_REQUEST, FLAG_RESPONSE as CONDUIT_FLAG_RESPONSE,
+    FLAG_TELEMETRY as CONDUIT_FLAG_TELEMETRY, FLAG_TENSOR as CONDUIT_FLAG_TENSOR,
+    FLAG_TOKEN_CHUNK as CONDUIT_FLAG_TOKEN_CHUNK, FLAG_WRAP as CONDUIT_FLAG_WRAP,
+    FRAME_HEADER_SIZE as CONDUIT_FRAME_HEADER_SIZE,
+    MASTER_HEADER_SIZE as CONDUIT_MASTER_HEADER_SIZE,
+    ZERO_COPY_DESCRIPTOR_THRESHOLD,
+};
+
 // Pillar 1: Unified Zero-Copy Memory Bus
 pub mod zero_copy_memory_bus;
 pub use zero_copy_memory_bus::{
@@ -2099,6 +2119,20 @@ pub use closed_loop_wasm_reflection::{
     ReflectionEngineConfig, ReflectionErrorKind, ReflectionSessionReport,
     DEFAULT_MAX_REFLECTION_RETRIES, DEFAULT_REFLECTION_GAS_BUDGET,
     MAX_REFLECTION_RETRIES_CEILING,
+};
+
+// Power-Up 2: Wasmtime Multi-Tenant JIT Pooling & Snapshot FaaS Runner
+pub mod wasmtime_multitenant_faas_pool;
+pub use wasmtime_multitenant_faas_pool::{
+    CachedFaasModule, FaasCacheTier, FaasExecutionReport, FaasGlobalVal,
+    FaasMemorySnapshot, FaasPoolConfig, FaasPoolTelemetry, FaasTenantHostState,
+    TenantFaasContext, TenantFaasPolicy, TenantFaasSessionInfo,
+    WasmtimeMultitenantFaasPool, DEFAULT_MAX_MEMORIES_PER_MODULE as FAAS_DEFAULT_MAX_MEMORIES_PER_MODULE,
+    DEFAULT_MAX_TABLES_PER_MODULE as FAAS_DEFAULT_MAX_TABLES_PER_MODULE,
+    DEFAULT_MAX_TABLE_ELEMENTS as FAAS_DEFAULT_MAX_TABLE_ELEMENTS,
+    DEFAULT_POOL_CORE_INSTANCES as FAAS_DEFAULT_POOL_CORE_INSTANCES,
+    DEFAULT_POOL_MEMORIES as FAAS_DEFAULT_POOL_MEMORIES,
+    DEFAULT_POOL_TABLES as FAAS_DEFAULT_POOL_TABLES,
 };
 
 

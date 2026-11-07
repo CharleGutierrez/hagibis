@@ -606,6 +606,35 @@ pub use unified_neural_hardware_loop::{
     THERMAL_RECOVERY_THRESHOLD_C as NEURAL_THERMAL_RECOVERY_THRESHOLD_C,
 };
 
+// Power-Up 4: Hardware-Aware Dynamic Acceleration (dynatune & kernel-optimizer)
+pub mod hardware_dynamic_ffi_bridge;
+pub use hardware_dynamic_ffi_bridge::{
+    AccelerationWorkload, BatteryTelemetry, HardwareAccelerationGuard,
+    HardwareBridgeConfig, HardwareBridgeTelemetrySnapshot, HardwareDynamicFfiBridge,
+    HardwareGovernorProfile, HardwareTelemetryOverride, MemoryPressureRecord,
+    MemoryTelemetry, SafetyClampState, ThermalTelemetry, ThermalZoneMetric,
+    BATTERY_CRITICAL_DISCHARGE_PCT as FFI_BATTERY_CRITICAL_DISCHARGE_PCT,
+    BATTERY_RECOVERY_DISCHARGE_PCT as FFI_BATTERY_RECOVERY_DISCHARGE_PCT,
+    BURST_MGLRU_MIN_TTL_MS as FFI_BURST_MGLRU_MIN_TTL_MS,
+    CLAMPED_CONCURRENCY_LIMIT as FFI_CLAMPED_CONCURRENCY_LIMIT,
+    DEFAULT_BOOST_CONCURRENCY_LIMIT as FFI_DEFAULT_BOOST_CONCURRENCY_LIMIT,
+    DEFAULT_DYNATUNE_SOCK as FFI_DEFAULT_DYNATUNE_SOCK,
+    DEFAULT_IDLE_GRACE_PERIOD_SECS as FFI_DEFAULT_IDLE_GRACE_PERIOD_SECS,
+    DEFAULT_NOMINAL_CONCURRENCY_LIMIT as FFI_DEFAULT_NOMINAL_CONCURRENCY_LIMIT,
+    IDLE_MGLRU_MIN_TTL_MS as FFI_IDLE_MGLRU_MIN_TTL_MS,
+    THERMAL_CLAMP_THRESHOLD_C as FFI_THERMAL_CLAMP_THRESHOLD_C,
+    THERMAL_RECOVERY_THRESHOLD_C as FFI_THERMAL_RECOVERY_THRESHOLD_C,
+};
+
+// Power-Up 3: Autonomous MCP Self-Healing & Profiling Loop
+pub mod autonomous_mcp_self_healing_loop;
+pub use autonomous_mcp_self_healing_loop::{
+    AutoPatchBottleneckReport, AutoPatchBottleneckRequest, AutonomousMcpSelfHealingLoop,
+    DiagnosticLanguage, ParsedDiagnostic, PgoHardwareTelemetry, PgoTunePassReport,
+    PgoTunePassRequest, SelfHealingDiagnoseReport, SelfHealingDiagnoseRequest,
+};
+
+
 
 
 

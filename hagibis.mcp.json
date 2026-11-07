@@ -149,6 +149,44 @@
         "db_path": { "type": "string", "description": "Optional path to SQLite vector database" }
       }
     },
+    "hgb_self_healing_diagnose": {
+      "description": "Autonomous compiler diagnostic interception, AST repair (Rust E0308/E0425/E0433/E0596, Zig, Python), speculative RAM CoW sandboxing (/dev/shm), and First-Green verification",
+      "parameters": {
+        "target_file": { "type": "string", "description": "Relative path to target source file", "required": true },
+        "error_context": { "type": "string", "description": "Optional compiler stderr, panic stack, or test failure logs" },
+        "code": { "type": "string", "description": "Optional candidate source code content (reads from target_file if omitted)" },
+        "compiler": { "type": "string", "description": "Optional compiler override ('rust', 'zig', 'python', 'auto')", "default": "auto" },
+        "check_command": { "type": "string", "description": "Optional custom verification check command" },
+        "max_retries": { "type": "integer", "description": "Maximum autonomous repair iterations (default: 3)", "default": 3 },
+        "auto_apply": { "type": "boolean", "description": "Commit candidate patch to workspace disk upon First-Green verification", "default": true }
+      }
+    },
+    "hgb_pgo_tune_pass": {
+      "description": "Autonomous Profile-Guided Optimization (PGO) pass: detects latency regression and build slowdowns, collects binary profiles, and executes scripts/pgo-optimize.sh in the background with cooldown guards",
+      "parameters": {
+        "trigger_reason": { "type": "string", "description": "Trigger reason description (default: 'autonomous_latency_regression_check')" },
+        "force": { "type": "boolean", "description": "Bypass cooldown timer and force immediate PGO optimization", "default": false },
+        "pgo_only": { "type": "boolean", "description": "Run standard PGO + Fat LTO without post-link BOLT (default: true)", "default": true },
+        "run_benchmark": { "type": "boolean", "description": "Execute before-and-after microbenchmarks to measure throughput gain", "default": false },
+        "cooldown_seconds": { "type": "integer", "description": "Cooldown period between PGO invocations in seconds (default: 300)", "default": 300 },
+        "target_binary": { "type": "string", "description": "Target binary to profile ('hgb', 'hgbd', 'all')", "default": "all" }
+      }
+    },
+    "hgb_auto_patch_bottleneck": {
+      "description": "Autonomous performance bottleneck optimizer: discovers hotspot functions and applies zero-overhead optimizations (capacity preallocation, #[inline(always)], buffered I/O, SIMD vectorization) verified First-Green in /dev/shm",
+      "parameters": {
+        "target_file": { "type": "string", "description": "Relative path to target source file containing hotspot", "required": true },
+        "function_name": { "type": "string", "description": "Optional specific hotspot function name to optimize" },
+        "optimization_strategy": {
+          "type": "string",
+          "enum": ["auto", "preallocate_capacity", "inline_hotspot", "buffered_io", "simd_vectorize", "cache_memoize"],
+          "description": "Optimization strategy to apply",
+          "default": "auto"
+        },
+        "verify_first_green": { "type": "boolean", "description": "Speculatively verify candidate optimization in RAM CoW sandbox before applying", "default": true },
+        "auto_apply": { "type": "boolean", "description": "Atomically commit verified optimization to physical workspace disk", "default": true }
+      }
+    },
     "hgb_self_healing_compile": {
       "description": "Autonomous First-Green compilation loop: executes build/checks in RAM CoW overlay sandbox, intercepts diagnostics, and heals AST syntax errors before disk commit",
       "parameters": {
@@ -559,6 +597,9 @@
         "OLLAMA_HOST": "http://127.0.0.1:11434"
       },
       "tools": [
+        "hgb_self_healing_diagnose",
+        "hgb_pgo_tune_pass",
+        "hgb_auto_patch_bottleneck",
         "hgb_self_healing_compile",
         "hgb_mcp_run_tests",
         "hgb_mcp_read_patch",

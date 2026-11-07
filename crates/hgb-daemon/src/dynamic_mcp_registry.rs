@@ -32,6 +32,15 @@ use hgb_core::autonomous_wasm_plugin_healer::AutonomousWasmPluginHealer;
 use hgb_core::error::{HgbError, Result};
 use hgb_core::zig_wasm_agent_compiler::ZigWasmAgentCompiler;
 
+#[path = "autonomous_mcp_self_healing_loop.rs"]
+pub mod autonomous_mcp_self_healing_loop;
+pub use autonomous_mcp_self_healing_loop::{
+    AutonomousMcpSelfHealingLoop, AutoPatchBottleneckReport, AutoPatchBottleneckRequest,
+    DiagnosticLanguage, ParsedDiagnostic, PgoHardwareTelemetry, PgoTunePassReport,
+    PgoTunePassRequest, SelfHealingDiagnoseReport, SelfHealingDiagnoseRequest,
+    MCP_TOOL_AUTO_PATCH_BOTTLENECK, MCP_TOOL_PGO_TUNE_PASS, MCP_TOOL_SELF_HEALING_DIAGNOSE,
+};
+
 /// Metadata for a dynamically registered WebAssembly MCP tool
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DynamicMcpTool {

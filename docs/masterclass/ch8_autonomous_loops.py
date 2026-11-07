@@ -347,6 +347,69 @@ def build_autonomous_loops_chapter():
     ))
     story.append(Spacer(1, 15))
 
+    # =========================================================================
+    # POWER-UP 3: AUTONOMOUS MCP SELF-HEALING & PROFILING LOOP
+    # =========================================================================
+    p15_desc = (
+        "<b>14. Autonomous MCP Self-Healing & PGO Profiling Loop (AutonomousMcpSelfHealingLoop):</b><br/>"
+        "Elevates the MCP JSON configuration into a resident self-healing engine bridging <code>hagibis.mcp.json</code>, "
+        "<code>NativeSelfHealingDaemon</code>, <code>PgoFeedbackLoop</code>, and <code>scripts/pgo-optimize.sh</code>. "
+        "Exposes three production-grade MCP tools:<br/>"
+        "• <b><code>hgb_self_healing_diagnose</code></b>: Intercepts compiler diagnostics across Rust AST (E0308 type mismatch, "
+        "E0425 unresolved symbol, E0596 mutable borrow), Zig, and Python. Isolates speculative repairs inside an ephemeral "
+        "RAM CoW sandbox (<code>/dev/shm</code>) and verifies First-Green exit code 0 before atomic workspace commit.<br/>"
+        "• <b><code>hgb_pgo_tune_pass</code></b>: Continuously inspects execution latency SLAs (p99 latency) and tool invocation "
+        "frequency. Upon detecting regressions or heavy build slowdowns, collects binary execution profiles into "
+        "<code>.hgb/pgo_hotspots.json</code> and launches <code>scripts/pgo-optimize.sh</code> in background mode with strict cooldown guards.<br/>"
+        "• <b><code>hgb_auto_patch_bottleneck</code></b>: Automatically discovers hot execution bottlenecks and synthesizes zero-overhead "
+        "optimizations including capacity preallocation (<code>Vec::with_capacity</code>), inlining attributes (<code>#[inline(always)]</code>), "
+        "buffered I/O wrappers, and 8-wide SIMD vectorization chunks, certified with BLAKE3 consensus certificates."
+    )
+    story.append(Paragraph(p15_desc, styles["BodyTextCustom"]))
+    story.append(Spacer(1, 10))
+
+    story.append(CodeSnippet(
+        "// Autonomous MCP Self-Healing & Profiling Loop (Rust)\n"
+        "let autonomous_loop = AutonomousMcpSelfHealingLoop::new(workspace_root)?;\n"
+        "\n"
+        "// 1. Autonomous Compilation Diagnosis & Speculative Repair\n"
+        "let diag_report = autonomous_loop.handle_self_healing_diagnose(SelfHealingDiagnoseRequest {\n"
+        "    target_file: \"src/lib.rs\".to_string(),\n"
+        "    error_context: Some(compiler_stderr),\n"
+        "    code: None,\n"
+        "    compiler: Some(\"rust\".to_string()),\n"
+        "    check_command: Some(\"cargo check\".to_string()),\n"
+        "    max_retries: Some(3),\n"
+        "    auto_apply: true,\n"
+        "}).await?;\n"
+        "assert!(diag_report.healed && diag_report.verification_passed);\n"
+        "\n"
+        "// 2. Profile-Guided Optimization (PGO) Background Pass\n"
+        "let pgo_report = autonomous_loop.handle_pgo_tune_pass(PgoTunePassRequest {\n"
+        "    trigger_reason: Some(\"latency_p99_regression\".to_string()),\n"
+        "    force: false,\n"
+        "    pgo_only: true,\n"
+        "    run_benchmark: false,\n"
+        "    cooldown_seconds: Some(300),\n"
+        "    target_binary: Some(\"all\".to_string()),\n"
+        "}).await?;\n"
+        "if pgo_report.triggered {\n"
+        "    println!(\"Launched PGO pipeline PID: {:?}\", pgo_report.pid);\n"
+        "}\n"
+        "\n"
+        "// 3. Zero-Overhead Bottleneck Optimization\n"
+        "let opt_report = autonomous_loop.handle_auto_patch_bottleneck(AutoPatchBottleneckRequest {\n"
+        "    target_file: \"src/compute.rs\".to_string(),\n"
+        "    function_name: Some(\"calculate_similarity\".to_string()),\n"
+        "    optimization_strategy: \"preallocate_capacity\".to_string(),\n"
+        "    verify_first_green: true,\n"
+        "    auto_apply: true,\n"
+        "}).await?;\n"
+        "println!(\"Sealed optimization with BLAKE3 cert: {:?}\", opt_report.consensus_certificate_hash);",
+        "Rust"
+    ))
+    story.append(Spacer(1, 15))
+
     return story
 
 if __name__ == "__main__":

@@ -303,7 +303,7 @@ pub fn resolve_default_shm_root(tenant_id: &str) -> PathBuf {
     }
 }
 
-fn sanitize_tenant_id(raw: &str) -> String {
+pub fn sanitize_tenant_id(raw: &str) -> String {
     let sanitized: String = raw
         .chars()
         .map(|c| if c.is_alphanumeric() || c == '_' || c == '-' { c } else { '_' })

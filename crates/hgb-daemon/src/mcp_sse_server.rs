@@ -417,6 +417,9 @@ pub async fn handle_client_message(
                 for swarm_tool in crate::distributed_swarm_orchestrator::SwarmMcpTools::tool_definitions() {
                     arr.push(swarm_tool);
                 }
+                for auto_tool in crate::dynamic_mcp_registry::autonomous_mcp_self_healing_loop::AutonomousMcpSelfHealingLoop::tool_definitions() {
+                    arr.push(auto_tool);
+                }
                 arr.push(serde_json::json!({
                     "name": "hgb_mcp_request_tool",
                     "description": "On-demand prompt-driven WASM tool generation and dynamic hot-swapping into MCP registry",
@@ -497,6 +500,52 @@ pub async fn handle_client_message(
                     "result": res_val
                 });
                 return (StatusCode::OK, Json(resp));
+            }
+
+            // Intercept Autonomous Self-Healing & Profiling Loop tools
+            if tool_name == crate::dynamic_mcp_registry::autonomous_mcp_self_healing_loop::MCP_TOOL_SELF_HEALING_DIAGNOSE
+                || tool_name == crate::dynamic_mcp_registry::autonomous_mcp_self_healing_loop::MCP_TOOL_PGO_TUNE_PASS
+                || tool_name == crate::dynamic_mcp_registry::autonomous_mcp_self_healing_loop::MCP_TOOL_AUTO_PATCH_BOTTLENECK
+            {
+                let auto_loop = match crate::dynamic_mcp_registry::autonomous_mcp_self_healing_loop::AutonomousMcpSelfHealingLoop::new(&state.workspace_root) {
+                    Ok(l) => l,
+                    Err(e) => {
+                        let resp = serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": {
+                                "content": [{ "type": "text", "text": format!("Failed to initialize AutonomousMcpSelfHealingLoop: {}", e) }],
+                                "isError": true
+                            }
+                        });
+                        return (StatusCode::OK, Json(resp));
+                    }
+                };
+
+                match auto_loop.dispatch_tool(tool_name, &arguments).await {
+                    Ok(res_val) => {
+                        let resp = serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": {
+                                "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res_val).unwrap_or_else(|_| res_val.to_string()) }],
+                                "isError": false
+                            }
+                        });
+                        return (StatusCode::OK, Json(resp));
+                    }
+                    Err(e) => {
+                        let resp = serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": {
+                                "content": [{ "type": "text", "text": format!("Error executing {}: {}", tool_name, e) }],
+                                "isError": true
+                            }
+                        });
+                        return (StatusCode::OK, Json(resp));
+                    }
+                }
             }
 
             // Intercept semantic cache inspection and purge tools directly
