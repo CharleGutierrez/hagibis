@@ -1,0 +1,68 @@
+package hagibis:skills/observability@0.1.0;
+
+interface types {
+    enum span-status {
+        ok,
+        error(string),
+        unset,
+    }
+
+    record trace-context {
+        version: u8,
+        trace-id: string,
+        parent-id: string,
+        flags: u8,
+    }
+
+    record span-attribute {
+        key: string,
+        value: string,
+    }
+
+    record span-event {
+        name: string,
+        timestamp-unix-nano: u64,
+        attributes: list<span-attribute>,
+    }
+
+    record span-record {
+        span-id: string,
+        trace-id: string,
+        parent-id: option<string>,
+        name: string,
+        service: string,
+        start-time-unix-nano: u64,
+        end-time-unix-nano: u64,
+        duration-ms: f64,
+        status: span-status,
+        attributes: list<span-attribute>,
+        events: list<span-event>,
+    }
+}
+
+interface telemetry {
+    use types.{trace-context, span-status, span-attribute, span-record};
+
+    /// Start a new span with optional parent context and initial attributes
+    create-span: func(name: string, parent-context: option<trace-context>, attributes: list<span-attribute>) -> string;
+
+    /// Complete a span by ID, recording end timestamp and status
+    finish-span: func(span-id: string, status: span-status) -> result<span-record, string>;
+
+    /// Record an instantaneous span event with custom attributes
+    record-event: func(span-id: string, name: string, attributes: list<span-attribute>) -> result<_, string>;
+
+    /// Inject active span context into a W3C traceparent carrier string
+    inject-traceparent: func(span-id: string) -> result<string, string>;
+
+    /// Extract W3C traceparent carrier string into structured trace context
+    extract-traceparent: func(carrier: string) -> result<trace-context, string>;
+
+    /// Flush and retrieve buffered completed spans
+    export-traces: func(max-records: u32) -> list<span-record>;
+}
+
+world observability-agent {
+    import telemetry;
+    export telemetry;
+}

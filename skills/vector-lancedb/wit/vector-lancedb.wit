@@ -1,0 +1,70 @@
+package hagibis:skills/vector-lancedb@0.1.0;
+
+interface types {
+    enum distance-metric {
+        cosine,
+        l2,
+        dot,
+    }
+
+    record vector-record {
+        id: string,
+        vector: list<f32>,
+        text: string,
+        metadata-json: string,
+        timestamp: u64,
+        partition: option<string>,
+    }
+
+    record search-query {
+        vector: list<f32>,
+        text-query: option<string>,
+        top-k: u32,
+        metric: distance-metric,
+        filter-predicate: option<string>,
+        partition: option<string>,
+        hybrid-alpha: option<f32>,
+        nprobes: option<u32>,
+    }
+
+    record search-result {
+        id: string,
+        score: f32,
+        distance: f32,
+        vector-score: f32,
+        lexical-score: f32,
+        text: string,
+        metadata-json: string,
+        timestamp: u64,
+        partition: string,
+    }
+
+    record partition-stats {
+        name: string,
+        record-count: u64,
+        centroid: list<f32>,
+    }
+
+    record engine-stats {
+        total-records: u64,
+        dimensions: u32,
+        version: u64,
+        partition-count: u32,
+        partitions: list<partition-stats>,
+    }
+}
+
+interface operations {
+    use types.{vector-record, search-query, search-result, engine-stats};
+
+    upsert: func(records: list<vector-record>) -> result<u32, string>;
+    query: func(query: search-query) -> result<list<search-result>, string>;
+    delete-by-id: func(id: string) -> result<bool, string>;
+    stats: func() -> result<engine-stats, string>;
+    compact: func() -> result<u32, string>;
+}
+
+world vector-lancedb-world {
+    import types;
+    export operations;
+}

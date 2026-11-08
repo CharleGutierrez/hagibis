@@ -1,0 +1,134 @@
+package hagibis:skills/agent-orchestrator@0.1.0;
+
+/// Standard types for Rig-inspired LLM agent orchestrator & hardware loop
+interface types {
+    /// Supported LLM provider kinds
+    enum provider-kind {
+        ollama,
+        anthropic,
+        openai,
+        deterministic-fallback,
+    }
+
+    /// Thermal classification of the host hardware
+    enum thermal-status {
+        optimal,
+        warm,
+        hot,
+        critical,
+    }
+
+    /// Real-time hardware telemetry and autonomic governor recommendations
+    record hardware-state {
+        cpu-pkg-temp-c: f64,
+        max-temp-c: f64,
+        is-thermal-clamped: bool,
+        is-ac-connected: bool,
+        battery-pct: option<u32>,
+        throttle-events: u64,
+        thermal-status: thermal-status,
+        recommended-token-budget: u32,
+        recommended-iteration-throttle-ms: u64,
+        recommended-max-iterations: u32,
+    }
+
+    /// Declarative tool definition with JSON schema parameters
+    record tool-definition {
+        name: string,
+        description: string,
+        parameters-json-schema: string,
+    }
+
+    /// Tool call invocation request
+    record tool-call {
+        id: string,
+        name: string,
+        arguments-json: string,
+    }
+
+    /// Recorded result of a tool execution
+    record tool-result {
+        call-id: string,
+        tool-name: string,
+        output-json: string,
+        is-error: bool,
+        duration-ms: u64,
+    }
+
+    /// Single turn in the ReAct conversation history
+    record turn-message {
+        role: string,
+        content: string,
+        tool-calls: list<tool-call>,
+        tool-results: list<tool-result>,
+    }
+
+    /// Agent configuration parameters
+    record agent-config {
+        system-prompt: string,
+        provider: provider-kind,
+        model: string,
+        endpoint: option<string>,
+        api-key: option<string>,
+        temperature: option<f32>,
+        max-tokens: option<u32>,
+        max-iterations: u32,
+        enable-autonomic-hardware-throttle: bool,
+    }
+
+    /// Termination reason of the agent cognitive loop
+    enum finish-reason {
+        completed,
+        max-iterations-reached,
+        thermal-abort,
+        cycle-detected,
+        error-state,
+    }
+
+    /// Comprehensive response structure returned from agent prompt
+    record agent-response {
+        final-answer: string,
+        iterations: u32,
+        total-tool-calls: u32,
+        history: list<turn-message>,
+        hardware-throttled: bool,
+        hardware-state: hardware-state,
+        execution-time-ms: u64,
+        finish-reason: finish-reason,
+    }
+
+    /// Real-time streaming events emitted during cognitive loops
+    variant stream-chunk {
+        thought-delta(string),
+        text-delta(string),
+        tool-starting(tool-call),
+        tool-completed(tool-result),
+        hardware-alert(string),
+        done(agent-response),
+        error-event(string),
+    }
+}
+
+/// Dynamic tool registration and cognitive orchestration interface
+interface orchestrator {
+    use types.{agent-config, agent-response, tool-definition, hardware-state, stream-chunk};
+
+    /// Register a declarative tool schema into the active orchestrator
+    register-tool: func(tool: tool-definition) -> result<_, string>;
+
+    /// Unregister an existing tool by name
+    unregister-tool: func(name: string) -> result<bool, string>;
+
+    /// Collect all active declarative tool definitions
+    list-tools: func() -> list<tool-definition>;
+
+    /// Inspect real-time hardware state via dynatune / kernel-optimizer sentry
+    sample-hardware: func() -> hardware-state;
+
+    /// Execute a multi-turn ReAct cognitive reasoning loop with dynamic tool calling
+    prompt: func(config: agent-config, user-prompt: string) -> result<agent-response, string>;
+}
+
+world agent-orchestrator-world {
+    export orchestrator;
+}

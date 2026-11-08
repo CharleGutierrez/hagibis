@@ -37,6 +37,8 @@ uuid = { version = "1.0", features = ["v4"] }
 hmac = "0.12"
 hex = "0.4.3"
 qrcode = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 # New dependencies
 wasmtime = "18.0"

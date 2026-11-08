@@ -238,6 +238,8 @@ pub struct DaemonState {
     pub eval_driven_gate: Arc<crate::eval_driven_gate::EvalDrivenGate>,
     // Pillar 3: Dynamic Thermal/Power Awareness IPC Bridge
     pub hardware_telemetry_bridge: Arc<crate::hardware_telemetry_bridge::HardwareGovernor>,
+    // Pillar 2: Distributed MicroVM Orchestration (firecracker-microvm/firecracker)
+    pub firecracker_runner: Arc<crate::firecracker_microvm_runner::FirecrackerMicroVmRunner>,
 }
 
 impl DaemonState {
@@ -562,6 +564,10 @@ impl DaemonState {
         let hardware_telemetry_bridge = Arc::new(
             crate::hardware_telemetry_bridge::HardwareGovernor::new()
         );
+        let firecracker_runner = Arc::new(
+            crate::firecracker_microvm_runner::FirecrackerMicroVmRunner::new(&ws_dir)
+                .expect("init firecracker microvm runner")
+        );
         {
             let supervisor_clone = Arc::clone(&agent_actor_mesh);
             tokio::spawn(async move {
@@ -654,6 +660,7 @@ impl DaemonState {
             agent_actor_mesh,
             eval_driven_gate,
             hardware_telemetry_bridge,
+            firecracker_runner,
         }
     }
 
@@ -5534,6 +5541,78 @@ impl HagibisDaemon {
                         Ok(outcome) => HgbResponse::MultiTierSandboxResult(outcome),
                         Err(e) => HgbResponse::Error(format!("Multi-tier sandbox execution failed: {}", e)),
                     }
+                }
+            }
+
+            // Pillar 2: Distributed MicroVM Orchestration (firecracker-microvm/firecracker)
+            HgbRequest::FirecrackerProvision {
+                vm_id,
+                vcpu_count,
+                mem_size_mib,
+                kernel_path,
+                rootfs_path,
+            } => {
+                let _ = state.governor_watchdog.on_queue_active().await;
+                let spec = crate::firecracker_microvm_runner::ProvisionJailSpec {
+                    vm_id,
+                    vcpu_count,
+                    mem_size_mib,
+                    kernel_path,
+                    rootfs_path,
+                    timeout_secs: Some(60),
+                };
+                match state.firecracker_runner.provision(&spec).await {
+                    Ok(report) => HgbResponse::FirecrackerProvisionResult(report),
+                    Err(e) => HgbResponse::Error(format!("Firecracker provision error: {}", e)),
+                }
+            }
+
+            HgbRequest::FirecrackerExec {
+                vm_id,
+                code,
+                language,
+                args,
+                env_vars,
+                timeout_ms,
+                stdin,
+                patch_content,
+            } => {
+                let _ = state.governor_watchdog.on_queue_active().await;
+                let timeout = timeout_ms.unwrap_or(10_000);
+                match state.firecracker_runner.execute(
+                    vm_id.as_deref(),
+                    &code,
+                    &language,
+                    &args,
+                    &env_vars,
+                    timeout,
+                    stdin.as_deref(),
+                    patch_content.as_deref(),
+                ).await {
+                    Ok(rep) => {
+                        let proto_report = hgb_core::protocol::FirecrackerExecReport {
+                            vm_id: rep.vm_id,
+                            backend: rep.backend.to_string(),
+                            exit_code: rep.exit_code,
+                            stdout: rep.stdout,
+                            stderr: rep.stderr,
+                            duration_ms: rep.duration_ms,
+                            duration_us: rep.duration_us,
+                            memory_consumed_mb: rep.memory_consumed_mb,
+                            success: rep.success,
+                            timed_out: rep.timed_out,
+                        };
+                        HgbResponse::FirecrackerExecResult(proto_report)
+                    }
+                    Err(e) => HgbResponse::Error(format!("Firecracker execution error: {}", e)),
+                }
+            }
+
+            HgbRequest::FirecrackerTeardown { vm_id } => {
+                let _ = state.governor_watchdog.on_queue_active().await;
+                match state.firecracker_runner.teardown(&vm_id).await {
+                    Ok(report) => HgbResponse::FirecrackerTeardownResult(report),
+                    Err(e) => HgbResponse::Error(format!("Firecracker teardown error: {}", e)),
                 }
             }
         }

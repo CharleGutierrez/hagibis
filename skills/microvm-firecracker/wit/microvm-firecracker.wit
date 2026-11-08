@@ -1,0 +1,106 @@
+package hagibis:skills/microvm-firecracker@0.1.0;
+
+interface runner {
+    /// Active isolation tier used for sandboxed execution
+    enum isolation-backend {
+        firecracker-kvm,
+        snapshot-resume,
+        landlock-ram-cow,
+    }
+
+    /// Operational state of a managed microVM jail
+    enum jail-status {
+        idle,
+        spawning,
+        running,
+        terminated,
+    }
+
+    /// Machine hardware configuration
+    record machine-config {
+        vcpu-count: u32,
+        mem-size-mib: u32,
+        smt: bool,
+        track-dirty-pages: bool,
+    }
+
+    /// Specification for provisioning a new microVM jail
+    record provision-spec {
+        vm-id: option<string>,
+        machine: option<machine-config>,
+        kernel-path: option<string>,
+        rootfs-path: option<string>,
+        timeout-secs: option<u64>,
+    }
+
+    /// Telemetry and descriptor of a provisioned jail
+    record jail-info {
+        id: string,
+        status: jail-status,
+        backend: isolation-backend,
+        socket-path: string,
+        created-at-epoch-ms: u64,
+        vcpu-count: u32,
+        mem-size-mib: u32,
+    }
+
+    /// Specification for code snippet execution
+    record exec-spec {
+        vm-id: option<string>,
+        code: string,
+        language: string,
+        args: list<string>,
+        env-vars: list<tuple<string, string>>,
+        timeout-ms: u64,
+        stdin: option<string>,
+        patch-content: option<string>,
+    }
+
+    /// Detailed execution outcome and duration report
+    record exec-report {
+        vm-id: string,
+        backend: isolation-backend,
+        exit-code: s32,
+        stdout: string,
+        stderr: string,
+        duration-ms: u64,
+        duration-us: u64,
+        memory-consumed-mb: u32,
+        success: bool,
+        timed-out: bool,
+    }
+
+    /// Snapshot restoration parameters
+    record snapshot-spec {
+        vm-id: string,
+        snapshot-path: string,
+        mem-file-path: string,
+        resume: bool,
+    }
+
+    /// Teardown confirmation response
+    record teardown-result {
+        vm-id: string,
+        success: bool,
+        message: string,
+    }
+
+    /// Provision a new isolated microVM jail
+    provision: func(spec: provision-spec) -> result<jail-info, string>;
+
+    /// Execute untrusted code (Python, Rust, Bash, WASM) inside microVM
+    execute: func(spec: exec-spec) -> result<exec-report, string>;
+
+    /// Restore guest state from pre-warmed snapshot
+    load-snapshot: func(spec: snapshot-spec) -> result<bool, string>;
+
+    /// Terminate and reap an isolated microVM jail
+    teardown: func(vm-id: string) -> result<teardown-result, string>;
+
+    /// List all currently tracked microVM jails
+    list-jails: func() -> list<jail-info>;
+}
+
+world microvm-firecracker {
+    export runner;
+}

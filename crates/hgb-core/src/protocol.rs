@@ -1634,6 +1634,39 @@ pub enum HgbRequest {
     MultiTierSandboxExec {
         request: crate::multi_tier_sandbox::SandboxExecutionRequest,
     },
+
+    // Pillar 2: Distributed MicroVM Orchestration (firecracker-microvm/firecracker)
+    FirecrackerProvision {
+        #[serde(default)]
+        vm_id: Option<String>,
+        #[serde(default)]
+        vcpu_count: Option<u32>,
+        #[serde(default)]
+        mem_size_mib: Option<u32>,
+        #[serde(default)]
+        kernel_path: Option<String>,
+        #[serde(default)]
+        rootfs_path: Option<String>,
+    },
+    FirecrackerExec {
+        #[serde(default)]
+        vm_id: Option<String>,
+        code: String,
+        language: String,
+        #[serde(default)]
+        args: Vec<String>,
+        #[serde(default)]
+        env_vars: std::collections::HashMap<String, String>,
+        #[serde(default)]
+        timeout_ms: Option<u64>,
+        #[serde(default)]
+        stdin: Option<String>,
+        #[serde(default)]
+        patch_content: Option<String>,
+    },
+    FirecrackerTeardown {
+        vm_id: String,
+    },
 }
 
 impl HgbRequest {
@@ -1648,6 +1681,9 @@ impl HgbRequest {
             | HgbRequest::Ship { dry_run: false, .. }
             | HgbRequest::Checkpoint { .. }
             | HgbRequest::SelfPatchTrigger { .. }
+            | HgbRequest::FirecrackerProvision { .. }
+            | HgbRequest::FirecrackerExec { .. }
+            | HgbRequest::FirecrackerTeardown { .. }
             | HgbRequest::StudioApplyPatch { .. } => true,
             HgbRequest::Enveloped { inner, .. } => inner.is_mutation(),
             _ => false,
@@ -2362,6 +2398,43 @@ pub enum HgbResponse {
 
     // Pillar 2: Multi-Tier Execution Sandbox
     MultiTierSandboxResult(crate::multi_tier_sandbox::SandboxExecutionOutcome),
+
+    // Pillar 2: Distributed MicroVM Orchestration (firecracker-microvm/firecracker)
+    FirecrackerProvisionResult(FirecrackerProvisionReport),
+    FirecrackerExecResult(FirecrackerExecReport),
+    FirecrackerTeardownResult(FirecrackerTeardownReport),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FirecrackerProvisionReport {
+    pub vm_id: String,
+    pub status: String,
+    pub backend: String,
+    pub socket_path: String,
+    pub vcpu_count: u32,
+    pub mem_size_mib: u32,
+    pub created_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FirecrackerExecReport {
+    pub vm_id: String,
+    pub backend: String,
+    pub exit_code: i32,
+    pub stdout: String,
+    pub stderr: String,
+    pub duration_ms: u64,
+    pub duration_us: u64,
+    pub memory_consumed_mb: u32,
+    pub success: bool,
+    pub timed_out: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FirecrackerTeardownReport {
+    pub vm_id: String,
+    pub success: bool,
+    pub message: String,
 }
 
 #[path = "hardware_runtime_synergy.rs"]

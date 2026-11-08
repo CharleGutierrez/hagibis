@@ -270,7 +270,7 @@ class UntangleAnalyzer:
         for wit_path in wit_files:
             content = wit_path.read_text(encoding="utf-8", errors="replace")
             # Basic WIT grammar checks: package statement, balanced braces
-            if not re.search(r"package\s+[\w:-]+(@[\w.-]+)?;", content):
+            if not re.search(r"package\s+[\w:/-]+(@[\w.-]+)?;", content):
                 self.log_violation(
                     "ARCH-005",
                     "Missing WIT Package Declaration",

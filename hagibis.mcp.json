@@ -625,6 +625,41 @@
         "symbols": { "type": "array", "items": { "type": "string" }, "description": "Associated code symbols (functions, structs, traits, classes)" },
         "namespace": { "type": "string", "description": "Target memory namespace", "default": "default" }
       }
+    },
+    "hgb_vector_lancedb_query": {
+      "description": "Execute embedded LanceDB zero-copy columnar vector and hybrid semantic queries with SIMD cosine/L2/dot distance, metadata predicate filtering, and partition pruning",
+      "parameters": {
+        "vector": { "type": "array", "items": { "type": "number" }, "description": "Dense f32 query vector" },
+        "text_query": { "type": "string", "description": "Optional lexical query string for hybrid BM25 search" },
+        "top_k": { "type": "integer", "description": "Maximum number of nearest neighbor results to return (default: 10)", "default": 10 },
+        "metric": { "type": "string", "enum": ["cosine", "l2", "dot"], "description": "Distance metric kind", "default": "cosine" },
+        "filter": { "type": "string", "description": "Optional metadata predicate filter expression" },
+        "partition": { "type": "string", "description": "Optional partition/cluster namespace filter" },
+        "hybrid_alpha": { "type": "number", "description": "Weight between dense vector similarity (alpha) and lexical score (1 - alpha)", "default": 0.7 },
+        "table_path": { "type": "string", "description": "Optional custom path to .lance directory" }
+      }
+    },
+    "hgb_vector_lancedb_upsert": {
+      "description": "Upsert vector records into embedded LanceDB columnar storage with atomic commit logging, memory-mapped binary persistence, and IVF centroid updating",
+      "parameters": {
+        "records": {
+          "type": "array",
+          "description": "List of vector records to insert or update",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string", "description": "Unique record identifier" },
+              "vector": { "type": "array", "items": { "type": "number" }, "description": "Dense contiguous f32 embedding vector" },
+              "text": { "type": "string", "description": "Raw text content for hybrid search and lexical retrieval", "default": "" },
+              "metadata": { "type": "object", "description": "Optional arbitrary JSON metadata key-value mapping" },
+              "timestamp": { "type": "integer", "description": "Unix timestamp in seconds or milliseconds" },
+              "partition": { "type": "string", "description": "Target partition namespace", "default": "default" }
+            },
+            "required": ["id", "vector"]
+          }
+        },
+        "table_path": { "type": "string", "description": "Optional custom path to .lance directory" }
+      }
     }
   },
   "mcpServers": {
@@ -689,7 +724,9 @@
         "hgb_distributed_scheduler_dispatch",
         "hgb_distributed_node_status",
         "hgb_distributed_node_register",
-        "hgb_wasm_plugin_inject"
+        "hgb_wasm_plugin_inject",
+        "hgb_vector_lancedb_query",
+        "hgb_vector_lancedb_upsert"
       ]
     },
     "hagibis_sse": {

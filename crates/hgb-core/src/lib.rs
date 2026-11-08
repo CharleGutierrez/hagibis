@@ -2145,6 +2145,22 @@ pub use firecracker_microvm_pipeline::{
     DEFAULT_FIRECRACKER_BIN,
 };
 
+// Pillar 3: Enterprise Observability & OpenTelemetry Telemetry
+pub mod telemetry_tracing;
+pub use telemetry_tracing::{
+    ActiveTelemetryBuffer, DistributedTraceContext, OtlpTraceExporter, SpanRecord,
+    SpanStatus, TelemetryConfig, TelemetryError, init_telemetry,
+};
+
+// Pillar 4: Rig Native LLM Agent & Autonomic Hardware Governor Engine
+pub mod rig_agent_orchestrator;
+pub use rig_agent_orchestrator::{
+    AgentFinishReason, AgentResponse, AgentTurnMessage, FnTool,
+    HardwareGovernor as RigHardwareGovernor, HardwareState as RigHardwareState,
+    RigAgent, RigAgentBuilder, RigModelOutput, RigProviderConfig, RigProviderKind,
+    RigStreamEvent, RigThermalStatus, ToolCallable, ToolDefinition, ToolRegistry,
+};
+
 
 
 

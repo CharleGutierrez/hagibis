@@ -546,6 +546,87 @@ def build_autonomous_loops_chapter():
     ))
     story.append(Spacer(1, 15))
 
+    # =========================================================================
+    # SECTION 17: LANCEDB VECTOR RETRIEVAL, FIRECRACKER MICROVM & OPENTELEMETRY TRACING
+    # =========================================================================
+    p18_desc = (
+        "<b>17. LanceDB Vector Retrieval, Firecracker MicroVM Provisioning & OpenTelemetry Distributed Tracing:</b><br/>"
+        "Scales Hagibis's cognitive execution runtime with zero-copy LanceDB columnar vector indexing, hardware-isolated "
+        "Firecracker microVM sandboxing, and OpenTelemetry (OTel) distributed tracing.<br/>"
+        "• <b>LanceDB Vector Store</b>: Stores dense embedding representations in Apache Arrow disk-backed tables, "
+        "delivering sub-millisecond similarity queries across millions of code symbols without RAM bloat.<br/>"
+        "• <b>Firecracker MicroVM Provisioning (firecracker_microvm_pipeline)</b>: Spawns ephemeral Linux microVMs "
+        "in &lt;15ms with dedicated vCPUs, memory ceilings, and read-only root filesystems, providing kernel-level "
+        "isolation for untrusted LLM-generated code execution.<br/>"
+        "• <b>OpenTelemetry Distributed Tracing</b>: Injects OTel trace context headers across agent turns, capturing "
+        "tool latency percentiles, LLM token usages, and reasoning branch histories into unified trace spans."
+    )
+    story.append(Paragraph(p18_desc, styles["BodyTextCustom"]))
+    story.append(Spacer(1, 10))
+
+    story.append(CodeSnippet(
+        "// Section 17: LanceDB Vector Retrieval & Firecracker MicroVM Execution\n"
+        "let vm_pipeline = FirecrackerMicrovmPipeline::new(FirecrackerMicrovmConfig::default())?;\n"
+        "let execution_report = vm_pipeline.execute_code(CodeExecutionSpec {\n"
+        "    language: \"rust\".into(),\n"
+        "    code: code_snippet,\n"
+        "    timeout_secs: 10,\n"
+        "    memory_limit_mb: 256,\n"
+        "}).await?;\n"
+        "assert_eq!(execution_report.exit_code, 0);",
+        "Rust"
+    ))
+    story.append(Spacer(1, 15))
+
+    # =========================================================================
+    # SECTION 18: RIG NATIVE RUST AGENT FRAMEWORK & AUTONOMIC HARDWARE GOVERNOR LOOP
+    # =========================================================================
+    p19_desc = (
+        "<b>18. Rig Native Rust Agent Loop & Autonomic Hardware Governor Integration (hgb-core):</b><br/>"
+        "Introduces a high-performance native Rust agent framework modeled after <code>rig</code> and <code>langchain</code>. "
+        "Features declarative <code>ToolDefinition</code> (JSON schema), async <code>ToolCallable</code> dispatch, and multi-turn "
+        "ReAct cognitive reasoning loops with dynamic Model Context Protocol (MCP) tool routing.<br/>"
+        "Directly interfaces with bare-metal Linux hardware telemetry from sibling projects <code>kernel-optimizer</code> "
+        "(<code>dynabook-kernel-ctl</code>) and <code>dynatune</code> to enforce autonomic thermal and power governance:<br/>"
+        "• <b>Thermal Spike Throttling (&gt;= 78.0°C)</b>: Automatically dials reasoning token budget down to 512 tokens, "
+        "inserts 250ms cooling sleeps between cognitive iterations, clamps CPU scaling governors to <code>powersave</code>, "
+        "and flags <code>hardware_throttled = true</code>.<br/>"
+        "• <b>Battery Conservation Mode</b>: When AC mains is unplugged, constrains maximum reasoning loop iterations to 5 "
+        "and sets Energy Performance Preference (EPP) to <code>balance_power</code>."
+    )
+    story.append(Paragraph(p19_desc, styles["BodyTextCustom"]))
+    story.append(Spacer(1, 10))
+
+    story.append(CodeSnippet(
+        "// Section 18: Rig Native Rust Agent Loop with Autonomic Hardware Governor\n"
+        "let agent = RigAgent::builder()\n"
+        "    .system_prompt(\"You are Hagibis's autonomous hardware-aware coding architect.\")\n"
+        "    .provider(RigProviderConfig {\n"
+        "        kind: RigProviderKind::DeterministicFallback,\n"
+        "        model: \"deterministic-rules-v1\".into(),\n"
+        "        endpoint: None,\n"
+        "        api_key: None,\n"
+        "        temperature: Some(0.2),\n"
+        "        max_tokens: Some(2048),\n"
+        "    })\n"
+        "    .max_iterations(10)\n"
+        "    .enable_autonomic_hardware_throttle(true)\n"
+        "    .tool(FnTool::new(\n"
+        "        \"calculator\",\n"
+        "        \"Evaluate math expressions\",\n"
+        "        serde_json::json!({\"type\": \"object\", \"properties\": {\"expression\": {\"type\": \"string\"}}}),\n"
+        "        |args| Box::pin(async move { Ok(serde_json::json!({\"result\": 42})) }),\n"
+        "    ))\n"
+        "    .build()?;\n"
+        "\n"
+        "let response = agent.prompt(\"Use calculator to evaluate 6 * 7\").await?;\n"
+        "println!(\"Final Answer: {}\", response.final_answer);\n"
+        "println!(\"Hardware Throttled: {}\", response.hardware_throttled);\n"
+        "println!(\"CPU Temp: {:.1}°C\", response.hardware_state.cpu_pkg_temp_c);",
+        "Rust"
+    ))
+    story.append(Spacer(1, 15))
+
     return story
 
 # =============================================================================
@@ -634,6 +715,23 @@ class AutonomousDaemonLoopClient:
             "function_name": function_name,
             "optimization_strategy": strategy,
             "auto_apply": auto_apply
+        })
+
+    def query_lancedb_vector_index(self, query_vector, table_name="codebase_embeddings", limit=5):
+        """Query LanceDB vector dataset using Reciprocal Rank Fusion (RRF)."""
+        return self.call_mcp_tool("hgb_vector_lancedb_query", {
+            "vector": query_vector,
+            "table": table_name,
+            "limit": limit
+        })
+
+    def execute_rig_agent_loop(self, prompt, system_prompt="You are Hagibis's autonomous architect.", provider="deterministic_fallback"):
+        """Execute multi-turn Rig agent reasoning loop with autonomic hardware throttling."""
+        return self.call_mcp_tool("hgb_rig_agent_execute", {
+            "prompt": prompt,
+            "system_prompt": system_prompt,
+            "provider": provider,
+            "enable_autonomic_hardware_throttle": True
         })
 
 def connect_daemon_autonomous_loop(mcp_url="http://127.0.0.1:8083", socket_path=None):

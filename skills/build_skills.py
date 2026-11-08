@@ -10,7 +10,15 @@ import shutil
 import sys
 
 def main():
-    root = os.getcwd()
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    parent_dir = os.path.dirname(script_dir)
+    if os.path.isdir(os.path.join(parent_dir, "skills")):
+        root = parent_dir
+    elif os.path.isdir(os.path.join(os.getcwd(), "skills")):
+        root = os.getcwd()
+    else:
+        root = os.path.join(os.getcwd(), "hagibis")
+
     skills_dir = os.path.join(root, "skills")
     out_dir = os.path.join(root, "target", "skills")
     os.makedirs(out_dir, exist_ok=True)

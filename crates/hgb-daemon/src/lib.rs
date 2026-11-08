@@ -643,6 +643,14 @@ pub use kernel_dynatune_ipc_loop::{
     WorkloadBurstGuard,
 };
 
+// Pillar 2: Distributed MicroVM Orchestration (firecracker-microvm/firecracker)
+pub mod firecracker_microvm_runner;
+pub use firecracker_microvm_runner::{
+    FirecrackerExecutionReport, FirecrackerMicroVmRunner, ManagedJailInfo,
+    ManagedMicrovmJail, MicrovmJailStatus, ProvisionJailSpec,
+    DEFAULT_RUNTIME_SOCKET_DIR, FALLBACK_SHM_SOCKET_DIR,
+};
+
 
 
 

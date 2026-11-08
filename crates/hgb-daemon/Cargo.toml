@@ -35,6 +35,8 @@ regex = { workspace = true }
 libc = "0.2"
 wasmtime = "18.0"
 toml = "0.5"
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 tokio-tungstenite = "0.21"

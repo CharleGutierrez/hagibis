@@ -98,7 +98,7 @@ pub use microvm_execution_log::{
 // Strategic Upgrade 5: Unified Embedded HNSW Vector Index (Pillar 2)
 pub mod hnsw_vector_index;
 pub use hnsw_vector_index::{
-    DistanceMetric, FastRng, HnswConfig, HnswSearchResult, HnswStats, HnswVectorIndex,
+    DistanceMetric as HnswDistanceMetric, FastRng, HnswConfig, HnswSearchResult, HnswStats, HnswVectorIndex,
 };
 
 // Strategic Upgrade 4: Vector-Native SQLite/DuckDB Edge Indexing
@@ -232,6 +232,12 @@ pub use vector_mcp_memory_mesh::{
     IndexOptions, IndexReport, MemoryFilter, MemoryItem, MemorySearchResult, VectorMcpMemoryMesh,
     CATEGORY_CODE_CHUNK, CATEGORY_CODE_CONTEXT, CATEGORY_COMMAND_OUTCOME, CATEGORY_INTERACTION,
     CATEGORY_PAST_FIX_PATTERN, CATEGORY_USER_PREFERENCE, DEFAULT_VECTOR_DIM as MCP_MEMORY_VECTOR_DIM,
+};
+
+// Pillar 1: LanceDB-Compatible Columnar Vector Engine
+pub mod lancedb_vector_engine;
+pub use lancedb_vector_engine::{
+    DistanceMetric, LanceDbVectorEngine, SearchQuery, SearchResult, VectorRecord,
 };
 
 // ============================================================================

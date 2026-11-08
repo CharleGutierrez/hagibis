@@ -39,6 +39,8 @@ crossterm = { version = "0.28", features = ["event-stream"] }
 unicode-width = "0.2"
 ratatui = "0.29"
 qrcode = { version = "0.14", default-features = false }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 [profile.release]
 opt-level = 3
