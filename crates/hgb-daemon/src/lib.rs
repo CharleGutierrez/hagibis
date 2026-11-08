@@ -667,6 +667,23 @@ pub use autonomous_hardware_healer_loop::{
     THERMAL_WARNING_THRESHOLD_CELSIUS,
 };
 
+// Strategic Power-Up: Distributed MicroVM Mesh via Raft Consensus
+pub mod distributed_microvm_mesh;
+pub use distributed_microvm_mesh::{
+    ClusterNodeDescriptor, DistributedMicrovmMesh, MeshExecutionReport,
+    MeshIsolationKind, MeshTaskSpec, MeshWorkloadKind,
+    DEFAULT_NODE_HEARTBEAT_TIMEOUT_MS, DEFAULT_TASK_LEASE_TIMEOUT_MS,
+};
+
+// Strategic Power-Up: Active Reinforcement Learning & Self-Compilation Loop (PGO)
+pub mod reinforcement_learning_pgo_loop;
+pub use reinforcement_learning_pgo_loop::{
+    LocalRewardLedger, LocalRewardModel, OptimizationActionCategory,
+    OptimizationEpisode, PgoRecompilationReport, ReinforcementLearningPgoLoop,
+    TelemetryDeltaMetrics, DEFAULT_PGO_TRIGGER_REWARD_THRESHOLD,
+};
+
+
 
 
 

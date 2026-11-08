@@ -248,6 +248,14 @@ pub use unified_vector_relational_bus::{
     TRAJECTORY_VECTOR_DIM,
 };
 
+// Strategic Upgrade: Native GPU-Accelerated Vector RAG & Zero-Copy SHM Buffer
+pub mod gpu_tensor_lancedb_rag;
+pub use gpu_tensor_lancedb_rag::{
+    GpuTensorConfig, GpuTensorLanceDbRAGBridge, GpuTensorSearchResult,
+    GpuTensorShmBuffer, LocalEmbeddingCache, DEFAULT_EMBEDDING_CACHE_CAPACITY,
+    DEFAULT_GPU_TENSOR_DIM, GPU_TENSOR_MAGIC, GPU_TENSOR_VERSION,
+};
+
 // ============================================================================
 // Pillar 3: Reactive Event Bus & SQLite WAL Append-Only Event Log
 // ============================================================================

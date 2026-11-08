@@ -232,10 +232,14 @@ pub use edge_prompt_cache_router::{
     EdgeCacheStats, EdgePromptCache, EdgePromptCacheRouter, EdgeRouteAction,
     EdgeRouteDecision, HierarchicalPromptHash, PromptComponents, RoutingDestination,
     WranglerConfig,
+};// Strategic Power-Up: Real-Time WebGL/WebSocket Holographic Control Room
+pub mod holographic_control_room;
+pub use holographic_control_room::{
+    create_holographic_router, spawn_holographic_server, AgentThoughtEvent,
+    HardwareThermalTelemetry, HolographicControlRoomState, HolographicSwarmNode,
+    HolographicTelemetrySnapshot, HumanSteeringCommand, SelfHealingLoopTelemetry,
+    SteeringAcknowledgement, DEFAULT_MAX_THOUGHT_HISTORY,
+    DEFAULT_TELEMETRY_BROADCAST_INTERVAL_MS, HOLOGRAPHIC_DASHBOARD_HTML,
 };
-
-
-
-
 
 

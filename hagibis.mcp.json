@@ -698,6 +698,46 @@
         "envelope_base64": { "type": "string", "description": "Base64-encoded signed HGBC\\x02 component envelope" }
       },
       "required": ["component_name", "envelope_base64"]
+    },
+    "hgb_mesh_dispatch_workload": {
+      "description": "Dispatch heavy distributed workloads (embedding generation, large-scale compilation, data scraping, WASM batch execution) across the Raft microVM mesh with strict sandbox isolation",
+      "parameters": {
+        "workload_kind": { "type": "string", "enum": ["embedding_generation", "large_scale_compilation", "data_scraping", "wasm_batch_execution", "heavy_model_inference"], "description": "Category of workload to execute" },
+        "payload": { "type": "string", "description": "Workload payload data or source script" },
+        "require_kvm": { "type": "boolean", "description": "Require hardware KVM acceleration for Firecracker microVM execution", "default": false },
+        "require_gpu": { "type": "boolean", "description": "Require GPU tensor core acceleration", "default": false },
+        "isolation": { "type": "string", "enum": ["FirecrackerMicroVm", "WasmFuelMetered", "RootlessRamCoW"], "description": "Sandbox isolation boundary", "default": "FirecrackerMicroVm" }
+      },
+      "required": ["workload_kind", "payload"]
+    },
+    "hgb_mesh_cluster_topology": {
+      "description": "Inspect live cluster node topology, CPU cores, RAM capacities, KVM/GPU acceleration flags, active microVMs, and Raft consensus health",
+      "parameters": {
+        "detailed": { "type": "boolean", "description": "Include active task leases and load balancing scores", "default": false }
+      }
+    },
+    "hgb_rl_reward_ledger_status": {
+      "description": "Query local reinforcement learning reward ledger, multi-objective score deltas (latency, memory RSS, errors), and PGO self-compilation trigger readiness",
+      "parameters": {
+        "limit": { "type": "integer", "description": "Number of recent optimization episodes to inspect", "default": 10 }
+      }
+    },
+    "hgb_gpu_tensor_ann_search": {
+      "description": "GPU tensor and SIMD accelerated approximate nearest neighbor (ANN) vector search over LanceDB with zero-copy POSIX /dev/shm caching",
+      "parameters": {
+        "query_text": { "type": "string", "description": "Text query to encode and project into LanceDB vector space" },
+        "top_k": { "type": "integer", "description": "Maximum nearest neighbors to retrieve (default: 5)", "default": 5 },
+        "min_similarity": { "type": "number", "description": "Minimum cosine similarity threshold (default: 0.3)", "default": 0.3 }
+      },
+      "required": ["query_text"]
+    },
+    "hgb_holographic_control_steer": {
+      "description": "Dispatch real-time bidirectional steering command to the WebGL/WebSocket Holographic Control Room (pause, resume, inspect VM memory, fork agent branch, steer prompt)",
+      "parameters": {
+        "action": { "type": "string", "enum": ["PauseSwarm", "ResumeSwarm", "InspectVmMemory", "ForkAgentBranch", "SteerPromptIntent", "EjectNode"], "description": "Steering action to execute" },
+        "payload": { "type": "object", "description": "Action payload parameters (vm_id, agent_id, new_directive, prompt_override, node_id)" }
+      },
+      "required": ["action"]
     }
   },
   "mcpServers": {
@@ -764,7 +804,12 @@
         "hgb_distributed_node_register",
         "hgb_wasm_plugin_inject",
         "hgb_vector_lancedb_query",
-        "hgb_vector_lancedb_upsert"
+        "hgb_vector_lancedb_upsert",
+        "hgb_mesh_dispatch_workload",
+        "hgb_mesh_cluster_topology",
+        "hgb_rl_reward_ledger_status",
+        "hgb_gpu_tensor_ann_search",
+        "hgb_holographic_control_steer"
       ]
     },
     "hagibis_sse": {
