@@ -634,6 +634,16 @@ pub use autonomous_mcp_self_healing_loop::{
     PgoTunePassRequest, SelfHealingDiagnoseReport, SelfHealingDiagnoseRequest,
 };
 
+// Architectural Power-Up I: Close the Loop with Native Linux Kernel Integration (`dynatune` & `kernel-optimizer`)
+pub mod kernel_dynatune_ipc_loop;
+pub use kernel_dynatune_ipc_loop::{
+    BatterySnapshot, BurstWorkload, CpuTuningState, DynatuneKernelPaths,
+    KernelDynatuneConfig, KernelDynatuneLoop, KernelIpcCommand, KernelIpcResponse,
+    KernelLoopStatus, KernelProfile, MglruStatus, ThermalSnapshot, ThermalZone,
+    WorkloadBurstGuard,
+};
+
+
 
 
 

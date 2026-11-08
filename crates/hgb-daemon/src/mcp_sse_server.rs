@@ -159,6 +159,7 @@ pub struct McpSseState {
     pub tenant_manager: Arc<hgb_core::multitenant_wasm_sandbox::TenantSessionManager>,
     pub swarm_orchestrator: Arc<std::sync::RwLock<Option<Arc<crate::distributed_swarm_orchestrator::DistributedSwarmOrchestrator>>>>,
     pub unified_hardware_loop: Arc<crate::unified_neural_hardware_loop::UnifiedNeuralHardwareLoop>,
+    pub vector_memory_mesh: Arc<hgb_storage::vector_mcp_memory_mesh::VectorMcpMemoryMesh>,
 }
 
 impl McpSseState {
@@ -173,6 +174,11 @@ impl McpSseState {
         let semantic_cache = Arc::new(
             hgb_storage::semantic_response_cache::SemanticResponseCache::open(&cache_db, 10000, 0.92, 3600)
                 .unwrap_or_else(|_| hgb_storage::semantic_response_cache::SemanticResponseCache::in_memory(10000, 0.92, 3600))
+        );
+        let mem_db = ws.join(".hgb").join("vector_memory.db");
+        let vector_memory_mesh = Arc::new(
+            hgb_storage::vector_mcp_memory_mesh::VectorMcpMemoryMesh::open_or_create(&mem_db)
+                .unwrap_or_else(|_| hgb_storage::vector_mcp_memory_mesh::VectorMcpMemoryMesh::in_memory().expect("in-memory vector mesh"))
         );
 
         Self {
@@ -192,6 +198,7 @@ impl McpSseState {
             })),
             swarm_orchestrator: Arc::new(std::sync::RwLock::new(None)),
             unified_hardware_loop: crate::unified_neural_hardware_loop::UnifiedNeuralHardwareLoop::new(),
+            vector_memory_mesh,
         }
     }
 
@@ -421,6 +428,64 @@ pub async fn handle_client_message(
                     arr.push(auto_tool);
                 }
                 arr.push(serde_json::json!({
+                    "name": "index_codebase_memory",
+                    "description": "Recursively scans, extracts symbols/functions, chunks, computes IEEE-754 semantic embeddings, and stores codebase chunks into persistent Vector MCP Memory Mesh",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "target_dir": { "type": "string", "description": "Optional target directory or crate to index (defaults to workspace root)" },
+                            "file_extensions": { "type": "array", "items": { "type": "string" }, "description": "File extensions to index (defaults to ['rs', 'py', 'toml', 'json', 'md', 'c', 'cpp', 'zig', 'ts', 'js'])" },
+                            "max_files": { "type": "integer", "description": "Maximum number of files to process", "default": 500 },
+                            "force_reindex": { "type": "boolean", "description": "Force reindexing of all matching files", "default": false },
+                            "namespace": { "type": "string", "description": "Memory namespace to isolate indexed codebase", "default": "codebase" }
+                        }
+                    }
+                }));
+                arr.push(serde_json::json!({
+                    "name": "semantic_memory_search",
+                    "description": "Queries the persistent Vector MCP Memory Mesh using hybrid semantic vector similarity (HNSW / SIMD cosine) and lexical SQLite FTS5 matching",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "query": { "type": "string", "description": "Natural language or technical query to match semantically against memory mesh" },
+                            "top_k": { "type": "integer", "description": "Maximum number of nearest neighbor results to return", "default": 10 },
+                            "category": { "type": "string", "description": "Optional memory category filter: interaction, command_outcome, user_preference, code_context, past_fix_pattern, code_chunk" },
+                            "namespace": { "type": "string", "description": "Optional namespace filter (e.g. codebase, developer_habits, default)" },
+                            "min_score": { "type": "number", "description": "Minimum similarity score threshold (0.0 to 1.0)", "default": 0.0 },
+                            "query_vector": { "type": "array", "items": { "type": "number" }, "description": "Optional dense f32 embedding vector for direct vector query" }
+                        },
+                        "required": ["query"]
+                    }
+                }));
+                arr.push(serde_json::json!({
+                    "name": "recall_developer_context",
+                    "description": "Retrieves long-term developer context, learned habits, architectural rules, past fix patterns, and debugging sessions from persistent memory",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "topic": { "type": "string", "description": "Optional topic or concept to recall context for" },
+                            "category": { "type": "string", "description": "Optional category filter: user_preference, past_fix_pattern, code_context, interaction, command_outcome" },
+                            "limit": { "type": "integer", "description": "Maximum number of context memories to recall", "default": 5 }
+                        }
+                    }
+                }));
+                arr.push(serde_json::json!({
+                    "name": "update_long_term_memory",
+                    "description": "Records a new persistent long-term memory insight, developer habit, command outcome, or fix pattern into the Vector MCP Memory Mesh",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "category": { "type": "string", "description": "Category: user_preference, past_fix_pattern, code_context, interaction, command_outcome" },
+                            "title": { "type": "string", "description": "Descriptive title or headline for the memory insight" },
+                            "content": { "type": "string", "description": "Detailed body content, rule, error trace, or fix diff" },
+                            "metadata": { "type": "object", "description": "Optional arbitrary JSON metadata key-value mapping" },
+                            "symbols": { "type": "array", "items": { "type": "string" }, "description": "Associated code symbols (functions, structs, traits, classes)" },
+                            "namespace": { "type": "string", "description": "Target memory namespace", "default": "default" }
+                        },
+                        "required": ["category", "title", "content"]
+                    }
+                }));
+                arr.push(serde_json::json!({
                     "name": "hgb_mcp_request_tool",
                     "description": "On-demand prompt-driven WASM tool generation and dynamic hot-swapping into MCP registry",
                     "inputSchema": {
@@ -540,6 +605,235 @@ pub async fn handle_client_message(
                             "id": id,
                             "result": {
                                 "content": [{ "type": "text", "text": format!("Error executing {}: {}", tool_name, e) }],
+                                "isError": true
+                            }
+                        });
+                        return (StatusCode::OK, Json(resp));
+                    }
+                }
+            }
+
+            // Intercept Vector MCP Memory Mesh tools
+            if tool_name == "index_codebase_memory" || tool_name == "hgb_index_codebase_memory" {
+                let target_dir_str = arguments.get("target_dir").and_then(|v| v.as_str()).unwrap_or(".");
+                let target_path = if Path::new(target_dir_str).is_absolute() {
+                    PathBuf::from(target_dir_str)
+                } else {
+                    state.workspace_root.join(target_dir_str)
+                };
+
+                let extensions = arguments.get("file_extensions")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| arr.iter().filter_map(|e| e.as_str().map(|s| s.to_string())).collect())
+                    .unwrap_or_else(|| hgb_storage::vector_mcp_memory_mesh::IndexOptions::default().extensions);
+
+                let max_files = arguments.get("max_files").and_then(|v| v.as_u64()).unwrap_or(500) as usize;
+                let force_reindex = arguments.get("force_reindex").and_then(|v| v.as_bool()).unwrap_or(false);
+                let namespace = arguments.get("namespace").and_then(|v| v.as_str()).unwrap_or("codebase").to_string();
+
+                let opts = hgb_storage::vector_mcp_memory_mesh::IndexOptions {
+                    extensions,
+                    max_files,
+                    chunk_size_lines: 40,
+                    overlap_lines: 8,
+                    namespace,
+                    force_reindex,
+                };
+
+                match state.vector_memory_mesh.index_codebase(&target_path, &opts) {
+                    Ok(report) => {
+                        let resp_val = serde_json::json!({
+                            "status": "success",
+                            "indexed_files": report.indexed_files,
+                            "total_chunks": report.total_chunks,
+                            "extracted_symbols": report.extracted_symbols,
+                            "duration_ms": report.duration_ms,
+                            "errors": report.errors
+                        });
+                        let resp = serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": {
+                                "content": [{ "type": "text", "text": serde_json::to_string_pretty(&resp_val).unwrap_or_default() }],
+                                "isError": false
+                            }
+                        });
+                        return (StatusCode::OK, Json(resp));
+                    }
+                    Err(e) => {
+                        let resp = serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": {
+                                "content": [{ "type": "text", "text": format!("Error indexing codebase: {}", e) }],
+                                "isError": true
+                            }
+                        });
+                        return (StatusCode::OK, Json(resp));
+                    }
+                }
+            } else if tool_name == "semantic_memory_search" || tool_name == "hgb_semantic_memory_search" {
+                let query_str = arguments.get("query").and_then(|v| v.as_str()).unwrap_or("");
+                let top_k = arguments.get("top_k").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
+                let category = arguments.get("category").and_then(|v| v.as_str());
+                let namespace = arguments.get("namespace").and_then(|v| v.as_str());
+                let min_score = arguments.get("min_score").and_then(|v| v.as_f64()).map(|s| s as f32);
+
+                let filter = hgb_storage::vector_mcp_memory_mesh::MemoryFilter {
+                    namespace: namespace.map(|n| n.to_string()),
+                    category: category.map(|c| c.to_string()),
+                    min_score,
+                    ..Default::default()
+                };
+
+                let search_res = if let Some(q_vec) = arguments.get("query_vector").and_then(|v| v.as_array()) {
+                    let f32_vec: Vec<f32> = q_vec.iter().filter_map(|x| x.as_f64().map(|f| f as f32)).collect();
+                    if !f32_vec.is_empty() {
+                        state.vector_memory_mesh.search_semantic_memory(&f32_vec, top_k, Some(&filter))
+                    } else {
+                        state.vector_memory_mesh.search_by_text(query_str, top_k, Some(&filter))
+                    }
+                } else {
+                    state.vector_memory_mesh.search_by_text(query_str, top_k, Some(&filter))
+                };
+
+                match search_res {
+                    Ok(results) => {
+                        let formatted_hits: Vec<serde_json::Value> = results.into_iter().map(|hit| {
+                            serde_json::json!({
+                                "id": hit.item.id,
+                                "title": hit.item.title,
+                                "category": hit.item.category,
+                                "namespace": hit.item.namespace,
+                                "content": hit.item.content,
+                                "symbols": hit.item.symbols,
+                                "similarity_score": hit.similarity_score,
+                                "combined_score": hit.combined_score,
+                                "lexical_score": hit.lexical_score,
+                                "snippet": hit.snippet,
+                                "metadata": hit.item.metadata,
+                                "access_count": hit.item.access_count
+                            })
+                        }).collect();
+
+                        let resp_val = serde_json::json!({
+                            "query": query_str,
+                            "count": formatted_hits.len(),
+                            "results": formatted_hits
+                        });
+                        let resp = serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": {
+                                "content": [{ "type": "text", "text": serde_json::to_string_pretty(&resp_val).unwrap_or_default() }],
+                                "isError": false
+                            }
+                        });
+                        return (StatusCode::OK, Json(resp));
+                    }
+                    Err(e) => {
+                        let resp = serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": {
+                                "content": [{ "type": "text", "text": format!("Semantic memory search error: {}", e) }],
+                                "isError": true
+                            }
+                        });
+                        return (StatusCode::OK, Json(resp));
+                    }
+                }
+            } else if tool_name == "recall_developer_context" || tool_name == "hgb_recall_developer_context" {
+                let topic = arguments.get("topic").and_then(|v| v.as_str());
+                let category = arguments.get("category").and_then(|v| v.as_str());
+                let limit = arguments.get("limit").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
+
+                match state.vector_memory_mesh.recall_developer_context(topic, category, limit) {
+                    Ok(items) => {
+                        let formatted: Vec<serde_json::Value> = items.into_iter().map(|item| {
+                            serde_json::json!({
+                                "id": item.id,
+                                "title": item.title,
+                                "category": item.category,
+                                "namespace": item.namespace,
+                                "content": item.content,
+                                "symbols": item.symbols,
+                                "metadata": item.metadata,
+                                "access_count": item.access_count,
+                                "updated_at": item.updated_at
+                            })
+                        }).collect();
+
+                        let resp_val = serde_json::json!({
+                            "topic": topic,
+                            "category": category,
+                            "recalled_items": formatted
+                        });
+                        let resp = serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": {
+                                "content": [{ "type": "text", "text": serde_json::to_string_pretty(&resp_val).unwrap_or_default() }],
+                                "isError": false
+                            }
+                        });
+                        return (StatusCode::OK, Json(resp));
+                    }
+                    Err(e) => {
+                        let resp = serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": {
+                                "content": [{ "type": "text", "text": format!("Recall developer context error: {}", e) }],
+                                "isError": true
+                            }
+                        });
+                        return (StatusCode::OK, Json(resp));
+                    }
+                }
+            } else if tool_name == "update_long_term_memory" || tool_name == "hgb_update_long_term_memory" {
+                let category = arguments.get("category").and_then(|v| v.as_str()).unwrap_or("general");
+                let title = arguments.get("title").and_then(|v| v.as_str()).unwrap_or("Untitled Insight");
+                let content = arguments.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                let metadata = arguments.get("metadata").cloned().unwrap_or(serde_json::json!({}));
+                let symbols: Vec<String> = arguments.get("symbols")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| arr.iter().filter_map(|s| s.as_str().map(|s| s.to_string())).collect())
+                    .unwrap_or_default();
+                let namespace = arguments.get("namespace").and_then(|v| v.as_str()).unwrap_or("default");
+
+                let vector = hgb_core::deterministic_semantic_embedding(content, hgb_storage::vector_mcp_memory_mesh::DEFAULT_VECTOR_DIM);
+                let mut item = hgb_storage::vector_mcp_memory_mesh::MemoryItem::new(category, title, content, vector)
+                    .with_namespace(namespace)
+                    .with_metadata(metadata)
+                    .with_symbols(symbols);
+
+                match state.vector_memory_mesh.insert_item(item.clone()) {
+                    Ok(()) => {
+                        let resp_val = serde_json::json!({
+                            "status": "stored",
+                            "id": item.id,
+                            "category": item.category,
+                            "namespace": item.namespace,
+                            "title": item.title,
+                            "updated_at": item.updated_at
+                        });
+                        let resp = serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": {
+                                "content": [{ "type": "text", "text": serde_json::to_string_pretty(&resp_val).unwrap_or_default() }],
+                                "isError": false
+                            }
+                        });
+                        return (StatusCode::OK, Json(resp));
+                    }
+                    Err(e) => {
+                        let resp = serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": {
+                                "content": [{ "type": "text", "text": format!("Error storing long-term memory: {}", e) }],
                                 "isError": true
                             }
                         });

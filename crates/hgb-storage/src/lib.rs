@@ -225,6 +225,15 @@ pub use vector_native_sqlite_vss::{
     VectorStoreStats as VssStoreStats,
 };
 
+// Architectural Power-Up III: Vector-Native Storage & MCP Memory Mesh
+pub mod vector_mcp_memory_mesh;
+pub use vector_mcp_memory_mesh::{
+    decode_vector_blob as decode_mcp_vector_blob, encode_vector_blob as encode_mcp_vector_blob,
+    IndexOptions, IndexReport, MemoryFilter, MemoryItem, MemorySearchResult, VectorMcpMemoryMesh,
+    CATEGORY_CODE_CHUNK, CATEGORY_CODE_CONTEXT, CATEGORY_COMMAND_OUTCOME, CATEGORY_INTERACTION,
+    CATEGORY_PAST_FIX_PATTERN, CATEGORY_USER_PREFERENCE, DEFAULT_VECTOR_DIM as MCP_MEMORY_VECTOR_DIM,
+};
+
 // ============================================================================
 // Pillar 3: Reactive Event Bus & SQLite WAL Append-Only Event Log
 // ============================================================================

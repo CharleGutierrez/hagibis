@@ -585,6 +585,46 @@
         "code_or_bytes": { "type": "string", "description": "Source code text, WAT script, or base64/hex WASM bytecode", "required": true },
         "gas_limit": { "type": "integer", "description": "Optional CPU instruction gas budget cap (default: 15,000,000 instructions)" }
       }
+    },
+    "index_codebase_memory": {
+      "description": "Recursively scans, extracts symbols/functions, chunks, computes IEEE-754 semantic embeddings, and stores codebase chunks into persistent Vector MCP Memory Mesh",
+      "parameters": {
+        "target_dir": { "type": "string", "description": "Optional target directory or crate to index (defaults to workspace root)" },
+        "file_extensions": { "type": "array", "items": { "type": "string" }, "description": "File extensions to index (defaults to ['rs', 'py', 'toml', 'json', 'md', 'c', 'cpp', 'zig', 'ts', 'js'])" },
+        "max_files": { "type": "integer", "description": "Maximum number of files to process", "default": 500 },
+        "force_reindex": { "type": "boolean", "description": "Force reindexing of all matching files", "default": false },
+        "namespace": { "type": "string", "description": "Memory namespace to isolate indexed codebase", "default": "codebase" }
+      }
+    },
+    "semantic_memory_search": {
+      "description": "Queries the persistent Vector MCP Memory Mesh using hybrid semantic vector similarity (HNSW / SIMD cosine) and lexical SQLite FTS5 matching",
+      "parameters": {
+        "query": { "type": "string", "description": "Natural language or technical query to match semantically against memory mesh", "required": true },
+        "top_k": { "type": "integer", "description": "Maximum number of nearest neighbor results to return", "default": 10 },
+        "category": { "type": "string", "description": "Optional memory category filter: interaction, command_outcome, user_preference, code_context, past_fix_pattern, code_chunk" },
+        "namespace": { "type": "string", "description": "Optional namespace filter (e.g. codebase, developer_habits, default)" },
+        "min_score": { "type": "number", "description": "Minimum similarity score threshold (0.0 to 1.0)", "default": 0.0 },
+        "query_vector": { "type": "array", "items": { "type": "number" }, "description": "Optional dense f32 embedding vector for direct vector query" }
+      }
+    },
+    "recall_developer_context": {
+      "description": "Retrieves long-term developer context, learned habits, architectural rules, past fix patterns, and debugging sessions from persistent memory",
+      "parameters": {
+        "topic": { "type": "string", "description": "Optional topic or concept to recall context for" },
+        "category": { "type": "string", "description": "Optional category filter: user_preference, past_fix_pattern, code_context, interaction, command_outcome" },
+        "limit": { "type": "integer", "description": "Maximum number of context memories to recall", "default": 5 }
+      }
+    },
+    "update_long_term_memory": {
+      "description": "Records a new persistent long-term memory insight, developer habit, command outcome, or fix pattern into the Vector MCP Memory Mesh",
+      "parameters": {
+        "category": { "type": "string", "description": "Category: user_preference, past_fix_pattern, code_context, interaction, command_outcome", "required": true },
+        "title": { "type": "string", "description": "Descriptive title or headline for the memory insight", "required": true },
+        "content": { "type": "string", "description": "Detailed body content, rule, error trace, or fix diff", "required": true },
+        "metadata": { "type": "object", "description": "Optional arbitrary JSON metadata key-value mapping" },
+        "symbols": { "type": "array", "items": { "type": "string" }, "description": "Associated code symbols (functions, structs, traits, classes)" },
+        "namespace": { "type": "string", "description": "Target memory namespace", "default": "default" }
+      }
     }
   },
   "mcpServers": {
@@ -597,6 +637,10 @@
         "OLLAMA_HOST": "http://127.0.0.1:11434"
       },
       "tools": [
+        "index_codebase_memory",
+        "semantic_memory_search",
+        "recall_developer_context",
+        "update_long_term_memory",
         "hgb_self_healing_diagnose",
         "hgb_pgo_tune_pass",
         "hgb_auto_patch_bottleneck",

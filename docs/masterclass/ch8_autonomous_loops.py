@@ -410,6 +410,55 @@ def build_autonomous_loops_chapter():
     ))
     story.append(Spacer(1, 15))
 
+    # =========================================================================
+    # ARCHITECTURAL POWER-UP III: VECTOR-NATIVE STORAGE & MCP MEMORY MESH
+    # =========================================================================
+    p16_desc = (
+        "<b>15. Vector-Native Storage & MCP Memory Mesh (VectorMcpMemoryMesh):</b><br/>"
+        "Supercharges Hagibis's state fabric with a persistent vector memory mesh combining embedded vector "
+        "storage (IEEE-754 little-endian binary float vectors compatible with <code>sqlite-vec</code> and native HNSW), "
+        "SQLite metadata, and FTS5 full-text indexing. Stores long-term developer context, past fix patterns, "
+        "command outcomes, and user preferences into an in-memory cached WAL database (<code>.hgb/vector_memory.db</code>).<br/>"
+        "Exposes four production MCP memory mesh tools:<br/>"
+        "• <b><code>index_codebase_memory</code></b>: Recursively parses workspace codebases, extracts AST symbols (functions, "
+        "structs, traits, classes), partitions content into overlapping chunks, and registers IEEE-754 semantic embeddings.<br/>"
+        "• <b><code>semantic_memory_search</code></b>: Queries vector memory using hybrid ANN skip-list retrieval (HNSW), "
+        "AVX2 SIMD cosine similarity, and FTS5 BM25 lexical ranking with reciprocal score fusion.<br/>"
+        "• <b><code>recall_developer_context</code></b>: Recalls developer habits, architectural decisions, and previous debugging "
+        "sessions with access-count reinforcement.<br/>"
+        "• <b><code>update_long_term_memory</code></b>: Dynamically records new architectural insights, rules, and fix patterns "
+        "with zero restart downtime."
+    )
+    story.append(Paragraph(p16_desc, styles["BodyTextCustom"]))
+    story.append(Spacer(1, 10))
+
+    story.append(CodeSnippet(
+        "// Vector-Native Storage & MCP Memory Mesh (VectorMcpMemoryMesh)\n"
+        "let mesh = VectorMcpMemoryMesh::open_workspace(&workspace_root)?;\n"
+        "\n"
+        "// 1. Recursive Codebase AST Indexing & Chunk Embedding\n"
+        "let report = mesh.index_codebase(&workspace_root, &IndexOptions::default())?;\n"
+        "println!(\"Indexed {} chunks across {} files (duration: {}ms)\",\n"
+        "    report.total_chunks, report.indexed_files, report.duration_ms);\n"
+        "\n"
+        "// 2. Hybrid Semantic Vector + FTS5 Retrieval\n"
+        "let results = mesh.search_by_text(\"HNSW cosine similarity graph search\", 5, None)?;\n"
+        "for hit in results {\n"
+        "    println!(\"Hit [score: {:.3}]: {}\", hit.combined_score, hit.item.title);\n"
+        "}\n"
+        "\n"
+        "// 3. Persistent Long-Term Memory Insight Recording\n"
+        "let item = mesh.record_past_fix_pattern(\n"
+        "    \"E0308 type mismatch\",\n"
+        "    \"Expected &str found String\",\n"
+        "    \"Convert with .as_str()\",\n"
+        "    true,\n"
+        ")?;\n"
+        "println!(\"Stored long-term fix memory: {}\", item.id);",
+        "Rust"
+    ))
+    story.append(Spacer(1, 15))
+
     return story
 
 if __name__ == "__main__":

@@ -2135,6 +2135,17 @@ pub use wasmtime_multitenant_faas_pool::{
     DEFAULT_POOL_TABLES as FAAS_DEFAULT_POOL_TABLES,
 };
 
+// Architectural Power-Up II: Full MicroVM Isolation via Firecracker Integration
+pub mod firecracker_microvm_pipeline;
+pub use firecracker_microvm_pipeline::{
+    BootSourceConfig, CodeExecutionSpec, DriveConfig, EphemeralMicrovmJail,
+    ExecutionReport, FirecrackerMicrovmConfig, FirecrackerMicrovmPipeline,
+    FirecrackerSocketBridge, IsolationBackend, LandlockFallbackConfig,
+    MachineConfig, SnapshotConfig, SnapshotPrewarmReport,
+    DEFAULT_FIRECRACKER_BIN,
+};
+
+
 
 
 
