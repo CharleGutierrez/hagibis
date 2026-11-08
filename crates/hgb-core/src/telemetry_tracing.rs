@@ -266,6 +266,7 @@ pub struct ActiveTelemetryBuffer {
     capacity: usize,
     buffer: RwLock<VecDeque<SpanRecord>>,
     total_recorded: AtomicU64,
+    total_dropped: AtomicU64,
 }
 
 impl ActiveTelemetryBuffer {
@@ -275,6 +276,7 @@ impl ActiveTelemetryBuffer {
             capacity: cap,
             buffer: RwLock::new(VecDeque::with_capacity(cap)),
             total_recorded: AtomicU64::new(0),
+            total_dropped: AtomicU64::new(0),
         }
     }
 
@@ -282,6 +284,7 @@ impl ActiveTelemetryBuffer {
         let mut guard = self.buffer.write().unwrap_or_else(|poisoned| poisoned.into_inner());
         if guard.len() >= self.capacity {
             guard.pop_front();
+            self.total_dropped.fetch_add(1, Ordering::Relaxed);
         }
         guard.push_back(span);
         self.total_recorded.fetch_add(1, Ordering::Relaxed);
@@ -317,6 +320,31 @@ impl ActiveTelemetryBuffer {
 
     pub fn total_recorded(&self) -> u64 {
         self.total_recorded.load(Ordering::Relaxed)
+    }
+
+    pub fn total_dropped(&self) -> u64 {
+        self.total_dropped.load(Ordering::Relaxed)
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+
+    /// Calculate span ingestion rate and drop rate per second given previous counters
+    pub fn metrics_rate(
+        &self,
+        previous_recorded: u64,
+        previous_dropped: u64,
+        duration_secs: f64,
+    ) -> (f64, f64) {
+        if duration_secs <= 0.0 {
+            return (0.0, 0.0);
+        }
+        let cur_recorded = self.total_recorded();
+        let cur_dropped = self.total_dropped();
+        let span_rate = (cur_recorded.saturating_sub(previous_recorded) as f64) / duration_secs;
+        let drop_rate = (cur_dropped.saturating_sub(previous_dropped) as f64) / duration_secs;
+        (span_rate, drop_rate)
     }
 }
 

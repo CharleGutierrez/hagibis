@@ -1,4 +1,4 @@
-package hagibis:skills/observability@0.1.0;
+package hagibis:skills/observability@0.2.0;
 
 interface types {
     enum span-status {

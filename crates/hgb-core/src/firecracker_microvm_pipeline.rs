@@ -699,6 +699,91 @@ impl FirecrackerSocketBridge {
             )))
         }
     }
+
+    /// Pause microVM guest vCPUs via `PATCH /vm`
+    pub fn pause_vm(&self) -> Result<()> {
+        let payload = serde_json::json!({
+            "state": "Paused",
+        });
+        let (status, body) = self.send_request("PATCH", "/vm", Some(&payload))?;
+        if status == 204 || status == 200 {
+            Ok(())
+        } else {
+            Err(HgbError::Execution(format!(
+                "Firecracker PATCH /vm (Paused) failed with status {}: {:?}",
+                status, body
+            )))
+        }
+    }
+
+    /// Resume microVM guest vCPUs via `PATCH /vm`
+    pub fn resume_vm(&self) -> Result<()> {
+        let payload = serde_json::json!({
+            "state": "Resumed",
+        });
+        let (status, body) = self.send_request("PATCH", "/vm", Some(&payload))?;
+        if status == 204 || status == 200 {
+            Ok(())
+        } else {
+            Err(HgbError::Execution(format!(
+                "Firecracker PATCH /vm (Resumed) failed with status {}: {:?}",
+                status, body
+            )))
+        }
+    }
+
+    /// Retrieve microVM runtime state via `GET /vm`
+    pub fn get_vm_state(&self) -> Result<String> {
+        let (status, body) = self.send_request("GET", "/vm", None)?;
+        if status == 200 {
+            if let Some(state) = body.get("state").and_then(|s| s.as_str()) {
+                Ok(state.to_string())
+            } else {
+                Ok(body.to_string())
+            }
+        } else {
+            Err(HgbError::Execution(format!(
+                "Firecracker GET /vm failed with status {}: {:?}",
+                status, body
+            )))
+        }
+    }
+
+    /// Configure virtio-vsock device via `PUT /vsock`
+    pub fn put_vsock(&self, vsock_id: &str, guest_cid: u32, uds_path: &str) -> Result<()> {
+        let payload = serde_json::json!({
+            "vsock_id": vsock_id,
+            "guest_cid": guest_cid,
+            "uds_path": uds_path,
+        });
+        let (status, body) = self.send_request("PUT", "/vsock", Some(&payload))?;
+        if status == 204 || status == 200 {
+            Ok(())
+        } else {
+            Err(HgbError::Execution(format!(
+                "Firecracker PUT /vsock failed with status {}: {:?}",
+                status, body
+            )))
+        }
+    }
+
+    /// Create snapshot via `PUT /snapshot/create`
+    pub fn create_snapshot(&self, snapshot_path: &str, mem_file_path: &str) -> Result<()> {
+        let payload = serde_json::json!({
+            "snapshot_type": "Full",
+            "snapshot_path": snapshot_path,
+            "mem_file_path": mem_file_path,
+        });
+        let (status, body) = self.send_request("PUT", "/snapshot/create", Some(&payload))?;
+        if status == 204 || status == 200 {
+            Ok(())
+        } else {
+            Err(HgbError::Execution(format!(
+                "Firecracker PUT /snapshot/create failed with status {}: {:?}",
+                status, body
+            )))
+        }
+    }
 }
 
 /// Ephemeral microVM jail container managing filesystem boundary and daemon lifecycle

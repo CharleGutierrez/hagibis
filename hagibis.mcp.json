@@ -660,6 +660,44 @@
         },
         "table_path": { "type": "string", "description": "Optional custom path to .lance directory" }
       }
+    },
+    "hgb_trajectory_semantic_search": {
+      "description": "Sub-millisecond semantic retrieval of past agent execution trajectories, error resolutions, and decision paths blending SQLite CDC records with LanceDB columnar vector indexing",
+      "parameters": {
+        "query_text": { "type": "string", "description": "Search query text describing action, error, or decision pattern" },
+        "session_id": { "type": "string", "description": "Optional session identifier filter" },
+        "actor_id": { "type": "string", "description": "Optional actor identifier filter" },
+        "agent_role": { "type": "string", "description": "Optional agent role filter" },
+        "outcome": { "type": "string", "enum": ["Success", "Failed", "Retried", "Escalated"], "description": "Target outcome status filter" },
+        "top_k": { "type": "integer", "description": "Maximum nearest neighbor trajectory records to return (default: 5)", "default": 5 },
+        "min_similarity": { "type": "number", "description": "Minimum similarity threshold (0.0 to 1.0)", "default": 0.1 },
+        "hybrid_alpha": { "type": "number", "description": "Hybrid weighting between dense vector similarity and BM25 lexical score", "default": 0.6 }
+      },
+      "required": ["query_text"]
+    },
+    "hgb_microvm_hotplug_wasm": {
+      "description": "Dynamically hot-plug a WASM module or guest kernel patch directly into a running Firecracker microVM memory space without rebooting",
+      "parameters": {
+        "vm_id": { "type": "string", "description": "Target Firecracker microVM jail identifier" },
+        "module_name": { "type": "string", "description": "Name/identifier of the module to inject" },
+        "wasm_base64_or_wat": { "type": "string", "description": "WASM module payload (base64-encoded binary or raw WAT text)" },
+        "allow_overwrite": { "type": "boolean", "description": "Whether to overwrite existing module in memory without reboot", "default": true }
+      },
+      "required": ["vm_id", "module_name", "wasm_base64_or_wat"]
+    },
+    "hgb_autonomic_healer_tick": {
+      "description": "Execute one evaluation tick of the real-time autonomic closed-loop healer, sampling hardware thermal and memory pressure metrics and applying thread shedding or workload migration",
+      "parameters": {
+        "force_eval": { "type": "boolean", "description": "Force immediate telemetry sampling and decision evaluation", "default": true }
+      }
+    },
+    "hgb_wasi_component_verify_and_swap": {
+      "description": "Cryptographically verify and hot-swap an active WASI 0.2 component using Ed25519 signature attestation with zero-downtime rollback",
+      "parameters": {
+        "component_name": { "type": "string", "description": "Name of the target skill component" },
+        "envelope_base64": { "type": "string", "description": "Base64-encoded signed HGBC\\x02 component envelope" }
+      },
+      "required": ["component_name", "envelope_base64"]
     }
   },
   "mcpServers": {

@@ -1,7 +1,7 @@
 ---
 name: vector-lancedb
 description: Embedded LanceDB-compatible vector storage and semantic querying for Hagibis
-version: 0.1.0
+version: 0.2.0
 category: storage
 ---
 
@@ -183,3 +183,16 @@ Executes zero-copy vector and hybrid semantic queries across the LanceDB dataset
 Atomically appends or updates vector records with automatic manifest generation.
 - `records` (`array[object]`): List of records with `id`, `vector`, `text`, `metadata`, `timestamp`, `partition`.
 - `table_path` (`string`, optional): Target `.lance` dataset path.
+
+---
+
+## 8. Unified Vector-Relational Memory Bus (Zero-Copy SQLite CDC)
+
+The `UnifiedVectorRelationalBus` integrates SQLite relational storage with LanceDB columnar fragments:
+- **Change-Data-Capture (CDC) Hook**: Automatically captures agent execution steps (`agent_state_transitions`) in SQLite WAL and projects them directly into LanceDB columnar fragments (`.vec` / `.col`).
+- **Sub-Millisecond Semantic Trajectory Search**: Evaluates past actions, error signatures, and decision trees in $< 500\mu\text{s}$ using hybrid BM25 + SIMD cosine ranking over memory-mapped fragments.
+- **MCP Tool**: `hgb_trajectory_semantic_search` provides instant semantic recall of past execution episodes for all autonomous agent loops.
+
+## 9. WASI 0.2 Component Model Interface
+
+Defined in [vector-lancedb.wit](file:///home/toshiba/My%20AI%20Project/hagibis/skills/vector-lancedb/wit/vector-lancedb.wit) under `package hagibis:skills/vector-lancedb@0.2.0;`. Compliant with WebAssembly Component Model standards for modular, sandboxed capability hot-swapping.

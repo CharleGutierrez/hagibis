@@ -651,6 +651,22 @@ pub use firecracker_microvm_runner::{
     DEFAULT_RUNTIME_SOCKET_DIR, FALLBACK_SHM_SOCKET_DIR,
 };
 
+// Strategic Upgrade: Distributed MicroVM Hot-Plugging (Dynamic WASM Injection)
+pub mod microvm_hotplug_manager;
+pub use microvm_hotplug_manager::{
+    HotPlugConfig, HotPlugExecutionReport, HotPlugReport, HotPluggedModuleEntry,
+    MicroVmHotPlugManager,
+};
+
+// Strategic Upgrade: Real-Time Autonomous Self-Healing Control Loops (Dynatune & OTel Governor)
+pub mod autonomous_hardware_healer_loop;
+pub use autonomous_hardware_healer_loop::{
+    AutonomousHardwareHealerLoop, AutonomousHealDecision, AutonomicHardwareTelemetrySnapshot,
+    HealerHealthState, ThreadSheddingReport, WorkloadMigrationReport,
+    MEMORY_PRESSURE_CRITICAL_PERCENT, THERMAL_CRITICAL_THRESHOLD_CELSIUS,
+    THERMAL_WARNING_THRESHOLD_CELSIUS,
+};
+
 
 
 

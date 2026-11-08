@@ -1,4 +1,4 @@
-package hagibis:wasm-kernel@0.1.0;
+package hagibis:wasm-kernel@0.2.0;
 
 /// Capability-gated host syscalls imported into the guest sandbox
 interface host-syscalls {

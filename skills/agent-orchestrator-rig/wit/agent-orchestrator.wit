@@ -1,4 +1,4 @@
-package hagibis:skills/agent-orchestrator@0.1.0;
+package hagibis:skills/agent-orchestrator@0.2.0;
 
 /// Standard types for Rig-inspired LLM agent orchestrator & hardware loop
 interface types {

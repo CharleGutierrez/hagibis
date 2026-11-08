@@ -240,6 +240,14 @@ pub use lancedb_vector_engine::{
     DistanceMetric, LanceDbVectorEngine, SearchQuery, SearchResult, VectorRecord,
 };
 
+// Strategic Upgrade: Unified Vector-Relational Memory Bus (Zero-Copy SQLite CDC Bridge)
+pub mod unified_vector_relational_bus;
+pub use unified_vector_relational_bus::{
+    AgentStateTransition, TrajectoryOutcome, TrajectorySearchQuery, TrajectorySemanticMatch,
+    UnifiedBusStats, UnifiedVectorRelationalBus, DEFAULT_HOT_CACHE_CAPACITY,
+    TRAJECTORY_VECTOR_DIM,
+};
+
 // ============================================================================
 // Pillar 3: Reactive Event Bus & SQLite WAL Append-Only Event Log
 // ============================================================================

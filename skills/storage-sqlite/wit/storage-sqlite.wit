@@ -1,4 +1,4 @@
-package hagibis:storage@0.1.0;
+package hagibis:storage@0.2.0;
 
 /// Pluggable SQLite Relational Store Interface
 interface sqlite-store {

@@ -1,4 +1,4 @@
-package hagibis:skills/microvm-firecracker@0.1.0;
+package hagibis:skills/microvm-firecracker@0.2.0;
 
 interface runner {
     /// Active isolation tier used for sandboxed execution
@@ -85,6 +85,54 @@ interface runner {
         message: string,
     }
 
+    /// Target runtime resource type for dynamic microVM hot-plugging
+    enum hotplug-target-type {
+        wasm-module,
+        kernel-patch,
+        memory-segment,
+    }
+
+    /// Status of a dynamic hot-plugging transaction
+    enum hotplug-status {
+        pending,
+        staged,
+        committed,
+        rolled-back,
+        failed,
+    }
+
+    /// Descriptor of a symbol entry in the guest microVM DRAM table
+    record symbol-entry {
+        name: string,
+        address: u64,
+        size: u64,
+        version: u32,
+        checksum: string,
+    }
+
+    /// Specification for hot-plugging code or memory into a running microVM
+    record hotplug-spec {
+        vm-id: string,
+        target-type: hotplug-target-type,
+        module-name: string,
+        binary-payload: list<u8>,
+        symbol-override: option<string>,
+        rollback-on-failure: bool,
+        max-pause-budget-us: u64,
+    }
+
+    /// Outcome telemetry of a dynamic hot-plug transaction
+    record hotplug-result {
+        success: bool,
+        vm-id: string,
+        status: hotplug-status,
+        applied-generation: u64,
+        pause-duration-us: u64,
+        hotplug-duration-us: u64,
+        dram-patched-bytes: u64,
+        error-message: option<string>,
+    }
+
     /// Provision a new isolated microVM jail
     provision: func(spec: provision-spec) -> result<jail-info, string>;
 
@@ -93,6 +141,21 @@ interface runner {
 
     /// Restore guest state from pre-warmed snapshot
     load-snapshot: func(spec: snapshot-spec) -> result<bool, string>;
+
+    /// Dynamically hot-plug a WASM module or guest kernel patch into running microVM (<5ms)
+    hotplug-module: func(spec: hotplug-spec) -> result<hotplug-result, string>;
+
+    /// Revert a previously hot-plugged module back to a target generation
+    rollback-module: func(vm-id: string, module-name: string, target-generation: u64) -> result<hotplug-result, string>;
+
+    /// Query live DRAM symbol table of a running microVM
+    query-symbol-table: func(vm-id: string) -> result<list<symbol-entry>, string>;
+
+    /// Pause microVM vCPUs via Firecracker API
+    pause-vm: func(vm-id: string) -> result<bool, string>;
+
+    /// Resume microVM vCPUs via Firecracker API
+    resume-vm: func(vm-id: string) -> result<bool, string>;
 
     /// Terminate and reap an isolated microVM jail
     teardown: func(vm-id: string) -> result<teardown-result, string>;

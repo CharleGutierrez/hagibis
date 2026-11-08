@@ -13,6 +13,7 @@ path = "src/bin/hgbd.rs"
 hgb-core = { path = "../hgb-core" }
 hgb-storage = { path = "../hgb-storage" }
 hgb-nextgen = { path = "../hgb-nextgen" }
+wat = { path = "../wat" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

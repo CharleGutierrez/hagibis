@@ -2161,6 +2161,14 @@ pub use rig_agent_orchestrator::{
     RigStreamEvent, RigThermalStatus, ToolCallable, ToolDefinition, ToolRegistry,
 };
 
+// Strategic Upgrade: WebAssembly Component Model Standardization (WASI 0.2 & Ed25519)
+pub mod wasi_component_loader;
+pub use wasi_component_loader::{
+    ComponentHotSwapReport, VerifiedWasiComponent, WasiComponentHotSwapper,
+    WasiComponentSigner, WasiComponentVerifier, COMPONENT_ENVELOPE_MAGIC,
+    ENVELOPE_HEADER_SIZE,
+};
+
 
 
 

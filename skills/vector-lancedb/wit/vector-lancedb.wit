@@ -1,4 +1,4 @@
-package hagibis:skills/vector-lancedb@0.1.0;
+package hagibis:skills/vector-lancedb@0.2.0;
 
 interface types {
     enum distance-metric {
@@ -39,10 +39,48 @@ interface types {
         partition: string,
     }
 
-    record partition-stats {
-        name: string,
-        record-count: u64,
-        centroid: list<f32>,
+    record agent-state-transition {
+        transition-id: string,
+        session-id: string,
+        actor-id: string,
+        agent-role: string,
+        step-index: u64,
+        action: string,
+        state-hash: string,
+        instruction: string,
+        outcome: string,
+        error-context: option<string>,
+        duration-ms: u64,
+        timestamp-ms: u64,
+    }
+
+    record trajectory-search-query {
+        query-text: string,
+        session-id: option<string>,
+        actor-id: option<string>,
+        agent-role: option<string>,
+        outcome: option<string>,
+        top-k: u32,
+        min-similarity: f32,
+        hybrid-alpha: option<f32>,
+    }
+
+    record trajectory-semantic-match {
+        transition: agent-state-transition,
+        similarity-score: f32,
+        bm25-score: f32,
+        combined-score: f32,
+        latency-us: u64,
+    }
+
+    record unified-bus-stats {
+        total-transitions: u64,
+        sqlite-rows: u64,
+        lancedb-vectors: u64,
+        hot-cache-items: u64,
+        hot-cache-hits: u64,
+        hot-cache-misses: u64,
+        average-search-latency-us: u64,
     }
 
     record engine-stats {
@@ -50,18 +88,19 @@ interface types {
         dimensions: u32,
         version: u64,
         partition-count: u32,
-        partitions: list<partition-stats>,
     }
 }
 
 interface operations {
-    use types.{vector-record, search-query, search-result, engine-stats};
+    use types.{vector-record, search-query, search-result, agent-state-transition, trajectory-search-query, trajectory-semantic-match, unified-bus-stats, engine-stats};
 
     upsert: func(records: list<vector-record>) -> result<u32, string>;
     query: func(query: search-query) -> result<list<search-result>, string>;
-    delete-by-id: func(id: string) -> result<bool, string>;
-    stats: func() -> result<engine-stats, string>;
+    record-transition: func(transition: agent-state-transition) -> result<string, string>;
+    query-trajectory-semantics: func(query: trajectory-search-query) -> result<list<trajectory-semantic-match>, string>;
+    backfill-from-sqlite: func() -> result<u32, string>;
     compact: func() -> result<u32, string>;
+    stats: func() -> result<unified-bus-stats, string>;
 }
 
 world vector-lancedb-world {

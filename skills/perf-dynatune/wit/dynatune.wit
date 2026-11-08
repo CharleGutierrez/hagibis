@@ -1,4 +1,4 @@
-package hagibis:dynatune@0.1.0;
+package hagibis:dynatune@0.2.0;
 
 /// Hardware governor and thermal telemetry interface
 interface governor {
