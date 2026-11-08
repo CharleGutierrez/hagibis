@@ -458,4 +458,26 @@ pub use unified_intent_router::{
     DEFAULT_INTENT_VECTOR_DIM,
 };
 
+// Strategic Power-Up: Local Quantized Fine-Tuning Pipeline for LLM Reflection
+pub mod reflection_finetune_pipeline;
+pub use reflection_finetune_pipeline::{
+    FinetuneRunReport, InstructionTuningPair, LoRAWeightDelta, QuantizationMode,
+    QuantizedLoRAConfig, ReflectionFinetunePipeline, SidecarLoRAAdapterBundle,
+};
+
+// Strategic Power-Up: Real-Time Kernel & Hardware Telemetry Vector Bridge
+pub mod telemetry_vector_bridge;
+pub use telemetry_vector_bridge::{
+    HardwareKernelTelemetrySnapshot, TelemetryMatch, TelemetryVectorBridge,
+    DEFAULT_TELEMETRY_VECTOR_DIM,
+};
+
+// Strategic Power-Up: High-Throughput Zero-Copy Shared Memory IPC Broker
+pub mod shm_ipc_broker;
+pub use shm_ipc_broker::{
+    ShmBrokerHeader, ShmChannelDescriptor, ShmIpcBroker, ZeroCopyPayloadDescriptor,
+    DEFAULT_SHM_CAPACITY, SHM_BROKER_MAGIC,
+};
+
+
 

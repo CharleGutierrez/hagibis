@@ -793,6 +793,56 @@
         "prompt": { "type": "string", "description": "Raw developer prompt or task instruction" }
       },
       "required": ["prompt"]
+    },
+    "hgb_swarm_fabric_offload": {
+      "description": "Dispatch heavy tasks (vector searches, Wasm microkernels, Firecracker jails) to optimal peer nodes across the secure WireGuard/P2P execution fabric",
+      "parameters": {
+        "task_id": { "type": "string", "description": "Unique task identifier" },
+        "kind": { "type": "string", "enum": ["VectorLanceDbQuery", "WasmKernelExecution", "FirecrackerJailExecution"], "description": "Workload execution tier" },
+        "payload": { "type": "string", "description": "Task payload or execution command" },
+        "require_kvm": { "type": "boolean", "description": "Require KVM hardware acceleration", "default": false },
+        "require_gpu": { "type": "boolean", "description": "Require GPU acceleration", "default": false }
+      },
+      "required": ["task_id", "kind", "payload"]
+    },
+    "hgb_swarm_fabric_peers": {
+      "description": "List discovered peer nodes, capacities (KVM, GPU, Wasm instances, RAM), and real-time load across the distributed swarm mesh",
+      "parameters": {
+        "detailed": { "type": "boolean", "description": "Include fitness scores and heartbeat age", "default": false }
+      }
+    },
+    "hgb_reflection_finetune_ingest": {
+      "description": "Convert a successful self-healing bug fix trace into an instruction-tuning pair and trigger local quantized LoRA fine-tuning for sidecar models",
+      "parameters": {
+        "session_id": { "type": "string", "description": "Self-healing session identifier" },
+        "prompt": { "type": "string", "description": "Initial user task or prompt" },
+        "error_trace": { "type": "string", "description": "Compiler error diagnostic or panic trace" },
+        "failing_code": { "type": "string", "description": "Initial failing source code" },
+        "patch": { "type": "string", "description": "Surgical patch that resolved the defect" },
+        "diff": { "type": "string", "description": "Unified git diff of the verified fix" },
+        "language": { "type": "string", "description": "Programming language (rust, wasm, wat, c, python)", "default": "rust" }
+      },
+      "required": ["session_id", "prompt", "error_trace", "failing_code", "patch", "diff"]
+    },
+    "hgb_reflection_finetune_status": {
+      "description": "Inspect local quantized LoRA adapter bundle, trained sample counts, cumulative loss, and GGUF artifact checksum",
+      "parameters": {
+        "export_jsonl": { "type": "boolean", "description": "Export dataset to JSONL format", "default": false }
+      }
+    },
+    "hgb_dynatune_natural_language_optimize": {
+      "description": "Autonomously parse a natural language system tuning directive (e.g. 'optimize my system thermal profile for a 4-hour compile workload'), match historical telemetry in LanceDB, and execute kernel governor / MGLRU sysctl adjustments",
+      "parameters": {
+        "prompt": { "type": "string", "description": "Natural language tuning directive" }
+      },
+      "required": ["prompt"]
+    },
+    "hgb_zerocopy_ipc_bench": {
+      "description": "Execute a zero-copy POSIX shared memory (/dev/shm) IPC transfer benchmark between CLI and daemon, measuring multi-GB/s throughput and sub-microsecond latency",
+      "parameters": {
+        "chunk_size_bytes": { "type": "integer", "description": "Transfer chunk size in bytes (default: 65536)", "default": 65536 },
+        "iterations": { "type": "integer", "description": "Number of roundtrip iterations (default: 50)", "default": 50 }
+      }
     }
   },
   "mcpServers": {
@@ -870,7 +920,13 @@
         "hgb_swarm_mesh_dispatch",
         "hgb_swarm_mesh_pods",
         "hgb_intent_history_retrieve",
-        "hgb_intent_prompt_enrich"
+        "hgb_intent_prompt_enrich",
+        "hgb_swarm_fabric_offload",
+        "hgb_swarm_fabric_peers",
+        "hgb_reflection_finetune_ingest",
+        "hgb_reflection_finetune_status",
+        "hgb_dynatune_natural_language_optimize",
+        "hgb_zerocopy_ipc_bench"
       ]
     },
     "hagibis_sse": {

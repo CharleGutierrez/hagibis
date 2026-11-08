@@ -701,6 +701,27 @@ pub use distributed_swarm_intelligence::{
     DEFAULT_MAX_POD_CAPACITY, DEFAULT_SWARM_HEARTBEAT_TIMEOUT_MS,
 };
 
+// Strategic Power-Up 1: Distributed Swarm MicroVM & Wasm Execution Fabric
+pub mod distributed_swarm_fabric;
+pub use distributed_swarm_fabric::{
+    DistributedSwarmFabric, MeshPeerNode, NodeLoadMetrics, NodeMeshCapabilities,
+    OffloadExecutionReport, OffloadTaskKind, OffloadTaskSpec, HEARTBEAT_TIMEOUT_MS,
+};
+
+// Strategic Power-Up 3: Natural Language Dynatune Agent
+pub mod natural_language_dynatune_agent;
+pub use natural_language_dynatune_agent::{
+    DynatuneExecutionReport, DynatuneOptimizationIntent, KernelTuningActionPlan,
+    NaturalLanguageDynatuneAgent,
+};
+
+// Strategic Power-Up 4: Zero-Copy Shared Memory Daemon Transport
+pub mod zero_copy_shm_server;
+pub use zero_copy_shm_server::{
+    ZeroCopyIpcBenchmarkMetrics, ZeroCopyShmServer,
+};
+
+
 
 
 
