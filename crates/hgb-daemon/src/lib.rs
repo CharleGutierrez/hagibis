@@ -683,6 +683,26 @@ pub use reinforcement_learning_pgo_loop::{
     TelemetryDeltaMetrics, DEFAULT_PGO_TRIGGER_REWARD_THRESHOLD,
 };
 
+// Strategic Upgrade 1: Autonomous Self-Compilation & PGO Hot-Swap Daemon
+pub mod autonomous_pgo_hotswap_daemon;
+pub use autonomous_pgo_hotswap_daemon::{
+    AutonomousPgoHotswapDaemon, PgoHotswapReport, SubsystemHotspotMetric,
+    WorkloadHotspotProfiler, ZeroDowntimeBinarySwapper,
+    DEFAULT_HEALTH_CHECK_TIMEOUT_MS, DEFAULT_PGO_COOLDOWN_SECONDS,
+    DEFAULT_PGO_PROFILE_TRIGGER_INVOCATIONS,
+};
+
+// Strategic Upgrade 2: Distributed MicroVM Swarm Intelligence (Firecracker + Wasm Mesh)
+pub mod distributed_swarm_intelligence;
+pub use distributed_swarm_intelligence::{
+    DistributedSwarmCoordinator, EphemeralWasmMicrokernelCompiler,
+    SwarmExecutionClusterReport, SwarmPodDescriptor, SwarmPodExecutionKind,
+    SwarmPodState, SwarmShardResult, SwarmTaskShard,
+    DEFAULT_MAX_POD_CAPACITY, DEFAULT_SWARM_HEARTBEAT_TIMEOUT_MS,
+};
+
+
+
 
 
 

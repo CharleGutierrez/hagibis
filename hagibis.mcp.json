@@ -738,6 +738,61 @@
         "payload": { "type": "object", "description": "Action payload parameters (vm_id, agent_id, new_directive, prompt_override, node_id)" }
       },
       "required": ["action"]
+    },
+    "hgb_pgo_hotswap_trigger": {
+      "description": "Trigger localized Profile-Guided Optimization (PGO) + ThinLTO background compilation and zero-downtime atomic binary hot-swap based on dynatune workload hotspot telemetry",
+      "parameters": {
+        "cooldown_secs": { "type": "integer", "description": "Minimum cooldown in seconds since prior PGO cycle (default: 600)", "default": 600 },
+        "dry_run": { "type": "boolean", "description": "Execute validation dry-run cycle without replacing production binaries", "default": false }
+      }
+    },
+    "hgb_pgo_hotswap_status": {
+      "description": "Query autonomous PGO hot-swap daemon status, active binary version, active connection count, and subsystem hotness scores",
+      "parameters": {
+        "detailed": { "type": "boolean", "description": "Include full subsystem hotness score rankings", "default": false }
+      }
+    },
+    "hgb_swarm_mesh_dispatch": {
+      "description": "Decompose and dispatch a multi-agent task across ephemeral Firecracker microVMs, freestanding JIT Wasm microkernels, and MCP containerized workers",
+      "parameters": {
+        "task_id": { "type": "string", "description": "Unique task identifier" },
+        "shards": {
+          "type": "array",
+          "description": "Task shards to execute concurrently",
+          "items": {
+            "type": "object",
+            "properties": {
+              "shard_id": { "type": "string", "description": "Shard identifier" },
+              "directive": { "type": "string", "description": "Instruction or task directive" },
+              "preferred_runtime": { "type": "string", "enum": ["FirecrackerMicroVm", "JitWasmMicrokernel", "ContainerizedWorker"], "description": "Preferred execution tier" },
+              "memory_quota_mb": { "type": "integer", "description": "Memory ceiling in MB", "default": 256 }
+            },
+            "required": ["shard_id", "directive"]
+          }
+        }
+      },
+      "required": ["task_id", "shards"]
+    },
+    "hgb_swarm_mesh_pods": {
+      "description": "Inspect active swarm execution pods, runtime isolation tiers, and instruction fuel metrics across the decentralized mesh",
+      "parameters": {
+        "detailed": { "type": "boolean", "description": "Include pod allocation timestamps and active shard IDs", "default": false }
+      }
+    },
+    "hgb_intent_history_retrieve": {
+      "description": "Sub-millisecond semantic retrieval over historical executions, code fixes, and compiler error resolutions stored in LanceDB + SQLite WAL",
+      "parameters": {
+        "query_intent": { "type": "string", "description": "Developer intent or query statement" },
+        "top_k": { "type": "integer", "description": "Maximum matching past trajectories to return (default: 5)", "default": 5 }
+      },
+      "required": ["query_intent"]
+    },
+    "hgb_intent_prompt_enrich": {
+      "description": "Pre-prompt contextual history injection: automatically vectorizes prompt intent and prepends exact historical solutions and prior error-to-fix patterns before code generation",
+      "parameters": {
+        "prompt": { "type": "string", "description": "Raw developer prompt or task instruction" }
+      },
+      "required": ["prompt"]
     }
   },
   "mcpServers": {
@@ -809,7 +864,13 @@
         "hgb_mesh_cluster_topology",
         "hgb_rl_reward_ledger_status",
         "hgb_gpu_tensor_ann_search",
-        "hgb_holographic_control_steer"
+        "hgb_holographic_control_steer",
+        "hgb_pgo_hotswap_trigger",
+        "hgb_pgo_hotswap_status",
+        "hgb_swarm_mesh_dispatch",
+        "hgb_swarm_mesh_pods",
+        "hgb_intent_history_retrieve",
+        "hgb_intent_prompt_enrich"
       ]
     },
     "hagibis_sse": {

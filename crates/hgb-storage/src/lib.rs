@@ -450,9 +450,12 @@ mod zero_copy_store_tests {
 
         let _ = std::fs::remove_file(db_path);
     }
-}
-
-
-
+}// Strategic Upgrade: Unified Vector-Semantic Intent Router (LanceDB + SQLite + MCP)
+pub mod unified_intent_router;
+pub use unified_intent_router::{
+    ContextualMatchRecord, IntentCdcEvent, IntentEventKind, IntentRouterMetrics,
+    PrePromptContextBundle, UnifiedIntentRouter, DEFAULT_INTENT_SEARCH_TOP_K,
+    DEFAULT_INTENT_VECTOR_DIM,
+};
 
 
