@@ -3,24 +3,18 @@
 //! High-throughput representative training benchmark exercising the five core performance-critical
 //! subsystems of Hagibis for LLVM profile data generation:
 //! 1. `TokenShredder` credential redaction, JSON/base64 compaction, and ANSI stripping.
-//! 2. `SQLite FTS5 + HNSW` hybrid lexical + vector indexing and KNN search.
+//! 2. AST Syn parser and `CodeSkeletonizer` structural context optimization.
 //! 3. Zero-copy shared-memory ring buffer IPC roundtrip transfers.
-//! 4. Dynamic runtime SIMD distance kernels (AVX-512, AVX2, ARM Neon, Scalar fallback).
+//! 4. SIMD vector linear algebra (dot product, ReLU activation, Euclidean distance).
 //! 5. Sandboxed WebAssembly kernel execution with fuel metering and capability checks.
 
 use std::fs;
 use std::time::Instant;
 
+use hgb_core::code_skeleton::CodeSkeletonizer;
 use hgb_core::shm_ring_buffer::{ShmRingConsumer, ShmRingProducer};
 use hgb_core::token_shredder::{TokenPolicyConfig, TokenPolicyEngine, TokenShredder};
 use hgb_core::wasm_plugin_sandbox::{PluginCapabilities, SandboxedWasmPlugin};
-use hgb_storage::fts5_hnsw_hybrid::{
-    Fts5HnswHybridEngine, HybridDocumentChunk, HybridRankingMode, HybridSearchQuery,
-};
-use hgb_storage::simd_runtime_dispatch::{
-    detect_simd_capabilities, simd_cosine_similarity, simd_dot_product, simd_euclidean_distance,
-    simd_normalize_inplace,
-};
 
 /// Run the full representative PGO training workload
 pub fn run_pgo_representative_workload(iterations: usize) {
@@ -31,9 +25,9 @@ pub fn run_pgo_representative_workload(iterations: usize) {
     println!(" [1/5] Exercising TokenShredder & TokenPolicyEngine...");
     run_tokenshredder_workload(iterations * 40);
 
-    // 2. SQLite FTS5 + HNSW: Hybrid Vector Indexing & KNN Retrieval
-    println!(" [2/5] Exercising SQLite FTS5 + HNSW Hybrid Indexing...");
-    run_vector_fts5_workload(iterations * 10);
+    // 2. Syn AST Parser & Code Skeletonizer: Token Context Reduction
+    println!(" [2/5] Exercising AST Syn Parsing & CodeSkeletonizer...");
+    run_ast_skeletonizer_workload(iterations * 20);
 
     // 3. Shared Memory Ring Buffer IPC: Zero-Copy Roundtrips
     println!(" [3/5] Exercising Zero-Copy SHM Ring Buffer IPC...");
@@ -88,39 +82,28 @@ fn run_tokenshredder_workload(iterations: usize) {
     }
 }
 
-fn run_vector_fts5_workload(iterations: usize) {
-    let engine = Fts5HnswHybridEngine::in_memory(None).expect("create in-memory hybrid engine");
-
-    // Index sample document chunks
-    for i in 0..iterations {
-        let vector: Vec<f32> = (0..128)
-            .map(|d| ((i * 7 + d) as f32).sin())
-            .collect();
-
-        let chunk = HybridDocumentChunk {
-            id: format!("doc_{}", i),
-            filepath: format!("crates/core/src/module_{}.rs", i % 5),
-            chunk_index: i,
-            content: format!(
-                "pub fn handle_event_{}(ctx: &Context) -> Result<Event> {{ tracing::info!(\"event fired\"); Ok(Event::Ack) }}",
-                i
-            ),
-            language: Some("rust".to_string()),
-            vector,
-            metadata: Some(serde_json::json!({ "tag": "test", "index": i }).to_string()),
-        };
-        engine.index_chunk(chunk).expect("index chunk");
+fn run_ast_skeletonizer_workload(iterations: usize) {
+    let sample_rust_code = r#"
+        pub struct ContextAnchor {
+            pub id: String,
+            pub tokens: Vec<u32>,
+            pub score: f32,
+        }
+        pub trait RelevanceScorer {
+            fn compute_relevance(&self, query: &str) -> f32;
+        }
+        impl RelevanceScorer for ContextAnchor {
+            fn compute_relevance(&self, query: &str) -> f32 {
+                if query.is_empty() { return 0.0; }
+                self.score * 1.5
+            }
+        }
+    "#;
+    for _ in 0..iterations {
+        let report = CodeSkeletonizer::skeletonize(sample_rust_code, "rs");
+        assert!(report.structs_count >= 1);
+        assert!(!report.skeleton_code.is_empty());
     }
-
-    // Perform hybrid queries
-    let query_vector: Vec<f32> = (0..128).map(|d| (d as f32).sin()).collect();
-    let query = HybridSearchQuery::new(10)
-        .with_text("handle_event tracing")
-        .with_vector(query_vector)
-        .with_ranking_mode(HybridRankingMode::LinearInterpolation { alpha: 0.5 });
-
-    let hits = engine.search(&query).expect("execute hybrid search");
-    assert!(!hits.is_empty());
 }
 
 fn run_shm_ring_ipc_workload(iterations: usize) {
@@ -146,20 +129,19 @@ fn run_shm_ring_ipc_workload(iterations: usize) {
 }
 
 fn run_simd_distance_workload(iterations: usize) {
-    let _caps = detect_simd_capabilities();
-
     let mut vec_a = vec![0.5f32; 256];
     let vec_b = vec![0.7f32; 256];
 
     for _ in 0..iterations {
-        let dot = simd_dot_product(&vec_a, &vec_b);
-        let cos = simd_cosine_similarity(&vec_a, &vec_b);
-        let dist = simd_euclidean_distance(&vec_a, &vec_b);
-        simd_normalize_inplace(&mut vec_a);
+        let dot = hgb_wasm_kernel::hgb_simd_dot_product_f32(&vec_a, &vec_b);
+        let cos = hgb_wasm_kernel::cosine_similarity(&vec_a, &vec_b);
+        let dist = hgb_wasm_kernel::euclidean_distance(&vec_a, &vec_b);
+        let relu = hgb_wasm_kernel::hgb_simd_relu_f32(&vec_a);
 
         assert!(dot > 0.0);
         assert!(cos > 0.0);
         assert!(dist >= 0.0);
+        assert_eq!(relu.len(), vec_a.len());
     }
 }
 

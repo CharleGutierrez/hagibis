@@ -1,0 +1,87 @@
+package hagibis:wasm-kernel@0.1.0;
+
+/// Capability-gated host syscalls imported into the guest sandbox
+interface host-syscalls {
+    /// Safe host structured logging
+    host-log: func(message: string);
+
+    /// Capability-checked filesystem read
+    fs-read: func(path: string, max-bytes: u32) -> result<list<u8>, string>;
+
+    /// Capability-checked filesystem write
+    fs-write: func(path: string, data: list<u8>) -> result<bool, string>;
+
+    /// Capability-checked outbound HTTP network request
+    net-fetch: func(url: string) -> result<list<u8>, string>;
+}
+
+/// Core guest ABI exported by the sandboxed WebAssembly kernel
+interface kernel-abi {
+    enum tensor-dtype {
+        f32,
+        f16,
+        bf16,
+        q8-0,
+    }
+
+    enum exec-target {
+        cpu,
+        gpu,
+        tpu,
+    }
+
+    record shm-descriptor {
+        shm-id: string,
+        base-offset: u32,
+        capacity-bytes: u32,
+        head-offset: u32,
+        tail-offset: u32,
+        flags: u32,
+    }
+
+    record plugin-manifest {
+        name: string,
+        version: string,
+        description: string,
+        capabilities-required: list<string>,
+        input-schema-json: string,
+    }
+
+    record invoke-request {
+        tool-name: string,
+        arguments-json: string,
+    }
+
+    record invoke-response {
+        success: bool,
+        result-json: string,
+        error-message: option<string>,
+    }
+
+    /// Initialize kernel configuration and memory parameters
+    init-kernel: func(config-json: string) -> result<bool, string>;
+
+    /// Inspect manifest of a loaded plugin binary
+    load-plugin: func(plugin-bytes: list<u8>) -> result<plugin-manifest, string>;
+
+    /// Invoke a sandboxed tool function
+    invoke-tool: func(request: invoke-request) -> result<invoke-response, string>;
+
+    /// Attach shared linear memory descriptor
+    shm-attach: func(descriptor: shm-descriptor) -> result<bool, string>;
+
+    /// Compute cosine similarity between two vector offsets in linear memory
+    compute-vector-similarity: func(vec-a-offset: u32, vec-b-offset: u32, dims: u32) -> result<f32, string>;
+
+    /// Byte Pair Encoding (BPE) tokenization
+    bpe-encode: func(text: string) -> result<list<u32>, string>;
+
+    /// BPE token decoding back to UTF-8 string
+    bpe-decode: func(tokens: list<u32>) -> result<string, string>;
+}
+
+/// Sandboxed capability runner engine world
+world kernel-engine {
+    import host-syscalls;
+    export kernel-abi;
+}

@@ -1,0 +1,52 @@
+package hagibis:dynatune@0.1.0;
+
+/// Hardware governor and thermal telemetry interface
+interface governor {
+    enum governor-profile {
+        performance,
+        balanced,
+        powersave,
+    }
+
+    enum turbo-mode {
+        enabled,
+        disabled,
+        unavailable,
+    }
+
+    record telemetry-report {
+        cpu-temp-millicelsius: u32,
+        active-governor: string,
+        energy-performance-preference: string,
+        turbo-state: turbo-mode,
+        mglru-enabled-mask: string,
+        mglru-min-ttl-ms: u32,
+        throttled: bool,
+    }
+
+    record tuning-options {
+        profile: governor-profile,
+        target-mglru-ttl-ms: option<u32>,
+        thermal-ceiling-millicelsius: u32,
+    }
+
+    /// Read comprehensive hardware telemetry and thermal status
+    get-telemetry: func() -> result<telemetry-report, string>;
+
+    /// Apply an active CPU governor profile (performance, balanced, powersave)
+    set-profile: func(profile: governor-profile) -> result<bool, string>;
+
+    /// Adjust Linux Multi-Gen LRU (MGLRU) working set page cache protection TTL
+    tune-mglru: func(min-ttl-ms: u32) -> result<bool, string>;
+
+    /// Validate that CPU temperature is safely below threshold ceiling
+    check-thermal-headroom: func(max-temp-millicelsius: u32) -> result<bool, string>;
+
+    /// Revert all hardware settings back to default balanced baseline
+    restore-baseline: func() -> result<bool, string>;
+}
+
+/// Hardware governor orchestration world
+world dynatune-governor {
+    export governor;
+}

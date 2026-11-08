@@ -1,0 +1,94 @@
+package hagibis:storage@0.1.0;
+
+/// Pluggable SQLite Relational Store Interface
+interface sqlite-store {
+    /// Safe SQL parameter binding values
+    variant query-param {
+        text(string),
+        integer(s64),
+        float(f64),
+        blob(list<u8>),
+        null-val,
+    }
+
+    /// Key-value column representation of a returned record row
+    record query-column {
+        name: string,
+        value: string,
+    }
+
+    record query-row {
+        columns: list<query-column>,
+    }
+
+    record exec-result {
+        rows-affected: u64,
+        last-insert-id: option<s64>,
+    }
+
+    record table-column {
+        name: string,
+        data-type: string,
+        is-nullable: bool,
+        is-primary-key: bool,
+        default-value: option<string>,
+    }
+
+    record table-schema {
+        name: string,
+        columns: list<table-column>,
+    }
+
+    /// Execute a non-query SQL statement (INSERT, UPDATE, DELETE, CREATE TABLE)
+    execute: func(sql: string, params: list<query-param>) -> result<exec-result, string>;
+
+    /// Execute a parameterized SELECT query returning typed row tuples
+    query: func(sql: string, params: list<query-param>) -> result<list<query-row>, string>;
+
+    /// Run WAL checkpoint operation to flush WAL log to main database file
+    pragma-wal-checkpoint: func() -> result<bool, string>;
+
+    /// Introspect schema of tables in the connected database
+    introspect-schema: func() -> result<list<table-schema>, string>;
+
+    /// Full-text search over FTS5 virtual table
+    fts5-search: func(table: string, query-text: string, limit: u32) -> result<list<query-row>, string>;
+}
+
+/// Pluggable Multi-Modal Vector Embedding Store Interface
+interface vector-store {
+    record vector-record {
+        id: string,
+        text: string,
+        embedding: list<f32>,
+        metadata-json: option<string>,
+    }
+
+    record vector-match {
+        id: string,
+        text: string,
+        similarity: f32,
+        metadata-json: option<string>,
+    }
+
+    /// Insert single embedding vector
+    insert-vector: func(record: vector-record) -> result<bool, string>;
+
+    /// Batch insert multiple embedding vectors
+    batch-insert-vectors: func(records: list<vector-record>) -> result<u32, string>;
+
+    /// Nearest-neighbor search using cosine similarity
+    search-vectors: func(query-embedding: list<f32>, top-k: u32, min-threshold: f32) -> result<list<vector-match>, string>;
+
+    /// Delete vector entry by identifier
+    delete-vector: func(id: string) -> result<bool, string>;
+
+    /// Count total registered vectors
+    count-vectors: func() -> result<u64, string>;
+}
+
+/// Storage capability engine world combining relational and vector interfaces
+world storage-engine {
+    export sqlite-store;
+    export vector-store;
+}

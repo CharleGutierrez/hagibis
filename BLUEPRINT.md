@@ -65,7 +65,6 @@ flowchart TB
     crate_hgb_storage -->|"depends on"| crate_hgb_core
     crate_hgb_nextgen -->|"depends on"| crate_hgb_core
     crate_hgb_nextgen -->|"depends on"| crate_hgb_storage
-    crate_hgb_nextgen -->|"depends on"| crate_hgb_daemon
     crate_hgb_daemon -->|"depends on"| crate_hgb_core
     crate_hgb_daemon -->|"depends on"| crate_hgb_storage
     crate_hgb_daemon -->|"depends on"| crate_hgb_nextgen

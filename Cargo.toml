@@ -6,6 +6,7 @@ members = [
     "crates/hgb-daemon",
     "crates/hgb-cli",
     "crates/hgb-wasm-kernel",
+    "crates/wat",
 ]
 resolver = "2"
 

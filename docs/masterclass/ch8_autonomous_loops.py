@@ -459,7 +459,201 @@ def build_autonomous_loops_chapter():
     ))
     story.append(Spacer(1, 15))
 
+    # =========================================================================
+    # SECTION 16: CALDOAI-INSPIRED SKILL UNTANGLING & AUTONOMIC HARDWARE-TUNED PGO FEEDBACK
+    # =========================================================================
+    p17_desc = (
+        "<b>16. CaldoAI-Inspired Skill Untangling & Autonomic Hardware-Tuned PGO Feedback:</b><br/>"
+        "Pioneers CaldoAI-inspired modularization by untangling monolithic agent loops into sovereign, "
+        "reusable, atomic skills (diagnostic interceptors, speculative sandboxes, PGO profilers, and hardware monitors). "
+        "Each skill exposes declarative precondition schemas and BLAKE3 attestation receipts, eliminating tool hallucination "
+        "and prompt congestion. Connects the autonomous event loop (<code>AutonomousDaemonLoopService</code> and "
+        "<code>AutonomousMcpSelfHealingLoop</code>) directly with real-time Linux kernel telemetry from <code>dynatune</code> "
+        "and <code>kernel-optimizer</code> via <code>KernelDynatuneLoop</code> and <code>HardwareDynamicFfiBridge</code>.<br/><br/>"
+        "<b>Autonomic Tri-Modal Feedback & Optimization Vectors:</b><br/>"
+        "• <b>Thermal Spike Mitigation</b>: Real-time sysfs thermal zone monitoring with millidegree precision. When package temperatures "
+        "reach or exceed 78.0°C (or critical thermal clamp limits), the daemon automatically dials back CPU frequency governors to "
+        "<code>powersave</code>, sets Energy Performance Preference (EPP) to <code>power</code>, throttles concurrency to 1 worker, "
+        "and initiates an autonomous background PGO tuning pass (<code>scripts/pgo-optimize.sh</code>) to restructure instruction caches and minimize thermal dissipation.<br/>"
+        "• <b>Swap Pressure & MGLRU Compaction</b>: Actively tracks <code>/proc/pressure/memory</code> (PSI avg10) and host swap exhaustion "
+        "(<code>swap_used_mb &gt; 512MB</code>) alongside Multi-Gen LRU (MGLRU) reclaim efficiency in <code>/proc/vmstat</code>. Automatically "
+        "escalates MGLRU low-latency aging (<code>min_ttl_ms 1000</code>) and launches background PGO passes (<code>--pgo-only</code>) to compress "
+        "resident set sizes (RSS) and eliminate disk paging bottlenecks.<br/>"
+        "• <b>p99 Latency SLA Self-Tuning</b>: Continuously computes rolling latency percentiles across WASM microkernel and LLM stream executions. "
+        "When p99 latency regresses beyond SLA thresholds (e.g. &gt;500ms), the daemon dynamically bursts CPU governors to <code>performance</code>, "
+        "engages Intel Turbo Boost, and launches autonomous PGO + LLVM BOLT profile passes with strict cooldown guards to reclaim sub-millisecond responsiveness."
+    )
+    story.append(Paragraph(p17_desc, styles["BodyTextCustom"]))
+    story.append(Spacer(1, 10))
+
+    story.append(CodeSnippet(
+        "// Autonomic Hardware-Tuned Telemetry & PGO Feedback Loop (Rust)\n"
+        "let autonomous_loop = AutonomousMcpSelfHealingLoop::new(workspace_root)?;\n"
+        "let kernel_loop = KernelDynatuneLoop::new();\n"
+        "let ffi_bridge = HardwareDynamicFfiBridge::new();\n"
+        "\n"
+        "// 1. Inspect real-time hardware telemetry from dynatune & kernel-optimizer\n"
+        "let thermal = ffi_bridge.read_thermal_telemetry();\n"
+        "let memory = ffi_bridge.read_memory_telemetry();\n"
+        "let percentiles = autonomous_loop.pgo_feedback.compute_latency_percentiles().await;\n"
+        "\n"
+        "// 2. Autonomic Tri-Modal Telemetry Evaluation & Governor Adjustment\n"
+        "if thermal.cpu_pkg_temp_c >= 78.0 || thermal.is_thermal_clamped {\n"
+        "    // Thermal Spike: clamp governor to powersave & launch PGO cooling pass\n"
+        "    kernel_loop.apply_profile(KernelProfile::ThermalThrottled)?;\n"
+        "    ffi_bridge.apply_profile(HardwareGovernorProfile::Powersave)?;\n"
+        "    autonomous_loop.handle_pgo_tune_pass(PgoTunePassRequest {\n"
+        "        trigger_reason: Some(\"thermal_spike_throttle\".into()),\n"
+        "        pgo_only: true,\n"
+        "        ..Default::default()\n"
+        "    }).await?;\n"
+        "} else if memory.swap_used_mb > 512 || memory.psi_some.avg10 > 15.0 {\n"
+        "    // Swap Pressure: escalate MGLRU min_ttl_ms to 1000ms & compress RSS footprint\n"
+        "    kernel_loop.set_mglru_min_ttl(1000)?;\n"
+        "    autonomous_loop.handle_pgo_tune_pass(PgoTunePassRequest {\n"
+        "        trigger_reason: Some(\"swap_pressure_mglru\".into()),\n"
+        "        pgo_only: true,\n"
+        "        ..Default::default()\n"
+        "    }).await?;\n"
+        "} else if percentiles.sample_count >= 5 && percentiles.p99_ms > 500.0 {\n"
+        "    // p99 Latency SLA Regression: burst to performance & launch PGO+BOLT pass\n"
+        "    kernel_loop.apply_profile(KernelProfile::Performance)?;\n"
+        "    autonomous_loop.handle_pgo_tune_pass(PgoTunePassRequest {\n"
+        "        trigger_reason: Some(\"latency_p99_regression\".into()),\n"
+        "        pgo_only: false,\n"
+        "        ..Default::default()\n"
+        "    }).await?;\n"
+        "}",
+        "Rust"
+    ))
+    story.append(Spacer(1, 15))
+
+    story.append(CodeSnippet(
+        "# CaldoAI-Inspired Skill Client & Daemon Event Loop Connector (Python)\n"
+        "from docs.masterclass.ch8_autonomous_loops import AutonomousDaemonLoopClient\n"
+        "\n"
+        "client = AutonomousDaemonLoopClient(mcp_url=\"http://127.0.0.1:8083\")\n"
+        "\n"
+        "# 1. Evaluate autonomic hardware telemetry and adjust governor profiles\n"
+        "report = client.evaluate_autonomic_telemetry(force_pgo=False)\n"
+        "print(f\"Telemetry Status: CPU={report.get('cpu_temp_c')}°C | Swap={report.get('swap_used_mb')}MB\")\n"
+        "\n"
+        "# 2. Trigger autonomous PGO tuning pass on SLA regression\n"
+        "if report.get('latency_regression_detected'):\n"
+        "    pgo_res = client.trigger_pgo_pass(reason=\"latency_p99_sla_violation\")\n"
+        "    print(\"Launched background PGO pipeline PID:\", pgo_res.get(\"pid\"))",
+        "Python"
+    ))
+    story.append(Spacer(1, 15))
+
     return story
+
+# =============================================================================
+# Direct Connection with hgb-daemon's Event Loop (AutonomousDaemonLoopClient)
+# =============================================================================
+
+import os
+import json
+import socket
+import urllib.request
+import urllib.error
+
+class AutonomousDaemonLoopClient:
+    """
+    Direct Python client interfacing with hgb-daemon's resident autonomous event loop
+    (AutonomousDaemonLoopService / AutonomousMcpSelfHealingLoop) via HTTP/SSE MCP and Unix Domain Sockets.
+    """
+    def __init__(self, mcp_url="http://127.0.0.1:8083", socket_path=None):
+        self.mcp_url = mcp_url
+        self.socket_path = socket_path or os.environ.get("HGB_DAEMON_SOCKET") or "/run/user/1000/hgb.sock"
+
+    def call_mcp_tool(self, tool_name, arguments=None):
+        payload = json.dumps({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": tool_name,
+                "arguments": arguments or {}
+            }
+        }).encode("utf-8")
+        endpoints = [
+            f"{self.mcp_url}/message",
+            f"{self.mcp_url}/mcp",
+            self.mcp_url,
+        ]
+        last_error = None
+        for ep in endpoints:
+            try:
+                req = urllib.request.Request(ep, data=payload, headers={"Content-Type": "application/json"})
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    res = json.loads(resp.read().decode("utf-8"))
+                    if "result" in res:
+                        content = res["result"].get("content", [])
+                        if content and "text" in content[0]:
+                            try:
+                                return json.loads(content[0]["text"])
+                            except Exception:
+                                return content[0]["text"]
+                        return res["result"]
+            except Exception as e:
+                last_error = e
+        return {
+            "status": "offline_fallback",
+            "tool": tool_name,
+            "error": str(last_error),
+            "message": f"Daemon MCP endpoint not reachable at {self.mcp_url}. Ensure hgbd is running."
+        }
+
+    def evaluate_autonomic_telemetry(self, force_pgo=False):
+        """Evaluate real-time hardware telemetry and trigger autonomous optimizations."""
+        return self.call_mcp_tool("hgb_autonomic_hardware_tune", {"force_pgo": force_pgo})
+
+    def trigger_pgo_pass(self, reason="latency_p99_regression", force=False, pgo_only=True):
+        """Dispatch autonomous PGO tuning pass with cooldown guards."""
+        return self.call_mcp_tool("hgb_pgo_tune_pass", {
+            "trigger_reason": reason,
+            "force": force,
+            "pgo_only": pgo_only,
+            "run_benchmark": False
+        })
+
+    def diagnose_and_heal(self, target_file, error_context="", compiler="auto", auto_apply=True):
+        """Invoke autonomous self-healing compiler diagnostic repair in /dev/shm sandbox."""
+        return self.call_mcp_tool("hgb_self_healing_diagnose", {
+            "target_file": target_file,
+            "error_context": error_context,
+            "compiler": compiler,
+            "auto_apply": auto_apply
+        })
+
+    def patch_bottleneck(self, target_file, function_name=None, strategy="auto", auto_apply=True):
+        """Auto-patch performance bottlenecks in target file."""
+        return self.call_mcp_tool("hgb_auto_patch_bottleneck", {
+            "target_file": target_file,
+            "function_name": function_name,
+            "optimization_strategy": strategy,
+            "auto_apply": auto_apply
+        })
+
+def connect_daemon_autonomous_loop(mcp_url="http://127.0.0.1:8083", socket_path=None):
+    return AutonomousDaemonLoopClient(mcp_url=mcp_url, socket_path=socket_path)
+
+def query_autonomous_daemon_loop(workflow_id=None, mcp_url="http://127.0.0.1:8083"):
+    client = AutonomousDaemonLoopClient(mcp_url=mcp_url)
+    return client.call_mcp_tool("hgb_autonomic_hardware_tune", {})
+
+def trigger_autonomous_pgo_pass(reason="latency_p99_regression", force=False, mcp_url="http://127.0.0.1:8083"):
+    client = AutonomousDaemonLoopClient(mcp_url=mcp_url)
+    return client.trigger_pgo_pass(reason=reason, force=force)
+
+def evaluate_autonomic_hardware_telemetry(force_pgo=False, mcp_url="http://127.0.0.1:8083"):
+    client = AutonomousDaemonLoopClient(mcp_url=mcp_url)
+    return client.evaluate_autonomic_telemetry(force_pgo=force_pgo)
+
+def diagnose_compiler_error(target_file, error_context="", mcp_url="http://127.0.0.1:8083"):
+    client = AutonomousDaemonLoopClient(mcp_url=mcp_url)
+    return client.diagnose_and_heal(target_file, error_context=error_context)
 
 if __name__ == "__main__":
     from reportlab.platypus import SimpleDocTemplate
