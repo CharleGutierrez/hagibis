@@ -721,6 +721,15 @@ pub use zero_copy_shm_server::{
     ZeroCopyIpcBenchmarkMetrics, ZeroCopyShmServer,
 };
 
+// Strategic Power-Up Directive 4: Self-Hosting Autonomic PGO Rewriter & Hot-Swap Daemon
+pub mod self_healing_pgo_rewriter;
+pub use self_healing_pgo_rewriter::{
+    PgoRecompileExecutionReport, PgoRecompileReason, SelfHealingPgoRewriter,
+    DEFAULT_PGO_HOTSPOT_INVOCATIONS_THRESHOLD, DEFAULT_PGO_MIN_COOLDOWN_MS,
+    DEFAULT_PGO_REGRESSION_THRESHOLD_PCT,
+};
+
+
 
 
 

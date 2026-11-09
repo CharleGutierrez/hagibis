@@ -479,5 +479,14 @@ pub use shm_ipc_broker::{
     DEFAULT_SHM_CAPACITY, SHM_BROKER_MAGIC,
 };
 
+// Strategic Power-Up Directive 3: Hardware-Accelerated Vector & Graph Relational Fusion Engine
+pub mod vector_graph_relational_fused_engine;
+pub use vector_graph_relational_fused_engine::{
+    fused_simd_cosine_similarity, FusedQueryRequest, FusedQueryResultItem,
+    FusedVectorGraphRelationalEngine, GraphEdge, GraphEntity,
+    DEFAULT_FUSED_VECTOR_DIM,
+};
+
+
 
 

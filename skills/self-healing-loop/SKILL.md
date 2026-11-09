@@ -90,3 +90,13 @@ let pipeline = NightShiftPipeline::new(".");
 let report = pipeline.run("absorb-patches-and-verify", "main");
 assert!(report.ready_for_review);
 ```
+
+---
+
+## 5. Closed-Loop Self-Hosting PGO & Runtime Hot-Swapping
+
+The `self-healing-loop` skill directly wires into [`crates/hgb-daemon/src/self_healing_pgo_rewriter.rs`](file:///home/toshiba/My%20AI%20Project/hagibis/crates/hgb-daemon/src/self_healing_pgo_rewriter.rs):
+1. **Continuous Telemetry Profiling**: Tracks execution hot-paths and latency regressions during multi-agent workloads.
+2. **Autonomous Recompilation Trigger**: Automatically invokes `scripts/pgo-optimize.sh` when latency regressions (>25%) or hotspot invocations (>1000) occur.
+3. **Zero-Downtime Hot-Swap**: Replaces live binaries and WASM microkernels using atomic filesystem symlink swaps with automatic rollback if health probes fail.
+

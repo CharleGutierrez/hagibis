@@ -843,6 +843,47 @@
         "chunk_size_bytes": { "type": "integer", "description": "Transfer chunk size in bytes (default: 65536)", "default": 65536 },
         "iterations": { "type": "integer", "description": "Number of roundtrip iterations (default: 50)", "default": 50 }
       }
+    },
+    "hgb_swarm_consensus_status": {
+      "description": "Query distributed swarm consensus state, term, quorum, and cluster nodes across multi-node Firecracker fabrics",
+      "parameters": {
+        "detailed": { "type": "boolean", "description": "Include log entry count and node descriptors", "default": false }
+      }
+    },
+    "hgb_swarm_pod_spawn": {
+      "description": "Dynamically spawn a sandboxed Firecracker agent pod on the optimal cluster node via distributed consensus",
+      "parameters": {
+        "pod_id": { "type": "string", "description": "Unique pod identifier" },
+        "agent_id": { "type": "string", "description": "Target agent identifier" },
+        "workload_image": { "type": "string", "description": "Pod workload image or runtime target", "default": "firecracker-rust-jail" },
+        "required_memory_mb": { "type": "integer", "description": "RAM requirement in MB", "default": 2048 },
+        "require_kvm": { "type": "boolean", "description": "Require hardware KVM acceleration", "default": true }
+      },
+      "required": ["pod_id", "agent_id"]
+    },
+    "hgb_shm_uring_bench": {
+      "description": "Benchmark zero-copy io_uring shared-memory ring buffer throughput and latency between host and Zig/WASM guests",
+      "parameters": {
+        "batch_size": { "type": "integer", "description": "Number of columnar sensor records to transfer (default: 100)", "default": 100 }
+      }
+    },
+    "hgb_fused_vector_graph_query": {
+      "description": "Execute hardware-accelerated fused query joining Knowledge Graph hops, SIMD vector similarity, and relational filters",
+      "parameters": {
+        "root_entity_id": { "type": "string", "description": "Optional starting root entity in graph" },
+        "max_graph_hops": { "type": "integer", "description": "Maximum graph traversal hops (default: 2)", "default": 2 },
+        "semantic_query": { "type": "string", "description": "Semantic text query for SIMD vector distance ranking" },
+        "min_similarity": { "type": "number", "description": "Minimum vector cosine similarity threshold (default: 0.5)", "default": 0.5 },
+        "top_k": { "type": "integer", "description": "Maximum items to return", "default": 5 }
+      }
+    },
+    "hgb_self_healing_pgo_trigger": {
+      "description": "Autonomously trigger PGO re-profiling and zero-downtime hot-swap for latency regressions or hotpath spikes",
+      "parameters": {
+        "subsystem": { "type": "string", "description": "Subsystem reporting hotpath or latency spike" },
+        "observed_latency_ms": { "type": "number", "description": "Observed p95 latency in milliseconds" }
+      },
+      "required": ["subsystem", "observed_latency_ms"]
     }
   },
   "mcpServers": {
@@ -926,7 +967,12 @@
         "hgb_reflection_finetune_ingest",
         "hgb_reflection_finetune_status",
         "hgb_dynatune_natural_language_optimize",
-        "hgb_zerocopy_ipc_bench"
+        "hgb_zerocopy_ipc_bench",
+        "hgb_swarm_consensus_status",
+        "hgb_swarm_pod_spawn",
+        "hgb_shm_uring_bench",
+        "hgb_fused_vector_graph_query",
+        "hgb_self_healing_pgo_trigger"
       ]
     },
     "hagibis_sse": {

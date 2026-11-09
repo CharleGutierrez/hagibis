@@ -2169,6 +2169,23 @@ pub use wasi_component_loader::{
     ENVELOPE_HEADER_SIZE,
 };
 
+// Strategic Power-Up 1: Distributed Swarm Consensus & Multi-Node Firecracker Orchestrator
+pub mod distributed_swarm_consensus;
+pub use distributed_swarm_consensus::{
+    AgentPodPlacementRecord, AgentPodSpec, AgentPodState, ConsensusLogEntry,
+    ConsensusRole, DistributedSwarmConsensus, SwarmClusterStatusReport,
+    SwarmConsensusCommand, SwarmNodeDescriptor, DEFAULT_HEARTBEAT_TIMEOUT_MS,
+};
+
+// Strategic Power-Up 2: Zero-Copy Shared Memory io_uring WASM Bridge
+pub mod shm_uring_wasm_bridge;
+pub use shm_uring_wasm_bridge::{
+    ColumnarSensorRecord, ShmUringBenchMetrics, ShmUringWasmBridge,
+    UringCompletionEntry, UringShmHeader, UringSubmissionEntry,
+    DEFAULT_URING_ENTRIES, URING_SHM_MAGIC,
+};
+
+
 
 
 

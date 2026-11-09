@@ -165,3 +165,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
+
+---
+
+## 6. Distributed MicroVM Swarms & Consensus Orchestrator
+
+The `agent-orchestrator-rig` skill interfaces with [`crates/hgb-core/src/distributed_swarm_consensus.rs`](file:///home/toshiba/My%20AI%20Project/hagibis/crates/hgb-core/src/distributed_swarm_consensus.rs) to scale agent execution from node-local execution to multi-node clusters:
+
+1. **Lightweight Raft Consensus**: Tracks cluster quorum, term election, and immutable log replication sealed with BLAKE3 checksums.
+2. **Dynamic Agent Pod Placement**: Evaluates hardware constraints (KVM presence, memory headroom, active pods) to place sandboxed agent pods dynamically on optimal remote nodes or local microVMs.
+3. **Multi-Node Scale Out**: Enables Hagibis daemons (`hgbd`) across LAN and cloud instances to spawn sandboxed agent pods on-demand with zero manual configuration.
+
