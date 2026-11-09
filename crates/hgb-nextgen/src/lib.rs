@@ -242,4 +242,14 @@ pub use holographic_control_room::{
     DEFAULT_TELEMETRY_BROADCAST_INTERVAL_MS, HOLOGRAPHIC_DASHBOARD_HTML,
 };
 
+// Strategic Power-Up Pillar 1: Distributed Multi-Node Agent Mesh (P2P Gossip & Raft Consensus)
+pub mod p2p_raft_mesh_network;
+pub use p2p_raft_mesh_network::{
+    DistributedWorkflowPlan, DistributedWorkflowStep, MeshPeerIdentity, MeshRpcMessage,
+    P2pRaftMeshNetwork, PeerNodeTelemetry, RaftClusterCommand, RaftLogEntry, RaftRole,
+    DEFAULT_RAFT_ELECTION_TIMEOUT_MAX_MS, DEFAULT_RAFT_ELECTION_TIMEOUT_MIN_MS,
+    DEFAULT_RAFT_HEARTBEAT_INTERVAL_MS, DEFAULT_VECTOR_SYNC_BATCH_SIZE,
+};
+
+
 

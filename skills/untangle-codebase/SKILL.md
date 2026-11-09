@@ -89,3 +89,10 @@ To produce a machine-readable JSON digest:
 ```bash
 python3 skills/untangle-codebase/scripts/untangle_analyzer.py --workspace . --json
 ```
+
+## 5. Autonomous Evolutionary Loop Integration
+When `AutonomousEvolutionaryLoop` (`crates/hgb-daemon/src/autonomous_evolutionary_loop.rs`) captures a failing test or latency regression, it programmatically invokes `audit_codebase_untangle()` prior to patch synthesis. This ensures:
+- Surgical patch modifications adhere strictly to DAG invariants `ARCH-001` and `ARCH-002`.
+- Zero circular references are introduced between `hgb-core`, `hgb-storage`, `hgb-nextgen`, and `hgb-daemon`.
+- Crate isolation is certified before candidate patches are verified in ephemeral Firecracker microVMs.
+

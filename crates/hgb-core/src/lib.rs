@@ -2185,6 +2185,16 @@ pub use shm_uring_wasm_bridge::{
     DEFAULT_URING_ENTRIES, URING_SHM_MAGIC,
 };
 
+// Strategic Power-Up Pillar 2: Hardware-Accelerated Hybrid Inference Pipeline (Wasm + Candle/ONNX)
+pub mod hybrid_candle_onnx_pipeline;
+pub use hybrid_candle_onnx_pipeline::{
+    apply_rope, rms_norm, softmax_inplace, swiglu_activation,
+    HostPowerMetrics, HybridCandleOnnxPipeline, InferenceGenerationOutput,
+    QuantizationKind, QuantizedModelSpec, QuantizedTensor,
+    DEFAULT_EPSILON, DEFAULT_MAX_CONTEXT_LEN, THERMAL_BURST_MAX_TEMP_C,
+};
+
+
 
 
 

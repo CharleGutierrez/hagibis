@@ -729,6 +729,21 @@ pub use self_healing_pgo_rewriter::{
     DEFAULT_PGO_REGRESSION_THRESHOLD_PCT,
 };
 
+// Strategic Power-Up Pillar 1: Distributed Raft Agent Mesh Service
+pub mod distributed_raft_agent_service;
+pub use distributed_raft_agent_service::{
+    DistributedRaftAgentService, DistributedRaftServiceConfig,
+};
+
+// Strategic Power-Up Pillar 3: Intent-Driven Autonomous Self-Evolving Code Loops
+pub mod autonomous_evolutionary_loop;
+pub use autonomous_evolutionary_loop::{
+    AutonomousEvolutionaryLoop, EvolutionaryCycleReceipt, EvolutionaryCycleStatus,
+    EvolutionaryTriggerKind,
+};
+
+
+
 
 
 

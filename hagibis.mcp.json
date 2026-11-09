@@ -884,6 +884,37 @@
         "observed_latency_ms": { "type": "number", "description": "Observed p95 latency in milliseconds" }
       },
       "required": ["subsystem", "observed_latency_ms"]
+    },
+    "hgb_p2p_raft_mesh_status": {
+      "description": "Query distributed P2P Raft mesh status, term, leader, quorum health, and replicated LanceDB vector memories",
+      "parameters": {
+        "detailed": { "type": "boolean", "description": "Include full node telemetry list and log entry count", "default": true }
+      }
+    },
+    "hgb_p2p_raft_workflow_dispatch": {
+      "description": "Dispatch a multi-step collaborative agent workflow DAG across peer nodes in the distributed Raft cluster",
+      "parameters": {
+        "title": { "type": "string", "description": "Workflow title", "required": true },
+        "steps": { "type": "array", "description": "Ordered workflow DAG steps", "required": true }
+      },
+      "required": ["title", "steps"]
+    },
+    "hgb_hybrid_inference_generate": {
+      "description": "Execute pure-Rust quantized LLM inference (Llama-3/Phi-3) with automatic Dynatune CPU thermal/battery governor scaling",
+      "parameters": {
+        "prompt": { "type": "string", "description": "Input prompt to evaluate", "required": true },
+        "max_new_tokens": { "type": "integer", "description": "Maximum new tokens to generate (default: 32)", "default": 32 }
+      },
+      "required": ["prompt"]
+    },
+    "hgb_evolutionary_self_heal_trigger": {
+      "description": "Engage autonomous evolutionary loop: untangle audit -> local LLM patch -> Firecracker microVM test -> PGO benchmark -> zero-downtime hot-reload",
+      "parameters": {
+        "target_file": { "type": "string", "description": "Path to affected source file", "required": true },
+        "trigger_type": { "type": "string", "description": "Trigger category (unit_test_failure, compiler_diagnostic, performance_regression)", "default": "unit_test_failure" },
+        "diagnostic_details": { "type": "string", "description": "Error output or diagnostic message", "required": true }
+      },
+      "required": ["target_file", "diagnostic_details"]
     }
   },
   "mcpServers": {
@@ -972,7 +1003,11 @@
         "hgb_swarm_pod_spawn",
         "hgb_shm_uring_bench",
         "hgb_fused_vector_graph_query",
-        "hgb_self_healing_pgo_trigger"
+        "hgb_self_healing_pgo_trigger",
+        "hgb_p2p_raft_mesh_status",
+        "hgb_p2p_raft_workflow_dispatch",
+        "hgb_hybrid_inference_generate",
+        "hgb_evolutionary_self_heal_trigger"
       ]
     },
     "hagibis_sse": {

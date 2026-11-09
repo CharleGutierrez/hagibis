@@ -100,3 +100,15 @@ The `self-healing-loop` skill directly wires into [`crates/hgb-daemon/src/self_h
 2. **Autonomous Recompilation Trigger**: Automatically invokes `scripts/pgo-optimize.sh` when latency regressions (>25%) or hotspot invocations (>1000) occur.
 3. **Zero-Downtime Hot-Swap**: Replaces live binaries and WASM microkernels using atomic filesystem symlink swaps with automatic rollback if health probes fail.
 
+---
+
+## 6. Autonomous Evolutionary Code Loop (Pillar 3)
+
+The evolutionary cycle integrates `crates/hgb-daemon/src/autonomous_evolutionary_loop.rs`:
+- **Diagnostic Capture**: Detects unit test failures, compiler errors, or latency regressions in real time.
+- **Untangle Invariant Check**: Enforces CaldoAI 100/100 DAG layering and crate boundaries.
+- **Local Hybrid Inference**: Invokes `HybridCandleOnnxPipeline` (`crates/hgb-core/src/hybrid_candle_onnx_pipeline.rs`) to synthesize surgical diff patches.
+- **Firecracker MicroVM Isolation**: Spawns an isolated ephemeral VM (or Landlock CoW sandbox) to test patches in complete isolation.
+- **PGO Benchmark Gate & Atomic Hot-Reload**: Benchmarks performance to avoid regressions, then atomically reloads compiled Wasm kernels into the live daemon.
+
+
