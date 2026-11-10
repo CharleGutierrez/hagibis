@@ -2203,6 +2203,21 @@ pub use distributed_grpc_swarm_transport::{
     SWARM_RPC_MAGIC,
 };
 
+// Pillar 1: Unified "Neural Bus" for Inter-Skill Streaming (Zero-Copy IPC)
+pub mod neural_bus_ring_buffer;
+pub use neural_bus_ring_buffer::{
+    NeuralBusMasterHeader, NeuralBusRingBuffer, NeuralFrameKind, NeuralSlotHeader,
+    SkillStreamingChannel, ZeroCopyGuestMapping, CACHELINE_SIZE, DEFAULT_NEURAL_SLOTS,
+    INLINE_SLOT_PAYLOAD_BYTES, NEURAL_BUS_MAGIC, NEURAL_BUS_VERSION, NEURAL_SLAB_ARENA_BYTES,
+};
+
+// Pillar 2: Native eBPF Observability & Kernel Telemetry Interceptor
+pub mod ebpf_kernel_probe_loader;
+pub use ebpf_kernel_probe_loader::{
+    AutonomicActionKind, EbpfAttachType, EbpfKernelProbeLoader, EbpfKernelTelemetrySnapshot,
+    EbpfProgramSpec, KernelAnomalyKind,
+};
+
 
 
 

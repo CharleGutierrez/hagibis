@@ -124,5 +124,17 @@ The evolutionary cycle integrates `crates/hgb-daemon/src/autonomous_evolutionary
    - Online Markov chain transitions anticipate next actions ($P \ge 60\%$).
    - Speculatively pre-warms Firecracker microVM snapshots, pre-loads vector memories into RAM, pre-compiles Wasm kernels, and pre-ramps CPU governors before the user or agent even executes the command.
 
+---
+
+## 8. Native eBPF Kernel Anomaly Interception & MicroVM Workload Eviction
+
+1. **eBPF Anomaly Sentry (`crates/hgb-core/src/ebpf_kernel_probe_loader.rs`)**:
+   - Sub-microsecond detection of memory thrashing (high PSI pressure), kernel lockups / deadlocks, and thermal spikes.
+   - Autonomic triggering of CPU governor down-throttling or boosting.
+
+2. **Automated Firecracker Workload Eviction (`crates/hgb-daemon/src/ebpf_autonomic_healer.rs`)**:
+   - Automatically migrates thrashing or anomalous processes into isolated Firecracker microVM sandboxes (`FirecrackerEphemeralSandbox`) without human intervention.
+
+
 
 

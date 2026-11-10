@@ -749,6 +749,19 @@ pub use agentic_self_compiler::{
     SelfCompilationReceipt, SkillSourceLanguage,
 };
 
+// Pillar 2: Native eBPF Kernel Observability & Autonomic Self-Healing Daemon Service
+pub mod ebpf_autonomic_healer;
+pub use ebpf_autonomic_healer::{
+    AutonomicInterventionEvent, EbpfAutonomicHealer,
+};
+
+// Pillar 3: Distributed Swarm Federation over WebRTC / libp2p
+pub mod webrtc_libp2p_swarm_federation;
+pub use webrtc_libp2p_swarm_federation::{
+    SwarmConsensusResult, SwarmNodeDescriptor, SwarmSubtask, SwarmWorkerResult,
+    WebRtcLibp2pSwarmFederation, WebRtcSignalMessage, WorkerExecutionTarget,
+};
+
 
 
 

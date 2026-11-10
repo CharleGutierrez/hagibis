@@ -949,6 +949,29 @@
         "event_name": { "type": "string", "description": "Observed workflow event or command", "required": true }
       },
       "required": ["event_name"]
+    },
+    "hgb_neural_bus_stream": {
+      "description": "Stream vectors, AST graphs, or multimodal blobs across skills via shared-memory zero-copy ring buffer",
+      "parameters": {
+        "bus_id": { "type": "string", "description": "Identifier for the shared memory bus", "required": true },
+        "channel": { "type": "string", "description": "Channel: lancedb_to_firecracker, wasm_kernel_to_daemon, ast_code_graph, multimodal_tensor", "default": "lancedb_to_firecracker" },
+        "payload_text": { "type": "string", "description": "Text or AST payload to stream into the ring buffer" }
+      },
+      "required": ["bus_id"]
+    },
+    "hgb_ebpf_telemetry_intercept": {
+      "description": "Intercept Linux kernel syscall latency, page faults, and thermal throttles via eBPF and trigger autonomic healing",
+      "parameters": {
+        "evaluate_autonomic_action": { "type": "boolean", "description": "Execute governor shift or Firecracker microVM migration if threshold is exceeded", "default": true }
+      }
+    },
+    "hgb_webrtc_swarm_federate": {
+      "description": "Decompose coding workflows across distributed Hagibis nodes over WebRTC/libp2p and achieve LanceDB vector consensus",
+      "parameters": {
+        "parent_task_id": { "type": "string", "description": "Identifier for the parent task", "required": true },
+        "task_prompt": { "type": "string", "description": "Complex task prompt to decompose and farm out to Wasm/Firecracker workers", "required": true }
+      },
+      "required": ["parent_task_id", "task_prompt"]
     }
   },
   "mcpServers": {
@@ -1045,7 +1068,10 @@
         "hgb_grpc_swarm_dispatch",
         "hgb_vulkan_rag_search",
         "hgb_agentic_self_compile",
-        "hgb_predictive_prefetch_anticipate"
+        "hgb_predictive_prefetch_anticipate",
+        "hgb_neural_bus_stream",
+        "hgb_ebpf_telemetry_intercept",
+        "hgb_webrtc_swarm_federate"
       ]
     },
     "hagibis_sse": {

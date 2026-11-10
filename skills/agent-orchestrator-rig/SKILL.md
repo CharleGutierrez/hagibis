@@ -176,3 +176,19 @@ The `agent-orchestrator-rig` skill interfaces with [`crates/hgb-core/src/distrib
 2. **Dynamic Agent Pod Placement**: Evaluates hardware constraints (KVM presence, memory headroom, active pods) to place sandboxed agent pods dynamically on optimal remote nodes or local microVMs.
 3. **Multi-Node Scale Out**: Enables Hagibis daemons (`hgbd`) across LAN and cloud instances to spawn sandboxed agent pods on-demand with zero manual configuration.
 
+---
+
+## 7. WebRTC & libp2p Swarm Federation with LanceDB Vector Consensus
+
+1. **Decentralized Swarm Discovery (`crates/hgb-daemon/src/webrtc_libp2p_swarm_federation.rs`)**:
+   - Discovers peer nodes via libp2p GossipSub and negotiates direct WebRTC data channels for sub-millisecond inter-agent communication.
+   - Dynamically federates remote MCP tool catalogs across edge machines.
+
+2. **Distributed Task Decomposition & Farming**:
+   - `agent-orchestrator-rig` decomposes complex workflows into discrete subtasks (Wasm kernels, Firecracker microVMs, remote RAG).
+   - Workers execute concurrently across nodes and stream results back into memory.
+
+3. **LanceDB Vector Consensus Reassembly**:
+   - Reassembles distributed worker outputs using centroid vector consensus and cosine similarity confidence scoring ($> 0.95$), ensuring Byzantine fault tolerance before merging patches.
+
+

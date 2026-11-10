@@ -49,3 +49,9 @@ bash scripts/cpu-governor.sh performance
 bash scripts/cpu-governor.sh status
 bash scripts/cpu-governor.sh balanced
 ```
+
+## 5. Native eBPF Kernel Observability & Autonomic Self-Healing
+Hagibis integrates a real-time Linux eBPF probe loader (`EbpfKernelProbeLoader` in `hgb-core` and `EbpfAutonomicHealer` in `hgb-daemon`):
+- **Tracepoints Attached**: `raw_syscalls:sys_enter`, `raw_syscalls:sys_exit`, `exceptions:page_fault_user`, `thermal:thermal_temperature`.
+- **Microsecond Anomaly Detection**: Intercepts memory thrashing (PSI pressure > 40% / 50k page faults/sec), thermal throttles (> 85°C), and deadlocks (blocked syscalls > 30ms).
+- **Autonomic Action**: Automatically actuates `/kernel-optimizer/plugins/cpu-governor.sh` or `dynabook-kernel-ctl`, dispatches alerts to `self-healing-loop`, and evicts runaway or thrashing tasks into isolated Firecracker microVM sandboxes with zero human intervention.
