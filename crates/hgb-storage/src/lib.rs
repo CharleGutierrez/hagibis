@@ -502,6 +502,14 @@ pub use hardware_adaptive_vector_rag::{
     HardwareAdaptiveVectorRag, VectorQuantizationLevel,
 };
 
+// Strategic Superpower 1: Unified Vector Memory with Distributed Graph RAG
+pub mod distributed_graph_vector_rag;
+pub use distributed_graph_vector_rag::{
+    CodeAstSummary, CodeEdgeRelation, CodeGraphEdge, CodeGraphNode, CodeNodeType,
+    DistributedGraphVectorRag, GraphPathStep, GraphVectorHit, GraphVectorQueryResult,
+    GraphVectorQuerySpec, DEFAULT_GRAPH_VECTOR_DIM,
+};
+
 
 
 

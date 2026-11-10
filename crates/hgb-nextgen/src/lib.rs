@@ -259,6 +259,16 @@ pub use predictive_prefetch_engine::{
     DEFAULT_PREDICTION_CONFIDENCE_THRESHOLD,
 };
 
+// Superpower 3: Predictive Profile-Guided Autonomous Tuning (perf-dynatune + kernel-optimizer)
+pub mod predictive_autonomous_tuner;
+pub use predictive_autonomous_tuner::{
+    AutonomousTuningAction, CompilerOptPreset, PredictiveAutonomousTuner, ThermalTrajectory,
+    TuningExecutionReceipt, DEFAULT_FORECAST_HORIZON_SECS, DEFAULT_MAX_TELEMETRY_WINDOW,
+    HIGH_PSI_SOME_AVG10_THRESHOLD, LOW_MEMORY_AVAILABLE_PCT_THRESHOLD,
+    THERMAL_RUNAWAY_SLOPE_C_PER_SEC,
+};
+
+
 
 
 

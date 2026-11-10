@@ -775,6 +775,20 @@ pub use self_evolving_skill_generator::{
     MetaSkillGenerationReceipt, NovelSkillRequest, SelfEvolvingSkillGenerator,
 };
 
+// Strategic Superpower 2: Zero-Overhead WASM Component Hot-Reloading in Daemon
+pub mod zero_overhead_wasm_reloader;
+pub use zero_overhead_wasm_reloader::{
+    ActiveWorkerComponentSlot, DaemonWasmHotReloader, HotReloadReceipt,
+};
+
+// Strategic Superpower 4: Native Multi-Agent Swarm Orchestration via MCP
+pub mod decentralized_mcp_swarm_protocol;
+pub use decentralized_mcp_swarm_protocol::{
+    ConsensusStatus, CrossAgentArtifactHandoff, DecentralizedMcpSwarmProtocol, McpDaemonNode,
+    McpSwarmRole, SwarmConsensusTicket, SwarmTaskBid, SwarmTaskProposal, TaskLeaseTicket,
+};
+
+
 
 
 

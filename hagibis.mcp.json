@@ -1012,6 +1012,41 @@
         "preferred_language": { "type": "string", "description": "Implementation language: 'zig' or 'rust'", "default": "zig" }
       },
       "required": ["skill_name", "intent_description"]
+    },
+    "hgb_graph_vector_multi_hop_query": {
+      "description": "Multi-hop Graph RAG query combining LanceDB vector search with AST syntactic property graph traversal (calls, defines, implements, imports, references) to prevent structural hallucinations",
+      "parameters": {
+        "query_text": { "type": "string", "description": "Semantic query text to search for seed symbol nodes", "required": true },
+        "max_hops": { "type": "integer", "description": "Maximum BFS graph expansion hops (default: 2)", "default": 2 },
+        "top_k_seeds": { "type": "integer", "description": "Number of vector nearest neighbors to seed graph traversal (default: 5)", "default": 5 },
+        "min_similarity": { "type": "number", "description": "Minimum vector cosine similarity threshold (default: 0.5)", "default": 0.5 }
+      },
+      "required": ["query_text"]
+    },
+    "hgb_daemon_wasm_hot_reload": {
+      "description": "Sub-millisecond zero-downtime hot-reloading of WebAssembly worker components in running daemon worker threads with optional linear memory state preservation",
+      "parameters": {
+        "component_id": { "type": "string", "description": "Identifier of the worker component to swap or inject", "required": true },
+        "wat_or_wasm_base64": { "type": "string", "description": "WAT source code or base64-encoded Wasm binary", "required": true },
+        "preserve_memory": { "type": "boolean", "description": "Whether to preserve linear memory across generations", "default": true }
+      },
+      "required": ["component_id", "wat_or_wasm_base64"]
+    },
+    "hgb_predictive_dynatune_optimize": {
+      "description": "Closed-loop predictive governor evaluation and sysctl/PGO tuning using thermal slope projections (dT/dt) and memory stall pressure",
+      "parameters": {
+        "workload_category": { "type": "string", "description": "Workload category: build_compile, test_execution, llm_generation, wasm_execution, idle_interval", "required": true },
+        "dry_run": { "type": "boolean", "description": "Simulate and return proposed tuning action without applying sysctl/governor changes", "default": false }
+      },
+      "required": ["workload_category"]
+    },
+    "hgb_mcp_swarm_negotiate": {
+      "description": "Multi-agent role-based task proposal, bidding, and consensus execution across federated daemon cluster nodes over MCP",
+      "parameters": {
+        "action": { "type": "string", "description": "Action type: propose_task, submit_bid, award_lease, propose_consensus, vote_consensus, execute_merge, swarm_status", "required": true },
+        "payload": { "type": "object", "description": "Action payload details (task proposal, bid, vote, or merge request)", "required": true }
+      },
+      "required": ["action", "payload"]
     }
   },
   "mcpServers": {
