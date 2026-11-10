@@ -972,6 +972,46 @@
         "task_prompt": { "type": "string", "description": "Complex task prompt to decompose and farm out to Wasm/Firecracker workers", "required": true }
       },
       "required": ["parent_task_id", "task_prompt"]
+    },
+    "hgb_microvm_swarm_offload": {
+      "description": "Dynamic offloading of compilation or vector indexing workloads across peer microVM swarms via libp2p GossipSub mesh (/hgb/microvm-swarm/1.0.0)",
+      "parameters": {
+        "workload_category": { "type": "string", "description": "Workload category: 'wasm_compilation', 'vector_indexing', 'adversarial_fuzzing', or 'deep_graph_traversal'", "required": true },
+        "payload": { "type": "string", "description": "Serialized workload or code payload to execute remotely", "required": true },
+        "required_vcpus": { "type": "integer", "description": "Minimum required vCPUs on target worker node", "default": 2 },
+        "required_memory_mb": { "type": "integer", "description": "Minimum required memory in MB", "default": 1024 },
+        "requires_kvm": { "type": "boolean", "description": "Whether hardware virtualization (KVM) is strictly required", "default": false },
+        "timeout_ms": { "type": "integer", "description": "Execution timeout in milliseconds", "default": 30000 }
+      },
+      "required": ["workload_category", "payload"]
+    },
+    "hgb_wasm_live_hotswap": {
+      "description": "Sub-millisecond zero-downtime hot-patching of WASM compute subroutines with linear memory persistence across module updates",
+      "parameters": {
+        "module_id": { "type": "string", "description": "Unique module identifier to hot-swap or register", "required": true },
+        "new_wasm_bytes": { "type": "string", "description": "Base64-encoded WebAssembly module or WAT text definition", "required": true },
+        "persist_linear_memory": { "type": "boolean", "description": "Persist memory across hot swap (default: true)", "default": true }
+      },
+      "required": ["module_id", "new_wasm_bytes"]
+    },
+    "hgb_adaptive_rag_query": {
+      "description": "Thermal-guided adaptive quantization vector search across LanceDB, dynamically shifting between FP32, INT8, and 1-bit binary Hamming distance",
+      "parameters": {
+        "query_vector": { "type": "array", "items": { "type": "number" }, "description": "Dense query vector", "required": true },
+        "top_k": { "type": "integer", "description": "Number of top matches to return", "default": 5 },
+        "temperature_celsius": { "type": "number", "description": "Optional synthetic thermal telemetry in Celsius (default: reads host Dynatune sensor)" },
+        "memory_used_pct": { "type": "number", "description": "Optional host memory saturation percentage" }
+      },
+      "required": ["query_vector"]
+    },
+    "hgb_meta_skill_evolve": {
+      "description": "Autonomous meta-skill synthesizer that invents novel Zig/Rust plugins, creates WIT interfaces, compiles WASM bytecode, verifies safety in Firecracker, and registers skills dynamically",
+      "parameters": {
+        "skill_name": { "type": "string", "description": "Novel skill kebab-case identifier (e.g. quantum-annealing-bridge)", "required": true },
+        "intent_description": { "type": "string", "description": "High-level goal and operational specification of the skill", "required": true },
+        "preferred_language": { "type": "string", "description": "Implementation language: 'zig' or 'rust'", "default": "zig" }
+      },
+      "required": ["skill_name", "intent_description"]
     }
   },
   "mcpServers": {

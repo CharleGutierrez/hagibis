@@ -762,6 +762,19 @@ pub use webrtc_libp2p_swarm_federation::{
     WebRtcLibp2pSwarmFederation, WebRtcSignalMessage, WorkerExecutionTarget,
 };
 
+// Power Upgrade 1: Distributed microVM Swarming (libp2p + Firecracker)
+pub mod distributed_microvm_swarming;
+pub use distributed_microvm_swarming::{
+    DistributedMicrovmSwarming, MicrovmSwarmNode, SwarmOffloadRequest,
+    SwarmOffloadResponse, SwarmWorkloadCategory, SWARM_GOSSIPSUB_TOPIC,
+};
+
+// Power Upgrade 4: Autonomous "Self-Evolving" Skill Generation Loop
+pub mod self_evolving_skill_generator;
+pub use self_evolving_skill_generator::{
+    MetaSkillGenerationReceipt, NovelSkillRequest, SelfEvolvingSkillGenerator,
+};
+
 
 
 

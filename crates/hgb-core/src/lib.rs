@@ -2218,6 +2218,12 @@ pub use ebpf_kernel_probe_loader::{
     EbpfProgramSpec, KernelAnomalyKind,
 };
 
+// Power Upgrade 2: Zig-WASM Kernel Live Hot-Patcher
+pub mod wasm_live_hotpatcher;
+pub use wasm_live_hotpatcher::{
+    HotSwapReceipt, WasmLiveHotpatcher, WasmMemorySnapshot,
+};
+
 
 
 

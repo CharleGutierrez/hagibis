@@ -64,6 +64,12 @@ pgo-train:
 	@if [ ! -d "$(PGO_DATA_DIR)" ]; then mkdir -p $(PGO_DATA_DIR); fi
 	RUSTFLAGS="-Cprofile-generate=$(PGO_DATA_DIR)" cargo bench -p hgb-core --bench pgo_workload -- --nocapture || \
 	RUSTFLAGS="-Cprofile-generate=$(PGO_DATA_DIR)" cargo test -p hgb-core --lib wasm_plugin_sandbox -- --nocapture || true
+	@echo "[PGO] Running masterclass suites (docs/masterclass/ch*.py) for branch-layout profiling..."
+	@for ch in docs/masterclass/ch*.py; do \
+		if [ -f "$$ch" ]; then \
+			python3 "$$ch" --test-mode >/dev/null 2>&1 || python3 "$$ch" >/dev/null 2>&1 || true; \
+		fi; \
+	done
 	@if [ -f "target/release/hgb" ]; then \
 		target/release/hgb --help >/dev/null 2>&1 || true; \
 	fi

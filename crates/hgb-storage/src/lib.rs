@@ -495,6 +495,13 @@ pub use vulkan_gpu_tensor_rag::{
     DRM_INTEL_RENDER_NODE, NVIDIA_DEV_NODE,
 };
 
+// Power Upgrade 3: Native Hardware-Accelerated Vector RAG with LanceDB + Dynatune
+pub mod hardware_adaptive_vector_rag;
+pub use hardware_adaptive_vector_rag::{
+    AdaptiveHit, AdaptiveRagSearchResult, AdaptiveVectorRecord,
+    HardwareAdaptiveVectorRag, VectorQuantizationLevel,
+};
+
 
 
 

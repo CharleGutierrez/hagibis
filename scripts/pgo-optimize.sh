@@ -322,6 +322,14 @@ if [[ "$BOLT_ONLY" != true && "$VERIFY_ONLY" != true ]]; then
     RUSTFLAGS="-Cprofile-generate=$PGO_DATA_DIR $RELOC_FLAG" cargo test --release -p hgb-core --lib wasm_plugin_sandbox -- --nocapture || true
     RUSTFLAGS="-Cprofile-generate=$PGO_DATA_DIR $RELOC_FLAG" cargo test --release -p hgb-storage --lib -- --nocapture || true
 
+    # Run Masterclass representative training workloads (ch1-ch8)
+    echo "[INFO] Running Masterclass autonomous workloads (docs/masterclass/ch*.py) to train PGO branch weights..."
+    for ch in docs/masterclass/ch*.py; do
+        if [[ -f "$ch" ]]; then
+            python3 "$ch" --test-mode >/dev/null 2>&1 || python3 "$ch" >/dev/null 2>&1 || true
+        fi
+    done
+
     # Run CLI commands
     if [[ -f "target/release/hgb" ]]; then
         target/release/hgb --help >/dev/null 2>&1 || true
@@ -407,6 +415,12 @@ optimize_with_bolt() {
     if [[ "$bin_name" == "hgb" ]]; then
         "$inst_bin" doctor --json >/dev/null 2>&1 || true
         "$inst_bin" mesh --status >/dev/null 2>&1 || true
+        # Execute Masterclass scripts under instrumented hgb binary
+        for ch in docs/masterclass/ch*.py; do
+            if [[ -f "$ch" ]]; then
+                python3 "$ch" --test-mode >/dev/null 2>&1 || python3 "$ch" >/dev/null 2>&1 || true
+            fi
+        done
     fi
 
     # Step 3: Locate collected fdata profile
