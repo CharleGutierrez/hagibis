@@ -487,6 +487,15 @@ pub use vector_graph_relational_fused_engine::{
     DEFAULT_FUSED_VECTOR_DIM,
 };
 
+// Strategic Power-Up Directive 2: True Hardware-Accelerated Local RAG (GPU/NPU Offloading)
+pub mod vulkan_gpu_tensor_rag;
+pub use vulkan_gpu_tensor_rag::{
+    AcceleratedRagHit, GpuVectorBuffer, HardwareRagBackend, HardwareRagMetrics,
+    VulkanGpuTensorRag, DEFAULT_GPU_VECTOR_DIM, DRM_AMD_RENDER_NODE,
+    DRM_INTEL_RENDER_NODE, NVIDIA_DEV_NODE,
+};
+
+
 
 
 

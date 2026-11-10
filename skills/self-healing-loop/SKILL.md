@@ -111,4 +111,18 @@ The evolutionary cycle integrates `crates/hgb-daemon/src/autonomous_evolutionary
 - **Firecracker MicroVM Isolation**: Spawns an isolated ephemeral VM (or Landlock CoW sandbox) to test patches in complete isolation.
 - **PGO Benchmark Gate & Atomic Hot-Reload**: Benchmarks performance to avoid regressions, then atomically reloads compiled Wasm kernels into the live daemon.
 
+---
+
+## 7. Native Agentic Self-Compilation & Predictive Prefetching
+
+1. **Agentic Self-Compiler (`crates/hgb-daemon/src/agentic_self_compiler.rs`)**:
+   - Synthesizes freestanding Zig or Rust source code when novel, unhandled tasks occur.
+   - Compiles dynamically to WebAssembly and verifies safety invariants inside `FirecrackerEphemeralSandbox`.
+   - Hot-reloads the newly validated Wasm skill into the live daemon without restarts.
+
+2. **Predictive Prefetching Engine (`crates/hgb-nextgen/src/predictive_prefetch_engine.rs`)**:
+   - Online Markov chain transitions anticipate next actions ($P \ge 60\%$).
+   - Speculatively pre-warms Firecracker microVM snapshots, pre-loads vector memories into RAM, pre-compiles Wasm kernels, and pre-ramps CPU governors before the user or agent even executes the command.
+
+
 

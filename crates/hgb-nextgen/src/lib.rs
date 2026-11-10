@@ -251,5 +251,14 @@ pub use p2p_raft_mesh_network::{
     DEFAULT_RAFT_HEARTBEAT_INTERVAL_MS, DEFAULT_VECTOR_SYNC_BATCH_SIZE,
 };
 
+// Strategic Power-Up Directive 4: Zero-Latency Predictive Prefetching (Anticipatory AI)
+pub mod predictive_prefetch_engine;
+pub use predictive_prefetch_engine::{
+    AnticipatoryActionKind, PrefetchEvaluationResult, PredictivePrefetchEngine,
+    SpeculativePrefetchDecision, DEFAULT_MAX_MARKOV_STATES,
+    DEFAULT_PREDICTION_CONFIDENCE_THRESHOLD,
+};
+
+
 
 

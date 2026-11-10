@@ -915,6 +915,40 @@
         "diagnostic_details": { "type": "string", "description": "Error output or diagnostic message", "required": true }
       },
       "required": ["target_file", "diagnostic_details"]
+    },
+    "hgb_grpc_swarm_dispatch": {
+      "description": "Dispatch heavy workloads (vector indexing, fine-tuning, heavy Wasm compilation) across multi-node gRPC swarm",
+      "parameters": {
+        "task_id": { "type": "string", "description": "Unique task identifier", "required": true },
+        "workload_type": { "type": "string", "description": "Workload type (vector_indexing, fine_tuning, wasm_compilation)", "required": true },
+        "require_gpu": { "type": "boolean", "description": "Require GPU acceleration", "default": false },
+        "require_kvm": { "type": "boolean", "description": "Require hardware KVM", "default": true }
+      },
+      "required": ["task_id", "workload_type"]
+    },
+    "hgb_vulkan_rag_search": {
+      "description": "Execute GPU/NPU-accelerated local vector similarity retrieval using direct Vulkan/DRM render nodes",
+      "parameters": {
+        "query_vector": { "type": "array", "items": { "type": "number" }, "description": "Query float embedding" },
+        "top_k": { "type": "integer", "description": "Max results to return", "default": 10 },
+        "min_similarity": { "type": "number", "description": "Cosine similarity cutoff", "default": 0.5 }
+      }
+    },
+    "hgb_agentic_self_compile": {
+      "description": "Dynamically synthesize and compile freestanding Zig/Rust skills with Firecracker microVM safety checks and hot-reload",
+      "parameters": {
+        "skill_name": { "type": "string", "description": "Name for the dynamic skill", "required": true },
+        "language": { "type": "string", "description": "Language (zig, rust, wat)", "default": "zig" },
+        "description": { "type": "string", "description": "Description of unhandled task to solve", "required": true }
+      },
+      "required": ["skill_name", "description"]
+    },
+    "hgb_predictive_prefetch_anticipate": {
+      "description": "Ingest telemetry, evaluate Markov transition probabilities, and trigger proactive microVM pre-warming and vector cache preloading",
+      "parameters": {
+        "event_name": { "type": "string", "description": "Observed workflow event or command", "required": true }
+      },
+      "required": ["event_name"]
     }
   },
   "mcpServers": {
@@ -1007,7 +1041,11 @@
         "hgb_p2p_raft_mesh_status",
         "hgb_p2p_raft_workflow_dispatch",
         "hgb_hybrid_inference_generate",
-        "hgb_evolutionary_self_heal_trigger"
+        "hgb_evolutionary_self_heal_trigger",
+        "hgb_grpc_swarm_dispatch",
+        "hgb_vulkan_rag_search",
+        "hgb_agentic_self_compile",
+        "hgb_predictive_prefetch_anticipate"
       ]
     },
     "hagibis_sse": {

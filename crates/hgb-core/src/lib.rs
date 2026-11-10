@@ -2194,6 +2194,16 @@ pub use hybrid_candle_onnx_pipeline::{
     DEFAULT_EPSILON, DEFAULT_MAX_CONTEXT_LEN, THERMAL_BURST_MAX_TEMP_C,
 };
 
+// Strategic Power-Up Directive 1: Distributed Agentic Swarms (gRPC / libp2p Transport)
+pub mod distributed_grpc_swarm_transport;
+pub use distributed_grpc_swarm_transport::{
+    GrpcSwarmTransport, SwarmNodeCapacity, SwarmRpcFrame, SwarmRpcHeader,
+    SwarmRpcMessage, SwarmTaskResult, SwarmTaskState, SwarmWorkloadKind,
+    SwarmWorkloadSpec, DEFAULT_SWARM_MAX_MESSAGE_BYTES, DEFAULT_TASK_LEASE_TIMEOUT_MS,
+    SWARM_RPC_MAGIC,
+};
+
+
 
 
 

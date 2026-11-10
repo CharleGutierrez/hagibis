@@ -742,6 +742,14 @@ pub use autonomous_evolutionary_loop::{
     EvolutionaryTriggerKind,
 };
 
+// Strategic Power-Up Directive 3: Native Agentic Self-Compilation & Hot-Patching
+pub mod agentic_self_compiler;
+pub use agentic_self_compiler::{
+    AgenticSelfCompiler, DynamicSkillDescriptor, NovelTaskSpecification,
+    SelfCompilationReceipt, SkillSourceLanguage,
+};
+
+
 
 
 
