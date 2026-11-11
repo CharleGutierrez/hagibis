@@ -268,6 +268,15 @@ pub use predictive_autonomous_tuner::{
     THERMAL_RUNAWAY_SLOPE_C_PER_SEC,
 };
 
+// Strategic Enhancement Pillar 4: Native WebGPU / Browser Control Cockpit PWA
+pub mod webgpu_desktop_cockpit;
+pub use webgpu_desktop_cockpit::{
+    create_webgpu_cockpit_router, CockpitSteerAck, CockpitSteerCommand, WebGpuCockpitSnapshot,
+    WebGpuCockpitState, WebGpuTopologyEdge, WebGpuTopologyNode, DEFAULT_MAX_WEBGPU_NODES,
+    DEFAULT_WEBGPU_COCKPIT_PORT, WEBGPU_COCKPIT_HTML,
+};
+
+
 
 
 

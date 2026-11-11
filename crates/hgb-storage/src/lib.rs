@@ -510,6 +510,14 @@ pub use distributed_graph_vector_rag::{
     GraphVectorQuerySpec, DEFAULT_GRAPH_VECTOR_DIM,
 };
 
+// Strategic Enhancement Pillar 3: Real-Time Episodic Memory Graph Bus
+pub mod realtime_episodic_memory_bus;
+pub use realtime_episodic_memory_bus::{
+    EpisodicEvent, EpisodicEventType, EpisodicRecallQuery, EpisodicRecallResult,
+    RealtimeEpisodicMemoryBus, DEFAULT_EPISODIC_VECTOR_DIM,
+};
+
+
 
 
 

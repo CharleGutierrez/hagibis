@@ -1047,6 +1047,42 @@
         "payload": { "type": "object", "description": "Action payload details (task proposal, bid, vote, or merge request)", "required": true }
       },
       "required": ["action", "payload"]
+    },
+    "hgb_federated_microvm_dispatch": {
+      "description": "Dispatches heavy compilation, AST transforms, or LLM fine-tuning to the most resource-efficient node in the Federated MicroVM Mesh across local network or cloud spot instances with automatic local fallback",
+      "parameters": {
+        "workload_type": { "type": "string", "description": "Workload category: rust_build_compile, zig_simd_compile, llm_finetune, sandbox_eval", "required": true },
+        "source_code": { "type": "string", "description": "Source code or script payload to execute", "required": true },
+        "required_memory_mb": { "type": "integer", "description": "Required memory ceiling in MB (default: 1024)", "default": 1024 },
+        "required_vcpu": { "type": "integer", "description": "Required virtual CPUs (default: 2)", "default": 2 },
+        "timeout_ms": { "type": "integer", "description": "Execution timeout in milliseconds (default: 10000)", "default": 10000 }
+      },
+      "required": ["workload_type", "source_code"]
+    },
+    "hgb_autonomous_compiler_loop": {
+      "description": "Executes an autonomous closed-loop performance cycle: analyzes hotspot telemetry, rewrites source code with SIMD/stack optimizations, re-runs PGO profiling, hot-swaps the Wasm module with zero downtime, and benchmarks verified speedup",
+      "parameters": {
+        "tool_id": { "type": "string", "description": "Identifier of the target tool or Wasm kernel to evaluate and optimize", "required": true },
+        "force_cycle": { "type": "boolean", "description": "Force optimization cycle even if threshold invocation count is not yet reached", "default": false }
+      },
+      "required": ["tool_id"]
+    },
+    "hgb_episodic_memory_recall": {
+      "description": "Queries the real-time Episodic Memory Graph in LanceDB and SQLite, retrieving past debugging thoughts, error diagnostics, and working patch resolutions across any codebase",
+      "parameters": {
+        "query_text": { "type": "string", "description": "Error diagnostic, stack trace, or semantic task query", "required": true },
+        "codebase_id": { "type": "string", "description": "Optional codebase identifier to filter results (searches all repositories if omitted)" },
+        "top_k": { "type": "integer", "description": "Number of top matching episodic resolutions to return (default: 5)", "default": 5 }
+      },
+      "required": ["query_text"]
+    },
+    "hgb_webgpu_cockpit_control": {
+      "description": "Broadcasts topology updates or sends human-in-the-loop steering commands (spawn_microvm, trigger_pgo, pause, resume) to the hardware-accelerated WebGPU Desktop Cockpit",
+      "parameters": {
+        "command": { "type": "string", "description": "Steering action: spawn_microvm, trigger_pgo, pause, resume, query_episodic", "required": true },
+        "payload": { "type": "object", "description": "Optional command parameters", "default": {} }
+      },
+      "required": ["command"]
     }
   },
   "mcpServers": {

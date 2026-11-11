@@ -788,6 +788,22 @@ pub use decentralized_mcp_swarm_protocol::{
     McpSwarmRole, SwarmConsensusTicket, SwarmTaskBid, SwarmTaskProposal, TaskLeaseTicket,
 };
 
+// Strategic Enhancement Pillar 1: Distributed MicroVM Mesh (Federated Firecracker)
+pub mod federated_microvm_mesh;
+pub use federated_microvm_mesh::{
+    FederatedMicrovmMeshCoordinator, FederatedMicrovmResult, FederatedMicrovmTask,
+    FederatedPeerNode, FederatedResourceScorer,
+};
+
+// Strategic Enhancement Pillar 2: Autonomous "Self-Evolving" Compiler Loop
+pub mod autonomous_self_evolving_compiler_loop;
+pub use autonomous_self_evolving_compiler_loop::{
+    AutonomousSelfEvolvingCompilerLoop, HotspotThresholds, SelfEvolvingOptimizationReceipt,
+    SourceTransformationKind, ToolHotspotRecord,
+};
+
+
+
 
 
 
