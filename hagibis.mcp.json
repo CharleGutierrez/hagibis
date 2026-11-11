@@ -1133,6 +1133,48 @@
         "target_file": { "type": "string", "description": "Optional source file path associated with the failure" }
       },
       "required": ["incident_id", "source_tool", "error_class", "stacktrace", "failing_command"]
+    },
+    "hgb_cluster_mesh_offload": {
+      "description": "Dispatches heavy computational workloads (batch embeddings, LanceDB vector search, crate compilation) across a secure WireGuard/mTLS mesh to idle Firecracker microVMs on remote cluster peers with automatic failover",
+      "parameters": {
+        "task_kind": { "type": "string", "description": "Task type: embedding_batch, lancedb_search, cargo_compilation, wasm_execution, neural_classification", "required": true },
+        "payload": { "type": "string", "description": "Raw string or base64 payload to execute", "required": true },
+        "target_node_id": { "type": "string", "description": "Optional specific target cluster peer node ID" }
+      },
+      "required": ["task_kind", "payload"]
+    },
+    "hgb_neural_hardware_pipeline": {
+      "description": "Executes zero-serialization in-memory neural embedding and stacktrace anomaly classification accelerated by SIMD AVX2/FMA/GPU with direct POSIX shared memory projection into WASM guests",
+      "parameters": {
+        "action": { "type": "string", "description": "Neural action: embed_text, classify_stacktrace, create_shm_bridge", "required": true },
+        "text_input": { "type": "string", "description": "Text chunk or stacktrace diagnostic to process", "required": true }
+      },
+      "required": ["action", "text_input"]
+    },
+    "hgb_vibe_code_mutation_loop": {
+      "description": "Autonomous vibe-coding loop: intercepts OpenTelemetry regression spans, synthesizes AST source mutations, executes tests inside isolated Firecracker microVMs, analyzes BOLT profile layouts, and hot-swaps running modules",
+      "parameters": {
+        "anomaly_kind": { "type": "string", "description": "Kind of anomaly: runtime_panic, performance_regression, memory_thrashing, wasm_fuel_exhaustion", "required": true },
+        "target_component": { "type": "string", "description": "Target component or crate identifier", "required": true },
+        "diagnostic_text": { "type": "string", "description": "Stack trace, panic log, or performance regression message", "required": true }
+      },
+      "required": ["anomaly_kind", "target_component", "diagnostic_text"]
+    },
+    "hgb_universal_mcp_gateway": {
+      "description": "Universal dynamic MCP router: discovers, sandboxes, and spawns MCP tools on-demand as isolated WASM or MicroVM processes based on incoming agent intent, with autonomous LRU idle process reaping",
+      "parameters": {
+        "action": { "type": "string", "description": "Gateway action: execute_tool, resolve_intent, reap_idle, list_sessions", "required": true },
+        "tool_name": { "type": "string", "description": "Tool name for execution or intent resolution" },
+        "params": { "type": "object", "description": "Parameters payload for dynamic tool invocation", "default": {} }
+      },
+      "required": ["action"]
+    },
+    "hgb_telemetry_hud_cockpit": {
+      "description": "Streams high-frequency real-time WebSocket telemetry (CPU temp, frequencies, dynatune governor, MGLRU, microVM states, cluster mesh peers, and live agent thoughts) to the WebGPU Desktop Cockpit PWA",
+      "parameters": {
+        "action": { "type": "string", "description": "Telemetry action: get_latest_packet, broadcast_manual_update, status", "default": "get_latest_packet" }
+      },
+      "required": ["action"]
     }
   },
   "mcpServers": {

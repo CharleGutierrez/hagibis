@@ -283,6 +283,14 @@ pub use bolt_profile_optimizer::{
     BoltProfileOptimizer, ElfRelocationCheckReport,
 };
 
+// Pillar V: Real-Time Telemetry HUD & PWA Command Center WebSocket Hub
+pub mod telemetry_websocket_hub;
+pub use telemetry_websocket_hub::{
+    AgentThoughtStep, ClusterNodeHudTelemetry, MicrovmHudTelemetry,
+    TelemetryBroadcastPacket, TelemetryWebSocketHub,
+    COCKPIT_PWA_HTML, DEFAULT_TELEMETRY_WS_PORT,
+};
+
 
 
 

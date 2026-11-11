@@ -525,6 +525,15 @@ pub use fused_memory_consolidation_daemon::{
     DEFAULT_CONSOLIDATION_VECTOR_DIM, DEFAULT_SQLITE_MMAP_SIZE_BYTES,
 };
 
+// Pillar II: Hardware-Accelerated Neural & Vector Inference Pipeline
+pub mod neural_hardware_pipeline;
+pub use neural_hardware_pipeline::{
+    ClassificationVerdict, DenseNeuralEmbedder, NeuralHardwareBackend,
+    RemediationCategory, StacktraceAnomalyClassifier, ZeroCopyShmNeuralBridge,
+    CACHELINE_ALIGN_BYTES, NEURAL_PIPELINE_MAGIC, NEURAL_PIPELINE_VERSION,
+    NEURAL_VECTOR_DIM,
+};
+
 
 
 

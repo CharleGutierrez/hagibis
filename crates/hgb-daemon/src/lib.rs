@@ -824,6 +824,26 @@ pub use autonomous_stacktrace_self_healer::{
     MicrovmSandboxVerification, SelfHealingIncidentReceipt, SynthesizedPatchCandidate,
 };
 
+// Pillar I: Distributed Cluster Mesh & Multi-Node Synchronization Coordinator
+pub mod distributed_cluster_mesh;
+pub use distributed_cluster_mesh::{
+    ClusterMeshConfig, DistributedClusterMeshCoordinator,
+};
+
+// Pillar III: Autonomous Self-Evolving Code Mutation Engine (Vibe Coding Loop)
+pub mod autonomous_code_mutation_engine;
+pub use autonomous_code_mutation_engine::{
+    AnomalyKind, AutonomousCodeMutationEngine, MutationVerificationReport,
+    SynthesizedMutationPatch, TelemetryAnomalyEvent,
+};
+
+// Pillar IV: Universal Model Context Protocol (MCP) Native Gateway & Ephemeral Sandbox
+pub mod universal_mcp_gateway;
+pub use universal_mcp_gateway::{
+    ActiveToolSession, DynamicToolManifest, McpGatewayRpcRequest, McpGatewayRpcResponse,
+    McpToolSandboxType, UniversalMcpGateway,
+};
+
 
 
 

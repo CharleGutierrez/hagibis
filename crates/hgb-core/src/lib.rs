@@ -2224,6 +2224,15 @@ pub use wasm_live_hotpatcher::{
     HotSwapReceipt, WasmLiveHotpatcher, WasmMemorySnapshot,
 };
 
+// Pillar I: Distributed Cluster Mesh Protocol & Multi-Node Synchronization
+pub mod cluster_mesh_protocol;
+pub use cluster_mesh_protocol::{
+    ClusterHeartbeat, ClusterMeshTopology, ClusterNodeId, ClusterPeerDescriptor,
+    GpuAccelerationType, NodeCapacityDescriptor, NodeRole, OffloadTaskKind,
+    OffloadWorkloadOutcome, OffloadWorkloadRequest, WireGuardMeshEnvelope,
+    CLUSTER_MESH_MAGIC, CLUSTER_MESH_VERSION, DEFAULT_PEER_TIMEOUT_MS, DEFAULT_WIREGUARD_PORT,
+};
+
 
 
 
