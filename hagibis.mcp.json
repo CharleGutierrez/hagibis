@@ -1083,6 +1083,56 @@
         "payload": { "type": "object", "description": "Optional command parameters", "default": {} }
       },
       "required": ["command"]
+    },
+    "hgb_dynatune_governor_shift": {
+      "description": "Exposes dynatune hardware metrics (thermal, battery, PSI memory pressure) directly into hgb-daemon, programmatically shifting CPU governor to performance, downscaling if thermal limits approach 78°C, and tuning MGLRU memory compaction",
+      "parameters": {
+        "workload_id": { "type": "string", "description": "Unique workload or task identifier", "required": true },
+        "category": { "type": "string", "description": "Workload category: build_compile, test_execution, llm_generation, wasm_execution", "required": true },
+        "concurrency": { "type": "integer", "description": "Requested parallel concurrency", "default": 4 },
+        "action": { "type": "string", "description": "Lifecycle action: start, finish, status, force_performance, force_powersave", "default": "start" }
+      },
+      "required": ["workload_id", "category"]
+    },
+    "hgb_wasm_component_mesh_execute": {
+      "description": "Compiles, cryptographically verifies with Blake3, streams across nodes, and executes sandboxed Wasm component model micro-agents in microseconds with zero memory footprint penalty",
+      "parameters": {
+        "skill_name": { "type": "string", "description": "Target skill or micro-agent name", "required": true },
+        "function_name": { "type": "string", "description": "Exported component function to invoke (e.g. run, add_forty_two)", "required": true },
+        "args": { "type": "array", "items": { "type": "integer" }, "description": "Array of i32 integer arguments to pass into the function", "default": [] },
+        "target_platform": { "type": "string", "description": "Target platform: local_wasmtime, distributed_mesh_node, cloudflare_worker_edge", "default": "local_wasmtime" }
+      },
+      "required": ["skill_name", "function_name"]
+    },
+    "hgb_memory_consolidation_trigger": {
+      "description": "Coordinates dual-tier SQLite WAL mmap transactional storage and LanceDB SIMD vector indexing, triggering asynchronous consolidation that distills intermediate thoughts into knowledge graph nodes and prunes stale traces",
+      "parameters": {
+        "action": { "type": "string", "description": "Consolidation action: run_cycle, query_knowledge, record_checkpoint", "default": "run_cycle" },
+        "query_text": { "type": "string", "description": "Optional search text for retrieving distilled knowledge graph nodes" },
+        "retention_ttl_secs": { "type": "integer", "description": "Time-to-live seconds before intermediate events are pruned", "default": 86400 }
+      },
+      "required": ["action"]
+    },
+    "hgb_bolt_optimize_binary": {
+      "description": "Orchestrates LLVM BOLT post-link binary optimization on hgb and hgbd ELF binaries: records perf branch profiles, runs perf2bolt, reorders basic blocks (ext-tsp) and functions (cdsort), and cuts critical loop latency by 10-18%",
+      "parameters": {
+        "target_binary": { "type": "string", "description": "Path to binary to optimize (default: target/release/hgbd)", "default": "target/release/hgbd" },
+        "reorder_blocks": { "type": "string", "description": "BOLT basic block reordering policy: ext-tsp, default, none", "default": "ext-tsp" },
+        "reorder_functions": { "type": "string", "description": "Function reordering policy: cdsort, hfsort+, none", "default": "cdsort" }
+      },
+      "required": []
+    },
+    "hgb_self_healing_stacktrace_patch": {
+      "description": "Wires autonomous self-healing into CLI test runners and OTel traces: intercepts stack traces, queries episodic vector memory for historical fixes, synthesizes patches, and verifies inside a Firecracker microVM snapshot before hot-patching",
+      "parameters": {
+        "incident_id": { "type": "string", "description": "Unique incident identifier", "required": true },
+        "source_tool": { "type": "string", "description": "Tool, binary, or module that experienced the failure", "required": true },
+        "error_class": { "type": "string", "description": "Exception or error type (e.g. Panic, LifetimeMismatch, OutOfBounds)", "required": true },
+        "stacktrace": { "type": "string", "description": "Raw stack trace output or error diagnostic", "required": true },
+        "failing_command": { "type": "string", "description": "Command or test invocation that failed", "required": true },
+        "target_file": { "type": "string", "description": "Optional source file path associated with the failure" }
+      },
+      "required": ["incident_id", "source_tool", "error_class", "stacktrace", "failing_command"]
     }
   },
   "mcpServers": {
@@ -1182,7 +1232,12 @@
         "hgb_predictive_prefetch_anticipate",
         "hgb_neural_bus_stream",
         "hgb_ebpf_telemetry_intercept",
-        "hgb_webrtc_swarm_federate"
+        "hgb_webrtc_swarm_federate",
+        "hgb_dynatune_governor_shift",
+        "hgb_wasm_component_mesh_execute",
+        "hgb_memory_consolidation_trigger",
+        "hgb_bolt_optimize_binary",
+        "hgb_self_healing_stacktrace_patch"
       ]
     },
     "hagibis_sse": {

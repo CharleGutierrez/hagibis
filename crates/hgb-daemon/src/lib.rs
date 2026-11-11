@@ -802,6 +802,31 @@ pub use autonomous_self_evolving_compiler_loop::{
     SourceTransformationKind, ToolHotspotRecord,
 };
 
+// Strategic Power Pillar 1: Native Dynatune & Kernel Optimizer High-Frequency IPC Governor
+pub mod kernel_dynatune_ipc_governor;
+pub use kernel_dynatune_ipc_governor::{
+    ActiveWorkloadRecord, GovernorStatusSnapshot, KernelDynatuneIpcGovernor,
+    DEFAULT_TELEMETRY_RING_CAPACITY,
+};
+
+// Strategic Power Pillar 2: Distributed Agent Meshing via WebAssembly Component Model
+pub mod wasm_component_mesh_agent;
+pub use wasm_component_mesh_agent::{
+    ExecutionTargetPlatform, WasmAgentExecutionReceipt, WasmComponentMeshAgent,
+    WasmMeshAgentPacket, WasmMicroAgentDescriptor, WasmMicroAgentReceipt,
+    WASM_MESH_MAGIC,
+};
+
+// Strategic Power Pillar 5: Autonomous Self-Healing & Code Synthesis Pipeline
+pub mod autonomous_stacktrace_self_healer;
+pub use autonomous_stacktrace_self_healer::{
+    AutonomousStacktraceSelfHealer, HistoricalFixRecord, InterceptedDiagnostic,
+    MicrovmSandboxVerification, SelfHealingIncidentReceipt, SynthesizedPatchCandidate,
+};
+
+
+
+
 
 
 

@@ -517,6 +517,15 @@ pub use realtime_episodic_memory_bus::{
     RealtimeEpisodicMemoryBus, DEFAULT_EPISODIC_VECTOR_DIM,
 };
 
+// Strategic Power Pillar 3: Hardware-Accelerated Vector & State Pipeline with Memory Consolidation Daemon
+pub mod fused_memory_consolidation_daemon;
+pub use fused_memory_consolidation_daemon::{
+    ConsolidationPolicy, ConsolidationReport, FusedMemoryConsolidationDaemon,
+    KnowledgeGraphNode, StateCheckpoint, ToolCallDagNode,
+    DEFAULT_CONSOLIDATION_VECTOR_DIM, DEFAULT_SQLITE_MMAP_SIZE_BYTES,
+};
+
+
 
 
 

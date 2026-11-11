@@ -276,6 +276,14 @@ pub use webgpu_desktop_cockpit::{
     DEFAULT_WEBGPU_COCKPIT_PORT, WEBGPU_COCKPIT_HTML,
 };
 
+// Strategic Power Pillar 4: Zero-Overhead PGO + BOLT Binary Layout Optimizer
+pub mod bolt_profile_optimizer;
+pub use bolt_profile_optimizer::{
+    BoltDynoStats, BoltOptimizationConfig, BoltOptimizationReceipt,
+    BoltProfileOptimizer, ElfRelocationCheckReport,
+};
+
+
 
 
 
