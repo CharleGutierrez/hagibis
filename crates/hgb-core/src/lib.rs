@@ -2241,6 +2241,32 @@ pub use ebpf_telemetry::{
     SentinelAnomaly, SocketTelemetry, SyscallTelemetry,
 };
 
+// Upgrade 5: Compile-Time Verified Agent Workflows via WIT Interfaces
+pub mod wit_type_safe_agent_validator;
+pub use wit_type_safe_agent_validator::{
+    TrapReason, WitBoundaryTrap, WitCase, WitField, WitFunction, WitFunctionResult,
+    WitInterface, WitParam, WitParser, WitParserError, WitPrimitive, WitType,
+    WitTypeRegistry, WitValidator, WitValidatorOptions, WitWorld,
+};
+
+// Upgrade 3: Hardware-Aware Dynamic Compilation & Execution Strategy (dynatune synergy)
+pub mod dynatune_adaptive_strategy;
+pub use dynatune_adaptive_strategy::{
+    evaluate_execution_strategy, evaluate_pgo_bolt_trigger, BatteryPowerState,
+    BoltBlockReordering, BoltFunctionReordering, DynatuneTelemetryReader,
+    ExecutionStrategy, ExecutionStrategyDecision,
+    HardwareTelemetrySnapshot as DynatuneHardwareTelemetrySnapshot,
+    HardwareThresholds, PgoBoltRecompilationPlan, PgoBoltTriggerEvaluation,
+    PsiPressureMetric, WorkloadAffinity, CGROUP_CPU_MAX_PERIOD_US,
+    DEFAULT_BATTERY_HEALTHY_RECOMPILATION_PCT, DEFAULT_BATTERY_LOW_THRESHOLD_PCT,
+    DEFAULT_PGO_HOT_PATH_INVOCATION_THRESHOLD, DEFAULT_PGO_RECOMPILATION_COOLDOWN_SECS,
+    DEFAULT_PSI_MEMORY_PRESSURE_THRESHOLD, DEFAULT_THERMAL_CRITICAL_TEMP_C,
+    DEFAULT_THERMAL_SAFE_RECOMPILATION_TEMP_C, DEFAULT_THERMAL_THROTTLE_TEMP_C,
+    EPP_BALANCE_PERFORMANCE, EPP_BALANCE_POWER, EPP_PERFORMANCE, EPP_POWER,
+    GOVERNOR_PERFORMANCE, GOVERNOR_POWERSAVE,
+};
+
+
 
 
 

@@ -1252,6 +1252,83 @@
         "secret_key": { "type": "string", "description": "HMAC secret key for edge token generation" }
       },
       "required": ["action"]
+    },
+    "hgb_epoll_circuit_breaker": {
+      "description": "Autonomous epoll and eventfd edge-triggered circuit breaker engine: captures microVM and WASM panics, OOMs, and SLA latency spikes with <1µs trip times, synthesizes AST candidate patches via LLM/MCP runner, verifies them in isolated Firecracker sandboxes, and executes zero-downtime hot swaps",
+      "parameters": {
+        "action": {
+          "type": "string",
+          "enum": ["status", "trip", "reset", "diagnose", "trigger_repair"],
+          "description": "Circuit breaker management action",
+          "default": "status"
+        },
+        "component_id": { "type": "string", "description": "Target component or module identifier" },
+        "error_trace": { "type": "string", "description": "Optional Rust panic, WASM trap, or Linux OOM stack trace to parse and repair" },
+        "isolated_microvm": { "type": "boolean", "description": "Execute candidate patch validation in isolated Firecracker microVM", "default": true }
+      },
+      "required": ["action"]
+    },
+    "hgb_synapse_unified_query": {
+      "description": "Unified Synapse query planner: performs zero-copy memory-mapped joins between structured relational SQLite state and LanceDB SIMD vector KNN searches, backed by custom SQLite scalar functions and Reciprocal Rank Fusion (RRF) with FTS5 lexical ranking",
+      "parameters": {
+        "sql_query": { "type": "string", "description": "SQL query containing optional join with virtual table synapse_vector_knn" },
+        "query_vector": { "type": "array", "items": { "type": "number" }, "description": "Dense contiguous f32 query vector for SIMD vector distance calculations" },
+        "top_k": { "type": "integer", "description": "Maximum number of nearest neighbor vector matches", "default": 10 },
+        "category_filter": { "type": "string", "description": "Optional category filter for relational entity pruning" },
+        "rrf_dense_weight": { "type": "number", "description": "Dense vector similarity weight in Reciprocal Rank Fusion (default: 0.7)", "default": 0.7 },
+        "rrf_sparse_weight": { "type": "number", "description": "Sparse lexical BM25 weight in Reciprocal Rank Fusion (default: 0.3)", "default": 0.3 }
+      }
+    },
+    "hgb_hardware_adaptive_scheduler": {
+      "description": "Hardware-aware dynamic execution strategy shifter and dynamic compiler scheduler: monitors CPU temperature, battery discharge rate, and PSI memory pressure via dynatune, dynamically throttles microVM cgroup v2 quotas, adjusts CPU scaling governors, meters WASM instruction fuel, and schedules automated PGO/BOLT recompilations",
+      "parameters": {
+        "action": {
+          "type": "string",
+          "enum": ["evaluate_telemetry", "apply_strategy", "throttle_microvm", "relax_microvm", "schedule_pgo_bolt"],
+          "description": "Dynamic hardware adaptation action",
+          "default": "evaluate_telemetry"
+        },
+        "affinity": {
+          "type": "string",
+          "enum": ["auto", "prefer_native", "prefer_wasm", "prefer_microvm"],
+          "description": "Workload dispatch preference",
+          "default": "auto"
+        },
+        "vm_id": { "type": "string", "description": "Target Firecracker microVM ID for cgroup v2 cpu.max adjustment" },
+        "candidate_binary": { "type": "string", "description": "Candidate ELF binary for automated LLVM BOLT basic block and function layout optimization" }
+      },
+      "required": ["action"]
+    },
+    "hgb_p2p_swarm_mesh": {
+      "description": "Distributed P2P MCP Swarm mesh coordinator: federates AI agent tools across local daemon nodes and Cloudflare Workers over Kademlia DHT XOR routing, BLAKE3 cryptographic attestation, mDNS discovery, and multi-criteria capacity scoring for transparent remote task offloading",
+      "parameters": {
+        "action": {
+          "type": "string",
+          "enum": ["list_peers", "discover_mdns", "sync_manifest", "offload_task", "sync_edge_gateway"],
+          "description": "Swarm mesh coordination action",
+          "default": "list_peers"
+        },
+        "target_tool": { "type": "string", "description": "Tool name to route or offload across the mesh" },
+        "arguments": { "type": "object", "description": "Tool parameters payload to transmit to worker node" },
+        "require_kvm": { "type": "boolean", "description": "Require hardware KVM virtualization on target node", "default": false },
+        "min_memory_mb": { "type": "integer", "description": "Minimum available RAM in megabytes required on target node", "default": 512 }
+      },
+      "required": ["action"]
+    },
+    "hgb_wit_type_validator": {
+      "description": "Compile-time verified agent workflow validator: strictly parses WebAssembly Interface Types (WIT) worlds, interfaces, records, and variants, validates agent tool call arguments at runtime, and instantly emits rich WitBoundaryTrap diagnostics with corrective guidance before state corruption occurs",
+      "parameters": {
+        "action": {
+          "type": "string",
+          "enum": ["validate_call", "parse_wit", "inspect_world"],
+          "description": "WIT validation action",
+          "default": "validate_call"
+        },
+        "wit_content": { "type": "string", "description": "WIT interface or world definition document text" },
+        "function_name": { "type": "string", "description": "Target WIT function or interface method name" },
+        "parameters": { "type": "object", "description": "JSON arguments object passed by AI agent to validate against WIT types" }
+      },
+      "required": ["action"]
     }
   },
   "mcpServers": {

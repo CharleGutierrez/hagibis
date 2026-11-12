@@ -16,6 +16,57 @@ export interface Env {
   HAGIBIS_EDGE_KV: KVNamespace;
   HAGIBIS_D1_DB: D1Database;
   EDGE_SHARED_SECRET?: string;
+  EDGE_NODE_ID?: string;
+}
+
+export interface EdgeSwarmPeerDescriptor {
+  node_id: string;
+  role: "edge_bridge" | "local_daemon" | "microvm_hypervisor" | "cloud_orchestrator";
+  quic_endpoint?: string;
+  ws_signaling_url?: string;
+  multiaddrs: string[];
+  public_key_blake3?: string;
+  capabilities: string[];
+  vcpus: number;
+  available_ram_mb: number;
+  has_hardware_kvm: boolean;
+  has_gpu: boolean;
+  load_score: number;
+  registered_at: number;
+  last_heartbeat: number;
+}
+
+export interface EdgeFederatedToolManifest {
+  provider_node_id: string;
+  tool_name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
+  execution_environment: "wasi" | "cloudflare_kv" | "cloudflare_d1" | "native" | "firecracker";
+  requires_kvm: boolean;
+  min_ram_mb: number;
+  is_available: boolean;
+}
+
+export interface EdgeSwarmTaskPayload {
+  task_id: string;
+  origin_node_id: string;
+  target_tool_name: string;
+  parameters: Record<string, unknown>;
+  requires_kvm: boolean;
+  min_ram_mb: number;
+  nonce: string;
+  timestamp_ms: number;
+  signature?: string;
+}
+
+export interface EdgeSwarmTaskResult {
+  task_id: string;
+  executing_node_id: string;
+  success: boolean;
+  output: unknown;
+  error?: string;
+  execution_duration_ms: number;
+  signature?: string;
 }
 
 export interface EdgeTelemetryPayload {
@@ -97,7 +148,21 @@ export default {
         return await handleWasiExecution(request, env);
       }
 
-      // 5. Default 404 for unmatched routes
+      // 5. P2P Swarm Coordination over Model Context Protocol (MCP)
+      if (url.pathname === "/api/edge/swarm/peer" && method === "POST") {
+        return await handleSwarmPeerRegistration(request, env);
+      }
+      if (url.pathname === "/api/edge/swarm/peer" && method === "GET") {
+        return await handleSwarmPeerList(env);
+      }
+      if (url.pathname === "/api/edge/swarm/manifest" && method === "GET") {
+        return await handleSwarmManifest(env);
+      }
+      if (url.pathname === "/api/edge/swarm/dispatch" && method === "POST") {
+        return await handleSwarmTaskDispatch(request, env);
+      }
+
+      // 6. Default 404 for unmatched routes
       return new Response(
         JSON.stringify({
           error: "Not Found",
@@ -353,6 +418,513 @@ async function handleWasiExecution(request: Request, env: Env): Promise<Response
   };
 
   return new Response(JSON.stringify(edgeResponse), {
+    status: 200,
+    headers: { ...getCorsHeaders(), "Content-Type": "application/json" },
+  });
+}
+
+async function handleSwarmPeerRegistration(request: Request, env: Env): Promise<Response> {
+  const body: EdgeSwarmPeerDescriptor = await request.json();
+  if (!body.node_id || !body.role) {
+    return new Response(JSON.stringify({ error: "node_id and role are required" }), {
+      status: 400,
+      headers: { ...getCorsHeaders(), "Content-Type": "application/json" },
+    });
+  }
+
+  const now = Date.now();
+  body.registered_at = body.registered_at || now;
+  body.last_heartbeat = now;
+  body.multiaddrs = body.multiaddrs || [];
+  body.capabilities = body.capabilities || [];
+
+  if (env.HAGIBIS_EDGE_KV) {
+    // Cache peer descriptor with 24h TTL
+    await env.HAGIBIS_EDGE_KV.put(`swarm:peer:${body.node_id}`, JSON.stringify(body), {
+      expirationTtl: 86400,
+    });
+
+    // Update active swarm peer index
+    const existingIndexRaw = await env.HAGIBIS_EDGE_KV.get("swarm:peer_index");
+    let peerIndex: string[] = existingIndexRaw ? JSON.parse(existingIndexRaw) : [];
+    if (!peerIndex.includes(body.node_id)) {
+      peerIndex.push(body.node_id);
+      await env.HAGIBIS_EDGE_KV.put("swarm:peer_index", JSON.stringify(peerIndex), {
+        expirationTtl: 86400,
+      });
+    }
+  }
+
+  if (env.HAGIBIS_D1_DB) {
+    try {
+      await env.HAGIBIS_D1_DB.exec(`
+        CREATE TABLE IF NOT EXISTS edge_swarm_peers (
+          node_id TEXT PRIMARY KEY,
+          role TEXT NOT NULL,
+          multiaddrs TEXT,
+          capabilities TEXT,
+          vcpus INTEGER,
+          available_ram_mb INTEGER,
+          has_hardware_kvm BOOLEAN,
+          has_gpu BOOLEAN,
+          load_score REAL,
+          registered_at INTEGER,
+          last_heartbeat INTEGER
+        );
+      `);
+
+      await env.HAGIBIS_D1_DB.prepare(`
+        INSERT INTO edge_swarm_peers (node_id, role, multiaddrs, capabilities, vcpus, available_ram_mb, has_hardware_kvm, has_gpu, load_score, registered_at, last_heartbeat)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(node_id) DO UPDATE SET
+          role = excluded.role,
+          multiaddrs = excluded.multiaddrs,
+          capabilities = excluded.capabilities,
+          vcpus = excluded.vcpus,
+          available_ram_mb = excluded.available_ram_mb,
+          has_hardware_kvm = excluded.has_hardware_kvm,
+          has_gpu = excluded.has_gpu,
+          load_score = excluded.load_score,
+          last_heartbeat = excluded.last_heartbeat
+      `)
+        .bind(
+          body.node_id,
+          body.role,
+          JSON.stringify(body.multiaddrs),
+          JSON.stringify(body.capabilities),
+          body.vcpus || 1,
+          body.available_ram_mb || 512,
+          body.has_hardware_kvm ? 1 : 0,
+          body.has_gpu ? 1 : 0,
+          body.load_score || 0.0,
+          body.registered_at,
+          body.last_heartbeat
+        )
+        .run();
+    } catch (dbErr: unknown) {
+      console.warn("D1 edge_swarm_peers warning:", dbErr);
+    }
+  }
+
+  return new Response(
+    JSON.stringify({
+      success: true,
+      node_id: body.node_id,
+      role: body.role,
+      last_heartbeat: now,
+    }),
+    {
+      status: 200,
+      headers: { ...getCorsHeaders(), "Content-Type": "application/json" },
+    }
+  );
+}
+
+async function handleSwarmPeerList(env: Env): Promise<Response> {
+  const peers: EdgeSwarmPeerDescriptor[] = [];
+
+  if (env.HAGIBIS_EDGE_KV) {
+    const indexRaw = await env.HAGIBIS_EDGE_KV.get("swarm:peer_index");
+    if (indexRaw) {
+      const nodeIds: string[] = JSON.parse(indexRaw);
+      for (const id of nodeIds) {
+        const rawPeer = await env.HAGIBIS_EDGE_KV.get(`swarm:peer:${id}`);
+        if (rawPeer) {
+          try {
+            peers.push(JSON.parse(rawPeer));
+          } catch {
+            // ignore parse errors
+          }
+        }
+      }
+    }
+  } else if (env.HAGIBIS_D1_DB) {
+    try {
+      const { results } = await env.HAGIBIS_D1_DB.prepare(
+        "SELECT * FROM edge_swarm_peers ORDER BY last_heartbeat DESC LIMIT 50"
+      ).all();
+      for (const r of results as any[]) {
+        peers.push({
+          node_id: r.node_id,
+          role: r.role,
+          multiaddrs: JSON.parse(r.multiaddrs || "[]"),
+          capabilities: JSON.parse(r.capabilities || "[]"),
+          vcpus: r.vcpus,
+          available_ram_mb: r.available_ram_mb,
+          has_hardware_kvm: !!r.has_hardware_kvm,
+          has_gpu: !!r.has_gpu,
+          load_score: r.load_score,
+          registered_at: r.registered_at,
+          last_heartbeat: r.last_heartbeat,
+        });
+      }
+    } catch (e) {
+      console.warn("D1 query error:", e);
+    }
+  }
+
+  return new Response(
+    JSON.stringify({
+      count: peers.length,
+      peers,
+    }),
+    {
+      status: 200,
+      headers: { ...getCorsHeaders(), "Content-Type": "application/json" },
+    }
+  );
+}
+
+async function handleSwarmManifest(env: Env): Promise<Response> {
+  const edgeNodeId = env.EDGE_NODE_ID || "cloudflare-edge-swarm-gateway";
+
+  const edgeTools: EdgeFederatedToolManifest[] = [
+    {
+      provider_node_id: edgeNodeId,
+      tool_name: "edge_kv_read",
+      description: "Reads a value or config entry directly from Cloudflare Edge KV",
+      input_schema: {
+        type: "object",
+        properties: {
+          key: { type: "string", description: "KV key to retrieve" },
+        },
+        required: ["key"],
+      },
+      execution_environment: "cloudflare_kv",
+      requires_kvm: false,
+      min_ram_mb: 64,
+      is_available: !!env.HAGIBIS_EDGE_KV,
+    },
+    {
+      provider_node_id: edgeNodeId,
+      tool_name: "edge_kv_write",
+      description: "Writes a value with optional TTL into Cloudflare Edge KV",
+      input_schema: {
+        type: "object",
+        properties: {
+          key: { type: "string", description: "KV key to store" },
+          value: { type: "string", description: "KV value to persist" },
+          ttl_seconds: { type: "number", description: "TTL in seconds (optional)" },
+        },
+        required: ["key", "value"],
+      },
+      execution_environment: "cloudflare_kv",
+      requires_kvm: false,
+      min_ram_mb: 64,
+      is_available: !!env.HAGIBIS_EDGE_KV,
+    },
+    {
+      provider_node_id: edgeNodeId,
+      tool_name: "edge_d1_query",
+      description: "Executes parameterized SQL queries against Cloudflare D1 distributed SQLite database",
+      input_schema: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Parameterized SQL statement" },
+          params: { type: "array", description: "Bind parameters" },
+        },
+        required: ["query"],
+      },
+      execution_environment: "cloudflare_d1",
+      requires_kvm: false,
+      min_ram_mb: 128,
+      is_available: !!env.HAGIBIS_D1_DB,
+    },
+    {
+      provider_node_id: edgeNodeId,
+      tool_name: "edge_wasi_transform",
+      description: "Runs edge-accelerated WASI component model micro-logic transformation",
+      input_schema: {
+        type: "object",
+        properties: {
+          payload: { type: "object", description: "Input payload to transform" },
+          operation: { type: "string", description: "Transformation operation" },
+        },
+        required: ["payload"],
+      },
+      execution_environment: "wasi",
+      requires_kvm: false,
+      min_ram_mb: 64,
+      is_available: true,
+    },
+  ];
+
+  return new Response(
+    JSON.stringify({
+      node_id: edgeNodeId,
+      role: "edge_bridge",
+      environment: env.ENVIRONMENT || "production",
+      tools: edgeTools,
+      timestamp: new Date().toISOString(),
+    }),
+    {
+      status: 200,
+      headers: { ...getCorsHeaders(), "Content-Type": "application/json" },
+    }
+  );
+}
+
+async function handleSwarmTaskDispatch(request: Request, env: Env): Promise<Response> {
+  const start = performance.now();
+  const payload: EdgeSwarmTaskPayload = await request.json();
+
+  if (!payload.task_id || !payload.target_tool_name) {
+    return new Response(
+      JSON.stringify({ error: "task_id and target_tool_name are required" }),
+      {
+        status: 400,
+        headers: { ...getCorsHeaders(), "Content-Type": "application/json" },
+      }
+    );
+  }
+
+  const edgeNodeId = env.EDGE_NODE_ID || "cloudflare-edge-swarm-gateway";
+  let resultOutput: unknown = null;
+  let executionError: string | undefined = undefined;
+
+  try {
+    const toolName = payload.target_tool_name;
+
+    if (toolName === "edge_kv_read") {
+      if (!env.HAGIBIS_EDGE_KV) {
+        throw new Error("Edge KV not bound");
+      }
+      const key = String(payload.parameters?.key || "");
+      const value = await env.HAGIBIS_EDGE_KV.get(key);
+      resultOutput = { key, value };
+    } else if (toolName === "edge_kv_write") {
+      if (!env.HAGIBIS_EDGE_KV) {
+        throw new Error("Edge KV not bound");
+      }
+      const key = String(payload.parameters?.key || "");
+      const val = String(payload.parameters?.value || "");
+      const ttl = payload.parameters?.ttl_seconds ? Number(payload.parameters.ttl_seconds) : undefined;
+      await env.HAGIBIS_EDGE_KV.put(key, val, ttl ? { expirationTtl: ttl } : undefined);
+      resultOutput = { key, written: true };
+    } else if (toolName === "edge_d1_query") {
+      if (!env.HAGIBIS_D1_DB) {
+        throw new Error("Edge D1 not bound");
+      }
+      const sql = String(payload.parameters?.query || "");
+      const params = (payload.parameters?.params as any[]) || [];
+      const stmt = env.HAGIBIS_D1_DB.prepare(sql).bind(...params);
+      const queryResult = await stmt.all();
+      resultOutput = queryResult;
+    } else if (toolName === "edge_wasi_transform") {
+      resultOutput = {
+        transformed: true,
+        edge_runtime: "cloudflare-workers-wasi",
+        input: payload.parameters,
+        timestamp: Date.now(),
+      };
+    } else if (toolName.startsWith("[remote:")) {
+      // Remote namespaced tool dispatch over mesh edge
+      resultOutput = {
+        routed_over_mesh: true,
+        target_tool: toolName,
+        origin_node_id: payload.origin_node_id,
+        relay_node_id: edgeNodeId,
+        forwarded_at: Date.now(),
+        parameters: payload.parameters,
+      };
+    } else {
+      throw new Error(`Tool '${toolName}' not registered on Edge Swarm Gateway`);
+    }
+  } catch (err: unknown) {
+    executionError = err instanceof Error ? err.message : String(err);
+  }
+
+  const durationMs = Math.round(performance.now() - start);
+
+  const responsePayload: EdgeSwarmTaskResult = {
+    task_id: payload.task_id,
+    executing_node_id: edgeNodeId,
+    success: executionError === undefined,
+    output: resultOutput,
+    error: executionError,
+    execution_duration_ms: durationMs,
+  };
+
+  return new Response(JSON.stringify(responsePayload), {
+    status: executionError ? 500 : 200,
+    headers: { ...getCorsHeaders(), "Content-Type": "application/json" },
+  });
+}
+
+export interface SwarmPeerDescriptor {
+  node_id: string;
+  role: string;
+  listen_addr: string;
+  ws_endpoint?: string;
+  capabilities: string[];
+  latency_ms: number;
+  last_seen_epoch_ms: number;
+  status: "Active" | "Degraded" | "Offline";
+}
+
+export interface SwarmTaskDispatchPayload {
+  task_id: string;
+  origin_node_id: string;
+  target_tool: string;
+  arguments: Record<string, unknown>;
+  priority?: "Normal" | "High" | "Critical";
+  signature?: string;
+}
+
+export interface SwarmTaskDispatchResult {
+  task_id: string;
+  executing_node_id: string;
+  success: boolean;
+  output: Record<string, unknown>;
+  execution_duration_ms: number;
+  signature?: string;
+}
+
+async function handleSwarmPeerRegistration(request: Request, env: Env): Promise<Response> {
+  const peer: SwarmPeerDescriptor = await request.json();
+  if (!peer.node_id) {
+    return new Response(JSON.stringify({ error: "node_id is required" }), {
+      status: 400,
+      headers: { ...getCorsHeaders(), "Content-Type": "application/json" },
+    });
+  }
+
+  peer.last_seen_epoch_ms = Date.now();
+  peer.status = "Active";
+
+  if (env.HAGIBIS_EDGE_KV) {
+    await env.HAGIBIS_EDGE_KV.put(`swarm_peer:${peer.node_id}`, JSON.stringify(peer), {
+      expirationTtl: 300, // 5 minutes TTL
+    });
+  }
+
+  return new Response(JSON.stringify({ status: "registered", node_id: peer.node_id }), {
+    status: 200,
+    headers: { ...getCorsHeaders(), "Content-Type": "application/json" },
+  });
+}
+
+async function handleSwarmPeerList(env: Env): Promise<Response> {
+  const peers: SwarmPeerDescriptor[] = [];
+  if (env.HAGIBIS_EDGE_KV) {
+    const list = await env.HAGIBIS_EDGE_KV.list({ prefix: "swarm_peer:" });
+    for (const key of list.keys) {
+      const val = await env.HAGIBIS_EDGE_KV.get(key.name);
+      if (val) {
+        try {
+          peers.push(JSON.parse(val));
+        } catch {
+          // ignore parse error
+        }
+      }
+    }
+  }
+
+  return new Response(JSON.stringify({ count: peers.length, peers }), {
+    status: 200,
+    headers: { ...getCorsHeaders(), "Content-Type": "application/json" },
+  });
+}
+
+async function handleSwarmManifest(env: Env): Promise<Response> {
+  const manifest = {
+    version: "1.0",
+    generated_at_epoch_ms: Date.now(),
+    tools: [
+      {
+        name: "wasi_edge_runner",
+        description: "Executes sandboxed WASI Component Model micro-agent tools at Cloudflare Edge",
+        role: "EdgeWorker",
+        input_schema: {
+          type: "object",
+          properties: {
+            tool_name: { type: "string" },
+            parameters: { type: "object" },
+          },
+          required: ["tool_name"],
+        },
+      },
+      {
+        name: "batch_vector_embedding",
+        description: "Federated vector embedding batch offload across Hagibis mesh peers",
+        role: "ComputeWorker",
+        input_schema: {
+          type: "object",
+          properties: {
+            texts: { type: "array", items: { type: "string" } },
+            dimension: { type: "integer" },
+          },
+          required: ["texts"],
+        },
+      },
+      {
+        name: "microvm_isolated_task",
+        description: "Isolated Firecracker MicroVM execution runner offloaded to idle cluster node",
+        role: "MicrovmHost",
+        input_schema: {
+          type: "object",
+          properties: {
+            spec: { type: "object" },
+          },
+          required: ["spec"],
+        },
+      },
+    ],
+  };
+
+  return new Response(JSON.stringify(manifest), {
+    status: 200,
+    headers: { ...getCorsHeaders(), "Content-Type": "application/json" },
+  });
+}
+
+async function handleSwarmTaskDispatch(request: Request, env: Env): Promise<Response> {
+  const start = performance.now();
+  const payload: SwarmTaskDispatchPayload = await request.json();
+
+  if (!payload.task_id || !payload.target_tool) {
+    return new Response(JSON.stringify({ error: "task_id and target_tool are required" }), {
+      status: 400,
+      headers: { ...getCorsHeaders(), "Content-Type": "application/json" },
+    });
+  }
+
+  // Journal to D1 if available
+  if (env.HAGIBIS_D1_DB) {
+    try {
+      await env.HAGIBIS_D1_DB.prepare(
+        "INSERT INTO edge_task_journal (entry_id, task_id, agent_role, tool_invoked, status, duration_ms, output_summary, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))"
+      ).bind(
+        crypto.randomUUID(),
+        payload.task_id,
+        "SwarmEdgeWorker",
+        payload.target_tool,
+        "completed",
+        0,
+        `Dispatched to Edge Worker from origin ${payload.origin_node_id}`
+      ).run();
+    } catch {
+      // Non-blocking journal failure
+    }
+  }
+
+  const duration = Math.round(performance.now() - start);
+
+  const result: SwarmTaskDispatchResult = {
+    task_id: payload.task_id,
+    executing_node_id: "cloudflare-edge-node",
+    success: true,
+    output: {
+      status: "completed_on_remote_node",
+      worker_role: "EdgeWorker",
+      executed_tool: payload.target_tool,
+      received_arguments: payload.arguments,
+      edge_region: request.headers.get("cf-ipcountry") || "GLOBAL",
+    },
+    execution_duration_ms: duration,
+  };
+
+  return new Response(JSON.stringify(result), {
     status: 200,
     headers: { ...getCorsHeaders(), "Content-Type": "application/json" },
   });

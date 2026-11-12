@@ -543,6 +543,18 @@ pub use hierarchical_multimodal_rag_cache::{
     UnifiedHierarchicalRAGCache, WarmStateCheckpoint, WarmTierEngine, WarmTierStats,
 };
 
+// Strategic Upgrade 2: Synaptic Unified Fabric & Query Planner
+pub mod synapse_unified_fabric;
+pub use synapse_unified_fabric::{
+    bytes_to_f32_slice, compute_rrf, decode_bytes_to_f32_vec, dot_product_unrolled,
+    encode_f32_slice_to_bytes, register_synapse_sql_functions, simd_cosine_distance,
+    simd_cosine_similarity as synapse_simd_cosine_similarity,
+    simd_dot_product as synapse_simd_dot_product, with_f32_slice, AgentCheckpoint,
+    ConversationMessage, ExecutionTraceRecord, HybridFusionResult, QueryPlanSummary,
+    RelationalRecord, RelationalVectorJoinRow, RrfConfig, SynapseConfig, SynapseKnnMatch,
+    SynapseQueryPlanner, SynapseVectorKnnCursor, SynapseVectorKnnTab, SynapticFabric,
+};
+
 
 
 

@@ -870,6 +870,34 @@ pub use wasi_cloudflare_edge_deployer::{
     EdgeRoutesManifest, WasiCloudflareEdgeDeployer,
 };
 
+// Upgrade 1: Epoll / Eventfd Circuit Breaker & Autonomous Self-Healing Pipeline
+pub mod epoll_circuit_breaker_self_healer;
+pub use epoll_circuit_breaker_self_healer::{
+    AutonomousRepairPromptGenerator, CandidatePatch as EpollCandidatePatch, CircuitBreakerConfig, CircuitBreakerMetrics,
+    CircuitBreakerPhase, CircuitBreakerState, CrashDiagnostic, CrashDiagnosticParser,
+    DiagnosticErrorKind, EpollCircuitBreakerSelfHealer, EpollCircuitWatcher, EventFdNotifier,
+    IsolatedMicrovmTestRunner, MicrovmTestResult, RepairPrompt, SelfHealingReceipt, TripReason,
+};
+
+// Upgrade 4: P2P Swarm Coordination over Model Context Protocol (MCP)
+pub mod p2p_swarm_mcp_mesh;
+pub use p2p_swarm_mcp_mesh::{
+    sign_mesh_payload, verify_mesh_payload, DhtNodeKey, FederatedMeshDirectory,
+    FederatedToolManifest, MdnsDiscoveryBeacon, MeshChannelType, MeshNodeRole,
+    NodeResourceTelemetry, P2pSwarmMcpMesh, PeerDiscoveryDescriptor, PeerStatus,
+    SwarmTaskOffloadEngine, SwarmTaskPayload, SwarmTaskResult, TaskExecutionReceipt,
+    TaskOffloadConfig, TaskResourceRequirement, ToolRouteTarget,
+};
+
+// Upgrade 3: Hardware-Aware Dynamic Execution & Compilation Engine (dynatune synergy)
+pub mod hardware_aware_dynamic_compiler;
+pub use hardware_aware_dynamic_compiler::{
+    AutomatedPgoBoltEngine, GovernorEppWatchdogController, GovernorWatchdogRecord,
+    HardwareAwareDynamicCompiler, MicrovmCgroupThrottler, WasmFuelExecutionResult,
+    WasmtimeFuelExecutor, DEFAULT_CGROUP_V2_BASE_DIR, DEFAULT_CPUFREQ_SYSFS_DIR,
+};
+
+
 
 
 
