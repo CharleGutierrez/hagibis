@@ -1175,6 +1175,83 @@
         "action": { "type": "string", "description": "Telemetry action: get_latest_packet, broadcast_manual_update, status", "default": "get_latest_packet" }
       },
       "required": ["action"]
+    },
+    "hgb_distributed_microvm_swarm": {
+      "description": "Cluster node coordinator for distributed microVM swarms: dynamically schedules, provisions, and supervises Firecracker microVMs or remote Wasm runners across edge/cluster nodes over libp2p/gRPC with multivariate fitness scoring and automatic failover",
+      "parameters": {
+        "action": {
+          "type": "string",
+          "enum": ["schedule_task", "cluster_status", "register_node", "report_heartbeat", "evacuate_node"],
+          "description": "Swarm coordination action",
+          "default": "schedule_task"
+        },
+        "task_id": { "type": "string", "description": "Unique task identifier" },
+        "workload_type": {
+          "type": "string",
+          "enum": ["CodeRefactoring", "WebScraping", "ModelFineTuningEval", "BatchVectorSearch", "GenericSandbox"],
+          "description": "Category of heavy multi-agent workload to dispatch",
+          "default": "CodeRefactoring"
+        },
+        "payload": { "type": "string", "description": "Serialized task instructions, script, or payload data" },
+        "required_cores": { "type": "integer", "description": "Minimum required CPU cores", "default": 2 },
+        "required_memory_mb": { "type": "integer", "description": "Minimum required memory in MB", "default": 1024 },
+        "requires_kvm": { "type": "boolean", "description": "Strict hardware virtualization requirement", "default": false },
+        "timeout_ms": { "type": "integer", "description": "Execution timeout in milliseconds", "default": 30000 }
+      },
+      "required": ["action"]
+    },
+    "hgb_hierarchical_multimodal_rag": {
+      "description": "Multi-tier hierarchical memory pipeline: Hot tier in-memory quantized HNSW vector index (<1ms), Warm tier LZSS-compressed SQLite checkpoints, and Cold tier BLAKE3 content-addressed multi-modal store indexing visual assets, diagrams, and perceptual hashes",
+      "parameters": {
+        "action": {
+          "type": "string",
+          "enum": ["query_hybrid", "store_asset", "get_asset", "cache_status", "evict_hot"],
+          "description": "Hierarchical memory action to execute",
+          "default": "query_hybrid"
+        },
+        "query_text": { "type": "string", "description": "Semantic search query string" },
+        "query_vector": { "type": "array", "items": { "type": "number" }, "description": "Optional dense query vector" },
+        "top_k": { "type": "integer", "description": "Maximum number of nearest neighbors to retrieve", "default": 5 },
+        "min_score": { "type": "number", "description": "Minimum cosine similarity score threshold", "default": 0.2 },
+        "asset_id": { "type": "string", "description": "Unique multi-modal asset identifier or path" },
+        "asset_payload_base64": { "type": "string", "description": "Base64-encoded binary content for multi-modal asset ingestion" },
+        "mime_type": { "type": "string", "description": "MIME type of asset (e.g. image/png, image/svg+xml)", "default": "image/png" }
+      },
+      "required": ["action"]
+    },
+    "hgb_ebpf_autonomous_sentinel": {
+      "description": "Sub-microsecond eBPF tracepoint sentinel for autonomous self-healing: intercepts syscalls, socket transactions, and file I/O in real time, detects cyclic infinite loops, memory violations (SIGSEGV), and spinlock stalls, and triggers instant sandbox restart or hot-patching",
+      "parameters": {
+        "action": {
+          "type": "string",
+          "enum": ["inspect_target", "ingest_telemetry", "evaluate_anomalies", "list_anomalies", "remediate_target"],
+          "description": "Sentinel operational action",
+          "default": "inspect_target"
+        },
+        "target_id": { "type": "string", "description": "Monitored PID or Wasm execution sandbox ID", "required": true },
+        "force_remediation": { "type": "boolean", "description": "Force immediate remediation dispatch (restart, isolate, or patch)", "default": false },
+        "patch_strategy": {
+          "type": "string",
+          "enum": ["RestartSandbox", "HotPatchWasmModule", "ThrottleCgroupQuota", "IsolateMicrovm"],
+          "description": "Preferred automated remediation policy"
+        }
+      },
+      "required": ["action", "target_id"]
+    },
+    "hgb_wasi_cloudflare_edge_sync": {
+      "description": "Turnkey Cloudflare Workers and WASI Component Model edge gateway coordinator: validates wrangler.toml and _routes.json bindings, verifies KV telemetry caching (HAGIBIS_EDGE_KV), synchronizes D1 task journaling (HAGIBIS_D1_DB), and manages HMAC token auth",
+      "parameters": {
+        "action": {
+          "type": "string",
+          "enum": ["inspect_status", "validate_bindings", "generate_auth_token", "sync_telemetry", "sync_journal"],
+          "description": "Cloudflare edge synchronization action",
+          "default": "inspect_status"
+        },
+        "config_path": { "type": "string", "description": "Optional custom path to wrangler.toml", "default": "wrangler.toml" },
+        "routes_path": { "type": "string", "description": "Optional custom path to _routes.json", "default": "_routes.json" },
+        "secret_key": { "type": "string", "description": "HMAC secret key for edge token generation" }
+      },
+      "required": ["action"]
     }
   },
   "mcpServers": {
@@ -1279,7 +1356,16 @@
         "hgb_wasm_component_mesh_execute",
         "hgb_memory_consolidation_trigger",
         "hgb_bolt_optimize_binary",
-        "hgb_self_healing_stacktrace_patch"
+        "hgb_self_healing_stacktrace_patch",
+        "hgb_cluster_mesh_offload",
+        "hgb_neural_hardware_pipeline",
+        "hgb_vibe_code_mutation_loop",
+        "hgb_universal_mcp_gateway",
+        "hgb_telemetry_hud_cockpit",
+        "hgb_distributed_microvm_swarm",
+        "hgb_hierarchical_multimodal_rag",
+        "hgb_ebpf_autonomous_sentinel",
+        "hgb_wasi_cloudflare_edge_sync"
       ]
     },
     "hagibis_sse": {

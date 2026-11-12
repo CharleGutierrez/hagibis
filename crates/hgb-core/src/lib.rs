@@ -2233,6 +2233,15 @@ pub use cluster_mesh_protocol::{
     CLUSTER_MESH_MAGIC, CLUSTER_MESH_VERSION, DEFAULT_PEER_TIMEOUT_MS, DEFAULT_WIREGUARD_PORT,
 };
 
+// Pillar 3: Real-Time eBPF Telemetry & Autonomic Anomaly Contracts
+pub mod ebpf_telemetry;
+pub use ebpf_telemetry::{
+    FileIoTelemetry, MemoryAccessType, MemoryViolationTelemetry, MonitoredTarget,
+    PatchStrategy, RegisterDump, RemediationDirective, RemediationReceipt,
+    SentinelAnomaly, SocketTelemetry, SyscallTelemetry,
+};
+
+
 
 
 

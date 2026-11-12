@@ -844,6 +844,33 @@ pub use universal_mcp_gateway::{
     McpToolSandboxType, UniversalMcpGateway,
 };
 
+// Four Pillars: Autonomous Agent Ecosystem Enhancements
+// Pillar 1: Distributed Swarm MicroVM Coordinator
+pub mod distributed_microvm_swarm_coordinator;
+pub use distributed_microvm_swarm_coordinator::{
+    DistributedMicrovmSwarmCoordinator, GpuTelemetry, KvmTelemetry, NodeId, NodeStatus,
+    NodeTelemetry, SwarmCoordinatorConfig, SwarmCoordinatorError,
+    WorkerEndpoint, WorkloadExecutionResult, WorkloadExecutionState, WorkloadId,
+    WorkloadIsolation, WorkloadKind, WorkloadSpec,
+};
+
+
+// Pillar 3: Real-Time eBPF Autonomous Sentinel
+pub mod ebpf_autonomous_sentinel;
+pub use ebpf_autonomous_sentinel::{
+    EbpfAutonomousSentinel, MicroVmRuntimeController, ProductionMicroVmController,
+    ProductionWasmSandboxController, ProgressWatchdog, SandboxRuntimeController,
+    SentinelConfig, SentinelError, SyscallCycleDetector,
+};
+
+// Pillar 4: Turnkey Cloudflare Workers & WASI Edge Deployment
+pub mod wasi_cloudflare_edge_deployer;
+pub use wasi_cloudflare_edge_deployer::{
+    EdgeD1Binding, EdgeDeploymentManifest, EdgeDeploymentStatus, EdgeKvBinding,
+    EdgeRoutesManifest, WasiCloudflareEdgeDeployer,
+};
+
+
 
 
 

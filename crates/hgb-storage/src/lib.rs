@@ -534,6 +534,16 @@ pub use neural_hardware_pipeline::{
     NEURAL_VECTOR_DIM,
 };
 
+// Pillar 2: Native Multi-Modal Memory & Real-Time Hierarchical RAG Cache
+pub mod hierarchical_multimodal_rag_cache;
+pub use hierarchical_multimodal_rag_cache::{
+    CheckpointKind, ColdAssetHit, ColdObjectStorageEngine, DeflateCodec,
+    HotVectorHit, MultiModalAssetDescriptor, QuantizedHnswConfig, QuantizedHnswIndex,
+    QuantizedMetric, QuantizedVectorRecord, UnifiedHierarchicalQueryResult,
+    UnifiedHierarchicalRAGCache, WarmStateCheckpoint, WarmTierEngine, WarmTierStats,
+};
+
+
 
 
 
