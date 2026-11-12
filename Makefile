@@ -10,7 +10,7 @@ LLVM_BOLT ?= $(shell command -v llvm-bolt 2>/dev/null || find /usr/lib/llvm-*/bi
 # Relocation preservation flags required for LLVM BOLT post-link transformations
 BOLT_RELOC_FLAGS ?= -C link-arg=-Wl,-q
 
-.PHONY: all check test release pgo bolt pgo-bolt pgo-bolt-dynatune pgo-bolt-verify pgo-build pgo-train pgo-merge pgo-release pgo-dynatune clean help untangle skill\:lint skill\:test skill\:build skill-lint skill-test skill-build
+.PHONY: all check test release pgo bolt pgo-bolt pgo-bolt-dynatune pgo-bolt-verify pgo-build pgo-train pgo-merge pgo-release pgo-dynatune clean help untangle skill\:lint skill\:test skill\:build skill-lint skill-test skill-build test-masterclass
 
 all: check test
 
@@ -267,6 +267,21 @@ skill\:build:
 skill-lint: skill\:lint
 skill-test: skill\:test
 skill-build: skill\:build
+
+# Interactive and self-testing masterclass & live simulation test suite
+test-masterclass:
+	@echo "======================================================================"
+	@echo " [Masterclass Test] Validating 8-Chapter Suite & Live Simulation Gates"
+	@echo "======================================================================"
+	@if command -v uv >/dev/null 2>&1; then \
+		uv run --with reportlab python3 docs/masterclass/generate_pdf.py --validate; \
+	elif python3 -c "import reportlab" >/dev/null 2>&1; then \
+		python3 docs/masterclass/generate_pdf.py --validate; \
+	fi
+	@python3 docs/masterclass/test_masterclass_live_simulations.py
+	@echo "======================================================================"
+	@echo " [Masterclass Test] Completed: All Chapters & Simulations In-Sync!"
+	@echo "======================================================================"
 
 clean:
 	cargo clean

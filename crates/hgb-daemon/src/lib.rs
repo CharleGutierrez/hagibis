@@ -897,6 +897,27 @@ pub use hardware_aware_dynamic_compiler::{
     WasmtimeFuelExecutor, DEFAULT_CGROUP_V2_BASE_DIR, DEFAULT_CPUFREQ_SYSFS_DIR,
 };
 
+// Phase 1: Deep Integration with dynatune (System-Aware Execution)
+pub mod native_dynatune_engine;
+pub use native_dynatune_engine::{
+    DynatuneAuditEvent, DynatuneSystemSnapshot, NativeDynatuneCoordinator,
+    ThreadAllocationDecision, WorkloadType,
+};
+
+// Phase 3: Autonomous Self-Healing & Vector Feedback Loops
+pub mod autonomous_vector_feedback_healer;
+pub use autonomous_vector_feedback_healer::{
+    AutonomousHealingReceipt, AutonomousVectorFeedbackHealer,
+    TaskFailureDiagnostic, VerifiedResolutionRecord, FAILURE_EMBEDDING_DIM,
+};
+
+// Phase 4: Edge-to-Core Unified Control Plane
+pub mod edge_tunnel_control_plane;
+pub use edge_tunnel_control_plane::{
+    EdgeHandshakeMessage, EdgeNodeCapabilities, EdgeOffloadResult, EdgeOffloadTask,
+    EdgeTunnelControlPlane, EdgeTunnelCrypto, EdgeTunnelStatus,
+};
+
 
 
 

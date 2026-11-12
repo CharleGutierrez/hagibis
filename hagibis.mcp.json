@@ -1329,6 +1329,71 @@
         "parameters": { "type": "object", "description": "JSON arguments object passed by AI agent to validate against WIT types" }
       },
       "required": ["action"]
+    },
+    "hgb_dynatune_kernel_coordinator": {
+      "description": "Deep integration with sibling dynatune crate: queries live thermal, RAM, and battery state, calculates optimal thread pool allocations for heavy LLM / compilation workloads, and pins thread CPU affinity",
+      "parameters": {
+        "action": {
+          "type": "string",
+          "enum": ["capture_snapshot", "calculate_worker_threads", "pin_core_affinity", "actuate_power_profile"],
+          "description": "Action to execute with dynatune engine",
+          "default": "capture_snapshot"
+        },
+        "workload": {
+          "type": "string",
+          "enum": ["HeavyCompilation", "LlmInferencePipeline", "MultiAgentSwarm", "BackgroundIdle"],
+          "description": "Workload type to scale worker threads for",
+          "default": "HeavyCompilation"
+        },
+        "core_ids": { "type": "array", "items": { "type": "integer" }, "description": "CPU core IDs for sched_setaffinity pinning" },
+        "power_profile": { "type": "string", "enum": ["performance", "balanced", "powersave"], "description": "Target power profile to switch to" }
+      },
+      "required": ["action"]
+    },
+    "hgb_hybrid_execution_router": {
+      "description": "Unified hybrid execution router: evaluates risk score of code payloads, auto-routes between Tier 1 instant WASM sandbox (<1ms) and Tier 2 isolated Firecracker MicroVM jail with snapshot acceleration",
+      "parameters": {
+        "task_id": { "type": "string", "description": "Unique execution task ID", "required": true },
+        "language": { "type": "string", "description": "Target language (rust, zig, wasm, python, bash)", "default": "rust" },
+        "code": { "type": "string", "description": "Code string or bytecode to evaluate and execute", "required": true },
+        "required_capabilities": { "type": "array", "items": { "type": "string" }, "description": "Requested capabilities (net, fs_write, exec)" },
+        "is_trusted_source": { "type": "boolean", "description": "Whether code originates from trusted internal source", "default": true }
+      },
+      "required": ["task_id", "code"]
+    },
+    "hgb_autonomous_vector_feedback_healer": {
+      "description": "Autonomous vector feedback healing loop: embeds task failure diagnostics into 128-dim vectors, searches past verified resolutions in LanceDB Synapse fabric, synthesizes AST patches, and auto-commits on green pass",
+      "parameters": {
+        "incident_id": { "type": "string", "description": "Incident tracking ID", "required": true },
+        "task_id": { "type": "string", "description": "Task identifier", "required": true },
+        "error_class": { "type": "string", "description": "Error class name (OutOfMemory, FuelExhaustion, IndexOutOfBounds)", "required": true },
+        "error_message": { "type": "string", "description": "Error diagnostic message", "required": true },
+        "failing_code": { "type": "string", "description": "Source code that caused the failure", "required": true },
+        "stack_trace": { "type": "array", "items": { "type": "string" }, "description": "Stack trace frames" }
+      },
+      "required": ["incident_id", "task_id", "error_class", "error_message", "failing_code"]
+    },
+    "hgb_edge_tunnel_control_plane": {
+      "description": "Edge-to-core unified control plane: encrypted tunnel bridging Cloudflare Worker edge (worker/index.ts) with local workstation daemon, enabling transparent offload of heavy compute with HMAC/BLAKE3 anti-replay security",
+      "parameters": {
+        "action": {
+          "type": "string",
+          "enum": ["create_handshake", "process_edge_task", "get_completed_result"],
+          "description": "Edge tunnel operation to perform",
+          "default": "create_handshake"
+        },
+        "task_id": { "type": "string", "description": "Task ID for process_edge_task or get_completed_result" },
+        "tool_name": { "type": "string", "description": "Tool name to execute on local workstation hardware" },
+        "payload": { "type": "object", "description": "Task payload dictionary" }
+      },
+      "required": ["action"]
+    },
+    "hgb_masterclass_simulation_test_gate": {
+      "description": "Interactive and self-testing masterclass CI/CD test gate: validates live crate boundaries, kernel telemetry, hybrid routers, and vector loops against all 8 masterclass chapters with zero documentation drift",
+      "parameters": {
+        "run_simulations": { "type": "boolean", "description": "Run live phase 1-5 simulation tests", "default": true },
+        "validate_pdf_chapters": { "type": "boolean", "description": "Validate 8 ReportLab chapters headlessly", "default": true }
+      }
     }
   },
   "mcpServers": {

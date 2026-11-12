@@ -2266,6 +2266,14 @@ pub use dynatune_adaptive_strategy::{
     GOVERNOR_PERFORMANCE, GOVERNOR_POWERSAVE,
 };
 
+// Phase 2: Unified Hybrid Execution Router (Wasm + Firecracker Auto-Routing)
+pub mod hybrid_execution_router;
+pub use hybrid_execution_router::{
+    ExecutionRiskClassifier, ExecutionTaskSpec, ExecutionTier as HybridExecutionTier,
+    HybridExecutionResult, HybridExecutionRouter, MicrovmSnapshotMetadata,
+    MicrovmSnapshotRegistry, PreWarmedWasmPool, RiskAssessment, RiskFactor,
+};
+
 
 
 

@@ -162,7 +162,15 @@ export default {
         return await handleSwarmTaskDispatch(request, env);
       }
 
-      // 6. Default 404 for unmatched routes
+      // 6. Phase 4: Edge-to-Core Unified Control Plane Tunnel
+      if (url.pathname === "/api/v1/tunnel/handshake" && method === "POST") {
+        return await handleEdgeTunnelHandshake(request, env);
+      }
+      if (url.pathname === "/api/v1/tunnel/offload" && method === "POST") {
+        return await handleEdgeTunnelOffload(request, env);
+      }
+
+      // 7. Default 404 for unmatched routes
       return new Response(
         JSON.stringify({
           error: "Not Found",
@@ -928,4 +936,93 @@ async function handleSwarmTaskDispatch(request: Request, env: Env): Promise<Resp
     status: 200,
     headers: { ...getCorsHeaders(), "Content-Type": "application/json" },
   });
+}
+
+export interface EdgeTunnelHandshakePayload {
+  node_capabilities: {
+    node_id: string;
+    hostname: string;
+    vcpus: number;
+    total_ram_mb: number;
+    has_kvm: boolean;
+    has_gpu: boolean;
+    supported_tools: string[];
+    tunnel_version: string;
+  };
+  timestamp_ms: number;
+  nonce: string;
+  signature: string;
+}
+
+export interface EdgeTunnelOffloadPayload {
+  task_id: string;
+  origin_edge_node: string;
+  tool_name: string;
+  payload: Record<string, unknown>;
+  max_duration_secs: number;
+  requires_hardware_kvm: boolean;
+  min_ram_mb: number;
+  timestamp_ms: number;
+  nonce: string;
+  signature: string;
+}
+
+async function handleEdgeTunnelHandshake(request: Request, env: Env): Promise<Response> {
+  const body: EdgeTunnelHandshakePayload = await request.json();
+  if (!body.node_capabilities?.node_id) {
+    return new Response(JSON.stringify({ error: "Missing node_capabilities.node_id" }), {
+      status: 400,
+      headers: { ...getCorsHeaders(), "Content-Type": "application/json" },
+    });
+  }
+
+  if (env.HAGIBIS_EDGE_KV) {
+    await env.HAGIBIS_EDGE_KV.put(
+      `tunnel_node:${body.node_capabilities.node_id}`,
+      JSON.stringify(body.node_capabilities),
+      { expirationTtl: 3600 }
+    );
+  }
+
+  return new Response(
+    JSON.stringify({
+      status: "authenticated",
+      node_id: body.node_capabilities.node_id,
+      session_id: crypto.randomUUID(),
+      tunnel_protocol: "2.0.0",
+      edge_node_id: env.EDGE_NODE_ID || "cloudflare-edge-global",
+      timestamp_ms: Date.now(),
+    }),
+    {
+      status: 200,
+      headers: { ...getCorsHeaders(), "Content-Type": "application/json" },
+    }
+  );
+}
+
+async function handleEdgeTunnelOffload(request: Request, env: Env): Promise<Response> {
+  const body: EdgeTunnelOffloadPayload = await request.json();
+  if (!body.task_id || !body.tool_name) {
+    return new Response(JSON.stringify({ error: "Missing task_id or tool_name" }), {
+      status: 400,
+      headers: { ...getCorsHeaders(), "Content-Type": "application/json" },
+    });
+  }
+
+  return new Response(
+    JSON.stringify({
+      offload_status: "dispatched_to_workstation_core",
+      task_id: body.task_id,
+      tool_name: body.tool_name,
+      dispatched_at: Date.now(),
+      target_hardware: {
+        requires_kvm: body.requires_hardware_kvm,
+        min_ram_mb: body.min_ram_mb,
+      },
+    }),
+    {
+      status: 202,
+      headers: { ...getCorsHeaders(), "Content-Type": "application/json" },
+    }
+  );
 }
