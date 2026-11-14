@@ -233,6 +233,17 @@ export default {
         return await handleEdgeTunnelOffload(request, env);
       }
 
+      // 7. Pillar III: Production-Hardened Edge-to-Core QUIC / HTTP/3 Tunnel & Sync
+      if (url.pathname === "/api/edge/quic-tunnel") {
+        return await handleQuicTunnel(request, env);
+      }
+      if (url.pathname === "/api/edge/vector-query" && method === "POST") {
+        return await handleEdgeVectorQuery(request, env);
+      }
+      if (url.pathname === "/api/edge/storage-sync" && (method === "POST" || method === "GET")) {
+        return await handleEdgeStorageSync(request, env);
+      }
+
       // 7. Default 404 for unmatched routes
       return new Response(
         JSON.stringify({
@@ -851,7 +862,7 @@ export interface SwarmTaskDispatchResult {
   signature?: string;
 }
 
-async function handleSwarmPeerRegistration(request: Request, env: Env): Promise<Response> {
+async function handleLegacySwarmPeerRegistration(request: Request, env: Env): Promise<Response> {
   const peer: SwarmPeerDescriptor = await request.json();
   if (!peer.node_id) {
     return new Response(JSON.stringify({ error: "node_id is required" }), {
@@ -875,7 +886,7 @@ async function handleSwarmPeerRegistration(request: Request, env: Env): Promise<
   });
 }
 
-async function handleSwarmPeerList(env: Env): Promise<Response> {
+async function handleLegacySwarmPeerList(env: Env): Promise<Response> {
   const peers: SwarmPeerDescriptor[] = [];
   if (env.HAGIBIS_EDGE_KV) {
     const list = await env.HAGIBIS_EDGE_KV.list({ prefix: "swarm_peer:" });
@@ -897,7 +908,7 @@ async function handleSwarmPeerList(env: Env): Promise<Response> {
   });
 }
 
-async function handleSwarmManifest(env: Env): Promise<Response> {
+async function handleLegacySwarmManifest(env: Env): Promise<Response> {
   const manifest = {
     version: "1.0",
     generated_at_epoch_ms: Date.now(),
@@ -949,7 +960,7 @@ async function handleSwarmManifest(env: Env): Promise<Response> {
   });
 }
 
-async function handleSwarmTaskDispatch(request: Request, env: Env): Promise<Response> {
+async function handleLegacySwarmTaskDispatch(request: Request, env: Env): Promise<Response> {
   const start = performance.now();
   const payload: SwarmTaskDispatchPayload = await request.json();
 

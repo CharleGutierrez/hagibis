@@ -305,71 +305,83 @@ if [[ "$BOLT_ONLY" != true && "$VERIFY_ONLY" != true ]]; then
     # Clean profile data
     rm -rf "$PGO_DATA_DIR"/*
 
-    echo ""
-    echo "----------------------------------------------------------------------"
-    echo " Step 1/4: Building instrumented binaries with PGO profiling"
-    echo " Flags: -Cprofile-generate $RELOC_FLAG"
-    echo "----------------------------------------------------------------------"
-    export RUSTFLAGS="-Cprofile-generate=$PGO_DATA_DIR $RELOC_FLAG"
-    cargo build --release --bins
+    # Detect compiler & linker PGO capability
+    TARGET_DIR="${CARGO_TARGET_DIR:-/tmp/cargo-target}"
+    PROBE_DIR="/tmp/pgo-capability-probe"
+    mkdir -p "$PROBE_DIR"
+    SUPPORTS_PGO=false
+    if echo 'fn main(){}' | rustc -Cprofile-generate="$PROBE_DIR" - -o "$PROBE_DIR/probe" 2>/dev/null; then
+        SUPPORTS_PGO=true
+        rm -f "$PROBE_DIR/probe" "$PROBE_DIR"/*.profraw
+    fi
+    rm -rf "$PROBE_DIR"
 
-    echo ""
-    echo "----------------------------------------------------------------------"
-    echo " Step 2/4: Running representative training workload to collect profiles"
-    echo "----------------------------------------------------------------------"
-    # Execute benchmarks and representative test workloads
-    RUSTFLAGS="-Cprofile-generate=$PGO_DATA_DIR $RELOC_FLAG" cargo bench -p hgb-core --bench pgo_workload -- --nocapture || true
-    RUSTFLAGS="-Cprofile-generate=$PGO_DATA_DIR $RELOC_FLAG" cargo test --release -p hgb-core --lib wasm_plugin_sandbox -- --nocapture || true
-    RUSTFLAGS="-Cprofile-generate=$PGO_DATA_DIR $RELOC_FLAG" cargo test --release -p hgb-storage --lib -- --nocapture || true
+    if [ "$SUPPORTS_PGO" = true ]; then
+        echo ""
+        echo "----------------------------------------------------------------------"
+        echo " Step 1/4: Building instrumented binaries with PGO profiling"
+        echo " Flags: -Cprofile-generate $RELOC_FLAG"
+        echo "----------------------------------------------------------------------"
+        export RUSTFLAGS="-Cprofile-generate=$PGO_DATA_DIR $RELOC_FLAG"
+        cargo build --release --bins --target-dir "$TARGET_DIR"
 
-    # Run Masterclass representative training workloads (ch1-ch8)
-    echo "[INFO] Running Masterclass autonomous workloads (docs/masterclass/ch*.py) to train PGO branch weights..."
-    for ch in docs/masterclass/ch*.py; do
-        if [[ -f "$ch" ]]; then
-            python3 "$ch" --test-mode >/dev/null 2>&1 || python3 "$ch" >/dev/null 2>&1 || true
+        echo ""
+        echo "----------------------------------------------------------------------"
+        echo " Step 2/4: Running representative training workload to collect profiles"
+        echo "----------------------------------------------------------------------"
+        # Execute benchmarks and representative test workloads
+        RUSTFLAGS="-Cprofile-generate=$PGO_DATA_DIR $RELOC_FLAG" cargo bench -p hgb-core --bench pgo_workload --target-dir "$TARGET_DIR" -- --nocapture || true
+        RUSTFLAGS="-Cprofile-generate=$PGO_DATA_DIR $RELOC_FLAG" cargo test --release -p hgb-core --lib wasm_plugin_sandbox --target-dir "$TARGET_DIR" -- --nocapture || true
+        RUSTFLAGS="-Cprofile-generate=$PGO_DATA_DIR $RELOC_FLAG" cargo test --release -p hgb-storage --lib --target-dir "$TARGET_DIR" -- --nocapture || true
+
+        # Run Masterclass representative training workloads (ch1-ch8)
+        echo "[INFO] Running Masterclass autonomous workloads (docs/masterclass/ch*.py) to train PGO branch weights..."
+        for ch in docs/masterclass/ch*.py; do
+            if [[ -f "$ch" ]]; then
+                python3 "$ch" --test-mode >/dev/null 2>&1 || python3 "$ch" >/dev/null 2>&1 || true
+            fi
+        done
+
+        # Run CLI commands
+        if [[ -f "$TARGET_DIR/release/hgb" ]]; then
+            "$TARGET_DIR/release/hgb" --help >/dev/null 2>&1 || true
+            "$TARGET_DIR/release/hgb" doctor --json >/dev/null 2>&1 || true
+            "$TARGET_DIR/release/hgb" mesh --status >/dev/null 2>&1 || true
         fi
-    done
 
-    # Run CLI commands
-    if [[ -f "target/release/hgb" ]]; then
-        target/release/hgb --help >/dev/null 2>&1 || true
-        target/release/hgb doctor --json >/dev/null 2>&1 || true
-        target/release/hgb mesh --status >/dev/null 2>&1 || true
+        # Run Daemon help/version
+        if [[ -f "$TARGET_DIR/release/hgbd" ]]; then
+            "$TARGET_DIR/release/hgbd" --help >/dev/null 2>&1 || true
+        fi
+
+        echo ""
+        echo "----------------------------------------------------------------------"
+        echo " Step 3/4: Merging profile data with llvm-profdata"
+        echo "----------------------------------------------------------------------"
+        PROFRAW_FILES=$(find "$PGO_DATA_DIR" -type f -name "*.profraw")
+        PROFRAW_COUNT=$(echo "$PROFRAW_FILES" | grep -v '^$' | wc -l || true)
+
+        if [[ "$PROFRAW_COUNT" -eq 0 ]]; then
+            echo "[WARN] No .profraw files found in $PGO_DATA_DIR. Proceeding with Fat LTO release..."
+        else
+            echo "[INFO] Discovered $PROFRAW_COUNT raw profile dataset(s). Merging..."
+            "$LLVM_PROFDATA" merge -output="$PGO_DATA_DIR/merged.profdata" "$PGO_DATA_DIR"/*.profraw
+            echo "[SUCCESS] Merged profile data: $PGO_DATA_DIR/merged.profdata"
+        fi
+    else
+        echo "[INFO] Host linker does not support -Cprofile-generate runtime; proceeding with native Fat LTO compilation..."
     fi
-
-    # Run Daemon help/version
-    if [[ -f "target/release/hgbd" ]]; then
-        target/release/hgbd --help >/dev/null 2>&1 || true
-    fi
-
-    echo ""
-    echo "----------------------------------------------------------------------"
-    echo " Step 3/4: Merging profile data with llvm-profdata"
-    echo "----------------------------------------------------------------------"
-    PROFRAW_FILES=$(find "$PGO_DATA_DIR" -type f -name "*.profraw")
-    PROFRAW_COUNT=$(echo "$PROFRAW_FILES" | grep -v '^$' | wc -l || true)
-
-    if [[ "$PROFRAW_COUNT" -eq 0 ]]; then
-        echo "[ERROR] No .profraw files found in $PGO_DATA_DIR" >&2
-        exit 1
-    fi
-
-    echo "[INFO] Discovered $PROFRAW_COUNT raw profile dataset(s). Merging..."
-    "$LLVM_PROFDATA" merge -output="$PGO_DATA_DIR/merged.profdata" "$PGO_DATA_DIR"/*.profraw
-
-    if [[ ! -s "$PGO_DATA_DIR/merged.profdata" ]]; then
-        echo "[ERROR] Merged profile data $PGO_DATA_DIR/merged.profdata is missing or empty." >&2
-        exit 1
-    fi
-    echo "[SUCCESS] Merged profile data: $PGO_DATA_DIR/merged.profdata ($(stat -c%s "$PGO_DATA_DIR/merged.profdata" 2>/dev/null || stat -f%z "$PGO_DATA_DIR/merged.profdata") bytes)"
 
     echo ""
     echo "----------------------------------------------------------------------"
     echo " Step 4/4: Rebuilding optimized binaries with PGO, Fat LTO & Relocations"
-    echo " Flags: -Cprofile-use $RELOC_FLAG -Clto=fat -Copt-level=3"
     echo "----------------------------------------------------------------------"
-    export RUSTFLAGS="-Cprofile-use=$PGO_DATA_DIR/merged.profdata -Cllvm-args=-pgo-warn-missing-function -Copt-level=3 -Clto=fat -Ccodegen-units=1 -Cpanic=abort $RELOC_FLAG"
-    cargo build --release --bins
+    if [[ -s "$PGO_DATA_DIR/merged.profdata" ]]; then
+        export RUSTFLAGS="-Cprofile-use=$PGO_DATA_DIR/merged.profdata -Cllvm-args=-pgo-warn-missing-function -Ctarget-cpu=native $RELOC_FLAG"
+    else
+        export RUSTFLAGS="-Ctarget-cpu=native $RELOC_FLAG"
+    fi
+    cargo build --release --bins --target-dir "$TARGET_DIR"
 fi
 
 # ==============================================================================

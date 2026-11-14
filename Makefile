@@ -10,7 +10,7 @@ LLVM_BOLT ?= $(shell command -v llvm-bolt 2>/dev/null || find /usr/lib/llvm-*/bi
 # Relocation preservation flags required for LLVM BOLT post-link transformations
 BOLT_RELOC_FLAGS ?= -C link-arg=-Wl,-q
 
-.PHONY: all check test release pgo bolt pgo-bolt pgo-bolt-dynatune pgo-bolt-verify pgo-build pgo-train pgo-merge pgo-release pgo-dynatune clean help untangle skill\:lint skill\:test skill\:build skill-lint skill-test skill-build test-masterclass
+.PHONY: all check test release pgo bolt pgo-bolt pgo-bench pgo-bolt-dynatune pgo-bolt-verify pgo-build pgo-train pgo-merge pgo-release pgo-dynatune clean help untangle skill\:lint skill\:test skill\:build skill-lint skill-test skill-build test-masterclass
 
 all: check test
 
@@ -113,24 +113,20 @@ bolt:
 	@echo "======================================================================"
 	bash scripts/pgo-optimize.sh --bolt-only
 
-# Super-optimization: chains pgo-build -> pgo-train -> pgo-merge -> pgo-release (with -C link-arg=-Wl,-q) -> bolt
+# Run Core Execution Benchmarks
+pgo-bench:
+	@echo "======================================================================"
+	@echo " Hagibis Core Execution Benchmarks (hgb-core/benches/pgo_workload.rs)"
+	@echo "======================================================================"
+	cargo bench -p hgb-core --bench pgo_workload -- --nocapture
+
+# Super-optimization: automated PGO + Fat LTO + LLVM BOLT across all workspace binaries
 pgo-bolt:
 	@echo "======================================================================"
-	@echo " Hagibis (hgb) PGO + LLVM BOLT Super-Optimization Pipeline"
-	@echo " Phase 1: Instrument & Profile Collection (PGO Build + Train + Merge)"
-	@echo " Phase 2: Relocation Preservation Release (-C link-arg=-Wl,-q + Fat LTO)"
-	@echo " Phase 3: Post-Link Binary Reordering (LLVM BOLT ext-tsp & hfsort+)"
+	@echo " Hagibis (hgb & hgbd) PGO + LLVM BOLT Super-Optimization Pipeline"
+	@echo " Targets: crates/hgb-cli (hgb) & crates/hgb-daemon (hgbd)"
 	@echo "======================================================================"
-	$(MAKE) pgo-build
-	$(MAKE) pgo-train
-	$(MAKE) pgo-merge
-	$(MAKE) pgo-release BOLT_LDFLAGS="$(BOLT_RELOC_FLAGS)"
-	$(MAKE) bolt
-	@echo "======================================================================"
-	@echo " Hagibis Super-Optimization (PGO + Fat LTO + LLVM BOLT) Completed!"
-	@echo " CLI:    target/release/hgb"
-	@echo " Daemon: target/release/hgbd"
-	@echo "======================================================================"
+	bash scripts/pgo-bolt-optimize.sh all
 
 # Hardware-Coordinated PGO + BOLT + dynatune / kernel-optimizer Optimization Pipeline
 pgo-bolt-dynatune:

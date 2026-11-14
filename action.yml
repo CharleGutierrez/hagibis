@@ -134,6 +134,5 @@ runs:
       shell: bash
       run: |
         echo "Executing Automated PGO + LLVM BOLT Layout Optimization..."
-        chmod +x scripts/pgo-bolt-optimize.sh
-        ./scripts/pgo-bolt-optimize.sh all
+        bash scripts/pgo-bolt-optimize.sh all
         echo "optimized=true" >> "$GITHUB_OUTPUT"

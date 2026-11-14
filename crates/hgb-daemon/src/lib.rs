@@ -918,6 +918,18 @@ pub use edge_tunnel_control_plane::{
     EdgeTunnelControlPlane, EdgeTunnelCrypto, EdgeTunnelStatus,
 };
 
+// Pillar III: Production-Hardened Edge-to-Core QUIC/HTTP3 Bridge
+pub mod edge_quic_tunnel;
+pub use edge_quic_tunnel::{
+    build_edge_quic_router, quic_frame_flags, simd_cosine_distance_unrolled,
+    simd_dot_product_unrolled, ClockSyncProbe, DualAuthHandshake, EdgeQuicTunnelLayer,
+    LanceDbVectorBridge, MicrovmDelegationBridge, MicrovmTunnelResult, MicrovmTunnelTask,
+    MonotonicSequenceGuard, QuicStreamType, QuicTunnelFrame, SqliteStorageBridge,
+    SqliteTunnelAction, SqliteTunnelResponse, SqliteValue, SubMillisecondClockSync,
+    VectorMatchItem, VectorMetric, VectorTunnelAction, VectorTunnelRecord,
+    VectorTunnelResponse, QUIC_HEADER_SIZE, QUIC_TUNNEL_MAGIC, QUIC_TUNNEL_VERSION,
+};
+
 
 
 

@@ -291,6 +291,17 @@ pub use telemetry_websocket_hub::{
     COCKPIT_PWA_HTML, DEFAULT_TELEMETRY_WS_PORT,
 };
 
+// Pillar V: Interactive Web UI / PWA Cockpit (Leptos / Dioxus Reactive Component Architecture)
+pub mod pwa_leptos_cockpit;
+pub use pwa_leptos_cockpit::{
+    create_pwa_leptos_router, generate_pwa_manifest, generate_service_worker,
+    get_brand_badge_data_uri, render_winged_sandal_svg, ChaosFaultType, ChaosIncident,
+    ChaosIncidentStatus, ChaosLabState, CpuGovernorKind, GotBranchNode, HardwareTelemetryState,
+    LeptosCockpitSnapshot, LeptosCockpitState, LeptosCockpitTelemetryPacket, McpToolRecord,
+    MicroVmCard, MicroVmState, PwaLeptosCockpit, Signal, VNode,
+};
+
+
 
 
 

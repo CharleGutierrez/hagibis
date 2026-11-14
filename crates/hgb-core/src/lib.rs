@@ -790,9 +790,6 @@ pub use cloud_fabric::{
     ProviderDescriptor, ProviderHealthReport, ProviderId, UniversalCloudFabric,
 };
 
-
-
-
 // ===========================================================================
 // ADDITIONS FOR crates/hgb-core/src/lib.rs
 // ===========================================================================
@@ -2272,25 +2269,23 @@ pub use hybrid_execution_router::{
     ExecutionRiskClassifier, ExecutionTaskSpec, ExecutionTier as HybridExecutionTier,
     HybridExecutionResult, HybridExecutionRouter, MicrovmSnapshotMetadata,
     MicrovmSnapshotRegistry, PreWarmedWasmPool, RiskAssessment, RiskFactor,
+};// Pillar II: Active LLM-MCP Closed-Loop Actuator
+pub mod mcp_closed_loop_actuator;
+pub use mcp_closed_loop_actuator::{
+    ActuationAuditRecord, ActuationPlan, ActuationStatus, AnomalyEvent, AnomalyKind,
+    AnomalySeverity, McpActionStep, McpClosedLoopActuator, McpClosedLoopRuleEngine,
+    McpToolCallParams, McpToolCallRequest, McpToolExecutionRecord, OtelMetricSample,
+    SlaThresholds, TelemetryVerificationGate, VerificationVerdict,
 };
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+// Pillar I: Unified Skill Rig & Wasm Component Registry
+pub mod unified_skill_compiler;
+pub use unified_skill_compiler::{
+    ComponentExecutionTelemetry, SkillComponentRegistry, SkillHostState,
+    SkillInterfaceSpec, SkillSandboxPolicy, UnifiedSkillCompiler,
+    DEFAULT_SKILL_FUEL_LIMIT, DEFAULT_SKILL_MAX_MEMORY_BYTES, DEFAULT_SKILL_SHM_CAPACITY,
+    KNOWN_SKILL_NAMES,
+};
 
 
 

@@ -1,0 +1,72 @@
+package hagibis:skills/untangle@0.2.0;
+
+interface types {
+    enum rule-severity {
+        blocker,
+        critical,
+        high,
+        medium,
+        low,
+    }
+
+    enum arch-rule-id {
+        arch-001-layer-ordering,
+        arch-002-circular-deps,
+        arch-003-dead-patches,
+        arch-004-leaky-sql,
+        arch-005-wit-mcp-integrity,
+    }
+
+    enum tier-level {
+        tier-1-core,
+        tier-2-storage,
+        tier-3-nextgen,
+        tier-4-daemon,
+        tier-5-cli,
+    }
+
+    record crate-descriptor {
+        name: string,
+        tier: tier-level,
+        path: string,
+        dependencies: list<string>,
+    }
+
+    record violation-finding {
+        rule-id: arch-rule-id,
+        severity: rule-severity,
+        message: string,
+        source-crate: string,
+        target-crate: option<string>,
+        file-path: option<string>,
+    }
+
+    record untangle-audit-report {
+        total-crates-scanned: u32,
+        violations: list<violation-finding>,
+        is-acyclic: bool,
+        dead-patches-found: list<string>,
+        passed: bool,
+        duration-ms: u64,
+    }
+}
+
+interface analyzer {
+    use types.{crate-descriptor, violation-finding, untangle-audit-report};
+
+    /// Audit workspace dependency hierarchy and code health against ARCH rules
+    audit-workspace: func(workspace-root: string, strict-mode: bool) -> result<untangle-audit-report, string>;
+
+    /// Verify crate dependency graph forms a strict DAG
+    verify-crate-dag: func(crates: list<crate-descriptor>) -> result<bool, string>;
+
+    /// Check for unabsorbed or lingering .patch and .diff files
+    check-dead-patches: func(workspace-root: string) -> list<string>;
+
+    /// Validate syntax and integrity of all WIT interfaces across skills
+    validate-wit-interfaces: func(skills-dir: string) -> result<u32, string>;
+}
+
+world untangle-governance-world {
+    export analyzer;
+}

@@ -79,6 +79,10 @@ optimize_binary() {
         echo "• [Phase 2/4] Executing realistic production profiling workloads..."
         LLVM_PROFILE_FILE="$PGO_PROFDATA_DIR/profile-%p-%m.profraw"
         export LLVM_PROFILE_FILE
+
+        # Feed core representative benchmark workloads (hgb-core/benches/pgo_workload.rs)
+        echo "  • Training on hgb-core benchmark kernels (TokenShredder, AST, SHM, SIMD, Wasm)..."
+        cargo bench -p hgb-core --bench pgo_workload --target-dir "$TARGET_DIR" -- --nocapture 2>/dev/null || true
         
         if [ "$BIN_NAME" = "hgb" ]; then
             "$INSTRUMENTED_BIN" --help >/dev/null 2>&1 || true
