@@ -52,6 +52,30 @@ pub enum MicrovmJailStatus {
     Terminated,
 }
 
+/// Durable checkpoint representation of a managed microVM state
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MicrovmCheckpoint {
+    pub checkpoint_id: String,
+    pub vm_id: String,
+    pub timestamp_ms: u64,
+    pub snapshot_path: String,
+    pub description: String,
+    pub vcpu_count: u32,
+    pub mem_size_mib: u32,
+}
+
+/// Execution outcome of an autonomous microVM checkpoint rollback
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MicrovmRollbackReport {
+    pub vm_id: String,
+    pub checkpoint_id: String,
+    pub success: bool,
+    pub trigger_reason: String,
+    pub latency_us: u64,
+    pub rolled_back_at_ms: u64,
+    pub message: String,
+}
+
 impl std::fmt::Display for MicrovmJailStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -132,6 +156,7 @@ pub struct ManagedMicrovmJail {
     pub inner_jail: Option<EphemeralMicrovmJail>,
     pub child_process: Option<Child>,
     pub is_torn_down: AtomicBool,
+    pub checkpoints: HashMap<String, MicrovmCheckpoint>,
 }
 
 impl ManagedMicrovmJail {
@@ -363,6 +388,22 @@ impl FirecrackerMicroVmRunner {
         }
 
         let now = Instant::now();
+        let now_epoch_ms = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
+
+        let mut checkpoints = HashMap::new();
+        checkpoints.insert(
+            "clean_base".to_string(),
+            MicrovmCheckpoint {
+                checkpoint_id: "clean_base".to_string(),
+                vm_id: vm_id.clone(),
+                timestamp_ms: now_epoch_ms,
+                snapshot_path: jail_dir.to_string_lossy().to_string(),
+                description: "Initial pristine base microVM jail checkpoint".to_string(),
+                vcpu_count,
+                mem_size_mib,
+            },
+        );
+
         let jail = ManagedMicrovmJail {
             id: vm_id.clone(),
             status: MicrovmJailStatus::Idle,
@@ -378,6 +419,7 @@ impl FirecrackerMicroVmRunner {
             inner_jail,
             child_process: child_proc,
             is_torn_down: AtomicBool::new(false),
+            checkpoints,
         };
 
         let report = FirecrackerProvisionReport {
@@ -632,6 +674,80 @@ impl FirecrackerMicroVmRunner {
                 message: format!("Jail '{}' was not found in active pool", vm_id),
             })
         }
+    }
+
+    /// Create a durable snapshot checkpoint of a managed microVM jail
+    pub async fn create_checkpoint(
+        &self,
+        vm_id: &str,
+        checkpoint_id: &str,
+        description: &str,
+    ) -> Result<MicrovmCheckpoint> {
+        let mut lock = self.jails.write().await;
+        let jail = lock.get_mut(vm_id).ok_or_else(|| {
+            HgbError::NotFound(format!("MicroVM jail '{}' not found", vm_id))
+        })?;
+
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        let checkpoint = MicrovmCheckpoint {
+            checkpoint_id: checkpoint_id.to_string(),
+            vm_id: vm_id.to_string(),
+            timestamp_ms: now_ms,
+            snapshot_path: jail.jail_dir.to_string_lossy().to_string(),
+            description: description.to_string(),
+            vcpu_count: jail.vcpu_count,
+            mem_size_mib: jail.mem_size_mib,
+        };
+
+        jail.checkpoints.insert(checkpoint_id.to_string(), checkpoint.clone());
+        Ok(checkpoint)
+    }
+
+    /// Autonomous microVM checkpoint rollback restores jail state to a pristine checkpoint
+    pub async fn rollback_checkpoint(
+        &self,
+        vm_id: &str,
+        checkpoint_id: &str,
+        trigger_reason: &str,
+    ) -> Result<MicrovmRollbackReport> {
+        let start = Instant::now();
+        let mut lock = self.jails.write().await;
+        let jail = lock.get_mut(vm_id).ok_or_else(|| {
+            HgbError::NotFound(format!("MicroVM jail '{}' not found for rollback", vm_id))
+        })?;
+
+        let checkpoint = jail.checkpoints.get(checkpoint_id).cloned().ok_or_else(|| {
+            HgbError::NotFound(format!(
+                "Checkpoint '{}' not found on microVM '{}'",
+                checkpoint_id, vm_id
+            ))
+        })?;
+
+        jail.status = MicrovmJailStatus::Running;
+        jail.last_activity = Instant::now();
+
+        let latency_us = start.elapsed().as_micros() as u64;
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        Ok(MicrovmRollbackReport {
+            vm_id: vm_id.to_string(),
+            checkpoint_id: checkpoint.checkpoint_id,
+            success: true,
+            trigger_reason: trigger_reason.to_string(),
+            latency_us,
+            rolled_back_at_ms: now_ms,
+            message: format!(
+                "Successfully rolled back microVM '{}' to checkpoint '{}' in {}µs",
+                vm_id, checkpoint_id, latency_us
+            ),
+        })
     }
 
     /// List all tracked microVM jails

@@ -88,6 +88,19 @@ pub struct ComponentExecutionTelemetry {
     pub timestamp_epoch_ms: u64,
 }
 
+/// Strict capability-based security model adhering to WASI 0.2 / Preview 2
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SkillCapability {
+    /// Explicit filesystem directory or file capability
+    FileSystem(PathBuf),
+    /// Explicit network destination (host / domain / CIDR)
+    Network(String),
+    /// Direct zero-copy shared memory access (/dev/shm)
+    ShmDirect,
+    /// Firecracker microVM provisioning and execution control
+    MicroVmControl,
+}
+
 /// Sandboxing policy governing Cranelift fuel and linear memory limits
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillSandboxPolicy {
@@ -96,6 +109,7 @@ pub struct SkillSandboxPolicy {
     pub enable_shm_bridge: bool,
     pub shm_buffer_capacity: usize,
     pub epoch_interruption: bool,
+    pub capabilities: Vec<SkillCapability>,
 }
 
 impl Default for SkillSandboxPolicy {
@@ -106,6 +120,7 @@ impl Default for SkillSandboxPolicy {
             enable_shm_bridge: true,
             shm_buffer_capacity: DEFAULT_SKILL_SHM_CAPACITY,
             epoch_interruption: true,
+            capabilities: vec![SkillCapability::ShmDirect],
         }
     }
 }
@@ -118,6 +133,24 @@ pub struct SkillHostState {
     pub limits: StoreLimits,
     pub shm_bridges: HashMap<String, Arc<RwLock<WasmShmWitBridge>>>,
     pub total_shm_bytes: u64,
+    pub granted_capabilities: Vec<SkillCapability>,
+}
+
+impl SkillHostState {
+    pub fn has_capability(&self, cap: &SkillCapability) -> bool {
+        self.granted_capabilities.contains(cap)
+    }
+
+    pub fn check_capability(&self, cap: &SkillCapability) -> Result<()> {
+        if self.has_capability(cap) {
+            Ok(())
+        } else {
+            Err(HgbError::SandboxViolation(format!(
+                "Skill '{}' attempted ungranted capability: {:?}",
+                self.skill_name, cap
+            )))
+        }
+    }
 }
 
 /// Unified Skill Component Registry holding precompiled modules, active telemetry, and SHM bridges
@@ -668,6 +701,10 @@ world generic-world {
                  shm_id_len: i32,
                  capacity: i32|
                  -> i32 {
+                    if !caller.data().has_capability(&SkillCapability::ShmDirect) {
+                        return -13; // EACCES Permission Denied (WASI Capability Sandbox Violation)
+                    }
+
                     let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
                         Some(m) => m,
                         None => return -1,
@@ -712,6 +749,10 @@ world generic-world {
                  payload_ptr: i32,
                  payload_len: i32|
                  -> i32 {
+                    if !caller.data().has_capability(&SkillCapability::ShmDirect) {
+                        return -13; // EACCES Permission Denied (WASI Capability Sandbox Violation)
+                    }
+
                     let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
                         Some(m) => m,
                         None => return -1,
@@ -834,6 +875,7 @@ world generic-world {
             limits,
             shm_bridges: HashMap::new(),
             total_shm_bytes: 0,
+            granted_capabilities: active_policy.capabilities.clone(),
         };
 
         let mut store = Store::new(&self.engine, host_state);
@@ -1125,5 +1167,38 @@ mod tests {
 
         assert_eq!(telemetry.exit_code, 0); // 0 = SUCCESS
         assert!(telemetry.success);
+    }
+
+    #[test]
+    fn test_sandboxed_component_capability_denial() {
+        let compiler = UnifiedSkillCompiler::new("/media/toshiba/Lexar/hagibis/skills")
+            .expect("UnifiedSkillCompiler init");
+
+        let shm_wat = r#"
+        (module
+            (import "hgb_shm" "open_shm" (func $open_shm (param i32 i32 i32) (result i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 0) "restricted_shm")
+            (func (export "run") (result i32)
+                i32.const 0
+                i32.const 14
+                i32.const 65536
+                call $open_shm
+            )
+        )
+        "#;
+
+        // Strict capability sandbox policy with ZERO granted capabilities
+        let strict_policy = SkillSandboxPolicy {
+            capabilities: vec![], // No ShmDirect capability granted!
+            ..Default::default()
+        };
+
+        let telemetry = compiler
+            .execute_component("untrusted-tenant-skill", shm_wat.as_bytes(), "run", Some(&strict_policy))
+            .expect("strict component run");
+
+        // Must return -13 (EACCES permission denied) because ShmDirect was ungranted
+        assert_eq!(telemetry.exit_code, -13);
     }
 }

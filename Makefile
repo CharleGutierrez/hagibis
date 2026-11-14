@@ -41,14 +41,16 @@ check:
 test:
 	cargo test --workspace
 
-release:
+release: pgo-bolt
+
+release-fast:
 	cargo build --release
 
 # End-to-End PGO Pipeline
 pgo: pgo-build pgo-train pgo-merge pgo-release
 	@echo "======================================================================"
-	@echo " Hagibis (hgb) PGO & Fat LTO Hardened Build Completed Successfully!"
-	@echo " Binary: target/release/hgb"
+	@echo " Hagibis (hgb, hgbd, wasm-kernel) PGO & Fat LTO Hardened Build Completed Successfully!"
+	@echo " Binaries: target/release/hgb target/release/hgbd target/release/hgb-wasm-kernel"
 	@echo "======================================================================"
 
 # Step 1: Build instrumented binaries
@@ -56,7 +58,7 @@ pgo-build:
 	@echo "[PGO] Step 1/4: Cleaning old profiles & instrumenting build..."
 	rm -rf $(PGO_DATA_DIR)
 	mkdir -p $(PGO_DATA_DIR)
-	RUSTFLAGS="-Cprofile-generate=$(PGO_DATA_DIR)" cargo build --release
+	RUSTFLAGS="-Cprofile-generate=$(PGO_DATA_DIR)" cargo build --release -p hgb-cli -p hgb-daemon -p hgb-wasm-kernel
 
 # Step 2: Run representative benchmark training workload
 pgo-train:
@@ -64,6 +66,11 @@ pgo-train:
 	@if [ ! -d "$(PGO_DATA_DIR)" ]; then mkdir -p $(PGO_DATA_DIR); fi
 	RUSTFLAGS="-Cprofile-generate=$(PGO_DATA_DIR)" cargo bench -p hgb-core --bench pgo_workload -- --nocapture || \
 	RUSTFLAGS="-Cprofile-generate=$(PGO_DATA_DIR)" cargo test -p hgb-core --lib wasm_plugin_sandbox -- --nocapture || true
+	@if [ -f "target/release/hgb-wasm-kernel" ]; then \
+		target/release/hgb-wasm-kernel --version >/dev/null 2>&1 || true; \
+		target/release/hgb-wasm-kernel --simd-test >/dev/null 2>&1 || true; \
+		target/release/hgb-wasm-kernel --bench 3000 >/dev/null 2>&1 || true; \
+	fi
 	@echo "[PGO] Running masterclass suites (docs/masterclass/ch*.py) for branch-layout profiling..."
 	@for ch in docs/masterclass/ch*.py; do \
 		if [ -f "$$ch" ]; then \
@@ -72,6 +79,9 @@ pgo-train:
 	done
 	@if [ -f "target/release/hgb" ]; then \
 		target/release/hgb --help >/dev/null 2>&1 || true; \
+	fi
+	@if [ -f "target/release/hgbd" ]; then \
+		target/release/hgbd --help >/dev/null 2>&1 || true; \
 	fi
 
 # Step 3: Merge raw .profraw files using llvm-profdata
@@ -102,16 +112,16 @@ pgo-release:
 		echo "ERROR: Profile data $(PGO_DATA_DIR)/merged.profdata not found. Run 'make pgo-train' and 'make pgo-merge' first." >&2; \
 		exit 1; \
 	fi
-	RUSTFLAGS="-Cprofile-use=$(PGO_DATA_DIR)/merged.profdata -Cllvm-args=-pgo-warn-missing-function -Copt-level=3 -Clto=fat -Ccodegen-units=1 -Cpanic=abort $(BOLT_LDFLAGS)" cargo build --release
+	RUSTFLAGS="-Cprofile-use=$(PGO_DATA_DIR)/merged.profdata -Cllvm-args=-pgo-warn-missing-function -Copt-level=3 -Clto=fat -Ccodegen-units=1 -Cpanic=abort $(BOLT_LDFLAGS)" cargo build --release -p hgb-cli -p hgb-daemon -p hgb-wasm-kernel
 
-# LLVM BOLT post-link binary layout super-optimization on target/release/hgb and target/release/hgbd
+# LLVM BOLT post-link binary layout super-optimization on target/release/hgb, target/release/hgbd, and target/release/hgb-wasm-kernel
 bolt:
 	@echo "======================================================================"
-	@echo " Hagibis (hgb) LLVM BOLT Post-Link Binary Optimization"
-	@echo " Targets: target/release/hgb & target/release/hgbd"
+	@echo " Hagibis LLVM BOLT Post-Link Binary Optimization"
+	@echo " Targets: target/release/hgb target/release/hgbd target/release/hgb-wasm-kernel"
 	@echo " Passes:  -reorder-blocks=ext-tsp -reorder-functions=hfsort+ -split-functions -split-all-cold -dyno-stats"
 	@echo "======================================================================"
-	bash scripts/pgo-optimize.sh --bolt-only
+	bash scripts/pgo-bolt-optimize.sh all
 
 # Run Core Execution Benchmarks
 pgo-bench:
@@ -123,8 +133,8 @@ pgo-bench:
 # Super-optimization: automated PGO + Fat LTO + LLVM BOLT across all workspace binaries
 pgo-bolt:
 	@echo "======================================================================"
-	@echo " Hagibis (hgb & hgbd) PGO + LLVM BOLT Super-Optimization Pipeline"
-	@echo " Targets: crates/hgb-cli (hgb) & crates/hgb-daemon (hgbd)"
+	@echo " Hagibis (hgb, hgbd & hgb-wasm-kernel) PGO + LLVM BOLT Super-Optimization Pipeline"
+	@echo " Targets: crates/hgb-cli (hgb), crates/hgb-daemon (hgbd), crates/hgb-wasm-kernel"
 	@echo "======================================================================"
 	bash scripts/pgo-bolt-optimize.sh all
 

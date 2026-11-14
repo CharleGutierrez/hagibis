@@ -36,6 +36,52 @@ pub struct BoltOptimizationConfig {
     pub inline_small_functions: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BoltTargetKind {
+    Cli,
+    Daemon,
+    WasmKernel,
+}
+
+impl BoltOptimizationConfig {
+    pub fn for_wasm_kernel(target_dir: impl AsRef<Path>) -> Self {
+        let base = target_dir.as_ref();
+        Self {
+            target_binary: base.join("release/hgb-wasm-kernel"),
+            output_binary: base.join("release/hgb-wasm-kernel.bolt"),
+            perf_data_path: PathBuf::from("/tmp/bolt-data/perf-hgb-wasm-kernel.data"),
+            fdata_path: PathBuf::from("/tmp/bolt-data/hgb-wasm-kernel.fdata"),
+            reorder_blocks_policy: "ext-tsp".to_string(),
+            reorder_functions_policy: "cdsort".to_string(),
+            split_functions: true,
+            split_all_cold: true,
+            dyno_stats: true,
+            inline_small_functions: true,
+        }
+    }
+
+    pub fn for_target(target: BoltTargetKind, target_dir: impl AsRef<Path>) -> Self {
+        let base = target_dir.as_ref();
+        match target {
+            BoltTargetKind::Cli => Self {
+                target_binary: base.join("release/hgb"),
+                output_binary: base.join("release/hgb.bolt"),
+                perf_data_path: PathBuf::from("/tmp/bolt-data/perf-hgb.data"),
+                fdata_path: PathBuf::from("/tmp/bolt-data/hgb.fdata"),
+                ..Default::default()
+            },
+            BoltTargetKind::Daemon => Self {
+                target_binary: base.join("release/hgbd"),
+                output_binary: base.join("release/hgbd.bolt"),
+                perf_data_path: PathBuf::from("/tmp/bolt-data/perf-hgbd.data"),
+                fdata_path: PathBuf::from("/tmp/bolt-data/hgbd.fdata"),
+                ..Default::default()
+            },
+            BoltTargetKind::WasmKernel => Self::for_wasm_kernel(base),
+        }
+    }
+}
+
 impl Default for BoltOptimizationConfig {
     fn default() -> Self {
         Self {
@@ -66,6 +112,18 @@ pub struct BoltDynoStats {
     pub estimated_speedup_pct: f64,
     pub functions_reordered: usize,
     pub basic_blocks_reordered: usize,
+}
+
+impl BoltDynoStats {
+    /// Validates that estimated icache miss reduction falls within the 14%–22% target tier or higher
+    pub fn is_within_icache_target_range(&self) -> bool {
+        self.icache_misses_estimated_reduction_pct >= 14.0
+    }
+
+    /// Validates that estimated speedup falls within the 14%–22% target tier
+    pub fn is_within_speedup_target_range(&self) -> bool {
+        self.estimated_speedup_pct >= 14.0 && self.estimated_speedup_pct <= 22.0
+    }
 }
 
 impl Default for BoltDynoStats {
@@ -439,5 +497,40 @@ mod tests {
 
         assert!(!report.validation_passed);
         assert!(report.error_diagnostic.is_some());
+    }
+
+    #[test]
+    fn test_bolt_optimization_config_wasm_kernel() {
+        let tmp = tempdir().unwrap();
+        let config = BoltOptimizationConfig::for_wasm_kernel(tmp.path());
+        assert!(config.target_binary.ends_with("release/hgb-wasm-kernel"));
+        assert!(config.output_binary.ends_with("release/hgb-wasm-kernel.bolt"));
+        assert!(config.split_functions);
+        assert!(config.split_all_cold);
+
+        let cli_cfg = BoltOptimizationConfig::for_target(BoltTargetKind::Cli, tmp.path());
+        assert!(cli_cfg.target_binary.ends_with("release/hgb"));
+
+        let daemon_cfg = BoltOptimizationConfig::for_target(BoltTargetKind::Daemon, tmp.path());
+        assert!(daemon_cfg.target_binary.ends_with("release/hgbd"));
+    }
+
+    #[test]
+    fn test_dyno_stats_icache_and_speedup_14_to_22_percent() {
+        let stats = BoltDynoStats {
+            icache_misses_estimated_reduction_pct: 18.5,
+            estimated_speedup_pct: 16.2,
+            ..Default::default()
+        };
+        assert!(stats.is_within_icache_target_range());
+        assert!(stats.is_within_speedup_target_range());
+
+        let low_stats = BoltDynoStats {
+            icache_misses_estimated_reduction_pct: 10.0,
+            estimated_speedup_pct: 8.0,
+            ..Default::default()
+        };
+        assert!(!low_stats.is_within_icache_target_range());
+        assert!(!low_stats.is_within_speedup_target_range());
     }
 }

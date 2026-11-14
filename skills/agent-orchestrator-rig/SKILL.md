@@ -191,4 +191,19 @@ The `agent-orchestrator-rig` skill interfaces with [`crates/hgb-core/src/distrib
 3. **LanceDB Vector Consensus Reassembly**:
    - Reassembles distributed worker outputs using centroid vector consensus and cosine similarity confidence scoring ($> 0.95$), ensuring Byzantine fault tolerance before merging patches.
 
+---
+
+## 8. Raft-Backed Distributed Multi-Agent Mesh & Autonomous Work-Stealing (Pillar 2)
+
+Hagibis upgrades the single-node orchestrator into a **Raft-Backed Distributed Multi-Agent Mesh** ([`distributed_raft_agent_service.rs`](file:///media/toshiba/Lexar/hagibis/crates/hgb-daemon/src/distributed_raft_agent_service.rs)), coordinating autonomic agent instances across local LAN subnets, edge microVMs, and cloud nodes:
+
+1. **Autonomic Work-Stealing on CPU Governor Throttling**:
+   - When a node enters `NodeGovernorMode::Throttled` or `NodeGovernorMode::Powersave` (due to silicon thermal rise $> 78^\circ\text{C}$ or battery drain), its local agent scheduler marks queue items for migration.
+   - Healthy nodes running in `Performance` or `Turbo` governor modes steal pending tasks over the Raft mesh with sub-millisecond lease transfers.
+
+2. **OpenTelemetry-Driven MicroVM Rollbacks**:
+   - Telemetry bridges ingest continuous SLA and latency distributions.
+   - When an SLA breach is detected ($P99 > 200\text{ms}$ or memory consumption exceeds budget), the mesh triggers an instant microVM snapshot rollback ([`firecracker_microvm_runner.rs`](file:///media/toshiba/Lexar/hagibis/crates/hgb-daemon/src/firecracker_microvm_runner.rs)) returning the execution jail to a known golden checkpoint in $< 150\text{ms}$ with zero data loss.
+
+
 

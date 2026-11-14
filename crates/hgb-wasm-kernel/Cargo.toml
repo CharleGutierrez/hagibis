@@ -9,6 +9,14 @@ description = "Hagibis WebAssembly Guest Kernel SDK and runtime bindings"
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[[bin]]
+name = "hgb-wasm-kernel"
+path = "src/main.rs"
+
+[[bin]]
+name = "wasm_kernel"
+path = "src/bin/wasm_kernel.rs"
+
 [dependencies]
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

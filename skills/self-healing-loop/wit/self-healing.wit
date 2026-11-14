@@ -1,0 +1,70 @@
+package hagibis:skills/self-healing@0.2.0;
+
+interface types {
+    enum incident-severity {
+        critical,
+        high,
+        medium,
+        low,
+    }
+
+    enum incident-kind {
+        compiler-diagnostic,
+        memory-leak,
+        storage-saturation,
+        worker-disconnect,
+        latency-sla-breach,
+        crash-loop,
+    }
+
+    record triage-diagnostic {
+        incident-id: string,
+        kind: incident-kind,
+        severity: incident-severity,
+        target-subsystem: string,
+        diagnostic-message: string,
+        error-code: option<string>,
+        observed-latency-ms: option<f64>,
+        memory-rss-mb: option<f64>,
+        timestamp-ms: u64,
+    }
+
+    record patch-candidate {
+        candidate-id: string,
+        file-target: string,
+        diff-content: string,
+        safety-risk-score: f32,
+    }
+
+    record healing-session-receipt {
+        session-id: string,
+        incident-id: string,
+        kind: incident-kind,
+        mttr-ms: u64,
+        reclaimed-metric: string,
+        action-taken: string,
+        verified-green: bool,
+        consensus-blake3: string,
+        timestamp-epoch-ms: u64,
+    }
+}
+
+interface healer {
+    use types.{triage-diagnostic, patch-candidate, healing-session-receipt};
+
+    /// Triage an active anomaly or diagnostic event
+    triage-anomaly: func(diagnostic: triage-diagnostic) -> result<string, string>;
+
+    /// Generate speculative candidate patch in RAM CoW overlay
+    generate-speculative-patch: func(diagnostic: triage-diagnostic) -> result<patch-candidate, string>;
+
+    /// Verify candidate patch in sandbox and certify First-Green
+    verify-and-certify-green: func(candidate: patch-candidate) -> result<healing-session-receipt, string>;
+
+    /// Query latest healing receipts history
+    get-recent-receipts: func(limit: u32) -> list<healing-session-receipt>;
+}
+
+world self-healing-world {
+    export healer;
+}
