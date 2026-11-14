@@ -563,6 +563,7 @@ pub const CORE_VIBE_TOOLS: &[&str] = CORE_TOOLS;
 pub struct HagibisMcpServer {
     pub workspace_root: PathBuf,
     pub profile: HgbMcpProfile,
+    pub dynamic_registry: Option<std::sync::Arc<crate::dynamic_skill_mcp_hot_reloader::DynamicSkillRegistry>>,
 }
 
 impl HagibisMcpServer {
@@ -570,6 +571,7 @@ impl HagibisMcpServer {
         Self {
             workspace_root: workspace_root.as_ref().to_path_buf(),
             profile: HgbMcpProfile::from_env_or_default(),
+            dynamic_registry: Some(crate::dynamic_skill_mcp_hot_reloader::DynamicSkillRegistry::global()),
         }
     }
 
@@ -577,7 +579,16 @@ impl HagibisMcpServer {
         Self {
             workspace_root: workspace_root.as_ref().to_path_buf(),
             profile,
+            dynamic_registry: Some(crate::dynamic_skill_mcp_hot_reloader::DynamicSkillRegistry::global()),
         }
+    }
+
+    pub fn with_dynamic_registry(
+        mut self,
+        registry: std::sync::Arc<crate::dynamic_skill_mcp_hot_reloader::DynamicSkillRegistry>,
+    ) -> Self {
+        self.dynamic_registry = Some(registry);
+        self
     }
 
     pub fn set_profile(&mut self, profile: HgbMcpProfile) {
@@ -591,7 +602,19 @@ impl HagibisMcpServer {
 
     /// List tools explicitly scoped by profile
     pub fn list_tools_for_profile(profile: HgbMcpProfile) -> Value {
-        let all_tools = Self::list_full_tools();
+        let mut all_tools = Self::list_full_tools();
+
+        // Merge hot-loaded dynamic skill tools from global registry
+        let dyn_tools = crate::dynamic_skill_mcp_hot_reloader::DynamicSkillRegistry::global().list_mcp_tools();
+        if let Some(arr) = all_tools.as_array_mut() {
+            for dt in dyn_tools {
+                let name = dt.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                if !arr.iter().any(|t| t.get("name").and_then(|n| n.as_str()) == Some(name)) {
+                    arr.push(dt);
+                }
+            }
+        }
+
         match profile {
             HgbMcpProfile::Full => all_tools,
             HgbMcpProfile::Core => {
@@ -600,7 +623,7 @@ impl HagibisMcpServer {
                         .iter()
                         .filter(|tool| {
                             let name = tool.get("name").and_then(|n| n.as_str()).unwrap_or("");
-                            CORE_TOOLS.contains(&name)
+                            CORE_TOOLS.contains(&name) || name.starts_with("skill_")
                         })
                         .cloned()
                         .collect();
@@ -1802,6 +1825,11 @@ impl HagibisMcpServer {
 
     /// Direct tool call dispatcher alias
     pub async fn dispatch_tool_call(&self, name: &str, args: &Value) -> Result<String> {
+        self.execute_tool(name, args).await
+    }
+
+    /// Dispatch tool calls (MCP standard alias)
+    pub async fn call_tool(&self, name: &str, args: &Value) -> Result<String> {
         self.execute_tool(name, args).await
     }
 
@@ -4684,6 +4712,27 @@ impl HagibisMcpServer {
                 });
 
                 Ok(serde_json::to_string_pretty(&report).unwrap_or_default())
+            }
+
+            // Dynamic skill tools dispatch (starts with `skill_` or registered in dynamic registry)
+            other if other.starts_with("skill_")
+                || self
+                    .dynamic_registry
+                    .as_ref()
+                    .map_or(false, |r| r.get_tool(other).is_some()) =>
+            {
+                progress_cb(30, "Dispatching dynamic MCP skill tool...");
+                let reg = self
+                    .dynamic_registry
+                    .clone()
+                    .unwrap_or_else(crate::dynamic_skill_mcp_hot_reloader::DynamicSkillRegistry::global);
+                let reloader = crate::dynamic_skill_mcp_hot_reloader::DynamicSkillMcpHotReloader::with_registry(
+                    self.workspace_root.join("skills"),
+                    reg,
+                    Some(self.workspace_root.join("hagibis.mcp.json")),
+                    false,
+                );
+                reloader.dispatch_dynamic_tool(other, args).await
             }
 
             other => Ok(format!("Tool '{}' recognized by Hagibis MCP dispatcher.", other)),

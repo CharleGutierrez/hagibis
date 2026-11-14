@@ -2287,6 +2287,14 @@ pub use unified_skill_compiler::{
     KNOWN_SKILL_NAMES,
 };
 
+// Pillar 4: Unified MCP Hot-Reloading Engine
+pub mod dynamic_skill_mcp_hot_reloader;
+pub use dynamic_skill_mcp_hot_reloader::{
+    DynamicSkillMcpHotReloader, DynamicSkillRegistry, DynamicSkillScanReport, DynamicSkillTool,
+    SkillFrontmatter, WitFunction as DynamicWitFunction, WitParam as DynamicWitParam, WitSpec,
+};
+
+
 
 
 

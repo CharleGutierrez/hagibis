@@ -158,6 +158,26 @@ pub enum McpSubcommand {
         #[arg(default_value = "all")]
         target: String,
     },
+    /// Watch skills/ directory and hot-reload dynamic MCP tools in real time
+    #[command(name = "watch-skills", alias = "watch_skills")]
+    WatchSkills {
+        /// Optional path to skills directory
+        #[arg(short, long)]
+        skills_dir: Option<String>,
+        /// Optional sync back to hagibis.mcp.json
+        #[arg(long, default_value_t = false)]
+        sync_mcp_json: bool,
+    },
+    /// Reload dynamic skills immediately and update MCP registry
+    #[command(name = "reload", alias = "reload-skills")]
+    Reload {
+        /// Optional path to skills directory
+        #[arg(short, long)]
+        skills_dir: Option<String>,
+        /// Sync back to hagibis.mcp.json
+        #[arg(long, default_value_t = false)]
+        sync_mcp_json: bool,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -6749,6 +6769,49 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 McpSubcommand::Serve => {
                     run_mcp_stdio_server(client).await?;
+                }
+                McpSubcommand::Reload { skills_dir, sync_mcp_json } => {
+                    let ws = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                    let s_dir = skills_dir.map(std::path::PathBuf::from).unwrap_or_else(|| ws.join("skills"));
+                    let mcp_json = ws.join("hagibis.mcp.json");
+
+                    let reloader = hgb_core::DynamicSkillMcpHotReloader::new(
+                        &s_dir,
+                        Some(mcp_json),
+                        sync_mcp_json,
+                    );
+
+                    let report = reloader.scan_and_register_all()?;
+                    println!("{}", "⚡ Dynamic MCP Skills Hot-Reloaded".cyan().bold());
+                    println!("  Skills Dir:         {}", report.skills_dir.yellow());
+                    println!("  Skills Discovered:  {}", report.discovered_skills.to_string().green());
+                    println!("  Tools Registered:   {}", report.total_registered_tools.to_string().green().bold());
+                    println!("  hagibis.mcp.json:   {}", if report.mcp_json_updated { "UPDATED (Atomic)".green() } else { "UNCHANGED".dimmed() });
+                    println!("  Scan Duration:      {} ms", report.scan_duration_ms);
+                    println!();
+                    for tool in &report.tools {
+                        println!("  • {}", tool.cyan());
+                    }
+                }
+                McpSubcommand::WatchSkills { skills_dir, sync_mcp_json } => {
+                    let ws = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                    let s_dir = skills_dir.map(std::path::PathBuf::from).unwrap_or_else(|| ws.join("skills"));
+                    let mcp_json = ws.join("hagibis.mcp.json");
+
+                    let mut reloader = hgb_core::DynamicSkillMcpHotReloader::new(
+                        &s_dir,
+                        Some(mcp_json),
+                        sync_mcp_json,
+                    );
+
+                    let initial = reloader.scan_and_register_all()?;
+                    println!("{}", "👀 Monitoring skills/ directory for real-time MCP hot-reloads...".cyan().bold());
+                    println!("  Discovered {} skills with {} tools.", initial.discovered_skills.to_string().green(), initial.total_registered_tools.to_string().green().bold());
+                    println!("  Press Ctrl+C to terminate hot watcher.");
+                    reloader.start_watching()?;
+
+                    tokio::signal::ctrl_c().await.ok();
+                    println!("\n{}", "Watcher stopped.".yellow());
                 }
             }
             Ok(())

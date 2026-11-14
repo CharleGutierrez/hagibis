@@ -930,6 +930,16 @@ pub use edge_quic_tunnel::{
     VectorTunnelResponse, QUIC_HEADER_SIZE, QUIC_TUNNEL_MAGIC, QUIC_TUNNEL_VERSION,
 };
 
+// Pillar 3: Autonomous Chaos-Loop Self-Hardening
+pub mod autonomous_chaos_heartbeat_sentry;
+pub use autonomous_chaos_heartbeat_sentry::{
+    sha256_digest_hex, AutonomousChaosHeartbeatSentry, CacheWalEntry, ChaosFaultKind,
+    ChaosFaultMode, ChaosHeartbeatConfig, ChaosResilienceReceipt, ChaosResilienceReport,
+    DynatuneGovernorProfile, MicrovmHealthStatus, MockMicrovmState, OtelAnomalySignal,
+    ResilientVectorCache,
+};
+
+
 
 
 

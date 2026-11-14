@@ -128,6 +128,19 @@ pub use embedding_cache_store::{
     EmbeddingInsertEntry,
 };
 
+// Pillar 1 (Autonomous Engine): Real-Time Distributed Vector Synchronization
+pub mod distributed_vector_raft_mesh;
+pub use distributed_vector_raft_mesh::{
+    compute_cosine_similarity as raft_mesh_cosine_similarity,
+    AppendEntriesArgs as VectorAppendEntriesArgs,
+    AppendEntriesReply as VectorAppendEntriesReply,
+    ClusterPeer, LearnedHeuristicVector, RaftMeshSyncReceipt,
+    RequestVoteArgs as VectorRequestVoteArgs,
+    RequestVoteReply as VectorRequestVoteReply,
+    TrajectoryMemoryRecord, VectorRaftLogEntry, VectorRaftMesh, VectorRaftRole,
+    VectorSimilarityMatch,
+};
+
 // ============================================================================
 // Additions to crates/hgb-storage/src/lib.rs
 // ============================================================================

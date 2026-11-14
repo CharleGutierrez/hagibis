@@ -16,6 +16,14 @@
 use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 
+pub mod wasi_nn_gpu;
+pub use wasi_nn_gpu::{
+    wasi_ephemeral_nn, ExecutionTarget, FallbackExecutionEngine, GpuBindingDescriptor,
+    GpuBindingType, GpuComputePipelineDescriptor, GpuShaderFormat, GraphEncoding,
+    TensorDescriptor, TensorDimensions, TensorType, WasiNnGuestContext, WasiNnGuestError,
+    WasiNnGuestModel,
+};
+
 /// Tool input/output manifest exported by the WASM guest
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PluginManifest {
