@@ -2166,6 +2166,14 @@ pub use wasi_component_loader::{
     ENVELOPE_HEADER_SIZE,
 };
 
+// Strategic Pillar 3: Native Multi-Tenant WASM Component Isolation with WIT Interfaces
+pub mod wasi_preview2_component_security;
+pub use wasi_preview2_component_security::{
+    CapabilityAuditRecord, CapabilityInterceptor, LanceDbCollectionGrant,
+    SqliteOperation, SqliteTableGrant, WasiComponentSecuritySandbox,
+    WasiPreview2CapabilityPolicy,
+};
+
 // Strategic Power-Up 1: Distributed Swarm Consensus & Multi-Node Firecracker Orchestrator
 pub mod distributed_swarm_consensus;
 pub use distributed_swarm_consensus::{
@@ -2293,6 +2301,18 @@ pub use dynamic_skill_mcp_hot_reloader::{
     DynamicSkillMcpHotReloader, DynamicSkillRegistry, DynamicSkillScanReport, DynamicSkillTool,
     SkillFrontmatter, WitFunction as DynamicWitFunction, WitParam as DynamicWitParam, WitSpec,
 };
+
+// Strategic Power-Up Pillar 1: Distributed Raft Consensus & State Machine Replication
+pub mod distributed_raft_consensus;
+pub use distributed_raft_consensus::{
+    AgentConsensusCommand, AgentConsensusStateMachine, AgentStateMachineSnapshot,
+    AgentTurnCheckpoint, AppendEntriesArgs as CoreAppendEntriesArgs,
+    AppendEntriesReply as CoreAppendEntriesReply, DistributedAgentTaskState,
+    DistributedTaskStatus, RaftConfig, RaftConsensusEngine, RaftLogEntry as CoreRaftLogEntry,
+    RaftPeer, RaftRole as CoreRaftRole, RequestVoteArgs as CoreRequestVoteArgs,
+    RequestVoteReply as CoreRequestVoteReply, TaskLease,
+};
+
 
 
 

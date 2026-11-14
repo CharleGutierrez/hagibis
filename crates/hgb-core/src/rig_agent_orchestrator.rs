@@ -27,13 +27,14 @@ use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
+use crate::distributed_raft_consensus::{AgentTurnCheckpoint, RaftConsensusEngine};
 use crate::error::{HgbError, Result};
 
 // ==============================================================================
@@ -600,6 +601,8 @@ pub struct RigAgentBuilder {
     max_iterations: usize,
     enable_autonomic_hardware_throttle: bool,
     client: reqwest::Client,
+    consensus_engine: Option<Arc<RaftConsensusEngine>>,
+    consensus_task_id: Option<String>,
 }
 
 impl Default for RigAgentBuilder {
@@ -614,6 +617,8 @@ impl Default for RigAgentBuilder {
                 .timeout(Duration::from_secs(60))
                 .build()
                 .unwrap_or_else(|_| reqwest::Client::new()),
+            consensus_engine: None,
+            consensus_task_id: None,
         }
     }
 }
@@ -660,6 +665,16 @@ impl RigAgentBuilder {
         self
     }
 
+    pub fn with_consensus(
+        mut self,
+        engine: Arc<RaftConsensusEngine>,
+        task_id: impl Into<String>,
+    ) -> Self {
+        self.consensus_engine = Some(engine);
+        self.consensus_task_id = Some(task_id.into());
+        self
+    }
+
     pub fn build(self) -> Result<RigAgent> {
         Ok(RigAgent {
             system_prompt: self.system_prompt,
@@ -668,6 +683,8 @@ impl RigAgentBuilder {
             max_iterations: self.max_iterations,
             enable_autonomic_hardware_throttle: self.enable_autonomic_hardware_throttle,
             client: self.client,
+            consensus_engine: self.consensus_engine,
+            consensus_task_id: self.consensus_task_id,
         })
     }
 }
@@ -681,6 +698,8 @@ pub struct RigAgent {
     max_iterations: usize,
     enable_autonomic_hardware_throttle: bool,
     client: reqwest::Client,
+    consensus_engine: Option<Arc<RaftConsensusEngine>>,
+    consensus_task_id: Option<String>,
 }
 
 impl RigAgent {
@@ -719,6 +738,21 @@ impl RigAgent {
         self.execute_loop(user_prompt, Some(event_sender)).await
     }
 
+    /// Commit final task status to distributed consensus cluster if configured
+    fn commit_final_consensus(&self, response: &AgentResponse) {
+        if let (Some(ref engine), Some(ref task_id)) = (&self.consensus_engine, &self.consensus_task_id) {
+            let is_ok = matches!(response.finish_reason, AgentFinishReason::Completed);
+            let reason = format!("{:?}", response.finish_reason);
+            let _ = engine.finalize_task(
+                task_id,
+                &engine.node_id(),
+                &response.final_answer,
+                is_ok,
+                &reason,
+            );
+        }
+    }
+
     /// Core multi-turn cognitive execution loop
     async fn execute_loop(
         &self,
@@ -742,6 +776,38 @@ impl RigAgent {
 
         loop {
             iterations += 1;
+
+            // Distributed Consensus: Verify task lease validity prior to execution turn
+            if let (Some(ref engine), Some(ref task_id)) = (&self.consensus_engine, &self.consensus_task_id) {
+                if let Some(task_state) = engine.get_task_state(task_id) {
+                    if let Some(ref lease) = task_state.lease {
+                        let now_ms = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as u64;
+                        if lease.is_expired(now_ms) || lease.node_id != engine.node_id() {
+                            let response = AgentResponse {
+                                final_answer: self.synthesize_current_answer(&history),
+                                iterations,
+                                total_tool_calls,
+                                history,
+                                hardware_throttled: was_hardware_throttled,
+                                hardware_state: latest_hw_state,
+                                execution_time_ms: start_time.elapsed().as_millis() as u64,
+                                finish_reason: AgentFinishReason::Error(format!(
+                                    "Consensus lease expired or transferred from node {} (assigned to {:?})",
+                                    engine.node_id(), task_state.assigned_node_id
+                                )),
+                            };
+                            self.commit_final_consensus(&response);
+                            if let Some(ref tx) = event_tx {
+                                let _ = tx.send(RigStreamEvent::Done(response.clone()));
+                            }
+                            return Ok(response);
+                        }
+                    }
+                }
+            }
 
             // 2. Sample hardware state & evaluate autonomic throttling
             if self.enable_autonomic_hardware_throttle {
@@ -791,6 +857,7 @@ impl RigAgent {
                     execution_time_ms: start_time.elapsed().as_millis() as u64,
                     finish_reason,
                 };
+                self.commit_final_consensus(&response);
                 if let Some(ref tx) = event_tx {
                     let _ = tx.send(RigStreamEvent::Done(response.clone()));
                 }
@@ -833,6 +900,7 @@ impl RigAgent {
                     execution_time_ms: start_time.elapsed().as_millis() as u64,
                     finish_reason: AgentFinishReason::Completed,
                 };
+                self.commit_final_consensus(&response);
                 if let Some(ref tx) = event_tx {
                     let _ = tx.send(RigStreamEvent::Done(response.clone()));
                 }
@@ -842,7 +910,7 @@ impl RigAgent {
             // 5. Execute Tool Calls
             let mut turn_results = Vec::new();
             history.push(AgentTurnMessage::assistant(
-                model_output.text,
+                model_output.text.clone(),
                 model_output.tool_calls.clone(),
             ));
 
@@ -862,6 +930,7 @@ impl RigAgent {
                         execution_time_ms: start_time.elapsed().as_millis() as u64,
                         finish_reason: AgentFinishReason::CycleDetected,
                     };
+                    self.commit_final_consensus(&response);
                     if let Some(ref tx) = event_tx {
                         let _ = tx.send(RigStreamEvent::Done(response.clone()));
                     }
@@ -872,7 +941,7 @@ impl RigAgent {
                 identical_call_count = 1;
             }
 
-            for call in model_output.tool_calls {
+            for call in &model_output.tool_calls {
                 total_tool_calls += 1;
                 if let Some(ref tx) = event_tx {
                     let _ = tx.send(RigStreamEvent::ToolCallStarting(call.clone()));
@@ -900,6 +969,22 @@ impl RigAgent {
                     let _ = tx.send(RigStreamEvent::ToolCallCompleted(tool_res.clone()));
                 }
                 turn_results.push(tool_res);
+            }
+
+            // Commit turn progress into Raft state machine
+            if let (Some(ref engine), Some(ref task_id)) = (&self.consensus_engine, &self.consensus_task_id) {
+                let checkpoint = AgentTurnCheckpoint {
+                    turn_index: iterations as u32,
+                    tool_name: model_output.tool_calls.first().map(|c| c.name.clone()),
+                    tool_input_json: model_output.tool_calls.first().map(|c| c.arguments.to_string()),
+                    tool_output_json: turn_results.first().map(|r| r.output.to_string()),
+                    intermediate_thought: model_output.text.clone(),
+                    timestamp_ms: SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64,
+                };
+                let _ = engine.commit_turn_progress(task_id, &engine.node_id(), checkpoint);
             }
 
             // 6. Feed Tool Outputs back to Context

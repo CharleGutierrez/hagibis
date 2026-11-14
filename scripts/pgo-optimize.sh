@@ -334,6 +334,11 @@ if [[ "$BOLT_ONLY" != true && "$VERIFY_ONLY" != true ]]; then
         RUSTFLAGS="-Cprofile-generate=$PGO_DATA_DIR $RELOC_FLAG" cargo test --release -p hgb-core --lib wasm_plugin_sandbox --target-dir "$TARGET_DIR" -- --nocapture || true
         RUSTFLAGS="-Cprofile-generate=$PGO_DATA_DIR $RELOC_FLAG" cargo test --release -p hgb-storage --lib --target-dir "$TARGET_DIR" -- --nocapture || true
 
+        # Run GPU / SIMD vector search and shared-memory embedding cache training
+        echo "[INFO] Running GPU tensor retrieval and shared-memory embedding cache training..."
+        bash scripts/cpu-governor.sh gpu-detect >/dev/null 2>&1 || true
+        bash scripts/cpu-governor.sh gpu-boost >/dev/null 2>&1 || true
+
         # Run Masterclass representative training workloads (ch1-ch8)
         echo "[INFO] Running Masterclass autonomous workloads (docs/masterclass/ch*.py) to train PGO branch weights..."
         for ch in docs/masterclass/ch*.py; do

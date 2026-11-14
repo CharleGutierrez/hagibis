@@ -126,15 +126,15 @@ The evolutionary cycle integrates `crates/hgb-daemon/src/autonomous_evolutionary
 
 ---
 
-## 8. Native eBPF Kernel Anomaly Interception & MicroVM Workload Eviction
+## 8. Universal eBPF Kernel Anomaly Interception & Autonomous Self-Healing
 
 1. **eBPF Anomaly Sentry (`crates/hgb-core/src/ebpf_kernel_probe_loader.rs`)**:
-   - Sub-microsecond detection of memory thrashing (high PSI pressure), kernel lockups / deadlocks, and thermal spikes.
-   - Autonomic triggering of CPU governor down-throttling or boosting.
+   - Sub-microsecond detection across 8 kernel tracepoint probes (`sched_switch`, `sched_stat_wait`, `page_fault_user`, `inet_sock_set_state`, `tcp_drop`, `thermal_temperature`, `sys_enter`, `sys_exit`).
+   - Tracks CPU scheduler latency spikes (p99 > 15ms or runqueue > 16), PSI full memory pressure (> 25%), cgroup saturation (> 80%), and socket exhaustion (`TCP_TIME_WAIT` > 10k, FD > 85%).
+   - Autonomic triggering of CPU governor down-throttling (`performance` / `powersave`) and live alert dispatch to the self-healing loop.
 
-2. **Automated Firecracker Workload Eviction (`crates/hgb-daemon/src/ebpf_autonomic_healer.rs`)**:
-   - Automatically migrates thrashing or anomalous processes into isolated Firecracker microVM sandboxes (`FirecrackerEphemeralSandbox`) without human intervention.
-
-
-
+2. **Autonomous Self-Healing Daemon (`crates/hgb-daemon/src/ebpf_autonomic_healer.rs`)**:
+   - **Preemptive WASM Isolation**: Identifies failing, crashing, or memory-leaking WASM components and quarantines them into `FirecrackerEphemeralSandbox` sandboxes *before* user requests fail.
+   - **Adaptive Loop Throttling**: Applies dynamic cognitive throttling multipliers (e.g., 50% backpressure) when kernel CPU scheduler congestion is detected.
+   - **Socket Backlog Reclamation**: Actively drains and purges lingering socket buffers during high TCP connection pressure.
 

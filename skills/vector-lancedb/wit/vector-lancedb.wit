@@ -89,10 +89,20 @@ interface types {
         version: u64,
         partition-count: u32,
     }
+
+    record gpu-accelerator-telemetry {
+        backend: string,
+        device-name: string,
+        vector-dimension: u32,
+        capacity: u32,
+        active-stored-vectors: u32,
+        hit-ratio-pct: f32,
+        estimated-saved-latency-ms: f64,
+    }
 }
 
 interface operations {
-    use types.{vector-record, search-query, search-result, agent-state-transition, trajectory-search-query, trajectory-semantic-match, unified-bus-stats, engine-stats};
+    use types.{vector-record, search-query, search-result, agent-state-transition, trajectory-search-query, trajectory-semantic-match, unified-bus-stats, engine-stats, gpu-accelerator-telemetry};
 
     upsert: func(records: list<vector-record>) -> result<u32, string>;
     query: func(query: search-query) -> result<list<search-result>, string>;
@@ -101,6 +111,7 @@ interface operations {
     backfill-from-sqlite: func() -> result<u32, string>;
     compact: func() -> result<u32, string>;
     stats: func() -> result<unified-bus-stats, string>;
+    get-gpu-accelerator-stats: func() -> result<gpu-accelerator-telemetry, string>;
 }
 
 world vector-lancedb-world {

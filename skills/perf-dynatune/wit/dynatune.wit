@@ -24,6 +24,16 @@ interface governor {
         throttled: bool,
     }
 
+    record ebpf-kernel-telemetry {
+        sched-latency-p99-us: f64,
+        sched-runqueue-depth: u32,
+        psi-memory-full-avg10: f64,
+        slab-reclaimable-mb: f64,
+        open-sockets-total: u64,
+        tcp-time-wait-count: u64,
+        fd-utilization-pct: f64,
+    }
+
     record tuning-options {
         profile: governor-profile,
         target-mglru-ttl-ms: option<u32>,
@@ -32,6 +42,9 @@ interface governor {
 
     /// Read comprehensive hardware telemetry and thermal status
     get-telemetry: func() -> result<telemetry-report, string>;
+
+    /// Read live eBPF kernel telemetry (scheduler latency, memory PSI, socket health)
+    get-ebpf-kernel-telemetry: func() -> result<ebpf-kernel-telemetry, string>;
 
     /// Apply an active CPU governor profile (performance, balanced, powersave)
     set-profile: func(profile: governor-profile) -> result<bool, string>;

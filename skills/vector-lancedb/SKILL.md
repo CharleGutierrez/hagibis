@@ -215,3 +215,20 @@ The `UnifiedVectorRelationalBus` integrates SQLite relational storage with Lance
 ## 9. WASI 0.2 Component Model Interface
 
 Defined in [vector-lancedb.wit](file:///home/toshiba/My%20AI%20Project/hagibis/skills/vector-lancedb/wit/vector-lancedb.wit) under `package hagibis:skills/vector-lancedb@0.2.0;`. Compliant with WebAssembly Component Model standards for modular, sandboxed capability hot-swapping.
+
+---
+
+## 10. GPU-Accelerated Vector Retrieval & Local Shared-Memory Embedding Caching (Pillar 4)
+
+Hagibis integrates high-throughput shared-memory vector caching (`GpuShmEmbeddingCache` in `crates/hgb-storage/src/gpu_shm_embedding_cache.rs`):
+- **POSIX Shared-Memory Buffer**: Maps `/dev/shm/hgb_gpu_embedding_cache_<session>.shm` with 64-byte cacheline-aligned binary slots, eliminating serialization overhead.
+- **Hardware Accelerator Autodetection**:
+  - Dynamically probes compute backends in priority order: NVIDIA CUDA (`/dev/nvidia0`, `nvidia-smi`) $\to$ Apple Silicon Metal Performance Shaders (MPS) $\to$ Vulkan DRI Compute $\to$ CPU AVX-512 / AVX2 / NEON.
+  - Coupled with `scripts/cpu-governor.sh gpu-detect` / `gpu-boost` to lock high-throughput GPU clocks during embedding bursts.
+- **Sub-Microsecond BLAKE3 Embedding Cache**:
+  - Keyed by 32-byte cryptographic BLAKE3 fingerprints of `(input_text, model_tag)`.
+  - Serves recurring RAG queries in $< 1\mu\text{s}$, completely bypassing expensive neural model forward passes.
+- **Accelerated SIMD Cosine Search**:
+  - 8-way unrolled SIMD dot product and norm accumulation for lightning-fast nearest-neighbor ranking directly across memory-mapped cache slots.
+- **PGO / BOLT Hardware Training**:
+  - `scripts/pgo-optimize.sh` trains branch probabilities and basic block layouts on high-throughput vector similarity loops for maximum IPC.

@@ -107,11 +107,44 @@ interface types {
         done(agent-response),
         error-event(string),
     }
+
+    /// Consensus role of an agent node in the distributed cluster
+    enum consensus-role {
+        follower,
+        pre-candidate,
+        candidate,
+        leader,
+    }
+
+    /// Status of a distributed agent task
+    enum distributed-task-status {
+        scheduled,
+        running,
+        handoff-pending,
+        completed,
+        failed,
+        aborted,
+    }
+
+    /// Distributed task lease metadata
+    record task-lease-info {
+        node-id: string,
+        acquired-at-ms: u64,
+        expires-at-ms: u64,
+    }
+
+    /// Replicated turn state checkpoint committed to the Raft log
+    record turn-checkpoint {
+        turn-index: u32,
+        tool-name: option<string>,
+        intermediate-thought: string,
+        timestamp-ms: u64,
+    }
 }
 
 /// Dynamic tool registration and cognitive orchestration interface
 interface orchestrator {
-    use types.{agent-config, agent-response, tool-definition, hardware-state, stream-chunk};
+    use types.{agent-config, agent-response, tool-definition, hardware-state, stream-chunk, consensus-role, distributed-task-status, task-lease-info, turn-checkpoint};
 
     /// Register a declarative tool schema into the active orchestrator
     register-tool: func(tool: tool-definition) -> result<_, string>;
@@ -127,6 +160,15 @@ interface orchestrator {
 
     /// Execute a multi-turn ReAct cognitive reasoning loop with dynamic tool calling
     prompt: func(config: agent-config, user-prompt: string) -> result<agent-response, string>;
+
+    /// Dispatch task into Raft consensus cluster across edge nodes
+    dispatch-consensus-task: func(agent-role: string, prompt: string, priority: u32) -> result<string, string>;
+
+    /// Hand off an in-flight agent task to an active peer node without losing turn state
+    handoff-consensus-task: func(task-id: string, target-node: string, reason: string) -> result<bool, string>;
+
+    /// Query current Raft node consensus role and leader ID
+    get-consensus-status: func() -> result<string, string>;
 }
 
 world agent-orchestrator-world {

@@ -205,5 +205,26 @@ Hagibis upgrades the single-node orchestrator into a **Raft-Backed Distributed M
    - Telemetry bridges ingest continuous SLA and latency distributions.
    - When an SLA breach is detected ($P99 > 200\text{ms}$ or memory consumption exceeds budget), the mesh triggers an instant microVM snapshot rollback ([`firecracker_microvm_runner.rs`](file:///media/toshiba/Lexar/hagibis/crates/hgb-daemon/src/firecracker_microvm_runner.rs)) returning the execution jail to a known golden checkpoint in $< 150\text{ms}$ with zero data loss.
 
+---
+
+## 9. Distributed Raft Consensus & State Machine Replication (Pillar 1 Upgrade)
+
+Hagibis introduces a native Raft distributed consensus layer directly into `hgb-core` ([`distributed_raft_consensus.rs`](file:///media/toshiba/Lexar/hagibis/crates/hgb-core/src/distributed_raft_consensus.rs)):
+
+1. **Leader Election & Split-Brain Immunity**:
+   - Full Raft state machine supporting `Follower`, `PreCandidate`, `Candidate`, and `Leader` roles.
+   - Pre-Vote protocol eliminates disruptive re-elections caused by transient network partitions.
+   - Strict quorum majority commitments: $\lfloor N/2 \rfloor + 1$.
+
+2. **Replicated Agent State Machine (`AgentConsensusStateMachine`)**:
+   - Log commands: `RegisterTask`, `AcquireTaskLease`, `CommitTurnState`, `HandoffTask`, `FinalizeTask`, and `ReplicateSharedMemory`.
+   - Cryptographic BLAKE3 integrity digests on each replicated log entry and point-in-time snapshot.
+
+3. **Fault-Tolerant Distributed Agent Task Handoff**:
+   - Edge nodes hold time-bounded execution leases (`TaskLease`).
+   - If an edge daemon crashes, hangs, or experiences severe thermal clamping mid-turn, the cluster leader automatically reclaims the lease and hands off the task to another healthy follower with the complete turn history and intermediate reasoning context intact.
+   - Eliminates split-brain anomalies and ensures multi-daemon edge autonomy across unreliable networks.
+
+
 
 

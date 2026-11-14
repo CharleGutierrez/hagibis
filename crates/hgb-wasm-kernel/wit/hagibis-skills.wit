@@ -20,15 +20,44 @@ interface skill-parameter {
 interface skill-capability {
     enum capability-kind {
         fs-read,
+        fs-write,
         crypto,
         text-transform,
         math,
+        lancedb-vector-query,
+        lancedb-vector-write,
+        sqlite-read,
+        sqlite-write,
+        network-egress,
+    }
+
+    record lancedb-collection-grant {
+        collection-name: string,
+        allow-write: bool,
+        max-vector-dims: u32,
+    }
+
+    record sqlite-table-grant {
+        table-name: string,
+        allow-write: bool,
+        column-filters: list<string>,
     }
 
     record permission-grant {
         kind: capability-kind,
         allowed-paths: list<string>,
         max-memory-pages: u32,
+    }
+
+    record granular-wasi-capability-grant {
+        tenant-id: string,
+        component-id: string,
+        allowed-paths: list<string>,
+        allowed-network-hosts: list<string>,
+        allowed-lancedb-collections: list<lancedb-collection-grant>,
+        allowed-sqlite-tables: list<sqlite-table-grant>,
+        max-memory-pages: u32,
+        gas-fuel-limit: u64,
     }
 }
 

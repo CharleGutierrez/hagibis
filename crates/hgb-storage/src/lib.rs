@@ -568,6 +568,15 @@ pub use synapse_unified_fabric::{
     SynapseQueryPlanner, SynapseVectorKnnCursor, SynapseVectorKnnTab, SynapticFabric,
 };
 
+// Strategic Pillar 4: GPU-Accelerated Vector Retrieval & Local Shared-Memory Embedding Caching
+pub mod gpu_shm_embedding_cache;
+pub use gpu_shm_embedding_cache::{
+    detect_hardware_accelerator, AcceleratorBackendKind, AcceleratorDeviceInfo,
+    GpuShmCacheStats, GpuShmEmbeddingCache, CACHELINE_ALIGNMENT_BYTES,
+    DEFAULT_EMBEDDING_DIMENSION, DEFAULT_SHM_CACHE_CAPACITY, GPU_EMBD_SHM_MAGIC,
+    GPU_EMBD_SHM_VERSION,
+};
+
 
 
 

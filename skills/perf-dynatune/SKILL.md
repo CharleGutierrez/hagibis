@@ -38,6 +38,7 @@ The `perf-dynatune` skill bridges high-level AI workloads (PGO training, LLVM BO
 ## 3. WebAssembly Interface Types (WIT)
 The capability contract in `wit/dynatune.wit` exposes safe, typed governor manipulation to sandboxed orchestration tools:
 - `get-telemetry`: Harvest real-time temperatures, frequencies, and governor states.
+- `get-ebpf-kernel-telemetry`: Access microsecond scheduler latency, PSI full memory stalls, slab reclaimable memory, and socket exhaustion metrics.
 - `set-profile`: Safely switch between `performance`, `balanced`, and `powersave`.
 - `tune-mglru`: Adjust working set retention TTL.
 - `check-thermal-headroom`: Guard pre-flight conditions before launching expensive benchmarks.
@@ -50,8 +51,16 @@ bash scripts/cpu-governor.sh status
 bash scripts/cpu-governor.sh balanced
 ```
 
-## 5. Native eBPF Kernel Observability & Autonomic Self-Healing
+## 5. Universal eBPF Kernel Observability & Autonomic Self-Healing
 Hagibis integrates a real-time Linux eBPF probe loader (`EbpfKernelProbeLoader` in `hgb-core` and `EbpfAutonomicHealer` in `hgb-daemon`):
-- **Tracepoints Attached**: `raw_syscalls:sys_enter`, `raw_syscalls:sys_exit`, `exceptions:page_fault_user`, `thermal:thermal_temperature`.
-- **Microsecond Anomaly Detection**: Intercepts memory thrashing (PSI pressure > 40% / 50k page faults/sec), thermal throttles (> 85°C), and deadlocks (blocked syscalls > 30ms).
-- **Autonomic Action**: Automatically actuates `/kernel-optimizer/plugins/cpu-governor.sh` or `dynabook-kernel-ctl`, dispatches alerts to `self-healing-loop`, and evicts runaway or thrashing tasks into isolated Firecracker microVM sandboxes with zero human intervention.
+- **Tracepoints Attached**: `raw_syscalls:sys_enter`, `raw_syscalls:sys_exit`, `exceptions:page_fault_user`, `thermal:thermal_temperature`, `sched:sched_switch`, `sched:sched_stat_wait`, `sock:inet_sock_set_state`, `tcp:tcp_drop`.
+- **Kernel-Level Telemetry Monitoring**:
+  - **Scheduler Latency**: Captures microsecond p50/p95/p99 dispatch latency and runqueue depth via `sched_switch` and yield probes.
+  - **Memory Pressure**: Continuously monitors Linux PSI full stall (`psi_memory_full_avg10`), cgroup memory pressure, and reclaimable slab caches.
+  - **Socket Exhaustion**: Tracks total open sockets, `TCP_TIME_WAIT` pileups, buffer pressure percentage, listen backlog drops, and file descriptor utilization (`file-nr`).
+- **Autonomic Action Pipeline**:
+  - Automatically shifts CPU governors (`performance` / `powersave`).
+  - Dispatches incident triggers to `self-healing-loop`.
+  - Preemptively isolates crashing or memory-leaking WASM components into isolated Firecracker microVM sandboxes before requests fail.
+  - Throttles misbehaving agent loops under high scheduler runqueue pressure.
+  - Drains lingering TCP socket backlogs to preserve edge gateway responsiveness.

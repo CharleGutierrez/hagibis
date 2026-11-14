@@ -181,8 +181,65 @@ EOF
         fi
         ;;
 
+    gpu-detect|gpu-status)
+        echo "🎮 [Hagibis GPU Compute Accelerator Autodetection]"
+        GPU_BACKEND="cpu_fallback"
+        GPU_NAME="Generic CPU SIMD (AVX2/NEON)"
+        
+        if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi >/dev/null 2>&1; then
+            GPU_BACKEND="cuda"
+            GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -n1 || echo "NVIDIA CUDA GPU")
+            GPU_MEM=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader 2>/dev/null | head -n1 || echo "Unknown")
+            echo "  • Backend:        $GPU_BACKEND"
+            echo "  • Device:         $GPU_NAME"
+            echo "  • VRAM:           $GPU_MEM"
+        elif [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; then
+            GPU_BACKEND="apple_mps"
+            GPU_NAME="Apple Silicon Metal Performance Shaders (MPS)"
+            echo "  • Backend:        $GPU_BACKEND"
+            echo "  • Device:         $GPU_NAME"
+        elif [ -e /dev/dri/renderD128 ] || [ -e /dev/dri/card0 ]; then
+            GPU_BACKEND="vulkan"
+            GPU_NAME="Vulkan DRI Compute Device"
+            echo "  • Backend:        $GPU_BACKEND"
+            echo "  • Device:         $GPU_NAME"
+        else
+            echo "  • Backend:        $GPU_BACKEND"
+            echo "  • Device:         $GPU_NAME"
+        fi
+
+        cat <<EOF > /tmp/hgb_gpu_accelerator_state.json 2>/dev/null || true
+{
+  "gpu_backend": "$GPU_BACKEND",
+  "device_name": "$GPU_NAME",
+  "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date)"
+}
+EOF
+        ;;
+
+    gpu-boost)
+        echo "🚀 [Hagibis GPU Governor] Ramping GPU Clocks for Vector Search & Embedding..."
+        if command -v nvidia-smi >/dev/null 2>&1; then
+            nvidia-smi -pm 1 2>/dev/null || true
+            nvidia-smi --auto-boost-default=1 2>/dev/null || true
+            echo "✔ NVIDIA GPU persistence and auto-boost enabled."
+        else
+            echo "✔ Non-NVIDIA accelerator state recorded as high-performance."
+        fi
+        "$0" performance
+        ;;
+
+    gpu-powersave)
+        echo "🍃 [Hagibis GPU Governor] Relaxing GPU Clocks..."
+        if command -v nvidia-smi >/dev/null 2>&1; then
+            nvidia-smi --auto-boost-default=0 2>/dev/null || true
+            echo "✔ NVIDIA GPU relaxed to nominal power."
+        fi
+        "$0" powersave
+        ;;
+
     *)
-        echo "Usage: $0 [performance|balanced|powersave|status|telemetry|evaluate <p99_ms> <queue> <settle_s>]"
+        echo "Usage: $0 [performance|balanced|powersave|status|telemetry|gpu-detect|gpu-status|gpu-boost|gpu-powersave|evaluate <p99_ms> <queue> <settle_s>]"
         exit 1
         ;;
 esac

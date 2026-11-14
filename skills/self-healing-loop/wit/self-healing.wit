@@ -15,6 +15,10 @@ interface types {
         worker-disconnect,
         latency-sla-breach,
         crash-loop,
+        scheduler-latency-spike,
+        memory-pressure-spike,
+        socket-exhaustion,
+        wasm-component-crash-risk,
     }
 
     record triage-diagnostic {
@@ -63,6 +67,12 @@ interface healer {
 
     /// Query latest healing receipts history
     get-recent-receipts: func(limit: u32) -> list<healing-session-receipt>;
+
+    /// Preemptively isolate and sandbox a misbehaving or crashing WASM component
+    preemptive-isolate-component: func(component-id: string, reason: string) -> result<bool, string>;
+
+    /// Throttle active agent loops during severe kernel scheduler congestion
+    throttle-agent-loops: func(throttle-factor: f32, reason: string) -> result<bool, string>;
 }
 
 world self-healing-world {
