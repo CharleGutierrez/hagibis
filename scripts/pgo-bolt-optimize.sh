@@ -35,56 +35,86 @@ optimize_binary() {
     local PGO_PROFDATA_DIR="$DATA_DIR/pgo-$BIN_NAME"
     mkdir -p "$PGO_PROFDATA_DIR"
     
+    # Detect compiler & linker capabilities
+    local SUPPORTS_PGO=false
+    local SUPPORTS_RELOCS=false
+    local PROBE_DIR="/tmp/hgb-pgo-probe"
+    mkdir -p "$PROBE_DIR"
+
+    if echo 'fn main(){}' | rustc -Cprofile-generate="$PROBE_DIR" - -o "$PROBE_DIR/probe_pgo" 2>/dev/null; then
+        SUPPORTS_PGO=true
+        rm -f "$PROBE_DIR/probe_pgo" "$PROBE_DIR"/*.profraw
+    fi
+
+    if echo "int main(){return 0;}" | "${CC:-cc}" -x c - -Wl,--emit-relocs -o "$PROBE_DIR/probe_reloc" 2>/dev/null; then
+        SUPPORTS_RELOCS=true
+        rm -f "$PROBE_DIR/probe_reloc"
+    fi
+    rm -rf "$PROBE_DIR"
+
+    local RELOC_FLAG=""
+    if [ "$SUPPORTS_RELOCS" = true ]; then
+        RELOC_FLAG="-Clink-arg=-Wl,--emit-relocs"
+    fi
+
     # -------------------------------------------------------------------------
     # Step 1: Instrument with LLVM PGO (-Cprofile-generate)
     # -------------------------------------------------------------------------
-    echo "• [Phase 1/4] Compiling with LLVM PGO instrumentation..."
-    RUSTFLAGS="-Cprofile-generate=$PGO_PROFDATA_DIR -Ctarget-cpu=native -Clink-arg=-Wl,-q" \
-        cargo build --release -p "$PKG_NAME" --bin "$BIN_NAME" --target-dir "$TARGET_DIR"
-    
-    local INSTRUMENTED_BIN="$TARGET_DIR/release/$BIN_NAME"
-    if [ ! -f "$INSTRUMENTED_BIN" ]; then
-        echo "❌ Instrumented binary not found at $INSTRUMENTED_BIN"
-        return 1
-    fi
-    
-    # -------------------------------------------------------------------------
-    # Step 2: Realistic Workload Profiling Traces
-    # -------------------------------------------------------------------------
-    echo "• [Phase 2/4] Executing realistic production profiling workloads..."
-    LLVM_PROFILE_FILE="$PGO_PROFDATA_DIR/profile-%p-%m.profraw"
-    export LLVM_PROFILE_FILE
-    
-    if [ "$BIN_NAME" = "hgb" ]; then
-        # Profiling CLI: help, menus, AST query parsing, hardware telemetry, vector tests
-        "$INSTRUMENTED_BIN" --help >/dev/null 2>&1 || true
-        "$INSTRUMENTED_BIN" ast-query --help >/dev/null 2>&1 || true
-        "$INSTRUMENTED_BIN" hardware --json >/dev/null 2>&1 || true
-        "$INSTRUMENTED_BIN" status >/dev/null 2>&1 || true
-        "$INSTRUMENTED_BIN" menu --help >/dev/null 2>&1 || true
-    elif [ "$BIN_NAME" = "hgbd" ]; then
-        # Profiling Daemon: ambient health, self-healing diagnostics, simulated offload
-        "$INSTRUMENTED_BIN" --version >/dev/null 2>&1 || true
-        "$INSTRUMENTED_BIN" --help >/dev/null 2>&1 || true
-    fi
-    
-    # Merge LLVM raw profiles if llvm-profdata is present
     local MERGED_PROFDATA="$DATA_DIR/$BIN_NAME.profdata"
-    if command -v llvm-profdata >/dev/null 2>&1; then
-        echo "• Merging PGO profile data using llvm-profdata..."
-        llvm-profdata merge -o "$MERGED_PROFDATA" "$PGO_PROFDATA_DIR"/*.profraw 2>/dev/null || true
+    
+    if [ "$SUPPORTS_PGO" = true ]; then
+        echo "• [Phase 1/4] Compiling with LLVM PGO instrumentation..."
+        RUSTFLAGS="-Cprofile-generate=$PGO_PROFDATA_DIR -Ctarget-cpu=native" \
+            cargo build --release -p "$PKG_NAME" --bin "$BIN_NAME" --target-dir "$TARGET_DIR"
+        
+        local INSTRUMENTED_BIN="$TARGET_DIR/release/$BIN_NAME"
+        if [ ! -f "$INSTRUMENTED_BIN" ]; then
+            echo "❌ Instrumented binary not found at $INSTRUMENTED_BIN"
+            return 1
+        fi
+        
+        # -------------------------------------------------------------------------
+        # Step 2: Realistic Workload Profiling Traces
+        # -------------------------------------------------------------------------
+        echo "• [Phase 2/4] Executing realistic production profiling workloads..."
+        LLVM_PROFILE_FILE="$PGO_PROFDATA_DIR/profile-%p-%m.profraw"
+        export LLVM_PROFILE_FILE
+        
+        if [ "$BIN_NAME" = "hgb" ]; then
+            "$INSTRUMENTED_BIN" --help >/dev/null 2>&1 || true
+            "$INSTRUMENTED_BIN" ast-query --help >/dev/null 2>&1 || true
+            "$INSTRUMENTED_BIN" hardware --json >/dev/null 2>&1 || true
+            "$INSTRUMENTED_BIN" status >/dev/null 2>&1 || true
+            "$INSTRUMENTED_BIN" menu --help >/dev/null 2>&1 || true
+        elif [ "$BIN_NAME" = "hgbd" ]; then
+            "$INSTRUMENTED_BIN" --version >/dev/null 2>&1 || true
+            "$INSTRUMENTED_BIN" --help >/dev/null 2>&1 || true
+        fi
+        
+        # Merge LLVM raw profiles if llvm-profdata is present
+        local LLVM_PROFDATA
+        LLVM_PROFDATA="$(command -v llvm-profdata 2>/dev/null || find "$(rustc --print sysroot 2>/dev/null)/lib/rustlib/" -name llvm-profdata 2>/dev/null | head -n 1)"
+        if [ -n "$LLVM_PROFDATA" ] && [ -x "$LLVM_PROFDATA" ]; then
+            echo "• Merging PGO profile data using $LLVM_PROFDATA..."
+            "$LLVM_PROFDATA" merge -o "$MERGED_PROFDATA" "$PGO_PROFDATA_DIR"/*.profraw 2>/dev/null || true
+        fi
+    else
+        echo "• [Phase 1-2/4] Host linker does not support LLVM PGO profile runtime; skipping instrumentation..."
     fi
     
     # -------------------------------------------------------------------------
     # Step 3: Recompile with PGO Profile Feedback + Fat LTO (-Cprofile-use)
+    # Note: Fat LTO (lto = "fat", codegen-units = 1) is cleanly managed by
+    # [profile.release] in Cargo.toml so build-scripts remain unaffected.
     # -------------------------------------------------------------------------
-    echo "• [Phase 3/4] Recompiling with PGO profile feedback + Fat LTO (-Wl,-q)..."
+    echo "• [Phase 3/4] Recompiling with maximum Fat LTO + native optimization..."
     if [ -f "$MERGED_PROFDATA" ]; then
-        RUSTFLAGS="-Cprofile-use=$MERGED_PROFDATA -Ctarget-cpu=native -Clto=fat -Ccodegen-units=1 -Clink-arg=-Wl,-q" \
+        echo "• Applying merged profile feedback: $MERGED_PROFDATA"
+        RUSTFLAGS="-Cprofile-use=$MERGED_PROFDATA -Ctarget-cpu=native $RELOC_FLAG" \
             cargo build --release -p "$PKG_NAME" --bin "$BIN_NAME" --target-dir "$TARGET_DIR"
     else
-        echo "• Notice: PGO raw profiles not merged. Compiling with high-performance LTO and relocation symbols..."
-        RUSTFLAGS="-Ctarget-cpu=native -Clto=fat -Ccodegen-units=1 -Clink-arg=-Wl,-q" \
+        echo "• Compiling with Cargo profile.release Fat LTO + native CPU codegen..."
+        RUSTFLAGS="-Ctarget-cpu=native $RELOC_FLAG" \
             cargo build --release -p "$PKG_NAME" --bin "$BIN_NAME" --target-dir "$TARGET_DIR"
     fi
     
