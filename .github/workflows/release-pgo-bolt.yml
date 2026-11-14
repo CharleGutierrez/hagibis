@@ -1,0 +1,131 @@
+name: Release Automated PGO + LLVM BOLT Super-Optimized Pipeline
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - main
+  pull_request:
+    paths:
+      - 'crates/**'
+      - 'scripts/pgo-bolt-optimize.sh'
+      - 'scripts/pgo-optimize.sh'
+      - 'Makefile'
+      - '.github/workflows/release-pgo-bolt.yml'
+  workflow_dispatch:
+    inputs:
+      enable_bolt:
+        description: 'Attempt LLVM BOLT post-link layout passes if available'
+        required: false
+        default: 'true'
+        type: boolean
+      verify_elf:
+        description: 'Run exhaustive ELF relocation and alignment verification'
+        required: false
+        default: 'true'
+        type: boolean
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  pgo-bolt-release:
+    name: Build & Super-Optimize PGO + BOLT (Linux x86_64)
+    runs-on: ubuntu-latest
+    env:
+      RUST_BACKTRACE: 1
+      PGO_DATA_DIR: /tmp/pgo-data
+      BOLT_DATA_DIR: /tmp/bolt-data
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install system build dependencies & LLVM toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            pkg-config \
+            libssl-dev \
+            llvm \
+            clang \
+            lld \
+            linux-tools-generic \
+            binutils \
+            python3 \
+            python3-pip || true
+          # Attempt to install llvm-bolt if packaged in ubuntu universe / llvm repos
+          sudo apt-get install -y llvm-bolt || true
+
+      - name: Install Rust toolchain with LLVM profiling tools
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy, llvm-tools-preview
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Workspace compiler check & sandbox tests
+        run: |
+          cargo check --workspace
+          cargo test -p hgb-core --lib wasm_plugin_sandbox -- --nocapture
+
+      - name: Execute Automated PGO + LLVM BOLT Optimization Pipeline
+        run: |
+          chmod +x scripts/pgo-bolt-optimize.sh
+          bash scripts/pgo-bolt-optimize.sh --both
+
+      - name: Verify optimized binary layout & smoke check
+        run: |
+          ls -lh target/release/hgb target/release/hgbd
+          ./target/release/hgb --version
+          ./target/release/hgb --help
+          ./target/release/hgbd --version
+          ./target/release/hgbd --help
+
+      - name: Post-optimization capability regression test
+        run: |
+          cargo test -p hgb-core --lib wasm_plugin_sandbox
+
+      - name: Package release archive
+        id: package
+        run: |
+          VERSION=${GITHUB_REF_NAME:-latest}
+          ARCHIVE_NAME="hagibis-${VERSION}-pgo-bolt-x86_64-unknown-linux-gnu.tar.gz"
+          mkdir -p dist
+          cp -f target/release/hgb dist/
+          if [ -f target/release/hgbd ]; then cp -f target/release/hgbd dist/; fi
+          cp README.md dist/ 2>/dev/null || true
+          cp LICENSE* dist/ 2>/dev/null || true
+          
+          # Compute manifest
+          cd dist
+          tar -czvf "../${ARCHIVE_NAME}" .
+          cd ..
+          sha256sum "${ARCHIVE_NAME}" > "${ARCHIVE_NAME}.sha256"
+          echo "archive_name=${ARCHIVE_NAME}" >> $GITHUB_OUTPUT
+          echo "archive_sha=${ARCHIVE_NAME}.sha256" >> $GITHUB_OUTPUT
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.archive_name }}
+          path: |
+            ${{ steps.package.outputs.archive_name }}
+            ${{ steps.package.outputs.archive_sha }}
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ steps.package.outputs.archive_name }}
+            ${{ steps.package.outputs.archive_sha }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true

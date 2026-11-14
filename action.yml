@@ -34,6 +34,10 @@ inputs:
     description: 'Automatically regenerate masterclass chapters and PDF via docs/masterclass/generate_pdf.py'
     required: false
     default: 'false'
+  optimize-pgo-bolt:
+    description: 'Execute automated PGO + LLVM BOLT profiling and release binary optimization for hgb and hgbd'
+    required: false
+    default: 'false'
   github-token:
     description: 'GitHub token for PR comment authoring'
     required: false
@@ -55,6 +59,9 @@ outputs:
   masterclass-validated:
     description: 'Whether all 8 masterclass chapters passed verification gates'
     value: ${{ steps.validate-masterclass-step.outputs.validated }}
+  pgo-bolt-optimized:
+    description: 'Whether automated PGO + LLVM BOLT binary optimization succeeded'
+    value: ${{ steps.pgo-bolt-optimizer.outputs.optimized }}
 
 runs:
   using: 'composite'
@@ -120,3 +127,13 @@ runs:
         else
           python3 docs/masterclass/generate_pdf.py || true
         fi
+
+    - name: Automated PGO + LLVM BOLT Optimization Pipeline
+      id: pgo-bolt-optimizer
+      if: inputs.optimize-pgo-bolt == 'true'
+      shell: bash
+      run: |
+        echo "Executing Automated PGO + LLVM BOLT Layout Optimization..."
+        chmod +x scripts/pgo-bolt-optimize.sh
+        ./scripts/pgo-bolt-optimize.sh all
+        echo "optimized=true" >> "$GITHUB_OUTPUT"

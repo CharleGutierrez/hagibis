@@ -20,3 +20,5 @@ __pycache__/
 *.so
 .zig-cache/
 zig-out/
+.cargo/
+**/crates/*/.cargo/

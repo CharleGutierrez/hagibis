@@ -1540,23 +1540,94 @@ pub export fn hgb_tool_manifest() u64 {
     return ptr_u64 | (len_u64 << 32);
 }
 
-pub export fn hgb_wasm_simd_dot_product(vec_a_ptr: [*]const f32, vec_b_ptr: [*]const f32, len: usize) f32 {
+pub fn simd_dot_product_f32(vec_a: [*]const f32, vec_b: [*]const f32, len: usize) f32 {
     if (len == 0) return 0.0;
     const Vec4 = @Vector(4, f32);
-    const chunks = len / 4;
-    var acc: Vec4 = @splat(0.0);
+    var acc0: Vec4 = @splat(0.0);
+    var acc1: Vec4 = @splat(0.0);
     var i: usize = 0;
-    while (i < chunks * 4) : (i += 4) {
-        const va: Vec4 = vec_a_ptr[i..][0..4].*;
-        const vb: Vec4 = vec_b_ptr[i..][0..4].*;
+    while (i + 8 <= len) : (i += 8) {
+        const va0: Vec4 = vec_a[i..][0..4].*;
+        const vb0: Vec4 = vec_b[i..][0..4].*;
+        acc0 += va0 * vb0;
+        const va1: Vec4 = vec_a[i + 4..][0..4].*;
+        const vb1: Vec4 = vec_b[i + 4..][0..4].*;
+        acc1 += va1 * vb1;
+    }
+    var acc = acc0 + acc1;
+    while (i + 4 <= len) : (i += 4) {
+        const va: Vec4 = vec_a[i..][0..4].*;
+        const vb: Vec4 = vec_b[i..][0..4].*;
         acc += va * vb;
     }
-    var sum = @reduce(.Add, acc);
-    var rem = chunks * 4;
-    while (rem < len) : (rem += 1) {
-        sum += vec_a_ptr[rem] * vec_b_ptr[rem];
+    var total: f32 = @reduce(.Add, acc);
+    while (i < len) : (i += 1) {
+        total += vec_a[i] * vec_b[i];
+    }
+    return total;
+}
+
+pub fn simd_cosine_similarity_f32(vec_a: [*]const f32, vec_b: [*]const f32, len: usize) f32 {
+    if (len == 0) return 0.0;
+    const Vec4 = @Vector(4, f32);
+    var dot_acc: Vec4 = @splat(0.0);
+    var norm_a_acc: Vec4 = @splat(0.0);
+    var norm_b_acc: Vec4 = @splat(0.0);
+    var i: usize = 0;
+    while (i + 4 <= len) : (i += 4) {
+        const va: Vec4 = vec_a[i..][0..4].*;
+        const vb: Vec4 = vec_b[i..][0..4].*;
+        dot_acc += va * vb;
+        norm_a_acc += va * va;
+        norm_b_acc += vb * vb;
+    }
+    var dot_sum: f32 = @reduce(.Add, dot_acc);
+    var norm_a_sum: f32 = @reduce(.Add, norm_a_acc);
+    var norm_b_sum: f32 = @reduce(.Add, norm_b_acc);
+    while (i < len) : (i += 1) {
+        const val_a = vec_a[i];
+        const val_b = vec_b[i];
+        dot_sum += val_a * val_b;
+        norm_a_sum += val_a * val_a;
+        norm_b_sum += val_b * val_b;
+    }
+    const denom = @sqrt(norm_a_sum) * @sqrt(norm_b_sum);
+    return if (denom > 1e-9) dot_sum / denom else 0.0;
+}
+
+pub fn simd_l2_distance_f32(vec_a: [*]const f32, vec_b: [*]const f32, len: usize) f32 {
+    if (len == 0) return 0.0;
+    const Vec4 = @Vector(4, f32);
+    var acc: Vec4 = @splat(0.0);
+    var i: usize = 0;
+    while (i + 4 <= len) : (i += 4) {
+        const va: Vec4 = vec_a[i..][0..4].*;
+        const vb: Vec4 = vec_b[i..][0..4].*;
+        const diff = va - vb;
+        acc += diff * diff;
+    }
+    var sum: f32 = @reduce(.Add, acc);
+    while (i < len) : (i += 1) {
+        const d = vec_a[i] - vec_b[i];
+        sum += d * d;
     }
     return sum;
+}
+
+pub export fn wasm_simd_dot_f32(a_ptr: [*]const f32, b_ptr: [*]const f32, len: usize) f32 {
+    return simd_dot_product_f32(a_ptr, b_ptr, len);
+}
+
+pub export fn wasm_simd_cosine_f32(a_ptr: [*]const f32, b_ptr: [*]const f32, len: usize) f32 {
+    return simd_cosine_similarity_f32(a_ptr, b_ptr, len);
+}
+
+pub export fn wasm_simd_l2_f32(a_ptr: [*]const f32, b_ptr: [*]const f32, len: usize) f32 {
+    return simd_l2_distance_f32(a_ptr, b_ptr, len);
+}
+
+pub export fn hgb_wasm_simd_dot_product(vec_a_ptr: [*]const f32, vec_b_ptr: [*]const f32, len: usize) f32 {
+    return simd_dot_product_f32(vec_a_ptr, vec_b_ptr, len);
 }
 
 pub export fn hgb_wasm_simd_matmul(
@@ -2138,18 +2209,51 @@ pub fn hgb_simd_matmul_f32(
 }
 
 // ----------------------------------------------------------------------------
-// C-ABI Exports for Freestanding Agent Tools
+// C-ABI Exports for Freestanding Agent Tools & Vector Distance Kernels
 // ----------------------------------------------------------------------------
 
-/// Exported C-ABI: 128-bit SIMD Vector Dot Product
+/// Exported C-ABI: WebAssembly SIMD 128-bit 4-lane f32 dot product
 #[no_mangle]
-pub extern "C" fn hgb_wasm_simd_dot_product(vec_a_ptr: *const f32, vec_b_ptr: *const f32, len: usize) -> f32 {
+pub extern "C" fn wasm_simd_dot_f32(vec_a_ptr: *const f32, vec_b_ptr: *const f32, len: usize) -> f32 {
     if vec_a_ptr.is_null() || vec_b_ptr.is_null() || len == 0 {
         return 0.0;
     }
     let slice_a = unsafe { std::slice::from_raw_parts(vec_a_ptr, len) };
     let slice_b = unsafe { std::slice::from_raw_parts(vec_b_ptr, len) };
     hgb_simd_dot_product_f32(slice_a, slice_b)
+}
+
+/// Exported C-ABI: WebAssembly SIMD 128-bit 4-lane f32 cosine similarity
+#[no_mangle]
+pub extern "C" fn wasm_simd_cosine_f32(vec_a_ptr: *const f32, vec_b_ptr: *const f32, len: usize) -> f32 {
+    if vec_a_ptr.is_null() || vec_b_ptr.is_null() || len == 0 {
+        return 0.0;
+    }
+    let slice_a = unsafe { std::slice::from_raw_parts(vec_a_ptr, len) };
+    let slice_b = unsafe { std::slice::from_raw_parts(vec_b_ptr, len) };
+    cosine_similarity(slice_a, slice_b)
+}
+
+/// Exported C-ABI: WebAssembly SIMD 128-bit 4-lane f32 Euclidean squared distance
+#[no_mangle]
+pub extern "C" fn wasm_simd_l2_f32(vec_a_ptr: *const f32, vec_b_ptr: *const f32, len: usize) -> f32 {
+    if vec_a_ptr.is_null() || vec_b_ptr.is_null() || len == 0 {
+        return 0.0;
+    }
+    let slice_a = unsafe { std::slice::from_raw_parts(vec_a_ptr, len) };
+    let slice_b = unsafe { std::slice::from_raw_parts(vec_b_ptr, len) };
+    let mut sum_sq = 0.0f32;
+    for (&x, &y) in slice_a.iter().zip(slice_b.iter()) {
+        let diff = x - y;
+        sum_sq += diff * diff;
+    }
+    sum_sq
+}
+
+/// Exported C-ABI: 128-bit SIMD Vector Dot Product (legacy alias)
+#[no_mangle]
+pub extern "C" fn hgb_wasm_simd_dot_product(vec_a_ptr: *const f32, vec_b_ptr: *const f32, len: usize) -> f32 {
+    wasm_simd_dot_f32(vec_a_ptr, vec_b_ptr, len)
 }
 
 /// Exported C-ABI: 128-bit SIMD Matrix Multiplication C = A * B
@@ -2190,6 +2294,33 @@ pub fn hgb_wit_vector_dot_product_simd(vec_a: Vec<f32>, vec_b: Vec<f32>) -> Resu
         return Err(format!("Vector dimension mismatch: {} != {}", vec_a.len(), vec_b.len()));
     }
     Ok(hgb_simd_dot_product_f32(&vec_a, &vec_b))
+}
+
+/// WIT func `vector-cosine-similarity-simd`
+pub fn hgb_wit_vector_cosine_similarity_simd(vec_a: Vec<f32>, vec_b: Vec<f32>) -> Result<f32, String> {
+    if vec_a.is_empty() || vec_b.is_empty() {
+        return Err("Input vectors cannot be empty".to_string());
+    }
+    if vec_a.len() != vec_b.len() {
+        return Err(format!("Vector dimension mismatch: {} != {}", vec_a.len(), vec_b.len()));
+    }
+    Ok(cosine_similarity(&vec_a, &vec_b))
+}
+
+/// WIT func `vector-l2-distance-simd`
+pub fn hgb_wit_vector_l2_distance_simd(vec_a: Vec<f32>, vec_b: Vec<f32>) -> Result<f32, String> {
+    if vec_a.is_empty() || vec_b.is_empty() {
+        return Err("Input vectors cannot be empty".to_string());
+    }
+    if vec_a.len() != vec_b.len() {
+        return Err(format!("Vector dimension mismatch: {} != {}", vec_a.len(), vec_b.len()));
+    }
+    let mut sum_sq = 0.0f32;
+    for (&x, &y) in vec_a.iter().zip(vec_b.iter()) {
+        let diff = x - y;
+        sum_sq += diff * diff;
+    }
+    Ok(sum_sq)
 }
 
 /// WIT func `relu-activation-simd`
@@ -2743,9 +2874,28 @@ mod tests {
         let dot = hgb_wasm_simd_dot_product(v1.as_ptr(), v2.as_ptr(), 4);
         assert!((dot - 40.0).abs() < 1e-4);
 
+        // wasm_simd_dot_f32
+        let dot2 = wasm_simd_dot_f32(v1.as_ptr(), v2.as_ptr(), 4);
+        assert!((dot2 - 40.0).abs() < 1e-4);
+
+        // wasm_simd_cosine_f32
+        let cos = wasm_simd_cosine_f32(v1.as_ptr(), v2.as_ptr(), 4);
+        assert!(cos > 0.9);
+        let self_cos = wasm_simd_cosine_f32(v1.as_ptr(), v1.as_ptr(), 4);
+        assert!((self_cos - 1.0).abs() < 1e-4);
+
+        // wasm_simd_l2_f32
+        let l2 = wasm_simd_l2_f32(v1.as_ptr(), v2.as_ptr(), 4);
+        // (2-1)^2 + (3-2)^2 + (4-3)^2 + (5-4)^2 = 1 + 1 + 1 + 1 = 4.0
+        assert!((l2 - 4.0).abs() < 1e-4);
+        let zero_l2 = wasm_simd_l2_f32(v1.as_ptr(), v1.as_ptr(), 4);
+        assert!((zero_l2 - 0.0).abs() < 1e-4);
+
         // Null pointer safety
         assert_eq!(hgb_wasm_simd_dot_product(std::ptr::null(), v2.as_ptr(), 4), 0.0);
         assert_eq!(hgb_wasm_simd_dot_product(v1.as_ptr(), std::ptr::null(), 4), 0.0);
+        assert_eq!(wasm_simd_cosine_f32(std::ptr::null(), v2.as_ptr(), 4), 0.0);
+        assert_eq!(wasm_simd_l2_f32(std::ptr::null(), v2.as_ptr(), 4), 0.0);
 
         // C-ABI matmul
         let a = vec![2.0f32, 0.0, 0.0, 2.0];

@@ -1,12 +1,74 @@
 /**
- * Hagibis Production Cloudflare Workers Edge Gateway & WASI Agent Tool Runner
+ * Hagibis Production Cloudflare Workers Edge Gateway, WASI Agent Tool Runner & Masterclass Docs Server
  *
  * Implements Turnkey Cloudflare Workers & WASI Edge Deployment for Hagibis:
  * - Sub-millisecond cold-start edge agent routing
  * - KV-backed high-frequency telemetry caching (`HAGIBIS_EDGE_KV`)
  * - D1 SQL event journaling and distributed task queues (`HAGIBIS_D1_DB`)
  * - WASI Component Model edge execution bridge with HMAC authentication
+ * - Automated Documentation Site Generator (/docs, /docs/masterclass/:chapter, /docs/pdf)
+ * - Serverless simulation execution endpoint (/api/masterclass/run)
  */
+
+declare global {
+  interface KVNamespaceListKey<Metadata = unknown> {
+    name: string;
+    expiration?: number;
+    metadata?: Metadata;
+  }
+
+  interface KVNamespaceListResult<Metadata = unknown> {
+    keys: KVNamespaceListKey<Metadata>[];
+    list_complete: boolean;
+    cursor?: string;
+  }
+
+  interface KVNamespace {
+    get(key: string, options?: any): Promise<string | null>;
+    get(key: string, type: "text"): Promise<string | null>;
+    get<ExpectedValue = unknown>(key: string, type: "json"): Promise<ExpectedValue | null>;
+    get(key: string, type: "arrayBuffer"): Promise<ArrayBuffer | null>;
+    get(key: string, type: "stream"): Promise<ReadableStream | null>;
+    put(
+      key: string,
+      value: string | ArrayBuffer | ArrayBufferView | ReadableStream,
+      options?: { expiration?: number; expirationTtl?: number; metadata?: any }
+    ): Promise<void>;
+    delete(key: string): Promise<void>;
+    list<Metadata = unknown>(options?: {
+      prefix?: string;
+      limit?: number;
+      cursor?: string;
+    }): Promise<KVNamespaceListResult<Metadata>>;
+  }
+
+  interface D1Result<T = unknown> {
+    results?: T[];
+    success: boolean;
+    meta?: any;
+    error?: string;
+  }
+
+  interface D1PreparedStatement {
+    bind(...values: any[]): D1PreparedStatement;
+    first<T = unknown>(colName?: string): Promise<T | null>;
+    run<T = unknown>(): Promise<D1Result<T>>;
+    all<T = unknown>(): Promise<D1Result<T>>;
+    raw<T = unknown>(): Promise<T[]>;
+  }
+
+  interface D1Database {
+    prepare(query: string): D1PreparedStatement;
+    dump(): Promise<ArrayBuffer>;
+    batch<T = unknown>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]>;
+    exec(query: string): Promise<D1Result<unknown>>;
+  }
+
+  interface ExecutionContext {
+    waitUntil(promise: Promise<any>): void;
+    passThroughOnException(): void;
+  }
+}
 
 export interface Env {
   ENVIRONMENT: string;
@@ -17,6 +79,7 @@ export interface Env {
   HAGIBIS_D1_DB: D1Database;
   EDGE_SHARED_SECRET?: string;
   EDGE_NODE_ID?: string;
+  ASSETS?: { fetch: (request: Request | string) => Promise<Response> };
 }
 
 export interface EdgeSwarmPeerDescriptor {

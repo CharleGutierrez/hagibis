@@ -1,5 +1,61 @@
 {
   "tools": {
+    "hgb_microvm_spinup": {
+      "description": "Spin up an isolated Firecracker microVM instance with configurable memory_mb, vcpu_count, rootfs/kernel images, and snapshot caching",
+      "parameters": {
+        "memory_mb": { "type": "integer", "description": "Memory ceiling in MiB allocated to the microVM instance (default: 256)", "default": 256 },
+        "vcpu_count": { "type": "integer", "description": "Number of vCPUs assigned to the microVM guest (default: 2)", "default": 2 },
+        "kernel_path": { "type": "string", "description": "Path to uncompressed vmlinux kernel binary (e.g. /var/lib/firecracker/vmlinux.bin)" },
+        "rootfs_path": { "type": "string", "description": "Path to ext4 rootfs disk image (e.g. /var/lib/firecracker/rootfs.ext4)" },
+        "snapshot_caching": { "type": "boolean", "description": "Enable pre-warmed snapshot caching in volatile /dev/shm for sub-10ms instantaneous spin-up", "default": true },
+        "snapshot_id": { "type": "string", "description": "Optional snapshot identifier to resume from (e.g. alpine-fast-sandbox)" },
+        "timeout_secs": { "type": "integer", "description": "MicroVM execution timeout in seconds before automatic termination", "default": 60 },
+        "vm_id": { "type": "string", "description": "Optional explicit unique identifier for the microVM instance" }
+      }
+    },
+    "hgb_microvm_execute": {
+      "description": "Dispatch untrusted code execution or command payload to an active Firecracker microVM instance or isolated sandbox",
+      "parameters": {
+        "vm_id": { "type": "string", "description": "Target active microVM instance identifier", "required": true },
+        "command": { "type": "string", "description": "Shell command or script string to execute inside the microVM guest" },
+        "code": { "type": "string", "description": "Source code payload to execute within guest runtime" },
+        "language": { "type": "string", "description": "Programming language of code payload (e.g. bash, rust, python, wasm)", "default": "bash" },
+        "stdin": { "type": "string", "description": "Optional standard input payload to pipe to guest process" },
+        "timeout_ms": { "type": "integer", "description": "Execution timeout in milliseconds", "default": 30000 },
+        "env_vars": { "type": "object", "description": "Optional key-value environment variable overrides" }
+      }
+    },
+    "hgb_microvm_terminate": {
+      "description": "Safely shut down, pause, or clean up an active Firecracker microVM instance, releasing cgroups and memory",
+      "parameters": {
+        "vm_id": { "type": "string", "description": "Target active microVM instance identifier to terminate or pause", "required": true },
+        "action": { "type": "string", "enum": ["terminate", "pause", "resume"], "description": "Lifecycle action to perform on microVM", "default": "terminate" },
+        "force": { "type": "boolean", "description": "Force immediate termination (SIGKILL) bypassing graceful guest shutdown", "default": false }
+      }
+    },
+    "hgb_wasm_kernel_invoke": {
+      "description": "Execute a sandboxed WebAssembly kernel with strict memory limits and Cranelift fuel budget",
+      "parameters": {
+        "wasm_path": { "type": "string", "description": "Path to compiled .wasm WebAssembly module binary on disk" },
+        "wasm_bytes_b64": { "type": "string", "description": "Optional Base64-encoded WebAssembly module bytecode" },
+        "task_name": { "type": "string", "description": "Target task or entrypoint function name (default: hgb_tool_invoke or _start)", "default": "hgb_tool_invoke" },
+        "fuel_limit": { "type": "integer", "description": "Cranelift fuel budget instructions for metering execution (default: 10000000)", "default": 10000000 },
+        "memory_max_mb": { "type": "integer", "description": "Maximum linear memory ceiling in MiB (default: 64)", "default": 64 },
+        "input_payload": { "type": "object", "description": "JSON arguments or parameters passed into the WASM kernel invocation" }
+      }
+    },
+    "hgb_wasm_kernel_stream": {
+      "description": "Stream real-time execution events, fuel consumption telemetry, and stdout/stderr chunks from a sandboxed WebAssembly kernel over SSE / JSON-RPC",
+      "parameters": {
+        "wasm_path": { "type": "string", "description": "Path to compiled .wasm WebAssembly module binary on disk" },
+        "wasm_bytes_b64": { "type": "string", "description": "Optional Base64-encoded WebAssembly module bytecode" },
+        "task_name": { "type": "string", "description": "Target task or entrypoint function name", "default": "hgb_tool_invoke" },
+        "fuel_limit": { "type": "integer", "description": "Cranelift fuel budget instructions for metering execution", "default": 10000000 },
+        "memory_max_mb": { "type": "integer", "description": "Maximum linear memory ceiling in MiB", "default": 64 },
+        "input_payload": { "type": "object", "description": "JSON arguments or parameters passed into the WASM kernel" },
+        "chunk_size_bytes": { "type": "integer", "description": "Streaming chunk buffer size in bytes", "default": 4096 }
+      }
+    },
     "hgb_mmap_vector_search": {
       "description": "Zero-copy memory-mapped (mmap) vector similarity search across code symbols and documentation in <50 microseconds using AVX2 SIMD dot-product and cosine distance without heap allocations",
       "parameters": {

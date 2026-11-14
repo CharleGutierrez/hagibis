@@ -272,6 +272,8 @@ const COCKPIT_HTML: &str = r#"<!DOCTYPE html>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>🪽 Hagibis Sovereign Cockpit HUD</title>
+  <!-- Pyodide in-browser WebAssembly Python Simulation Runner -->
+  <script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
   <style>
     :root {
       --bg: #090d16;
@@ -530,6 +532,83 @@ const COCKPIT_HTML: &str = r#"<!DOCTYPE html>
       <div class="metric-sub" style="margin-top: 0.75rem;">MGLRU Tuning: <span id="mglru-info" style="color: var(--accent);">ACTIVE (min_ttl: 1000ms)</span></div>
     </div>
 
+    <!-- WIDGET: Autonomous Agent Loop Simulator (Pyodide WASM + Closed-Loop Self-Healing) -->
+    <div class="card" style="grid-column: 1 / -1; border: 1px solid #0284c7; box-shadow: 0 0 25px rgba(56, 189, 248, 0.15);">
+      <div class="card-title">
+        <span style="display:flex; align-items:center; gap:0.5rem; color:#38bdf8;">
+          <span style="font-size:1.1rem;">⚡</span> Autonomous Agent Loop Simulator (Pyodide WebAssembly)
+        </span>
+        <div style="display:flex; gap:0.5rem; align-items:center;">
+          <span id="pyodide-wasm-badge" class="badge" style="background: rgba(16,185,129,0.15); color: var(--success); border: 1px solid var(--success);">Pyodide Ready</span>
+          <span id="sim-loop-status" class="badge" style="background: rgba(168,85,247,0.2); color: var(--purple);">Closed-Loop Active</span>
+        </div>
+      </div>
+
+      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; margin-top: 0.5rem;">
+        <!-- Left: Scenario selector & controls -->
+        <div style="display:flex; flex-direction:column; gap:0.75rem;">
+          <div>
+            <label style="font-size:0.75rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; display:block; margin-bottom:0.35rem;">
+              Masterclass Scenario
+            </label>
+            <select id="hud-sim-scenario" style="width:100%; background:#1a2333; color:var(--text); border:1px solid var(--border); padding:0.6rem; border-radius:0.375rem; font-size:0.85rem; font-family:inherit;">
+              <option value="ch8_self_healing">Chapter 8: Closed-Loop Self-Healing & Dynatune Escalation</option>
+              <option value="ch8_chaos_injection">Chapter 8: Chaos Fault Injection & Auto-Repair</option>
+              <option value="ch8_dynatune_scaling">Chapter 8: Dynamic Dynatune Scaling & Thermal Governor</option>
+              <option value="ch2_hybrid_router">Chapter 2: Unified Hybrid Execution Router (WASM + MicroVM)</option>
+              <option value="ch4_superpowers_bench">Chapter 4: 125 Sovereign Superpowers Micro-Benchmark</option>
+            </select>
+          </div>
+
+          <div style="display:flex; gap:0.5rem;">
+            <button id="btn-run-hud-sim" onclick="runHudPyodideSimulation()" style="flex:1; background:var(--accent); color:#090d16; font-weight:700; padding:0.65rem 1rem; border-radius:0.375rem; border:none; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:0.4rem;">
+              ▶ Run Live Simulation (Browser WASM)
+            </button>
+            <button onclick="clearHudSimTerminal()" style="padding:0.65rem; background:#1e293b; color:var(--text-muted); border:1px solid var(--border); border-radius:0.375rem; cursor:pointer;" title="Clear Console">
+              ⟲ Clear
+            </button>
+          </div>
+
+          <!-- Real-Time Simulated Hardware Metrics -->
+          <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:0.5rem; margin-top:0.25rem;">
+            <div style="background:#0f172a; padding:0.6rem; border-radius:0.375rem; border:1px solid rgba(255,255,255,0.05); text-align:center;">
+              <div style="font-size:0.65rem; color:var(--text-muted); text-transform:uppercase;">CPU Freq</div>
+              <div id="sim-metric-freq" style="font-size:1.05rem; font-weight:800; color:var(--accent); font-family:monospace; margin-top:0.15rem;">2.40 GHz</div>
+            </div>
+            <div style="background:#0f172a; padding:0.6rem; border-radius:0.375rem; border:1px solid rgba(255,255,255,0.05); text-align:center;">
+              <div style="font-size:0.65rem; color:var(--text-muted); text-transform:uppercase;">CPU Temp</div>
+              <div id="sim-metric-temp" style="font-size:1.05rem; font-weight:800; color:#f59e0b; font-family:monospace; margin-top:0.15rem;">46.0°C</div>
+            </div>
+            <div style="background:#0f172a; padding:0.6rem; border-radius:0.375rem; border:1px solid rgba(255,255,255,0.05); text-align:center;">
+              <div style="font-size:0.65rem; color:var(--text-muted); text-transform:uppercase;">Queue Depth</div>
+              <div id="sim-metric-queue" style="font-size:1.05rem; font-weight:800; color:var(--success); font-family:monospace; margin-top:0.15rem;">0 Tasks</div>
+            </div>
+          </div>
+
+          <!-- Self-Healing Recovery Events Feed -->
+          <div>
+            <div style="font-size:0.75rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; margin-bottom:0.35rem;">
+              Self-Healing Recovery Events
+            </div>
+            <div id="sim-events-feed" style="background:#090d16; border:1px solid var(--border); border-radius:0.375rem; padding:0.5rem; max-height:115px; overflow-y:auto; display:flex; flex-direction:column; gap:0.35rem; font-size:0.75rem;">
+              <div style="color:var(--text-muted); font-style:italic;">Awaiting live simulation trigger...</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right: Streaming Terminal Output -->
+        <div style="display:flex; flex-direction:column;">
+          <div style="font-size:0.75rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; margin-bottom:0.35rem; display:flex; justify-content:space-between;">
+            <span>Live Streaming Terminal Output</span>
+            <span id="sim-exec-duration" style="font-family:monospace; color:var(--accent);">Ready</span>
+          </div>
+          <div id="sim-terminal-output" style="background:#090d16; border:1px solid var(--border); border-radius:0.375rem; padding:0.75rem; font-family:monospace; font-size:0.75rem; color:#cbd5e1; flex:1; min-height:220px; max-height:260px; overflow-y:auto; white-space:pre-wrap; line-height:1.45;">// Hagibis Autonomous Agent Loop Simulator Ready.
+// Select a Masterclass chapter scenario and click "Run Live Simulation"
+// Python code executes directly in your browser using Pyodide WebAssembly.</div>
+        </div>
+      </div>
+    </div>
+
     <!-- WIDGET 4: MCP Tool Invocations Live Table -->
     <div class="card" style="grid-column: 1 / -1;">
       <div class="card-title">
@@ -708,6 +787,186 @@ const COCKPIT_HTML: &str = r#"<!DOCTYPE html>
             btn.textContent = '⚡ Toggle Boost Mode';
           }
         });
+    }
+
+    // Pyodide in-browser Python Simulation Engine
+    let pyodideInstanceHUD = null;
+    let isPyodideLoading = false;
+
+    async function getPyodideHUD() {
+      if (pyodideInstanceHUD) return pyodideInstanceHUD;
+      if (isPyodideLoading) {
+        while (isPyodideLoading) {
+          await new Promise(r => setTimeout(r, 100));
+        }
+        return pyodideInstanceHUD;
+      }
+      isPyodideLoading = true;
+      const badge = document.getElementById('pyodide-wasm-badge');
+      if (badge) {
+        badge.textContent = 'Loading Pyodide...';
+        badge.style.color = '#f59e0b';
+        badge.style.borderColor = '#f59e0b';
+      }
+      try {
+        if (typeof loadPyodide === 'function') {
+          pyodideInstanceHUD = await loadPyodide({
+            indexURL: "https://cdn.jsdelivr.net/pyodide/v0.26.2/full/"
+          });
+          if (badge) {
+            badge.textContent = 'Pyodide WASM Ready';
+            badge.style.color = '#10b981';
+            badge.style.borderColor = '#10b981';
+          }
+        }
+      } catch (err) {
+        console.warn('Pyodide load failed, fallback will be used:', err);
+        if (badge) {
+          badge.textContent = 'Offline Fallback';
+          badge.style.color = '#94a3b8';
+          badge.style.borderColor = '#94a3b8';
+        }
+      } finally {
+        isPyodideLoading = false;
+      }
+      return pyodideInstanceHUD;
+    }
+
+    function clearHudSimTerminal() {
+      const term = document.getElementById('sim-terminal-output');
+      if (term) term.textContent = '// Terminal cleared.\n';
+      const events = document.getElementById('sim-events-feed');
+      if (events) events.innerHTML = '<div style="color:var(--text-muted); font-style:italic;">Awaiting live simulation trigger...</div>';
+    }
+
+    async function runHudPyodideSimulation() {
+      const scenario = document.getElementById('hud-sim-scenario').value;
+      const term = document.getElementById('sim-terminal-output');
+      const btn = document.getElementById('btn-run-hud-sim');
+      const eventsFeed = document.getElementById('sim-events-feed');
+      const durationBadge = document.getElementById('sim-exec-duration');
+      
+      btn.disabled = true;
+      btn.textContent = '⏳ Executing Simulation...';
+      term.textContent = `[HAGIBIS_AGENT_SIM] Initializing scenario: ${scenario}...\n`;
+      eventsFeed.innerHTML = '';
+
+      function addEvent(tag, severity, text) {
+        const div = document.createElement('div');
+        const color = severity === 'CRITICAL' ? 'var(--danger)' : severity === 'WARNING' ? 'var(--warning)' : severity === 'SUCCESS' ? 'var(--success)' : 'var(--accent)';
+        div.innerHTML = `<span style="font-weight:700; color:${color};">[${tag}]</span> ${text}`;
+        eventsFeed.appendChild(div);
+        eventsFeed.scrollTop = eventsFeed.scrollHeight;
+      }
+
+      const pyCode = `
+import sys, time, json, math, random
+
+def simulate_autonomous_loop(scenario_name):
+    output_lines = []
+    events = []
+    metrics = {"freq_mhz": 2400, "temp_c": 46.0, "queue": 0}
+
+    output_lines.append(f"[*] Starting Autonomous Closed-Loop Scenario: {scenario_name}")
+    
+    if "self_healing" in scenario_name:
+        events.append(("FAULT_INJECTED", "WARNING", "Detected p99 latency spike (96.4ms) in worker pool"))
+        output_lines.append("[!] Injected synthetic fault: latency p99 regression beyond 80ms threshold")
+        
+        metrics["freq_mhz"] = 3200
+        metrics["temp_c"] = 51.5
+        events.append(("DYNATUNE_ESCALATE", "INFO", "Governor escalated to 'performance'; pinned to Cores 2-3"))
+        output_lines.append("[+] Dynatune governor switched to performance; CPU frequency scaled to 3.2 GHz")
+        
+        events.append(("LANCEDB_MATCH", "INFO", "LanceDB HNSW vector match: cosine similarity 0.948 to resolution #48"))
+        output_lines.append("[+] LanceDB vector memory: Cosine similarity 0.948 found matching diagnostic")
+        
+        events.append(("PATCH_SYNTHESIZED", "INFO", "Rig agent synthesized surgical patch inside /dev/shm CoW sandbox"))
+        output_lines.append("[+] Rig agent synthesized patch diff in RAM sandbox; verifying First-Green...")
+        
+        events.append(("FIRST_GREEN_VERIFIED", "SUCCESS", "All 18 regression tests passed First-Green validation in 4.1ms"))
+        output_lines.append("[✔] First-Green verification: PASSED in 4.1ms")
+        
+        metrics["queue"] = 0
+        metrics["temp_c"] = 47.2
+        events.append(("HOT_RELOAD_COMMITTED", "SUCCESS", "Patch committed to active microkernel memory with 0ms downtime"))
+        output_lines.append("[✔] Patch committed into active Tokio microkernel. Autonomous Loop restored to nominal SLA.")
+
+    elif "chaos" in scenario_name:
+        events.append(("CHAOS_FAULT_INJECTED", "CRITICAL", "Injected memory pressure and network socket timeout"))
+        output_lines.append("[!] Chaos injector: Injected socket timeout on /run/user/1000/hgb.sock")
+        metrics["freq_mhz"] = 2800
+        metrics["temp_c"] = 57.0
+        metrics["queue"] = 4
+        
+        events.append(("MGLRU_COMPACTOR", "INFO", "MGLRU min_ttl reduced to 200ms; reclaimed 4.2MB linear pages"))
+        output_lines.append("[+] MGLRU memory compactor engaged: Reclaimed 4.2MB linear pages")
+        
+        events.append(("STANDALONE_FALLBACK", "WARNING", "Seamlessly switched to Standalone Fallback In-Process Mode"))
+        output_lines.append("[+] Activated Standalone Fallback: Zero dropped tasks")
+        
+        metrics["queue"] = 0
+        metrics["temp_c"] = 48.5
+        events.append(("HEALING_RECOVERED", "SUCCESS", "Socket handles reset; all queues drained safely"))
+        output_lines.append("[✔] System healed completely from chaos perturbation.")
+
+    else:
+        output_lines.append("[*] Executing Dynatune hardware scaling pass...")
+        metrics["freq_mhz"] = 3000
+        metrics["temp_c"] = 49.0
+        events.append(("DYNATUNE_TUNE", "INFO", "Adjusted EPP to balance_performance"))
+        output_lines.append("[✔] Dynatune scaling benchmark verified across 4 cores.")
+
+    return json.dumps({"output": "\\n".join(output_lines), "events": events, "metrics": metrics})
+
+result_json = simulate_autonomous_loop("${scenario}")
+`;
+
+      const startTime = performance.now();
+      try {
+        const py = await getPyodideHUD();
+        if (py) {
+          term.textContent += "[Pyodide WASM] Running Python simulation in-browser...\n";
+          await py.runPythonAsync(pyCode);
+          const pyRes = JSON.parse(py.globals.get('result_json'));
+          
+          term.textContent += pyRes.output + '\n';
+          if (pyRes.events && pyRes.events.length > 0) {
+            pyRes.events.forEach(([tag, sev, detail]) => {
+              addEvent(tag, sev, detail);
+            });
+          }
+          if (pyRes.metrics) {
+            document.getElementById('sim-metric-freq').textContent = (pyRes.metrics.freq_mhz / 1000).toFixed(2) + ' GHz';
+            document.getElementById('sim-metric-temp').textContent = pyRes.metrics.temp_c.toFixed(1) + '°C';
+            document.getElementById('sim-metric-queue').textContent = pyRes.metrics.queue + ' Tasks';
+          }
+        } else {
+          // Native JavaScript simulation fallback
+          term.textContent += "[Native Kernel Runner] Simulating closed-loop self-healing...\n";
+          addEvent("FAULT_INJECTED", "WARNING", "Detected synthetic latency spike");
+          term.textContent += "[!] Injected fault: latency regression p99 > 80ms\n";
+          await new Promise(r => setTimeout(r, 120));
+          addEvent("DYNATUNE_ESCALATE", "INFO", "Dynatune scaled frequency to 3.2 GHz");
+          term.textContent += "[+] Dynatune governor switched to performance\n";
+          document.getElementById('sim-metric-freq').textContent = '3.20 GHz';
+          document.getElementById('sim-metric-temp').textContent = '51.5°C';
+          await new Promise(r => setTimeout(r, 120));
+          addEvent("FIRST_GREEN_VERIFIED", "SUCCESS", "RAM CoW OverlaySandbox tests passed in 4.1ms");
+          term.textContent += "[✔] First-Green verification PASSED (4.1ms)\n";
+          addEvent("HOT_RELOAD_COMMITTED", "SUCCESS", "State committed to microkernel memory");
+          term.textContent += "[✔] Closed-Loop Self-Healing verified successfully.\n";
+          document.getElementById('sim-metric-queue').textContent = '0 Tasks';
+        }
+      } catch (e) {
+        term.textContent += `[ERROR] Simulation runtime exception: ${e.message}\n`;
+      } finally {
+        const elapsed = (performance.now() - startTime).toFixed(1);
+        durationBadge.textContent = `${elapsed} ms`;
+        btn.disabled = false;
+        btn.textContent = '▶ Run Live Simulation (Browser WASM)';
+        term.scrollTop = term.scrollHeight;
+      }
     }
   </script>
 </body>

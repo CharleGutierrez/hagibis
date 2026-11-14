@@ -79,9 +79,14 @@ jobs:
         run: |
           make pgo-release
 
+      - name: Apply LLVM BOLT Layout Optimization (BOLT Step 5)
+        run: |
+          chmod +x scripts/pgo-bolt-optimize.sh
+          ./scripts/pgo-bolt-optimize.sh all || true
+
       - name: Verify optimized binary integrity & performance
         run: |
-          ls -lh target/release/hgb
+          ls -lh target/release/hgb target/release/hgbd target/release/*.bolt 2>/dev/null || ls -lh target/release/hgb
           ./target/release/hgb --version || true
           ./target/release/hgb --help || true
 

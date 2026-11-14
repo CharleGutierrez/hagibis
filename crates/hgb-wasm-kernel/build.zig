@@ -1,11 +1,15 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
-    // 1. WebAssembly Freestanding Target
+    // 1. WebAssembly Freestanding Target with SIMD128 enabled
+    var cpu_features_add = std.Target.Cpu.Feature.Set.empty;
+    cpu_features_add.addFeature(@intFromEnum(std.Target.wasm.Feature.simd128));
+
     const wasm_target = b.resolveTargetQuery(.{
         .cpu_arch = .wasm32,
         .os_tag = .freestanding,
         .abi = .none,
+        .cpu_features_add = cpu_features_add,
     });
 
     const optimize = b.standardOptimizeOption(.{

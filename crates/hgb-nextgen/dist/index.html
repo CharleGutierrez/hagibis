@@ -18,6 +18,8 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
     <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+    <!-- Pyodide in-browser WebAssembly Python Simulation Runner -->
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
     <style>
         :root {
             --bg-dark: #121214;
@@ -790,6 +792,9 @@
                 <button class="activity-btn" id="act-btn-swarm" onclick="handleActivityClick('swarm')" title="Multi-Agent Worktree Swarm">
                     <i class="fa fa-network-wired"></i>
                 </button>
+                <button class="activity-btn" id="act-btn-sim" onclick="handleActivityClick('sim')" title="Autonomous Agent Loop Simulator (Pyodide WASM)" style="color:#38bdf8;">
+                    <i class="fa fa-microchip"></i>
+                </button>
                 <button class="activity-btn" id="act-btn-mcp" onclick="openMcpModal()" title="MCP Tools Runner">
                     <i class="fa fa-plug"></i>
                 </button>
@@ -823,6 +828,7 @@
                 <button class="sidebar-nav-btn" id="tab-nav-debug" onclick="switchSidebarTab('debug')" title="Visual Debugger (DAP)"><i class="fa fa-bug"></i> Debug</button>
                 <button class="sidebar-nav-btn" id="tab-nav-tests" onclick="switchSidebarTab('tests')" title="Visual Test Explorer & TDD Runner"><i class="fa fa-vial" style="color:#10b981;"></i> Tests</button>
                 <button class="sidebar-nav-btn" id="tab-nav-swarm" onclick="switchSidebarTab('swarm')" title="Multi-Agent Swarm"><i class="fa fa-network-wired"></i> Swarm</button>
+                <button class="sidebar-nav-btn" id="tab-nav-sim" onclick="switchSidebarTab('sim')" title="Autonomous Agent Loop Simulator"><i class="fa fa-microchip" style="color:#38bdf8;"></i> Simulator</button>
             </div>
 
             <!-- View 1: Files Explorer -->
@@ -1105,6 +1111,86 @@
                     </div>
                     <div id="test-failure-name" style="font-weight:600; color:#fca5a5; margin-bottom:4px; font-family:monospace;"></div>
                     <div id="test-failure-message" style="color:#f87171; background:#09090b; padding:6px; border-radius:4px; font-family:monospace; white-space:pre-wrap; font-size:10px; border:1px solid #7f1d1d; max-height:140px; overflow-y:auto;"></div>
+                </div>
+            </div>
+
+            <!-- View 8: Autonomous Agent Loop Simulator (Pyodide WASM) -->
+            <div class="sidebar-view" id="sidebar-view-sim" style="display:none; overflow-y:auto;">
+                <div class="sidebar-header">
+                    <div style="display:flex; align-items:center; gap:6px;">
+                        <span>Agent Loop Simulator</span>
+                        <span id="pwa-sim-badge" class="badge" style="background:#083344; color:#38bdf8; font-size:10px;">PYODIDE WASM</span>
+                    </div>
+                    <div class="sidebar-actions">
+                        <i class="fa fa-rotate" onclick="resetPwaSimulation()" title="Reset Simulator"></i>
+                    </div>
+                </div>
+
+                <div style="padding:10px; display:flex; flex-direction:column; gap:10px;">
+                    <!-- Scenario Selector -->
+                    <div>
+                        <label style="font-size:10px; font-weight:700; color:#a1a1aa; text-transform:uppercase; display:block; margin-bottom:4px;">
+                            Masterclass Scenario
+                        </label>
+                        <select id="pwa-sim-scenario" style="width:100%; background:#18181b; color:#f4f4f5; border:1px solid #3f3f46; border-radius:4px; padding:6px 8px; font-size:11px;">
+                            <option value="ch8_self_healing">CH 8: Closed-Loop Self-Healing & Dynatune Escalation</option>
+                            <option value="ch8_chaos_injection">CH 8: Chaos Fault Injection & Auto-Repair</option>
+                            <option value="ch8_dynatune_scaling">CH 8: Dynamic Dynatune Scaling & Thermal Governor</option>
+                            <option value="ch2_hybrid_router">CH 2: Unified Hybrid Execution Router (WASM + MicroVM)</option>
+                            <option value="ch4_superpowers_bench">CH 4: 125 Sovereign Superpowers Micro-Benchmark</option>
+                        </select>
+                    </div>
+
+                    <!-- Action Controls -->
+                    <div style="display:flex; gap:6px;">
+                        <button class="btn btn-primary" id="btn-pwa-run-sim" onclick="runPwaAutonomousSimulation()" style="flex:1; font-size:11px; padding:6px 10px; justify-content:center;">
+                            <i class="fa fa-play"></i> Run Live Simulation
+                        </button>
+                        <button class="btn" onclick="clearPwaSimTerminal()" style="font-size:11px; padding:6px 8px;" title="Clear Terminal">
+                            <i class="fa fa-broom"></i>
+                        </button>
+                    </div>
+
+                    <!-- Simulated Hardware Metrics -->
+                    <div style="background:#141416; border:1px solid #27272a; border-radius:6px; padding:8px;">
+                        <div style="font-size:10px; font-weight:700; color:#a1a1aa; text-transform:uppercase; margin-bottom:6px;">
+                            Simulated Hardware Telemetry
+                        </div>
+                        <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:6px; text-align:center;">
+                            <div style="background:#18181b; padding:6px 4px; border-radius:4px; border:1px solid rgba(255,255,255,0.05);">
+                                <div style="font-size:9px; color:#71717a;">CPU FREQ</div>
+                                <div id="pwa-sim-freq" style="font-size:12px; font-weight:700; color:#38bdf8; font-family:monospace; margin-top:2px;">2.40 GHz</div>
+                            </div>
+                            <div style="background:#18181b; padding:6px 4px; border-radius:4px; border:1px solid rgba(255,255,255,0.05);">
+                                <div style="font-size:9px; color:#71717a;">CPU TEMP</div>
+                                <div id="pwa-sim-temp" style="font-size:12px; font-weight:700; color:#f59e0b; font-family:monospace; margin-top:2px;">46.0°C</div>
+                            </div>
+                            <div style="background:#18181b; padding:6px 4px; border-radius:4px; border:1px solid rgba(255,255,255,0.05);">
+                                <div style="font-size:9px; color:#71717a;">QUEUE</div>
+                                <div id="pwa-sim-queue" style="font-size:12px; font-weight:700; color:#10b981; font-family:monospace; margin-top:2px;">0 Tasks</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Self-Healing Recovery Events -->
+                    <div style="background:#141416; border:1px solid #27272a; border-radius:6px; padding:8px;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                            <span style="font-size:10px; font-weight:700; color:#a1a1aa; text-transform:uppercase;">Self-Healing Recovery Events</span>
+                            <span id="pwa-sim-duration" style="font-size:10px; color:#38bdf8; font-family:monospace;">Ready</span>
+                        </div>
+                        <div id="pwa-sim-events" style="display:flex; flex-direction:column; gap:4px; max-height:120px; overflow-y:auto; font-size:11px;">
+                            <div style="color:#71717a; font-style:italic;">Awaiting simulation trigger...</div>
+                        </div>
+                    </div>
+
+                    <!-- Streaming Terminal Console -->
+                    <div>
+                        <div style="font-size:10px; font-weight:700; color:#a1a1aa; text-transform:uppercase; margin-bottom:4px;">
+                            Streaming Terminal Output
+                        </div>
+                        <div id="pwa-sim-terminal" style="background:#09090b; border:1px solid #27272a; border-radius:4px; padding:8px; font-family:monospace; font-size:11px; color:#cbd5e1; height:180px; overflow-y:auto; white-space:pre-wrap; line-height:1.4;">// Pyodide In-Browser WebAssembly Python Simulation Ready.
+// Select scenario and click "Run Live Simulation" to execute.</div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -4882,6 +4968,7 @@
             const debugView = document.getElementById('sidebar-view-debug');
             const testsView = document.getElementById('sidebar-view-tests');
             const swarmView = document.getElementById('sidebar-view-swarm');
+            const simView = document.getElementById('sidebar-view-sim');
 
             const btnFiles = document.getElementById('tab-nav-files');
             const btnSearch = document.getElementById('tab-nav-search');
@@ -4890,9 +4977,10 @@
             const btnDebug = document.getElementById('tab-nav-debug');
             const btnTests = document.getElementById('tab-nav-tests');
             const btnSwarm = document.getElementById('tab-nav-swarm');
+            const btnSim = document.getElementById('tab-nav-sim');
 
             if (!filesView || !searchView || !gitView) return;
-            [btnFiles, btnSearch, btnGit, btnZig, btnDebug, btnTests, btnSwarm].filter(Boolean).forEach(b => b.classList.remove('active'));
+            [btnFiles, btnSearch, btnGit, btnZig, btnDebug, btnTests, btnSwarm, btnSim].filter(Boolean).forEach(b => b.classList.remove('active'));
             filesView.style.display = 'none';
             searchView.style.display = 'none';
             gitView.style.display = 'none';
@@ -4900,6 +4988,7 @@
             if (debugView) debugView.style.display = 'none';
             if (testsView) testsView.style.display = 'none';
             if (swarmView) swarmView.style.display = 'none';
+            if (simView) simView.style.display = 'none';
 
             // Synchronize Activity Bar
             document.querySelectorAll('.activity-btn').forEach(b => b.classList.remove('active'));
@@ -4938,6 +5027,9 @@
                 if (swarmView) swarmView.style.display = 'flex';
                 if (btnSwarm) btnSwarm.classList.add('active');
                 refreshSwarmTasks();
+            } else if (tab === 'sim') {
+                if (simView) simView.style.display = 'flex';
+                if (btnSim) btnSim.classList.add('active');
             }
         }
 
@@ -7370,6 +7462,204 @@
 
             return { avgWasmMs: avgWasm, avgHttpMs: avgHttp, speedupMultiplier: parseFloat(speedup) };
         };
+
+        // =========================================================================
+        // Pillar 4: Autonomous Agent Loop Simulator via In-Browser Pyodide WASM
+        // =========================================================================
+        let pwaPyodideInstance = null;
+        let isPwaPyodideLoading = false;
+
+        async function initPyodidePwaSimulator() {
+            if (pwaPyodideInstance) return pwaPyodideInstance;
+            if (isPwaPyodideLoading) {
+                while (isPwaPyodideLoading) {
+                    await new Promise(r => setTimeout(r, 100));
+                }
+                return pwaPyodideInstance;
+            }
+            isPwaPyodideLoading = true;
+            const badge = document.getElementById('pwa-sim-badge');
+            if (badge) {
+                badge.textContent = 'LOADING PYODIDE...';
+                badge.style.background = '#78350f';
+                badge.style.color = '#fde68a';
+            }
+            try {
+                if (typeof loadPyodide === 'function') {
+                    pwaPyodideInstance = await loadPyodide({
+                        indexURL: "https://cdn.jsdelivr.net/pyodide/v0.26.2/full/"
+                    });
+                    if (badge) {
+                        badge.textContent = 'PYODIDE WASM READY';
+                        badge.style.background = '#064e3b';
+                        badge.style.color = '#6ee7b7';
+                    }
+                }
+            } catch (err) {
+                console.warn('Pyodide CDN initialization error, fallback enabled:', err);
+                if (badge) {
+                    badge.textContent = 'OFFLINE ENGINE';
+                    badge.style.background = '#27272a';
+                    badge.style.color = '#a1a1aa';
+                }
+            } finally {
+                isPwaPyodideLoading = false;
+            }
+            return pwaPyodideInstance;
+        }
+
+        function clearPwaSimTerminal() {
+            const term = document.getElementById('pwa-sim-terminal');
+            if (term) term.textContent = '// Terminal cleared.\n';
+            const events = document.getElementById('pwa-sim-events');
+            if (events) events.innerHTML = '<div style="color:#71717a; font-style:italic;">Awaiting simulation trigger...</div>';
+        }
+
+        function resetPwaSimulation() {
+            clearPwaSimTerminal();
+            document.getElementById('pwa-sim-freq').textContent = '2.40 GHz';
+            document.getElementById('pwa-sim-temp').textContent = '46.0°C';
+            document.getElementById('pwa-sim-queue').textContent = '0 Tasks';
+            document.getElementById('pwa-sim-duration').textContent = 'Ready';
+            toast.info('Simulator reset to nominal state');
+        }
+
+        async function runPwaAutonomousSimulation() {
+            const scenario = document.getElementById('pwa-sim-scenario').value;
+            const term = document.getElementById('pwa-sim-terminal');
+            const btn = document.getElementById('btn-pwa-run-sim');
+            const eventsContainer = document.getElementById('pwa-sim-events');
+            const durationEl = document.getElementById('pwa-sim-duration');
+
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> Simulating...';
+            term.textContent = `[HAGIBIS_AUTONOMOUS_SIM] Initiating scenario: ${scenario}...\n`;
+            eventsContainer.innerHTML = '';
+
+            function appendEvent(tag, severity, text) {
+                const div = document.createElement('div');
+                div.style.display = 'flex';
+                div.style.gap = '6px';
+                div.style.alignItems = 'flex-start';
+                let tagColor = '#38bdf8';
+                let bgBadge = 'rgba(56, 189, 248, 0.15)';
+                if (severity === 'CRITICAL') { tagColor = '#ef4444'; bgBadge = 'rgba(239, 68, 68, 0.2)'; }
+                else if (severity === 'WARNING') { tagColor = '#f59e0b'; bgBadge = 'rgba(245, 158, 11, 0.2)'; }
+                else if (severity === 'SUCCESS') { tagColor = '#10b981'; bgBadge = 'rgba(16, 185, 129, 0.2)'; }
+
+                div.innerHTML = `<span class="badge" style="background:${bgBadge}; color:${tagColor}; font-size:9px; padding:1px 4px; border-radius:3px; flex-shrink:0;">${tag}</span> <span style="color:#e4e4e7;">${text}</span>`;
+                eventsContainer.appendChild(div);
+                eventsContainer.scrollTop = eventsContainer.scrollHeight;
+            }
+
+            const pyScript = `
+import sys, time, json, math, random
+
+def execute_scenario(name):
+    lines = []
+    events = []
+    metrics = {"freq": 2400, "temp": 46.0, "queue": 0}
+    lines.append(f"[*] Scenario Dispatch: {name}")
+
+    if "self_healing" in name:
+        events.append(("FAULT_INJECTED", "WARNING", "Detected p99 latency spike (96.4ms) in Tokio event bus"))
+        lines.append("[!] Injected synthetic fault: latency p99 regression beyond 80ms ceiling")
+        
+        metrics["freq"] = 3200
+        metrics["temp"] = 51.5
+        events.append(("DYNATUNE_ESCALATE", "INFO", "Dynatune escalated governor to 'performance'; pinned to Cores 2-3"))
+        lines.append("[+] Dynatune governor switched to performance; frequency boosted to 3.20 GHz")
+        
+        events.append(("LANCEDB_MATCH", "INFO", "LanceDB HNSW vector match: cosine similarity 0.948 found diagnostic"))
+        lines.append("[+] LanceDB vector query: Cosine similarity 0.948 to historical patch resolution")
+        
+        events.append(("PATCH_SYNTHESIZED", "INFO", "Rig agent synthesized surgical patch inside /dev/shm CoW sandbox"))
+        lines.append("[+] Rig agent generated candidate diff in isolated RAM CoW sandbox")
+        
+        events.append(("FIRST_GREEN_VERIFIED", "SUCCESS", "All 18 regression tests passed First-Green validation in 4.1ms"))
+        lines.append("[✔] First-Green verification: PASSED in 4.1ms")
+        
+        metrics["queue"] = 0
+        metrics["temp"] = 47.2
+        events.append(("HOT_RELOAD_COMMITTED", "SUCCESS", "Patch committed to active Tokio microkernel with 0ms downtime"))
+        lines.append("[✔] Patch committed into active microkernel memory. Autonomous loop restored to nominal SLA.")
+
+    elif "chaos" in name:
+        events.append(("CHAOS_FAULT_INJECTED", "CRITICAL", "Injected memory pressure and network socket timeout"))
+        lines.append("[!] Chaos injector: Injected socket timeout on /run/user/1000/hgb.sock")
+        metrics["freq"] = 2800
+        metrics["temp"] = 57.0
+        metrics["queue"] = 4
+        
+        events.append(("MGLRU_COMPACTOR", "INFO", "MGLRU min_ttl reduced to 200ms; reclaimed 4.2MB linear pages"))
+        lines.append("[+] MGLRU memory compactor engaged: Reclaimed 4.2MB linear pages")
+        
+        events.append(("STANDALONE_FALLBACK", "WARNING", "Seamlessly switched to Standalone Fallback In-Process Mode"))
+        lines.append("[+] Activated Standalone Fallback: Zero dropped tasks")
+        
+        metrics["queue"] = 0
+        metrics["temp"] = 48.5
+        events.append(("HEALING_RECOVERED", "SUCCESS", "Socket handles reset; all queues drained safely"))
+        lines.append("[✔] System healed completely from chaos perturbation.")
+
+    else:
+        lines.append("[*] Executing Dynatune hardware scaling pass...")
+        metrics["freq"] = 3000
+        metrics["temp"] = 49.0
+        events.append(("DYNATUNE_TUNE", "INFO", "Adjusted EPP to balance_performance"))
+        lines.append("[✔] Dynatune scaling benchmark verified across 4 cores.")
+
+    return json.dumps({"output": "\\n".join(lines), "events": events, "metrics": metrics})
+
+sim_out = execute_scenario("${scenario}")
+`;
+
+            const startTime = performance.now();
+            try {
+                const py = await initPyodidePwaSimulator();
+                if (py) {
+                    term.textContent += "[Pyodide WASM] Running Python simulation in-browser...\n";
+                    await py.runPythonAsync(pyScript);
+                    const pyRes = JSON.parse(py.globals.get('sim_out'));
+
+                    term.textContent += pyRes.output + '\n';
+                    if (pyRes.events) {
+                        pyRes.events.forEach(([tag, sev, det]) => appendEvent(tag, sev, det));
+                    }
+                    if (pyRes.metrics) {
+                        document.getElementById('pwa-sim-freq').textContent = (pyRes.metrics.freq / 1000).toFixed(2) + ' GHz';
+                        document.getElementById('pwa-sim-temp').textContent = pyRes.metrics.temp.toFixed(1) + '°C';
+                        document.getElementById('pwa-sim-queue').textContent = pyRes.metrics.queue + ' Tasks';
+                    }
+                } else {
+                    // Local JavaScript simulation fallback
+                    term.textContent += "[Native Engine] Executing client simulation...\n";
+                    appendEvent("FAULT_INJECTED", "WARNING", "Detected synthetic latency spike");
+                    term.textContent += "[!] Injected fault: latency regression p99 > 80ms\n";
+                    await new Promise(r => setTimeout(r, 100));
+                    appendEvent("DYNATUNE_ESCALATE", "INFO", "Dynatune scaled frequency to 3.2 GHz");
+                    term.textContent += "[+] Dynatune governor switched to performance\n";
+                    document.getElementById('pwa-sim-freq').textContent = '3.20 GHz';
+                    document.getElementById('pwa-sim-temp').textContent = '51.5°C';
+                    await new Promise(r => setTimeout(r, 100));
+                    appendEvent("FIRST_GREEN_VERIFIED", "SUCCESS", "RAM CoW OverlaySandbox tests passed in 4.1ms");
+                    term.textContent += "[✔] First-Green verification PASSED (4.1ms)\n";
+                    appendEvent("HOT_RELOAD_COMMITTED", "SUCCESS", "State committed to microkernel memory");
+                    term.textContent += "[✔] Closed-Loop Self-Healing verified successfully.\n";
+                    document.getElementById('pwa-sim-queue').textContent = '0 Tasks';
+                }
+                toast.success('Simulation completed successfully!');
+            } catch (err) {
+                term.textContent += `[ERROR] Simulation error: ${err.message}\n`;
+                toast.error('Simulation failed: ' + err.message);
+            } finally {
+                const elapsed = (performance.now() - startTime).toFixed(1);
+                durationEl.textContent = `${elapsed} ms`;
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fa fa-play"></i> Run Live Simulation';
+                term.scrollTop = term.scrollHeight;
+            }
+        }
 
         // Initialize Everything
         initEditor();

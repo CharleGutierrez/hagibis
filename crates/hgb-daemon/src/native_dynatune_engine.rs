@@ -89,34 +89,38 @@ impl NativeDynatuneCoordinator {
         }
     }
 
-    /// Capture real-time hardware telemetry directly using the `dynatune` library.
+    /// Capture real-time hardware telemetry directly using the host dynatune bridge.
     pub fn capture_snapshot(&self) -> DynatuneSystemSnapshot {
-        // Query dynatune thermal telemetry
-        let thermal = dynatune::read_thermal_summary();
-        
-        // Query dynatune memory and PSI pressure
-        let (total_ram, avail_ram, avail_pct) = match dynatune::read_mem_info() {
-            Ok(mem) => (mem.total_mb, mem.available_mb, mem.available_pct),
-            Err(_) => (8192, 4096, 50.0), // Graceful fallback
+        let bridge = hgb_core::dynatune_bridge::DynatuneBridge::new();
+        let cpu_temp_c = bridge.read_cpu_pkg_temp_c();
+        let max_temp_c = bridge.read_max_temp_c();
+        let is_thermal_critical = bridge.is_thermal_throttled();
+        let thermal_status = if is_thermal_critical {
+            "CRITICAL".to_string()
+        } else if max_temp_c > 70.0 {
+            "WARM".to_string()
+        } else {
+            "NOMINAL".to_string()
         };
-        let psi_pressure = dynatune::read_memory_pressure();
+
+        // Query memory and PSI pressure
+        let (total_ram, avail_ram, _, avail_pct) = bridge.read_system_memory();
+        let psi_pressure = bridge.read_memory_pressure_psi();
         let psi_avg10 = psi_pressure.some.avg10;
 
-        // Query dynatune power & AC state
-        let ac_on = dynatune::is_ac_connected();
-        let power_state = dynatune::read_power_state();
-        let current_profile = power_state
-            .powerprofilesctl_profile
-            .unwrap_or_else(|| {
-                if ac_on {
-                    "balanced".to_string()
-                } else {
-                    "powersave".to_string()
-                }
-            });
+        // Query power & AC state
+        let ac_on = bridge.is_ac_connected();
+        let power_state = bridge.read_power_state();
+        let current_profile = if !power_state.scaling_governor.is_empty() {
+            power_state.scaling_governor.clone()
+        } else if ac_on {
+            "balanced".to_string()
+        } else {
+            "powersave".to_string()
+        };
 
-        // Query dynatune battery info if available
-        let battery_pct = dynatune::BatteryInfo::read_primary().map(|b| b.capacity_pct);
+        // Query battery info if available
+        let battery_pct = bridge.read_battery_telemetry().first().map(|b| b.capacity_pct);
 
         let now_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -124,10 +128,10 @@ impl NativeDynatuneCoordinator {
             .unwrap_or(0);
 
         DynatuneSystemSnapshot {
-            cpu_temp_c: thermal.cpu_pkg_temp_c,
-            max_temp_c: thermal.max_temp_c,
-            is_thermal_critical: thermal.is_critical,
-            thermal_status: thermal.status.to_string(),
+            cpu_temp_c,
+            max_temp_c,
+            is_thermal_critical,
+            thermal_status,
             total_ram_mb: total_ram,
             available_ram_mb: avail_ram,
             available_ram_pct: avail_pct,
@@ -300,9 +304,12 @@ impl NativeDynatuneCoordinator {
 
         // If not, trigger dynatune power optimizations
         if !executed {
-            let ac = dynatune::is_ac_connected();
-            let thermal = dynatune::read_thermal_summary();
-            let _ = dynatune::apply_power_optimizations(ac, thermal.is_critical);
+            let bridge = hgb_core::dynatune_bridge::DynatuneBridge::new();
+            if profile_name == "performance" {
+                let _ = bridge.shift_to_performance_mode();
+            } else if profile_name == "powersave" {
+                let _ = bridge.shift_to_powersave_mode();
+            }
             executed = true;
         }
 

@@ -1082,23 +1082,158 @@ test "zero copy shm allocation and in-place context processing" {
 // 8. HARDWARE-ACCELERATED TENSOR & SIMD OPERATIONS (Roadmap Pillar 2)
 // ============================================================================
 
-pub export fn hgb_wasm_simd_dot_product(vec_a_ptr: [*]const f32, vec_b_ptr: [*]const f32, len: usize) callconv(.C) f32 {
+/// 128-bit SIMD 4-lane f32 dot product with 4-way unrolled loops (16 floats per iteration)
+pub fn simd_dot_product_f32(vec_a: [*]const f32, vec_b: [*]const f32, len: usize) f32 {
     if (len == 0) return 0.0;
     const Vec4 = @Vector(4, f32);
-    const chunks = len / 4;
-    var acc: Vec4 = @splat(0.0);
+    var acc0: Vec4 = @splat(0.0);
+    var acc1: Vec4 = @splat(0.0);
+    var acc2: Vec4 = @splat(0.0);
+    var acc3: Vec4 = @splat(0.0);
+
     var i: usize = 0;
-    while (i < chunks * 4) : (i += 4) {
-        const va: Vec4 = vec_a_ptr[i..][0..4].*;
-        const vb: Vec4 = vec_b_ptr[i..][0..4].*;
+    while (i + 16 <= len) : (i += 16) {
+        const va0: Vec4 = vec_a[i..][0..4].*;
+        const vb0: Vec4 = vec_b[i..][0..4].*;
+        acc0 += va0 * vb0;
+
+        const va1: Vec4 = vec_a[i + 4..][0..4].*;
+        const vb1: Vec4 = vec_b[i + 4..][0..4].*;
+        acc1 += va1 * vb1;
+
+        const va2: Vec4 = vec_a[i + 8..][0..4].*;
+        const vb2: Vec4 = vec_b[i + 8..][0..4].*;
+        acc2 += va2 * vb2;
+
+        const va3: Vec4 = vec_a[i + 12..][0..4].*;
+        const vb3: Vec4 = vec_b[i + 12..][0..4].*;
+        acc3 += va3 * vb3;
+    }
+
+    var acc = (acc0 + acc1) + (acc2 + acc3);
+
+    while (i + 4 <= len) : (i += 4) {
+        const va: Vec4 = vec_a[i..][0..4].*;
+        const vb: Vec4 = vec_b[i..][0..4].*;
         acc += va * vb;
     }
-    var sum = @reduce(.Add, acc);
-    var rem = chunks * 4;
-    while (rem < len) : (rem += 1) {
-        sum += vec_a_ptr[rem] * vec_b_ptr[rem];
+
+    var total: f32 = @reduce(.Add, acc);
+    while (i < len) : (i += 1) {
+        total += vec_a[i] * vec_b[i];
+    }
+    return total;
+}
+
+/// Vectorized cosine similarity using 128-bit SIMD dot product and simultaneous norm accumulation
+pub fn simd_cosine_similarity_f32(vec_a: [*]const f32, vec_b: [*]const f32, len: usize) f32 {
+    if (len == 0) return 0.0;
+    const Vec4 = @Vector(4, f32);
+    var dot_acc0: Vec4 = @splat(0.0);
+    var dot_acc1: Vec4 = @splat(0.0);
+    var norm_a0: Vec4 = @splat(0.0);
+    var norm_a1: Vec4 = @splat(0.0);
+    var norm_b0: Vec4 = @splat(0.0);
+    var norm_b1: Vec4 = @splat(0.0);
+
+    var i: usize = 0;
+    while (i + 8 <= len) : (i += 8) {
+        const va0: Vec4 = vec_a[i..][0..4].*;
+        const vb0: Vec4 = vec_b[i..][0..4].*;
+        dot_acc0 += va0 * vb0;
+        norm_a0 += va0 * va0;
+        norm_b0 += vb0 * vb0;
+
+        const va1: Vec4 = vec_a[i + 4..][0..4].*;
+        const vb1: Vec4 = vec_b[i + 4..][0..4].*;
+        dot_acc1 += va1 * vb1;
+        norm_a1 += va1 * va1;
+        norm_b1 += vb1 * vb1;
+    }
+
+    var dot_acc = dot_acc0 + dot_acc1;
+    var norm_a_acc = norm_a0 + norm_a1;
+    var norm_b_acc = norm_b0 + norm_b1;
+
+    while (i + 4 <= len) : (i += 4) {
+        const va: Vec4 = vec_a[i..][0..4].*;
+        const vb: Vec4 = vec_b[i..][0..4].*;
+        dot_acc += va * vb;
+        norm_a_acc += va * va;
+        norm_b_acc += vb * vb;
+    }
+
+    var dot_sum: f32 = @reduce(.Add, dot_acc);
+    var norm_a_sum: f32 = @reduce(.Add, norm_a_acc);
+    var norm_b_sum: f32 = @reduce(.Add, norm_b_acc);
+
+    while (i < len) : (i += 1) {
+        const val_a = vec_a[i];
+        const val_b = vec_b[i];
+        dot_sum += val_a * val_b;
+        norm_a_sum += val_a * val_a;
+        norm_b_sum += val_b * val_b;
+    }
+
+    const denom = @sqrt(norm_a_sum) * @sqrt(norm_b_sum);
+    if (denom > 1e-9) {
+        const sim = dot_sum / denom;
+        return std.math.clamp(sim, -1.0, 1.0);
+    }
+    return 0.0;
+}
+
+/// Vectorized Euclidean squared distance (a - b)^2 with 128-bit SIMD unrolling
+pub fn simd_l2_distance_f32(vec_a: [*]const f32, vec_b: [*]const f32, len: usize) f32 {
+    if (len == 0) return 0.0;
+    const Vec4 = @Vector(4, f32);
+    var acc0: Vec4 = @splat(0.0);
+    var acc1: Vec4 = @splat(0.0);
+
+    var i: usize = 0;
+    while (i + 8 <= len) : (i += 8) {
+        const va0: Vec4 = vec_a[i..][0..4].*;
+        const vb0: Vec4 = vec_b[i..][0..4].*;
+        const diff0 = va0 - vb0;
+        acc0 += diff0 * diff0;
+
+        const va1: Vec4 = vec_a[i + 4..][0..4].*;
+        const vb1: Vec4 = vec_b[i + 4..][0..4].*;
+        const diff1 = va1 - vb1;
+        acc1 += diff1 * diff1;
+    }
+
+    var acc = acc0 + acc1;
+
+    while (i + 4 <= len) : (i += 4) {
+        const va: Vec4 = vec_a[i..][0..4].*;
+        const vb: Vec4 = vec_b[i..][0..4].*;
+        const diff = va - vb;
+        acc += diff * diff;
+    }
+
+    var sum: f32 = @reduce(.Add, acc);
+    while (i < len) : (i += 1) {
+        const d = vec_a[i] - vec_b[i];
+        sum += d * d;
     }
     return sum;
+}
+
+pub export fn wasm_simd_dot_f32(a_ptr: [*]const f32, b_ptr: [*]const f32, len: usize) callconv(.C) f32 {
+    return simd_dot_product_f32(a_ptr, b_ptr, len);
+}
+
+pub export fn wasm_simd_cosine_f32(a_ptr: [*]const f32, b_ptr: [*]const f32, len: usize) callconv(.C) f32 {
+    return simd_cosine_similarity_f32(a_ptr, b_ptr, len);
+}
+
+pub export fn wasm_simd_l2_f32(a_ptr: [*]const f32, b_ptr: [*]const f32, len: usize) callconv(.C) f32 {
+    return simd_l2_distance_f32(a_ptr, b_ptr, len);
+}
+
+pub export fn hgb_wasm_simd_dot_product(vec_a_ptr: [*]const f32, vec_b_ptr: [*]const f32, len: usize) callconv(.C) f32 {
+    return simd_dot_product_f32(vec_a_ptr, vec_b_ptr, len);
 }
 
 pub export fn hgb_wasm_simd_matmul(
@@ -1622,4 +1757,65 @@ test "wasi-nn native contract execution" {
     try std.testing.expectApproxEqAbs(@as(f32, 2.0), out_floats[1], 0.001); // ReLU on 2.0
     try std.testing.expectApproxEqAbs(@as(f32, 0.0), out_floats[2], 0.001); // ReLU on -0.5
     try std.testing.expectApproxEqAbs(@as(f32, 4.0), out_floats[3], 0.001); // ReLU on 4.0
+}
+
+test "wasm simd 128-bit vector primitives: dot product, cosine similarity, l2 distance" {
+    // Test with vectors longer than 16 to exercise unrolled loops and tail scalar handling
+    const v1 = [_]f32{
+        1.0, 2.0, 3.0, 4.0,
+        5.0, 6.0, 7.0, 8.0,
+        1.0, 1.0, 1.0, 1.0,
+        2.0, 2.0, 2.0, 2.0,
+        0.5, 1.5, 2.5,
+    };
+    const v2 = [_]f32{
+        0.5, 1.0, 1.5, 2.0,
+        2.5, 3.0, 3.5, 4.0,
+        2.0, 2.0, 2.0, 2.0,
+        1.0, 1.0, 1.0, 1.0,
+        4.0, 2.0, 0.0,
+    };
+    const len = v1.len; // 19 elements
+
+    // 1. Dot product
+    var expected_dot: f32 = 0.0;
+    for (0..len) |i| {
+        expected_dot += v1[i] * v2[i];
+    }
+    const dot_res = simd_dot_product_f32(&v1, &v2, len);
+    const wasm_dot_res = wasm_simd_dot_f32(&v1, &v2, len);
+    try std.testing.expectApproxEqAbs(expected_dot, dot_res, 0.001);
+    try std.testing.expectApproxEqAbs(expected_dot, wasm_dot_res, 0.001);
+
+    // 2. Cosine similarity
+    var norm1: f32 = 0.0;
+    var norm2: f32 = 0.0;
+    for (0..len) |i| {
+        norm1 += v1[i] * v1[i];
+        norm2 += v2[i] * v2[i];
+    }
+    const expected_cos = expected_dot / (@sqrt(norm1) * @sqrt(norm2));
+    const cos_res = simd_cosine_similarity_f32(&v1, &v2, len);
+    const wasm_cos_res = wasm_simd_cosine_f32(&v1, &v2, len);
+    try std.testing.expectApproxEqAbs(expected_cos, cos_res, 0.001);
+    try std.testing.expectApproxEqAbs(expected_cos, wasm_cos_res, 0.001);
+
+    // Self-similarity should be exactly 1.0
+    const self_cos = wasm_simd_cosine_f32(&v1, &v1, len);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), self_cos, 0.001);
+
+    // 3. L2 Euclidean squared distance
+    var expected_l2: f32 = 0.0;
+    for (0..len) |i| {
+        const diff = v1[i] - v2[i];
+        expected_l2 += diff * diff;
+    }
+    const l2_res = simd_l2_distance_f32(&v1, &v2, len);
+    const wasm_l2_res = wasm_simd_l2_f32(&v1, &v2, len);
+    try std.testing.expectApproxEqAbs(expected_l2, l2_res, 0.001);
+    try std.testing.expectApproxEqAbs(expected_l2, wasm_l2_res, 0.001);
+
+    // Zero distance between identical vectors
+    const zero_l2 = wasm_simd_l2_f32(&v1, &v1, len);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), zero_l2, 0.0001);
 }

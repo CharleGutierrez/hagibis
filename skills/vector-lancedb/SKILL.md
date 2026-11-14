@@ -86,6 +86,25 @@ $$\text{dot}(\mathbf{u}, \mathbf{v}) = \sum_{i=0}^{D-1} u_i v_i$$
 - Distance: $-\text{dot}(\mathbf{u}, \mathbf{v})$.
 - Score: $\text{dot}(\mathbf{u}, \mathbf{v})$.
 
+### WebAssembly SIMD (`simd128`) Kernel Acceleration
+To execute vector queries inside sandboxed guest plugins, edge workers, and browser PWA environments, `vector-lancedb` delegates distance calculations to WebAssembly SIMD (`simd128`) acceleration primitives compiled via `hgb-wasm-kernel` (`main.zig` / `lib.rs`):
+
+- **`wasm_simd_dot_f32(a_ptr, b_ptr, len) -> f32`**: 128-bit SIMD 4-lane `f32` dot product leveraging `@Vector(4, f32)` with 4-way loop unrolling (16 floats per iteration) and scalar tail accumulation.
+- **`wasm_simd_cosine_f32(a_ptr, b_ptr, len) -> f32`**: Vectorized cosine similarity executing parallel dot product and norm accumulation registers ($\sum a_i b_i$, $\sum a_i^2$, $\sum b_i^2$) in unified SIMD passes.
+- **`wasm_simd_l2_f32(a_ptr, b_ptr, len) -> f32`**: Vectorized Euclidean squared distance $\sum (a_i - b_i)^2$ with unrolled difference-square SIMD registers.
+
+```rust
+// Sandboxed guest invocation of hgb-wasm-kernel SIMD exports
+use hgb_wasm_kernel::{wasm_simd_dot_f32, wasm_simd_cosine_f32, wasm_simd_l2_f32};
+
+let query_vec: &[f32] = &[0.1, 0.2, 0.3, 0.4];
+let candidate: &[f32] = &[0.2, 0.3, 0.4, 0.5];
+
+// Compute SIMD cosine similarity directly in linear memory
+let sim = wasm_simd_cosine_f32(query_vec.as_ptr(), candidate.as_ptr(), query_vec.len());
+let l2_dist = wasm_simd_l2_f32(query_vec.as_ptr(), candidate.as_ptr(), query_vec.len()).sqrt();
+```
+
 ---
 
 ## 4. Hybrid Search Fusion
