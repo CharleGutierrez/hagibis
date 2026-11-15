@@ -592,6 +592,18 @@ pub use zero_copy_lancedb_mmap::{
     ZERO_COPY_LANCE_VERSION,
 };
 
+// Pillar 1: Distributed Vector-Graph Semantic Knowledge Mesh
+pub mod semantic_knowledge_mesh;
+pub use semantic_knowledge_mesh::{
+    ArchitecturalRecord, CodeDependency, DependencyEdge, DependencySubgraph,
+    EnrichedArchDecision, EnrichedDependency, EnrichedMcpTool, EnrichedSemanticContext,
+    EnrichedTelemetry, McpToolRecord, RuntimeTelemetryRecord, SearchDomain,
+    SemanticKnowledgeMesh, SemanticKnowledgeMeshConfig, SemanticMeshQuery,
+    SemanticMeshStats, DEFAULT_MESH_VECTOR_DIM, PARTITION_ARCH, PARTITION_CODE_DEP,
+    PARTITION_MCP_TOOL, PARTITION_TELEMETRY,
+};
+
+
 
 
 

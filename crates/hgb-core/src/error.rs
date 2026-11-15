@@ -62,3 +62,9 @@ impl HgbError {
 
 pub type Result<T> = std::result::Result<T, HgbError>;
 
+
+impl From<rusqlite::Error> for HgbError {
+    fn from(err: rusqlite::Error) -> Self {
+        Self::Storage(err.to_string())
+    }
+}

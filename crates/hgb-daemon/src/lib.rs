@@ -979,3 +979,19 @@ pub use pillar3_telemetry_actuator::{
 
 
 
+
+// Pillar 2: Close the Autonomous Self-Healing Loop with PGO/BOLT Feedback
+pub mod pgo_bolt_closed_loop_healer;
+pub use pgo_bolt_closed_loop_healer::{
+    BoltLayoutConfig, ClosedLoopHealingDecision, ConnectionGuard,
+    DynamicBinaryHotRelinker, ElfBinaryInspector, ElfHeaderMetadata,
+    HealerState, HotSwapReceipt, OptimizationStatus, OptimizationTriggerReason,
+    OtelTelemetryBridgePayload, PgoBoltClosedLoopHealer, PgoBoltOptimizationReceipt,
+    PgoPipelineConfig, RuntimeKernelDescriptor, SubsystemTelemetryRecord,
+    ToolchainLocator, BOLT_FLAG_DYNO_STATS, BOLT_FLAG_REORDER_BLOCKS,
+    BOLT_FLAG_REORDER_FUNCTIONS, BOLT_FLAG_SPLIT_ALL_COLD, BOLT_FLAG_SPLIT_FUNCTIONS,
+    DEFAULT_BRANCH_MISPREDICT_THRESHOLD_PCT, DEFAULT_CPU_HOTSPOT_CALL_THRESHOLD,
+    DEFAULT_CPU_HOTSPOT_DURATION_MS, DEFAULT_ERROR_RATE_THRESHOLD,
+    DEFAULT_ICACHE_THRASHING_THRESHOLD_PCT,
+    DEFAULT_OPTIMIZATION_COOLDOWN_MS, DEFAULT_ROLLBACK_REGRESSION_THRESHOLD_PCT,
+};

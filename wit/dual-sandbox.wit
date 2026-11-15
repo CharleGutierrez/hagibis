@@ -1,0 +1,164 @@
+// Hagibis Unified WebAssembly & Firecracker Dual-Sandbox Specification (WIT)
+// Standardizes plugin execution, capability gating, and untrusted agent tool-calls.
+package hagibis:dual-sandbox@0.1.0;
+
+/// Standard types for dual-sandbox tiering (Wasm and Firecracker MicroVM)
+interface types {
+    /// Sandboxed execution tier dynamically selected by the routing arbiter
+    enum execution-tier {
+        /// Fast Path: In-process WebAssembly sandbox (<5ms SLA, pure computation/vector/parsing, <=64MB RAM)
+        fast-wasm,
+        /// Heavy Path: Hardware-virtualized Firecracker microVM (>64MB RAM, filesystem/disk, raw socket)
+        heavy-microvm,
+    }
+
+    /// Sandboxed execution isolation lifecycle status
+    enum sandbox-status {
+        ready,
+        executing,
+        completed,
+        faulted,
+        handed-off,
+    }
+
+    /// Capability flags granted to or requested by untrusted plugins/agent tools
+    flags capability-flags {
+        /// Read access to bounded sandbox directory
+        fs-read,
+        /// Write access to temporary scratch space
+        fs-write,
+        /// Low-level TCP/UDP socket networking
+        network-socket,
+        /// Native binary or shell process execution
+        process-exec,
+        /// Sub-millisecond compute guarantees (<5ms SLA)
+        sub-millisecond-compute,
+        /// Vector math and SIMD extensions
+        simd-vector,
+    }
+
+    /// Hardware and resource bounds enforced on the execution tier
+    record resource-limits {
+        /// Maximum linear memory allocation in bytes
+        max-memory-bytes: u64,
+        /// Maximum execution timeout in milliseconds
+        max-execution-time-ms: u64,
+        /// Instruction fuel budget for WASM execution
+        fuel-budget: u64,
+        /// Virtual CPU count for Firecracker microVM
+        vcpu-count: u32,
+        /// Capability whitelist enforced by the sandbox
+        capabilities: capability-flags,
+    }
+
+    /// Workload characteristics used by the dynamic routing arbiter
+    record workload-profile {
+        /// Name of the tool or plugin being executed
+        tool-name: string,
+        /// Estimated payload size in bytes
+        payload-size-bytes: u64,
+        /// Whether the workload requires host or disk filesystem persistence
+        requires-filesystem: bool,
+        /// Whether the workload requires raw network socket connections
+        requires-network: bool,
+        /// Estimated RAM requirement in megabytes
+        memory-estimate-mb: u32,
+        /// Latency service level agreement in milliseconds
+        latency-sla-ms: u64,
+    }
+
+    /// Invocation request for an untrusted agent tool or plugin
+    record tool-invocation-request {
+        /// Unique correlation ID for tracing and idempotency
+        call-id: string,
+        /// Identifier of the target tool or plugin
+        tool-name: string,
+        /// JSON-encoded arguments passed to the tool
+        arguments-json: string,
+        /// Declared profile for dynamic tier routing
+        profile: workload-profile,
+        /// Resource bounds requested or enforced
+        limits: resource-limits,
+    }
+
+    /// High-resolution telemetry recorded during sandbox execution
+    record execution-telemetry {
+        /// Final execution tier utilized
+        tier-used: execution-tier,
+        /// Startup or cold-boot latency in microseconds
+        startup-latency-us: u64,
+        /// Actual workload execution duration in microseconds
+        execution-duration-us: u64,
+        /// Peak virtual memory allocated in megabytes
+        memory-allocated-mib: u32,
+        /// WebAssembly instruction fuel consumed (0 if microVM)
+        fuel-consumed: u64,
+        /// Virtual CPU core count allocated
+        vcpu-count: u32,
+        /// Security boundary description (e.g. Wasmtime Memory-Capped / Firecracker KVM)
+        security-boundary: string,
+        /// Whether execution was handed off from FastWasm to HeavyMicroVM
+        handoff-occurred: bool,
+        /// Reason for handoff if triggered
+        handoff-reason: option<string>,
+        /// Process or sandbox exit code (0 = success)
+        exit-code: s32,
+    }
+
+    /// Result returned to the calling agent or workflow
+    record tool-execution-response {
+        /// Correlation ID matching the invocation request
+        call-id: string,
+        /// Overall success indicator
+        success: bool,
+        /// JSON-encoded tool output
+        output-json: string,
+        /// Captured standard output
+        stdout: string,
+        /// Captured standard error or diagnostics
+        stderr: string,
+        /// Error description if execution failed
+        error-message: option<string>,
+        /// Real telemetry captured across execution lifecycle
+        telemetry: execution-telemetry,
+    }
+
+    /// Decision returned by capability gating checks
+    variant capability-decision {
+        allowed(execution-tier),
+        handoff-required(string),
+        denied(string),
+    }
+}
+
+/// Dynamic tier routing interface
+interface router {
+    use types.{execution-tier, workload-profile, resource-limits, capability-decision};
+
+    /// Determine optimal execution tier based on workload requirements and SLA
+    route-workload: func(profile: workload-profile) -> execution-tier;
+
+    /// Gate tool invocation against allowed sandbox capabilities
+    check-capabilities: func(profile: workload-profile, limits: resource-limits) -> capability-decision;
+}
+
+/// Unified tool execution interface across Wasm and Firecracker microVMs
+interface executor {
+    use types.{tool-invocation-request, tool-execution-response, execution-telemetry};
+
+    /// Execute tool in the dynamically selected sandbox tier
+    execute: func(request: tool-invocation-request) -> tool-execution-response;
+
+    /// Seamlessly escalate a running or faulted Wasm tool to a Firecracker microVM
+    handoff-to-microvm: func(request: tool-invocation-request, reason: string) -> tool-execution-response;
+
+    /// Capture cumulative telemetry across active sandbox instances
+    get-telemetry-snapshot: func() -> list<execution-telemetry>;
+}
+
+/// World representing the dual-sandbox host environment
+world dual-sandbox-runtime {
+    import types;
+    export router;
+    export executor;
+}

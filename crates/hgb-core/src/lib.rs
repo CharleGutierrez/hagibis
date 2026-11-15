@@ -2340,6 +2340,52 @@ pub use pillar4_wasm_plugin_loader::{
     DynamicWasmPluginDescriptor, DynamicWasmPluginLoader,
 };
 
+// ==============================================================================
+// Pillar 3: Strengthen the WebAssembly & Firecracker Dual-Sandbox Tier
+// ==============================================================================
+pub mod unified_dual_sandbox;
+pub use unified_dual_sandbox::{
+    CapabilityFlags as DualSandboxCapabilityFlags,
+    CapabilityGateDecision as DualSandboxCapabilityGateDecision,
+    DualSandboxExecutor,
+    DualSandboxWitValidator,
+    ResourceLimits as DualSandboxResourceLimits,
+    SandboxTelemetry as DualSandboxTelemetry,
+    SandboxToolRequest as DualSandboxToolRequest,
+    SandboxToolResponse as DualSandboxToolResponse,
+    UnifiedDualSandboxEngine,
+    WasmSuspendedState as DualSandboxSuspendedState,
+    WorkloadProfile as DualSandboxWorkloadProfile,
+    DEFAULT_WASM_FUEL_BUDGET,
+    FAST_WASM_LATENCY_SLA_MS,
+    FAST_WASM_MAX_MEMORY_MB,
+};
+
+// ==============================================================================
+// Pillar 4: Scale the Edge & Multi-Region Worker Pipeline
+// ==============================================================================
+pub mod edge_worker_bridge;
+pub use edge_worker_bridge::{
+    BinaryEdgeFrame,
+    EdgeActionDirective,
+    EdgeReasoningEngine,
+    EdgeStreamType,
+    EdgeVectorEngine,
+    EdgeVectorItem,
+    EdgeVectorMatch,
+    EdgeWebhookAnalysis,
+    MicrovmDispatchTask,
+    edge_frame_flags,
+    hgb_edge_decode_task_frame,
+    hgb_edge_encode_task_frame,
+    hgb_edge_process_webhook_json,
+    hgb_edge_vector_search_json,
+    QUIC_HEADER_SIZE,
+    QUIC_TUNNEL_MAGIC,
+    QUIC_TUNNEL_VERSION,
+};
+
+
 
 
 
