@@ -99,10 +99,41 @@ interface types {
         hit-ratio-pct: f32,
         estimated-saved-latency-ms: f64,
     }
+
+    record zero-copy-match {
+        id: string,
+        partition: string,
+        edge-node-id: string,
+        score: f32,
+        distance: f32,
+        text: string,
+        timestamp-ms: u64,
+        is-edge-replicated: bool,
+    }
+
+    record zero-copy-search-report {
+        total-scanned: u64,
+        hits: list<zero-copy-match>,
+        duration-us: u64,
+        memory-allocated-bytes: u64,
+        zero-copy-verified: bool,
+        federated-edge-nodes: list<string>,
+    }
+
+    record edge-vector-sync-event {
+        id: string,
+        event-type: string,
+        vector: option<list<f32>>,
+        text: option<string>,
+        partition: option<string>,
+        node-id: string,
+        physical-epoch-ms: u64,
+        logical-counter: u64,
+    }
 }
 
 interface operations {
-    use types.{vector-record, search-query, search-result, agent-state-transition, trajectory-search-query, trajectory-semantic-match, unified-bus-stats, engine-stats, gpu-accelerator-telemetry};
+    use types.{vector-record, search-query, search-result, agent-state-transition, trajectory-search-query, trajectory-semantic-match, unified-bus-stats, engine-stats, gpu-accelerator-telemetry, zero-copy-match, zero-copy-search-report, edge-vector-sync-event};
 
     upsert: func(records: list<vector-record>) -> result<u32, string>;
     query: func(query: search-query) -> result<list<search-result>, string>;
@@ -112,6 +143,8 @@ interface operations {
     compact: func() -> result<u32, string>;
     stats: func() -> result<unified-bus-stats, string>;
     get-gpu-accelerator-stats: func() -> result<gpu-accelerator-telemetry, string>;
+    query-zero-copy-mmap: func(query-vector: list<f32>, top-k: u32, min-score: f32, partition: option<string>) -> result<zero-copy-search-report, string>;
+    ingest-edge-sync-event: func(event: edge-vector-sync-event) -> result<u64, string>;
 }
 
 world vector-lancedb-world {

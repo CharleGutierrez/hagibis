@@ -1,0 +1,25 @@
+[package]
+name = "hgb-autopoietic"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+hgb-core = { path = "../hgb-core" }
+hgb-wasm-kernel = { path = "../hgb-wasm-kernel" }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+syn = { version = "2.0", features = ["full", "extra-traits", "visit"] }
+quote = "1.0"
+uuid = { version = "1.27.0", features = ["v4"] }
+blake3 = { workspace = true }
+sha2 = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3.10"

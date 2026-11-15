@@ -614,10 +614,12 @@ pub fn simd_cosine_distance_unrolled(a: &[f32], b: &[f32]) -> f32 {
 }
 
 /// Production LanceDB-compatible in-memory columnar vector engine with SIMD acceleration
+/// Backed optionally by zero-copy memory-mapped files (`hgb-storage::ZeroCopyLanceDbMmapEngine`)
 #[derive(Debug)]
 pub struct LanceDbVectorBridge {
     records: Arc<RwLock<HashMap<String, VectorTunnelRecord>>>,
     dimension: usize,
+    mmap_engine: Option<Arc<hgb_storage::ZeroCopyLanceDbMmapEngine>>,
 }
 
 impl LanceDbVectorBridge {
@@ -625,12 +627,26 @@ impl LanceDbVectorBridge {
         Self {
             records: Arc::new(RwLock::new(HashMap::new())),
             dimension,
+            mmap_engine: None,
         }
     }
 
+    pub fn with_mmap_engine(mut self, engine: Arc<hgb_storage::ZeroCopyLanceDbMmapEngine>) -> Self {
+        self.mmap_engine = Some(engine);
+        self
+    }
+
     pub async fn upsert(&self, new_records: Vec<VectorTunnelRecord>) -> usize {
-        let mut lock = self.records.write().await;
         let count = new_records.len();
+        if let Some(ref mmap) = self.mmap_engine {
+            for rec in &new_records {
+                let part = rec.metadata.get("partition").and_then(|v| v.as_str()).unwrap_or("edge-worker");
+                let node = rec.metadata.get("node_id").and_then(|v| v.as_str()).unwrap_or("edge-node");
+                let text_str = rec.text.as_deref().unwrap_or("");
+                let _ = mmap.insert_vector(&rec.id, &rec.vector, text_str, part, node);
+            }
+        }
+        let mut lock = self.records.write().await;
         for rec in new_records {
             lock.insert(rec.id.clone(), rec);
         }
@@ -655,6 +671,29 @@ impl LanceDbVectorBridge {
         metric: VectorMetric,
         filter_tag: Option<&str>,
     ) -> Vec<VectorMatchItem> {
+        if let Some(ref mmap) = self.mmap_engine {
+            let options = hgb_storage::ZeroCopyQueryOptions {
+                top_k,
+                min_similarity: 0.0,
+                partition_filter: filter_tag.map(|s| s.to_string()),
+                edge_node_filter: None,
+                federate_with_edge: true,
+            };
+            let rep = mmap.search(query, &options);
+            return rep.hits.into_iter().map(|h| {
+                let mut meta = HashMap::new();
+                meta.insert("partition".to_string(), serde_json::Value::String(h.partition));
+                meta.insert("node_id".to_string(), serde_json::Value::String(h.edge_node_id));
+                VectorMatchItem {
+                    id: h.id,
+                    score: h.score,
+                    distance: h.distance,
+                    text: Some(h.text),
+                    metadata: meta,
+                }
+            }).collect();
+        }
+
         let lock = self.records.read().await;
         let mut scored = Vec::with_capacity(lock.len());
 

@@ -1,0 +1,27 @@
+[package]
+name = "hgb-npu-router"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+hgb-core = { path = "../hgb-core" }
+hgb-storage = { path = "../hgb-storage" }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+rusqlite = { workspace = true }
+uuid = { version = "1.0", features = ["v4", "serde"] }
+sha2 = { workspace = true }
+hex = "0.4.3"
+rayon = "1.12"
+blake3 = { workspace = true }
+memmap2 = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3.10"

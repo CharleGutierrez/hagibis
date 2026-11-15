@@ -1,0 +1,24 @@
+[package]
+name = "hgb-compiler"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+hgb-core = { path = "../hgb-core" }
+hgb-wasm-kernel = { path = "../hgb-wasm-kernel" }
+wasmtime = "18.0"
+wat = { path = "../wat" }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+memmap2 = { workspace = true }
+sha2 = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3.10"

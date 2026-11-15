@@ -1,7 +1,8 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
-    // 1. WebAssembly Freestanding Target with SIMD128, Relaxed SIMD, Bulk Memory & WASI Features
+    // 1. WebAssembly Component Model Target (wasm32-wasip2 / WASI Preview2)
+    // with SIMD128, Relaxed SIMD, Bulk Memory, Mutable Globals & Sign Extension
     var cpu_features_add = std.Target.Cpu.Feature.Set.empty;
     cpu_features_add.addFeature(@intFromEnum(std.Target.wasm.Feature.simd128));
     cpu_features_add.addFeature(@intFromEnum(std.Target.wasm.Feature.relaxed_simd));
@@ -10,10 +11,11 @@ pub fn build(b: *std.Build) void {
     cpu_features_add.addFeature(@intFromEnum(std.Target.wasm.Feature.nontrapping_fptoint));
     cpu_features_add.addFeature(@intFromEnum(std.Target.wasm.Feature.sign_ext));
 
+    // Standardize to wasm32-wasi (WASI Preview2 / Component Model foundation)
     const wasm_target = b.resolveTargetQuery(.{
         .cpu_arch = .wasm32,
-        .os_tag = .freestanding,
-        .abi = .none,
+        .os_tag = .wasi,
+        .abi = .musl,
         .cpu_features_add = cpu_features_add,
     });
 
@@ -21,7 +23,7 @@ pub fn build(b: *std.Build) void {
         .preferred_optimize_mode = .ReleaseSmall,
     });
 
-    // 2. Build Wasm Library / Executable without entry point, with WASI-NN imports enabled
+    // 2. Build Wasm Library / Executable without entry point, exporting WIT interfaces
     const wasm_lib = b.addExecutable(.{
         .name = "hgb_kernel",
         .root_source_file = b.path("src/main.zig"),
@@ -31,10 +33,9 @@ pub fn build(b: *std.Build) void {
 
     wasm_lib.entry = .disabled;
     wasm_lib.rdynamic = true;
-    wasm_lib.import_symbols = true; // Retain undefined extern symbols for host wasi_ephemeral_nn linking
+    wasm_lib.import_symbols = true; // Retain undefined extern symbols for host WASI-NN and syscall imports
     wasm_lib.export_memory = true; // Expose WebAssembly linear memory for host tensor zero-copy access
-    wasm_lib.initial_memory = 4 * 65536; // 256 KiB base memory
-    wasm_lib.max_memory = 256 * 65536; // 16 MiB maximum memory
+    wasm_lib.max_memory = 512 * 65536; // 32 MiB maximum memory limit
 
     // Export memory and functions
     b.installArtifact(wasm_lib);
@@ -48,6 +49,6 @@ pub fn build(b: *std.Build) void {
     });
 
     const run_unit_tests = b.addRunArtifact(unit_tests);
-    const test_step = b.step("test", "Run unit tests across memory, Myers diff, fuzzy search, WASI-NN, and SIMD");
+    const test_step = b.step("test", "Run unit tests across memory, Myers diff, fuzzy search, WASI-NN, WIT interfaces, and SIMD");
     test_step.dependOn(&run_unit_tests.step);
 }

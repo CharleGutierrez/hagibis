@@ -2075,6 +2075,18 @@ pub use wasm_capability_sandbox::{CapabilitySecurityViolation, WasmCapabilityPol
 pub mod wasm_component_engine;
 pub use wasm_component_engine::WasmComponentEngine;
 
+pub mod wasm_component_runner;
+pub use wasm_component_runner::{
+    ComponentRunnerHostData, WasmComponentRunner, WasmComponentRunnerConfig,
+    DEFAULT_COMPONENT_EPOCH_DEADLINE_MS, DEFAULT_COMPONENT_FUEL_LIMIT,
+    DEFAULT_COMPONENT_MAX_PAGES,
+};
+pub use hgb_wasm_kernel::{
+    AgentToolInvocation, AgentToolOutput, MeteredExecutionResult, SandboxPolicy,
+    SkillArg, SkillCapabilityKind, SkillDescriptor, SkillExecutionOutcome,
+    SkillParameterValue, PermissionGrant, GranularWasiCapabilityGrant,
+};
+
 // Pillar 3: Hardware-Accelerated Fallback Router
 pub mod hardware_accelerator;
 pub use hardware_accelerator::{
@@ -2312,6 +2324,16 @@ pub use distributed_raft_consensus::{
     RaftPeer, RaftRole as CoreRaftRole, RequestVoteArgs as CoreRequestVoteArgs,
     RequestVoteReply as CoreRequestVoteReply, TaskLease,
 };
+
+// Power Vector 3: Self-Evolving Agent Loop in MCP
+pub mod mcp_self_evolving_loop;
+pub use mcp_self_evolving_loop::{
+    AnomalyKind as SelfEvolvingAnomalyKind, AnomalyReport as SelfEvolvingAnomalyReport,
+    ChaosTestResult as SelfEvolvingChaosTestResult, CompileResult as SelfEvolvingCompileResult,
+    LoopCycleOutcome as SelfEvolvingLoopCycleOutcome, PatchCandidate as SelfEvolvingPatchCandidate,
+    SelfEvolvingAgentLoop, SelfEvolvingCycleReport, TelemetrySnapshot as SelfEvolvingTelemetrySnapshot,
+};
+
 
 
 

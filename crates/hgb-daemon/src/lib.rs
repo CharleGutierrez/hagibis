@@ -817,6 +817,13 @@ pub use wasm_component_mesh_agent::{
     WASM_MESH_MAGIC,
 };
 
+pub mod wasm_edge_hotloader;
+pub use wasm_edge_hotloader::{
+    CloudflareWorkerEdgeBundle, EdgeExecutionReceipt, EdgeHotLoaderMetrics,
+    HotLoadReceipt, HotLoadedKernel, ParsedRuleOutcome, WasmEdgeHotLoader,
+    DEFAULT_EDGE_SCRIPT_TIMEOUT_US, DEFAULT_PARSER_RULE_FUEL_LIMIT,
+};
+
 // Strategic Power Pillar 5: Autonomous Self-Healing & Code Synthesis Pipeline
 pub mod autonomous_stacktrace_self_healer;
 pub use autonomous_stacktrace_self_healer::{

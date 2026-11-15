@@ -1450,6 +1450,59 @@
         "run_simulations": { "type": "boolean", "description": "Run live phase 1-5 simulation tests", "default": true },
         "validate_pdf_chapters": { "type": "boolean", "description": "Validate 8 ReportLab chapters headlessly", "default": true }
       }
+    },
+    "hgb_self_evolving_loop_trigger": {
+      "description": "Execute an autonomous self-evolving reinforcement cycle: inspects bare-metal telemetry (dynatune_telemetry.py / sysfs), detects performance anomalies, synthesizes invariant patch in ephemeral worktree, compiles workspace via cargo, runs chaos injection suite (ch8_chaos_injector.py), and autonomously rolls back on regression or deploys to production",
+      "parameters": {
+        "mode": { "type": "string", "enum": ["single_cycle", "dry_run", "continuous"], "description": "Execution mode for self-evolving cycle", "default": "single_cycle" },
+        "target_crate": { "type": "string", "description": "Target cargo crate for compilation and verification", "default": "hgb-core" },
+        "force_chaos_verification": { "type": "boolean", "description": "Enforce 100% chaos recovery verification via ch8_chaos_injector.py", "default": true },
+        "deploy_on_success": { "type": "boolean", "description": "Autonomously deploy to production on First-Green pass", "default": true }
+      }
+    },
+    "hgb_self_evolving_loop_status": {
+      "description": "Query current state, history, active deployed patches, rollbacks, and latest telemetry evaluation of the self-evolving agent reinforcement loop",
+      "parameters": {
+        "history_limit": { "type": "integer", "description": "Maximum historical cycles to retrieve", "default": 10 },
+        "include_telemetry": { "type": "boolean", "description": "Include real-time telemetry snapshot in status response", "default": true }
+      }
+    },
+    "hgb_rig_agent_orchestrate": {
+      "description": "Execute multi-turn ReAct cognitive reasoning loop via Rig agent framework with dynamic MCP tool routing, autonomic hardware thermal governor, and multi-provider fallback",
+      "parameters": {
+        "prompt": { "type": "string", "description": "Task prompt or user objective for cognitive loop", "required": true },
+        "max_turns": { "type": "integer", "description": "Maximum reasoning turns before graceful synthesis", "default": 10 },
+        "temperature": { "type": "number", "description": "LLM sampling temperature", "default": 0.7 },
+        "provider": { "type": "string", "enum": ["ollama", "anthropic", "openai", "fallback"], "description": "Target LLM provider", "default": "ollama" }
+      },
+      "required": ["prompt"]
+    },
+    "hgb_self_heal_absorb_patch": {
+      "description": "Absorb speculative candidate patch, verify compilation and test integrity, and delete stale .patch file strictly enforcing ARCH-003 zero dead patch invariant",
+      "parameters": {
+        "patch_path": { "type": "string", "description": "Path to candidate .patch file to absorb" },
+        "patch_content": { "type": "string", "description": "Raw diff content if patching in-memory" },
+        "verify_compile": { "type": "boolean", "description": "Compile workspace prior to atomic commit", "default": true },
+        "unlink_after_absorb": { "type": "boolean", "description": "Delete patch file after successful absorption", "default": true }
+      }
+    },
+    "hgb_hardware_thermal_sentry": {
+      "description": "Inspect bare-metal hardware thermal state, governor profiles, PSI memory pressure, and enforce autonomous governor downscaling or cooling pauses",
+      "parameters": {
+        "max_temp_c": { "type": "number", "description": "Thermal ceiling threshold in Celsius before throttling", "default": 78.0 },
+        "enforce_governor": { "type": "boolean", "description": "Automatically downscale to powersave if threshold breached", "default": true }
+      }
+    },
+    "hgb_zero_copy_vector_federation": {
+      "description": "Execute sub-millisecond zero-copy vector similarity search across memory-mapped LanceDB files and federate queries across worker edge deployments and local nodes",
+      "parameters": {
+        "query_vector": { "type": "array", "items": { "type": "number" }, "description": "Dense f32 query vector" },
+        "query_text": { "type": "string", "description": "Natural language query to embed deterministically" },
+        "top_k": { "type": "integer", "description": "Maximum nearest neighbors to retrieve", "default": 10 },
+        "min_score": { "type": "number", "description": "Minimum similarity score threshold (0.0 to 1.0)", "default": 0.0 },
+        "partition": { "type": "string", "description": "Filter by dataset partition" },
+        "federate_edge": { "type": "boolean", "description": "Federate search across Cloudflare Worker edge mesh", "default": true }
+      }
     }
   },
   "mcpServers": {
@@ -1563,8 +1616,30 @@
         "hgb_distributed_microvm_swarm",
         "hgb_hierarchical_multimodal_rag",
         "hgb_ebpf_autonomous_sentinel",
-        "hgb_wasi_cloudflare_edge_sync"
+        "hgb_wasi_cloudflare_edge_sync",
+        "hgb_self_evolving_loop_trigger",
+        "hgb_self_evolving_loop_status",
+        "hgb_rig_agent_orchestrate",
+        "hgb_self_heal_absorb_patch",
+        "hgb_hardware_thermal_sentry",
+        "hgb_zero_copy_vector_federation"
       ]
+    },
+    "self_healing_agent": {
+      "command": "hgb",
+      "args": ["mcp", "--skill", "self-healing-loop"],
+      "env": {
+        "HGB_WORKSPACE": ".",
+        "AUTONOMOUS_HEALING": "1"
+      }
+    },
+    "agent_orchestrator": {
+      "command": "hgb",
+      "args": ["mcp", "--skill", "agent-orchestrator-rig"],
+      "env": {
+        "HGB_WORKSPACE": ".",
+        "RIG_ORCHESTRATOR": "1"
+      }
     },
     "hagibis_sse": {
       "url": "http://127.0.0.1:8083/sse"

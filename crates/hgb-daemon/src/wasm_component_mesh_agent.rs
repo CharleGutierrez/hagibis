@@ -21,6 +21,12 @@ use serde::{Deserialize, Serialize};
 use wasmtime::{Config, Engine, Instance, Module, Store};
 
 use hgb_core::error::{HgbError, Result};
+use hgb_core::wasm_component_runner::WasmComponentRunnerConfig;
+use hgb_wasm_kernel::{AgentToolInvocation, AgentToolOutput};
+
+use crate::wasm_edge_hotloader::{
+    EdgeExecutionReceipt, ParsedRuleOutcome, WasmEdgeHotLoader,
+};
 
 pub const WASM_MESH_MAGIC: &[u8; 4] = b"WMAP"; // Wasm Mesh Agent Packet
 
@@ -102,6 +108,7 @@ pub struct WasmComponentMeshAgent {
     engine: Engine,
     agents: Arc<RwLock<HashMap<String, Arc<WasmMicroAgentDescriptor>>>>,
     workspace_root: PathBuf,
+    hotloader: Arc<WasmEdgeHotLoader>,
 }
 
 impl WasmComponentMeshAgent {
@@ -115,10 +122,20 @@ impl WasmComponentMeshAgent {
 
         let engine = Engine::new(&config).unwrap_or_else(|_| Engine::default());
 
+        let hotloader = WasmEdgeHotLoader::new(workspace_root.as_ref())
+            .unwrap_or_else(|_| {
+                WasmEdgeHotLoader::with_config(
+                    workspace_root.as_ref(),
+                    WasmComponentRunnerConfig::default(),
+                )
+                .expect("Failed to initialize WasmEdgeHotLoader")
+            });
+
         Self {
             engine,
             agents: Arc::new(RwLock::new(HashMap::new())),
             workspace_root: workspace_root.as_ref().to_path_buf(),
+            hotloader: Arc::new(hotloader),
         }
     }
 
@@ -192,6 +209,15 @@ impl WasmComponentMeshAgent {
             agents.insert(skill_name.to_string(), descriptor);
         }
 
+        // Register into the dynamic sandboxed hot-loader
+        let _ = self.hotloader.hot_load_kernel(
+            skill_name,
+            &wasm_bytes,
+            wit_interface,
+            expected_blake3_hash,
+            None,
+        );
+
         let elapsed_micros = start.elapsed().as_micros() as u64;
 
         Ok(WasmMicroAgentReceipt {
@@ -208,6 +234,41 @@ impl WasmComponentMeshAgent {
             ],
             registered_at_epoch_ms: now_ms,
         })
+    }
+
+    /// Access the dynamic sandboxed edge hotloader
+    pub fn hotloader(&self) -> &WasmEdgeHotLoader {
+        &self.hotloader
+    }
+
+    /// Execute a tool adhering to WIT `hagibis:kernel/agent-component-model@0.2.0` inside sandbox
+    pub fn execute_sandboxed_tool(
+        &self,
+        skill_name: &str,
+        tool_inv: &AgentToolInvocation,
+    ) -> Result<AgentToolOutput> {
+        self.hotloader.execute_kernel_tool(skill_name, tool_inv)
+    }
+
+    /// Execute untrusted user code or dynamic scripts with mathematical isolation and zero host danger
+    pub fn execute_sandboxed_script(
+        &self,
+        skill_name: &str,
+        entrypoint: &str,
+        input_payload: &[u8],
+    ) -> Result<EdgeExecutionReceipt> {
+        self.hotloader
+            .execute_untrusted_script(skill_name, entrypoint, input_payload)
+    }
+
+    /// Execute complex dynamic parsing rules within the isolated sandbox
+    pub fn execute_parsing_rule(
+        &self,
+        skill_name: &str,
+        input_text: &str,
+    ) -> Result<ParsedRuleOutcome> {
+        self.hotloader
+            .execute_dynamic_parsing_rule(skill_name, input_text)
     }
 
     /// Execute a micro-agent function synchronously in sub-millisecond time
@@ -444,5 +505,13 @@ mod tests {
         assert!(exported.join("wrangler.toml").exists());
         assert!(exported.join("worker.js").exists());
         assert!(exported.join("math_accelerator.wasm").exists());
+
+        // Test sandboxed execution via hotloader
+        let sandboxed_res = mesh.execute_sandboxed_script("math_accelerator", "add_forty_two", b"{}").unwrap();
+        assert!(sandboxed_res.is_success());
+
+        // Test dynamic parsing rule via hotloader
+        let parse_res = mesh.execute_parsing_rule("math_accelerator", "sample data tokens").unwrap();
+        assert!(parse_res.isolated_sandbox_verified);
     }
 }

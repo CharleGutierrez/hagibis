@@ -2426,6 +2426,153 @@ pub fn hgb_invoke_component_tool(
     }
 }
 
+// ============================================================================
+// HAGIBIS SKILLS WIT INTERFACE TYPES (`hagibis:skills@0.3.0`)
+// ============================================================================
+
+/// Dynamic skill parameter value variant conforming to WIT `skill-parameter.value`
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", content = "value")]
+pub enum SkillParameterValue {
+    Text(String),
+    Integer(i64),
+    Boolean(bool),
+    RawBytes(Vec<u8>),
+    JsonPayload(String),
+}
+
+/// Skill argument entry conforming to WIT `skill-parameter.skill-arg`
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SkillArg {
+    pub name: String,
+    pub val: SkillParameterValue,
+}
+
+impl SkillArg {
+    pub fn text(name: impl Into<String>, val: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            val: SkillParameterValue::Text(val.into()),
+        }
+    }
+
+    pub fn integer(name: impl Into<String>, val: i64) -> Self {
+        Self {
+            name: name.into(),
+            val: SkillParameterValue::Integer(val),
+        }
+    }
+
+    pub fn boolean(name: impl Into<String>, val: bool) -> Self {
+        Self {
+            name: name.into(),
+            val: SkillParameterValue::Boolean(val),
+        }
+    }
+
+    pub fn json(name: impl Into<String>, json_str: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            val: SkillParameterValue::JsonPayload(json_str.into()),
+        }
+    }
+}
+
+/// Capability kinds conforming to WIT `skill-capability.capability-kind`
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SkillCapabilityKind {
+    FsRead,
+    FsWrite,
+    Crypto,
+    TextTransform,
+    Math,
+    LanceDbVectorQuery,
+    LanceDbVectorWrite,
+    SqliteRead,
+    SqliteWrite,
+    NetworkEgress,
+}
+
+/// Permission grant conforming to WIT `skill-capability.permission-grant`
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PermissionGrant {
+    pub kind: SkillCapabilityKind,
+    pub allowed_paths: Vec<String>,
+    pub max_memory_pages: u32,
+}
+
+/// Granular capability grant for tenant isolation conforming to WIT `skill-capability`
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GranularWasiCapabilityGrant {
+    pub tenant_id: String,
+    pub component_id: String,
+    pub allowed_paths: Vec<String>,
+    pub allowed_network_hosts: Vec<String>,
+    pub max_memory_pages: u32,
+    pub gas_fuel_limit: u64,
+}
+
+/// Skill descriptor conforming to WIT `skill-manifest.skill-descriptor`
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SkillDescriptor {
+    pub name: String,
+    pub version: String,
+    pub author: String,
+    pub description: String,
+    pub capabilities: Vec<SkillCapabilityKind>,
+    pub blake3_hash: String,
+}
+
+impl SkillDescriptor {
+    pub fn new(name: impl Into<String>, version: impl Into<String>, author: impl Into<String>, desc: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            version: version.into(),
+            author: author.into(),
+            description: desc.into(),
+            capabilities: Vec::new(),
+            blake3_hash: String::new(),
+        }
+    }
+
+    pub fn with_capability(mut self, cap: SkillCapabilityKind) -> Self {
+        self.capabilities.push(cap);
+        self
+    }
+}
+
+/// Execution outcome conforming to WIT `skill-execute.execution-outcome`
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SkillExecutionOutcome {
+    pub success: bool,
+    pub exit_code: i32,
+    pub output: String,
+    pub fuel_used: u64,
+    pub duration_us: u64,
+}
+
+impl SkillExecutionOutcome {
+    pub fn ok(output: impl Into<String>, fuel_used: u64, duration_us: u64) -> Self {
+        Self {
+            success: true,
+            exit_code: 0,
+            output: output.into(),
+            fuel_used,
+            duration_us,
+        }
+    }
+
+    pub fn err(exit_code: i32, err_msg: impl Into<String>, fuel_used: u64, duration_us: u64) -> Self {
+        Self {
+            success: false,
+            exit_code,
+            output: err_msg.into(),
+            fuel_used,
+            duration_us,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

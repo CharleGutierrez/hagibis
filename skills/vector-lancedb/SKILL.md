@@ -232,3 +232,15 @@ Hagibis integrates high-throughput shared-memory vector caching (`GpuShmEmbeddin
   - 8-way unrolled SIMD dot product and norm accumulation for lightning-fast nearest-neighbor ranking directly across memory-mapped cache slots.
 - **PGO / BOLT Hardware Training**:
   - `scripts/pgo-optimize.sh` trains branch probabilities and basic block layouts on high-throughput vector similarity loops for maximum IPC.
+
+---
+
+## 11. Power Vector 4: Zero-Copy Vector Storage Federation (`hgb-storage` + `vector-lancedb`)
+
+The `ZeroCopyLanceDbMmapEngine` (`crates/hgb-storage/src/zero_copy_lancedb_mmap.rs`) unifies `hgb-storage` to use LanceDB backed by memory-mapped files (`mmap`):
+
+- **Zero-Allocation Mmap Vector Scanning**: Dense f32 embeddings are stored contiguous in 64-byte aligned slabs. During search, queries read directly from memory-mapped slices (`&[f32]`), achieving millions of vector comparisons with 0 heap bytes allocated.
+- **Worker Edge Layer Integration**: Connects directly to the Cloudflare Worker edge mesh (`worker/index.ts`), providing sub-millisecond execution for both `/api/edge/vector-query` and `/api/edge/storage-sync`.
+- **Hybrid Local-Edge Federation**: Semantic queries fan out across both local bare-metal NVMe mmap fragments and distributed edge worker KV caches, unifying decentralized agent memories under a single sub-millisecond API.
+- **MCP Integration**: Exposed through `hgb_zero_copy_vector_federation` in `hagibis.mcp.json`.
+

@@ -1925,6 +1925,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
+name = "hgb-autopoietic"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "blake3",
+ "chrono",
+ "hgb-core",
+ "hgb-wasm-kernel",
+ "quote",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "syn 2.0.119",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "hgb-cli"
 version = "0.1.0"
 dependencies = [
@@ -1957,6 +1978,26 @@ dependencies = [
  "tracing-subscriber",
  "unicode-width 0.2.0",
  "uuid",
+]
+
+[[package]]
+name = "hgb-compiler"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "hgb-core",
+ "hgb-wasm-kernel",
+ "memmap2",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "wasmtime",
+ "wat 1.0.0",
 ]
 
 [[package]]
@@ -2022,6 +2063,7 @@ dependencies = [
  "hgb-core",
  "hgb-nextgen",
  "hgb-storage",
+ "hgb-wasm-kernel",
  "libc",
  "memmap2",
  "regex",
@@ -2041,6 +2083,26 @@ dependencies = [
  "uuid",
  "wasmtime",
  "wat 1.0.0",
+]
+
+[[package]]
+name = "hgb-mesh"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "bincode",
+ "chrono",
+ "hgb-core",
+ "libp2p",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -2078,6 +2140,29 @@ dependencies = [
  "tokio",
  "tokio-tungstenite 0.21.0",
  "unicode-width 0.2.0",
+ "uuid",
+]
+
+[[package]]
+name = "hgb-npu-router"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "blake3",
+ "chrono",
+ "hex",
+ "hgb-core",
+ "hgb-storage",
+ "memmap2",
+ "rayon",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
  "uuid",
 ]
 

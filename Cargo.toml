@@ -7,6 +7,10 @@ members = [
     "crates/hgb-cli",
     "crates/hgb-wasm-kernel",
     "crates/wat",
+    "crates/hgb-mesh",
+    "crates/hgb-compiler",
+    "crates/hgb-npu-router",
+    "crates/hgb-autopoietic",
 ]
 resolver = "2"
 

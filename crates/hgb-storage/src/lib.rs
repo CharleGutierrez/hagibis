@@ -577,6 +577,22 @@ pub use gpu_shm_embedding_cache::{
     GPU_EMBD_SHM_VERSION,
 };
 
+// Power Vector 4: Zero-Copy Vector Storage Federation (hgb-storage + vector-lancedb)
+pub mod zero_copy_lancedb_mmap;
+pub use zero_copy_lancedb_mmap::{
+    cosine_similarity_simd as zero_copy_cosine_similarity,
+    dot_product_simd as zero_copy_dot_product,
+    l2_distance_sq_simd as zero_copy_l2_distance_sq,
+    EdgeSyncEvent as ZeroCopyEdgeSyncEvent,
+    EdgeVectorQueryPayload as ZeroCopyEdgeVectorQueryPayload,
+    EdgeVectorQueryResponse as ZeroCopyEdgeVectorQueryResponse,
+    FixedMetaRecord, ZeroCopyLanceDbMmapEngine, ZeroCopyLanceHeader,
+    ZeroCopyLanceMatch, ZeroCopyLanceStats, ZeroCopyMetric,
+    ZeroCopyQueryOptions, ZeroCopySearchReport, ZERO_COPY_LANCE_MAGIC,
+    ZERO_COPY_LANCE_VERSION,
+};
+
+
 
 
 

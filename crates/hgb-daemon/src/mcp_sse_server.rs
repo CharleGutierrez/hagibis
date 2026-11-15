@@ -613,6 +613,133 @@ pub async fn handle_client_message(
                 }
             }
 
+            // Intercept Self-Evolving Agent Loop & Zero-Copy Vector Storage Federation tools
+            if tool_name == "hgb_self_evolving_loop_trigger" {
+                let auto_loop = match hgb_core::mcp_self_evolving_loop::SelfEvolvingAgentLoop::new(&state.workspace_root) {
+                    Ok(l) => l,
+                    Err(e) => {
+                        let resp = serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": {
+                                "content": [{ "type": "text", "text": format!("Failed to initialize SelfEvolvingAgentLoop: {}", e) }],
+                                "isError": true
+                            }
+                        });
+                        return (StatusCode::OK, Json(resp));
+                    }
+                };
+
+                let mode = arguments.get("mode").and_then(|v| v.as_str()).unwrap_or("single_cycle");
+                let dry_run = mode == "dry_run";
+
+                match auto_loop.run_cycle(dry_run) {
+                    Ok(rep) => {
+                        let resp = serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": {
+                                "content": [{ "type": "text", "text": serde_json::to_string_pretty(&rep).unwrap_or_default() }],
+                                "isError": false
+                            }
+                        });
+                        return (StatusCode::OK, Json(resp));
+                    }
+                    Err(e) => {
+                        let resp = serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": {
+                                "content": [{ "type": "text", "text": format!("Self-evolving loop error: {}", e) }],
+                                "isError": true
+                            }
+                        });
+                        return (StatusCode::OK, Json(resp));
+                    }
+                }
+            } else if tool_name == "hgb_self_evolving_loop_status" {
+                let auto_loop = match hgb_core::mcp_self_evolving_loop::SelfEvolvingAgentLoop::new(&state.workspace_root) {
+                    Ok(l) => l,
+                    Err(e) => {
+                        let resp = serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": {
+                                "content": [{ "type": "text", "text": format!("Failed to initialize SelfEvolvingAgentLoop: {}", e) }],
+                                "isError": true
+                            }
+                        });
+                        return (StatusCode::OK, Json(resp));
+                    }
+                };
+
+                let status_val = auto_loop.export_status_json();
+                let resp = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {
+                        "content": [{ "type": "text", "text": serde_json::to_string_pretty(&status_val).unwrap_or_default() }],
+                        "isError": false
+                    }
+                });
+                return (StatusCode::OK, Json(resp));
+            } else if tool_name == "hgb_zero_copy_vector_federation" {
+                let lance_dir = state.workspace_root.join(".hgb").join("zero_copy_lancedb");
+                let dimension = 768usize;
+                let engine = match hgb_storage::zero_copy_lancedb_mmap::ZeroCopyLanceDbMmapEngine::open_or_create(
+                    &lance_dir.join("vectors.lance_mmap"),
+                    dimension,
+                    100_000,
+                    hgb_storage::zero_copy_lancedb_mmap::ZeroCopyMetric::Cosine,
+                ) {
+                    Ok(e) => e,
+                    Err(e) => {
+                        let resp = serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": {
+                                "content": [{ "type": "text", "text": format!("Failed to open ZeroCopyLanceDbMmapEngine: {}", e) }],
+                                "isError": true
+                            }
+                        });
+                        return (StatusCode::OK, Json(resp));
+                    }
+                };
+
+                let query_vec = if let Some(q_arr) = arguments.get("query_vector").and_then(|v| v.as_array()) {
+                    let v: Vec<f32> = q_arr.iter().filter_map(|x| x.as_f64().map(|f| f as f32)).collect();
+                    if v.len() == dimension { v } else { hgb_core::deterministic_semantic_embedding("query", dimension) }
+                } else if let Some(q_txt) = arguments.get("query_text").and_then(|v| v.as_str()) {
+                    hgb_core::deterministic_semantic_embedding(q_txt, dimension)
+                } else {
+                    vec![0.0f32; dimension]
+                };
+
+                let top_k = arguments.get("top_k").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
+                let min_score = arguments.get("min_score").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                let partition = arguments.get("partition").and_then(|v| v.as_str()).map(|s| s.to_string());
+                let federate = arguments.get("federate_edge").and_then(|v| v.as_bool()).unwrap_or(true);
+
+                let options = hgb_storage::zero_copy_lancedb_mmap::ZeroCopyQueryOptions {
+                    top_k,
+                    min_similarity: min_score,
+                    partition_filter: partition,
+                    edge_node_filter: None,
+                    federate_with_edge: federate,
+                };
+
+                let report = engine.search(&query_vec, &options);
+                let resp = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {
+                        "content": [{ "type": "text", "text": serde_json::to_string_pretty(&report).unwrap_or_default() }],
+                        "isError": false
+                    }
+                });
+                return (StatusCode::OK, Json(resp));
+            }
+
             // Intercept Vector MCP Memory Mesh tools
             if tool_name == "index_codebase_memory" || tool_name == "hgb_index_codebase_memory" {
                 let target_dir_str = arguments.get("target_dir").and_then(|v| v.as_str()).unwrap_or(".");
