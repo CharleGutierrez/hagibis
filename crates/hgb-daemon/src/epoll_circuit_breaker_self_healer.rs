@@ -328,6 +328,12 @@ pub enum TripReason {
         trap_type: String,
         detail: String,
     },
+    TelemetryAnomalySpike {
+        error_rate_pct: f64,
+        p99_latency_ms: f64,
+        cpu_temp_c: f64,
+        reason: String,
+    },
     ManualIntervention {
         reason: String,
     },
@@ -1301,6 +1307,68 @@ impl EpollCircuitBreakerSelfHealer {
             current_phase: st.phase,
         }
     }
+
+    /// Ingest OpenTelemetry and Dynatune telemetry payload.
+    /// If anomaly thresholds are breached (error rate > 5%, latency > 300ms, or thermal runaway),
+    /// trips the circuit breaker to Open (<1µs kernel eventfd signaling), executes closed-loop
+    /// self-healing remediation (microVM scaling/rollback + WASM module hot-swap), and upon
+    /// First-Green verification, resets the circuit breaker to Closed.
+    pub fn evaluate_telemetry_metrics(
+        &self,
+        payload: &crate::pillar3_telemetry_actuator::OtelDynatuneTelemetryPayload,
+        actuator: &crate::pillar3_telemetry_actuator::ClosedLoopTelemetryActuator,
+    ) -> Result<Option<crate::pillar3_telemetry_actuator::TelemetryActuationReport>> {
+        let is_anomaly = payload.error_rate > crate::pillar3_telemetry_actuator::ERROR_RATE_THRESHOLD
+            || payload.p99_ms > crate::pillar3_telemetry_actuator::LATENCY_P99_THRESHOLD_MS
+            || payload.cpu_temp_c >= crate::pillar3_telemetry_actuator::THERMAL_RUNAWAY_THRESHOLD_C
+            || payload.throttled;
+
+        if !is_anomaly {
+            return Ok(None);
+        }
+
+        let reason = format!(
+            "Telemetry anomaly breach: error_rate={:.1}%, p99={:.1}ms, cpu_temp={:.1}C, throttled={}",
+            payload.error_rate * 100.0,
+            payload.p99_ms,
+            payload.cpu_temp_c,
+            payload.throttled
+        );
+
+        // Trip the epoll circuit breaker with sub-microsecond eventfd kernel signaling
+        self.trip_circuit_breaker(TripReason::TelemetryAnomalySpike {
+            error_rate_pct: payload.error_rate * 100.0,
+            p99_latency_ms: payload.p99_ms,
+            cpu_temp_c: payload.cpu_temp_c,
+            reason: reason.clone(),
+        })?;
+
+        // Transition to HalfOpen for probe remediation
+        {
+            let mut st = self.state.write().unwrap();
+            st.phase = CircuitBreakerPhase::HalfOpen;
+            st.half_open_probe_active = true;
+        }
+
+        // Execute closed-loop remediation (dynamic microVM scaling/rollback and WASM hot-swap)
+        let report = actuator.ingest_and_remediate(payload)?;
+
+        if report.success {
+            // First-Green verification: reset circuit breaker to Closed
+            let mut st = self.state.write().unwrap();
+            st.phase = CircuitBreakerPhase::Closed;
+            st.tripped_at_ms = None;
+            st.trip_reason = None;
+            st.retry_after_ms = None;
+            st.consecutive_failures = 0;
+            st.half_open_probe_active = false;
+
+            self.total_healed.fetch_add(1, Ordering::SeqCst);
+            self.notifier.notify(1)?;
+        }
+
+        Ok(Some(report))
+    }
 }
 
 // ============================================================================
@@ -1576,5 +1644,43 @@ stack backtrace:
 
         let drained = notifier.drain_counter();
         assert!(drained > 0);
+    }
+
+    #[test]
+    fn test_telemetry_metrics_anomaly_epoll_circuit_breaking_and_remediation() {
+        let dir = tempdir().unwrap();
+        let config = CircuitBreakerConfig::default();
+        let healer = EpollCircuitBreakerSelfHealer::new(dir.path(), config).unwrap();
+
+        let microvm_ctrl = Arc::new(crate::pillar3_telemetry_actuator::MicrovmDynamicResourceController::new());
+        microvm_ctrl.register_microvm("epoll-vm-1", 2, 256, None, Some("cp-golden".to_string()));
+        let actuator = crate::pillar3_telemetry_actuator::ClosedLoopTelemetryActuator::new(microvm_ctrl.clone());
+        actuator.register_golden_baseline("hot_swap_mod", b"\x00asm\x01\x00\x00\x00_GOLDEN");
+
+        // 1. Nominal telemetry should not trip breaker
+        let mut payload = crate::pillar3_telemetry_actuator::OtelDynatuneTelemetryPayload::default();
+        let res = healer.evaluate_telemetry_metrics(&payload, &actuator).unwrap();
+        assert!(res.is_none());
+        assert_eq!(healer.current_phase(), CircuitBreakerPhase::Closed);
+
+        // 2. Anomaly payload with error rate > 5% and latency > 300ms
+        payload.error_rate = 0.09;
+        payload.p99_ms = 350.0;
+        payload.vm_id = Some("epoll-vm-1".to_string());
+        payload.wasm_module_name = Some("hot_swap_mod".to_string());
+
+        let report_opt = healer.evaluate_telemetry_metrics(&payload, &actuator).unwrap();
+        assert!(report_opt.is_some());
+        let report = report_opt.unwrap();
+        assert!(report.triggered);
+        assert_eq!(report.connections_dropped, 0);
+
+        // Circuit breaker should be closed after successful remediation
+        assert_eq!(healer.current_phase(), CircuitBreakerPhase::Closed);
+
+        // MicroVM resources scaled up
+        let state = microvm_ctrl.get_state("epoll-vm-1").unwrap();
+        assert_eq!(state.vcpu_count, 4);
+        assert_eq!(state.mem_size_mib, 512);
     }
 }

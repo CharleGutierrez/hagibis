@@ -39,6 +39,12 @@ use hgb_core::closed_loop_wasm_reflection::{
 use hgb_core::error::{HgbError, Result};
 use hgb_core::multitenant_wasm_sandbox::{LanguageKind, TenantExecutionResult, TenantSessionManager};
 use crate::mcp_sse_server::McpSseState;
+pub use crate::pillar3_telemetry_actuator::{
+    AnomalyBreachKind, ClosedLoopTelemetryActuator, MicrovmDynamicResourceController,
+    OtelDynatuneTelemetryPayload, RemediationActuation, TelemetryActuationReport,
+    TrackedMicrovmState, ERROR_RATE_THRESHOLD, LATENCY_P99_THRESHOLD_MS,
+    THERMAL_RUNAWAY_THRESHOLD_C,
+};
 
 /// Canonical MCP tool name for autonomous closed-loop self-healing
 pub const AUTONOMOUS_SELF_HEAL_TOOL_NAME: &str = "hgb_autonomous_self_heal_script";
@@ -364,6 +370,18 @@ impl ClosedLoopSelfHealingRunner {
             is_error,
         )
     }
+
+    /// Evaluates real-time OpenTelemetry and Dynatune telemetry payload.
+    /// When error rates > 5%, latency > 300ms, or thermal runaway are breached,
+    /// triggers closed-loop remediation (dynamic microVM resource adjustment or
+    /// checkpoint rollback and atomic WASM module hot-swap) with zero dropped connections.
+    pub fn evaluate_telemetry(
+        &self,
+        payload: &OtelDynatuneTelemetryPayload,
+        actuator: &ClosedLoopTelemetryActuator,
+    ) -> Result<TelemetryActuationReport> {
+        actuator.ingest_and_remediate(payload)
+    }
 }
 
 // ==============================================================================
@@ -451,5 +469,52 @@ mod tests {
 
         assert!(res.success, "Should successfully heal unbalanced parens");
         assert!(res.final_code.ends_with(')'), "Final code should end with closing paren");
+    }
+
+    #[tokio::test]
+    async fn test_closed_loop_chaos_injection_resilience() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let tenant_mgr = Arc::new(
+            TenantSessionManager::with_base_root(temp_dir.path()).expect("tenant manager"),
+        );
+        let runner = ClosedLoopSelfHealingRunner::new(tenant_mgr, temp_dir.path());
+
+        let microvm_ctrl = Arc::new(MicrovmDynamicResourceController::new());
+        microvm_ctrl.register_microvm("chaos-vm-node", 2, 256, None, Some("golden-v1".to_string()));
+        let actuator = ClosedLoopTelemetryActuator::new(microvm_ctrl.clone());
+        let golden_bytes = b"\x00asm\x01\x00\x00\x00\x00\x00\x00_CERTIFIED_GOLDEN";
+        actuator.register_golden_baseline("chaos_target_skill", golden_bytes);
+
+        // Inject chaotic fault: error rate = 12% (>5%), P99 latency = 340ms (>300ms)
+        let chaos_payload = OtelDynatuneTelemetryPayload {
+            count: 1000,
+            p50_ms: 45.0,
+            p90_ms: 180.0,
+            p95_ms: 270.0,
+            p99_ms: 340.0, // SLA spike breach
+            max_ms: 420.0,
+            error_rate: 0.12, // 12% error spike breach
+            queue_depth: 30,
+            active_workers: 8,
+            cpu_temp_c: 62.0,
+            throttled: false,
+            governor_profile: "performance".to_string(),
+            vm_id: Some("chaos-vm-node".to_string()),
+            wasm_module_name: Some("chaos_target_skill".to_string()),
+        };
+
+        let report = runner.evaluate_telemetry(&chaos_payload, &actuator).expect("actuation report");
+        assert!(report.triggered, "Closed-loop self-healer must trigger upon chaos breach");
+        assert_eq!(report.connections_dropped, 0, "Zero connections must be dropped");
+
+        // Verify microVM scaled up resources seamlessly
+        let vm_state = microvm_ctrl.get_state("chaos-vm-node").unwrap();
+        assert_eq!(vm_state.vcpu_count, 4, "vCPUs scaled from 2 to 4");
+        assert_eq!(vm_state.mem_size_mib, 512, "RAM scaled from 256MB to 512MB");
+
+        // Verify WASM module was hot-swapped
+        let (gen, _hash, active_bytes) = actuator.get_active_module("chaos_target_skill").unwrap();
+        assert_eq!(gen, 2);
+        assert_eq!(active_bytes, golden_bytes);
     }
 }

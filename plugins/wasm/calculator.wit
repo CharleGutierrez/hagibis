@@ -1,0 +1,14 @@
+package hagibis:calculator@0.1.0;
+
+/// Arithmetic calculator dynamic skill tool for LLMs
+interface operations {
+    /// Add two signed 32-bit integers
+    add: func(a: s32, b: s32) -> s32;
+
+    /// Multiply two signed 32-bit integers
+    multiply: func(a: s32, b: s32) -> s32;
+}
+
+world calculator {
+    export operations;
+}

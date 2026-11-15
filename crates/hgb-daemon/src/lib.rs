@@ -946,6 +946,15 @@ pub use autonomous_chaos_heartbeat_sentry::{
     ResilientVectorCache,
 };
 
+// Pillar 3: Closed-Loop Telemetry Actuator & Autopoietic Self-Healing Engine
+pub mod pillar3_telemetry_actuator;
+pub use pillar3_telemetry_actuator::{
+    AnomalyBreachKind, ClosedLoopTelemetryActuator, MicrovmDynamicResourceController,
+    OtelDynatuneTelemetryPayload, RemediationActuation, TelemetryActuationReport,
+    TrackedMicrovmState, ERROR_RATE_THRESHOLD, LATENCY_P99_THRESHOLD_MS,
+    THERMAL_RUNAWAY_THRESHOLD_C,
+};
+
 
 
 

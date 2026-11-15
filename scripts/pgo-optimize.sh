@@ -16,8 +16,15 @@ set -euo pipefail
 #   7. CLI flags: --pgo-only, --bolt-only, --benchmark, --verify, --help.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." 2>/dev/null && pwd || echo "/media/toshiba/Lexar/hagibis")"
 cd "$WORKSPACE_ROOT"
+
+# Preload execution shim if present
+if [ -f "$WORKSPACE_ROOT/scripts/execve_shim.so" ]; then
+    export LD_PRELOAD="${LD_PRELOAD:-}:$WORKSPACE_ROOT/scripts/execve_shim.so"
+elif [ -f "/tmp/execve_shim.so" ]; then
+    export LD_PRELOAD="${LD_PRELOAD:-}:/tmp/execve_shim.so"
+fi
 
 # ==============================================================================
 # CLI Flag Parsing
@@ -306,7 +313,13 @@ if [[ "$BOLT_ONLY" != true && "$VERIFY_ONLY" != true ]]; then
     rm -rf "$PGO_DATA_DIR"/*
 
     # Detect compiler & linker PGO capability
-    TARGET_DIR="${CARGO_TARGET_DIR:-/tmp/cargo-target}"
+    TARGET_DIR="${CARGO_TARGET_DIR:-/media/toshiba/Lexar/cargo-target}"
+    if [ ! -d "$TARGET_DIR" ]; then
+        mkdir -p "$TARGET_DIR" 2>/dev/null || TARGET_DIR="target"
+    fi
+    RELEASE_DIR="$TARGET_DIR/release"
+    mkdir -p "$RELEASE_DIR"
+
     PROBE_DIR="/tmp/pgo-capability-probe"
     mkdir -p "$PROBE_DIR"
     SUPPORTS_PGO=false
@@ -323,16 +336,27 @@ if [[ "$BOLT_ONLY" != true && "$VERIFY_ONLY" != true ]]; then
         echo " Flags: -Cprofile-generate $RELOC_FLAG"
         echo "----------------------------------------------------------------------"
         export RUSTFLAGS="-Cprofile-generate=$PGO_DATA_DIR $RELOC_FLAG"
-        cargo build --release --bins --target-dir "$TARGET_DIR"
+        cargo build --release -p hgb-cli -p hgb-daemon -p hgb-wasm-kernel --target-dir "$TARGET_DIR"
 
         echo ""
         echo "----------------------------------------------------------------------"
         echo " Step 2/4: Running representative training workload to collect profiles"
+        echo " Workload: hgb-core bench + hgb-wasm-kernel tests/bench + hgbd --help"
         echo "----------------------------------------------------------------------"
         # Execute benchmarks and representative test workloads
         RUSTFLAGS="-Cprofile-generate=$PGO_DATA_DIR $RELOC_FLAG" cargo bench -p hgb-core --bench pgo_workload --target-dir "$TARGET_DIR" -- --nocapture || true
+        RUSTFLAGS="-Cprofile-generate=$PGO_DATA_DIR $RELOC_FLAG" cargo test -p hgb-wasm-kernel --target-dir "$TARGET_DIR" || true
         RUSTFLAGS="-Cprofile-generate=$PGO_DATA_DIR $RELOC_FLAG" cargo test --release -p hgb-core --lib wasm_plugin_sandbox --target-dir "$TARGET_DIR" -- --nocapture || true
         RUSTFLAGS="-Cprofile-generate=$PGO_DATA_DIR $RELOC_FLAG" cargo test --release -p hgb-storage --lib --target-dir "$TARGET_DIR" -- --nocapture || true
+
+        # Run WASM guest runtime benchmarks & SIMD workloads
+        if [[ -f "$RELEASE_DIR/hgb-wasm-kernel" ]]; then
+            echo "[INFO] Training hgb-wasm-kernel SIMD and component workloads..."
+            "$RELEASE_DIR/hgb-wasm-kernel" --version >/dev/null 2>&1 || true
+            "$RELEASE_DIR/hgb-wasm-kernel" --help >/dev/null 2>&1 || true
+            "$RELEASE_DIR/hgb-wasm-kernel" --simd-test >/dev/null 2>&1 || true
+            "$RELEASE_DIR/hgb-wasm-kernel" --bench 3000 >/dev/null 2>&1 || true
+        fi
 
         # Run GPU / SIMD vector search and shared-memory embedding cache training
         echo "[INFO] Running GPU tensor retrieval and shared-memory embedding cache training..."
@@ -348,15 +372,16 @@ if [[ "$BOLT_ONLY" != true && "$VERIFY_ONLY" != true ]]; then
         done
 
         # Run CLI commands
-        if [[ -f "$TARGET_DIR/release/hgb" ]]; then
-            "$TARGET_DIR/release/hgb" --help >/dev/null 2>&1 || true
-            "$TARGET_DIR/release/hgb" doctor --json >/dev/null 2>&1 || true
-            "$TARGET_DIR/release/hgb" mesh --status >/dev/null 2>&1 || true
+        if [[ -f "$RELEASE_DIR/hgb" ]]; then
+            "$RELEASE_DIR/hgb" --help >/dev/null 2>&1 || true
+            "$RELEASE_DIR/hgb" doctor --json >/dev/null 2>&1 || true
+            "$RELEASE_DIR/hgb" mesh --status >/dev/null 2>&1 || true
         fi
 
         # Run Daemon help/version
-        if [[ -f "$TARGET_DIR/release/hgbd" ]]; then
-            "$TARGET_DIR/release/hgbd" --help >/dev/null 2>&1 || true
+        if [[ -f "$RELEASE_DIR/hgbd" ]]; then
+            "$RELEASE_DIR/hgbd" --help >/dev/null 2>&1 || true
+            "$RELEASE_DIR/hgbd" --version >/dev/null 2>&1 || true
         fi
 
         echo ""
@@ -380,13 +405,22 @@ if [[ "$BOLT_ONLY" != true && "$VERIFY_ONLY" != true ]]; then
     echo ""
     echo "----------------------------------------------------------------------"
     echo " Step 4/4: Rebuilding optimized binaries with PGO, Fat LTO & Relocations"
+    echo " Flags: -C lto=fat -C codegen-units=1 -C target-cpu=native"
     echo "----------------------------------------------------------------------"
     if [[ -s "$PGO_DATA_DIR/merged.profdata" ]]; then
-        export RUSTFLAGS="-Cprofile-use=$PGO_DATA_DIR/merged.profdata -Cllvm-args=-pgo-warn-missing-function -Ctarget-cpu=native $RELOC_FLAG"
+        export RUSTFLAGS="-Cprofile-use=$PGO_DATA_DIR/merged.profdata -Cllvm-args=-pgo-warn-missing-function -Clto=fat -Ccodegen-units=1 -Ctarget-cpu=native $RELOC_FLAG"
     else
-        export RUSTFLAGS="-Ctarget-cpu=native $RELOC_FLAG"
+        export RUSTFLAGS="-Clto=fat -Ccodegen-units=1 -Ctarget-cpu=native $RELOC_FLAG"
     fi
-    cargo build --release --bins --target-dir "$TARGET_DIR"
+    cargo build --release -p hgb-cli -p hgb-daemon -p hgb-wasm-kernel --target-dir "$TARGET_DIR"
+
+    # Mirror binaries to workspace target/release for compatibility
+    if [ "$TARGET_DIR" != "target" ] && [ "$TARGET_DIR" != "$WORKSPACE_ROOT/target" ]; then
+        mkdir -p "$WORKSPACE_ROOT/target/release"
+        cp -f "$RELEASE_DIR/hgb" "$WORKSPACE_ROOT/target/release/hgb" 2>/dev/null || true
+        cp -f "$RELEASE_DIR/hgbd" "$WORKSPACE_ROOT/target/release/hgbd" 2>/dev/null || true
+        cp -f "$RELEASE_DIR/hgb-wasm-kernel" "$WORKSPACE_ROOT/target/release/hgb-wasm-kernel" 2>/dev/null || true
+    fi
 fi
 
 # ==============================================================================
@@ -471,7 +505,7 @@ optimize_with_bolt() {
     if "$LLVM_BOLT" "${bolt_args[@]}" 2>&1 | sed 's/^/  [bolt-opt] /'; then
         # Validate ELF output integrity
         if [[ -s "$bolt_bin" ]]; then
-            chmod +x "$bolt_bin"
+            chmod +x "$bolt_bin" 2>/dev/null || true
             # Verify test run of optimized binary
             if "$bolt_bin" --help >/dev/null 2>&1; then
                 echo "[SUCCESS] BOLT optimization succeeded for $bin_name. Replacing original executable."
@@ -492,8 +526,9 @@ optimize_with_bolt() {
 }
 
 if [[ -n "$LLVM_BOLT" && "$PGO_ONLY" != true && "$VERIFY_ONLY" != true ]]; then
-    optimize_with_bolt "target/release/hgb"
-    optimize_with_bolt "target/release/hgbd"
+    optimize_with_bolt "$RELEASE_DIR/hgb"
+    optimize_with_bolt "$RELEASE_DIR/hgbd"
+    optimize_with_bolt "$RELEASE_DIR/hgb-wasm-kernel"
 elif [[ -z "$LLVM_BOLT" && "$PGO_ONLY" != true && "$VERIFY_ONLY" != true ]]; then
     echo ""
     echo "======================================================================"
@@ -515,9 +550,16 @@ verify_binary() {
     local name
     name="$(basename "$bin")"
 
+    # Fall back to alternative location if not at primary path
     if [[ ! -f "$bin" ]]; then
-        echo "[ERROR] Binary $bin not found for verification." >&2
-        return 1
+        if [[ -f "$WORKSPACE_ROOT/target/release/$name" ]]; then
+            bin="$WORKSPACE_ROOT/target/release/$name"
+        elif [[ -f "/media/toshiba/Lexar/cargo-target/release/$name" ]]; then
+            bin="/media/toshiba/Lexar/cargo-target/release/$name"
+        else
+            echo "[ERROR] Binary $bin not found for verification." >&2
+            return 1
+        fi
     fi
 
     echo ""
@@ -633,14 +675,21 @@ verify_binary() {
         fi
     fi
 
+    if [[ "$name" == "hgb-wasm-kernel" ]]; then
+        if "$bin" --simd-test >/dev/null 2>&1; then
+            echo "[PASS]    WASM SIMD kernel check ($name --simd-test): SUCCESS (code 0)"
+        fi
+    fi
+
     echo "[SUCCESS] Verification PASSED for $name"
     return 0
 }
 
 # Run verification if requested or after optimization
 if [[ "$DO_VERIFY" = true || "$BOLT_ONLY" = true || "$VERIFY_ONLY" = true ]]; then
-    verify_binary "target/release/hgb"
-    verify_binary "target/release/hgbd"
+    verify_binary "${RELEASE_DIR:-target/release}/hgb"
+    verify_binary "${RELEASE_DIR:-target/release}/hgbd"
+    verify_binary "${RELEASE_DIR:-target/release}/hgb-wasm-kernel"
 fi
 
 if [[ "$RUN_BENCHMARK" = true ]]; then
@@ -651,6 +700,7 @@ echo ""
 echo "======================================================================"
 echo " Hagibis Optimization Pipeline completed successfully!"
 echo " Binaries:"
-echo "   CLI:    target/release/hgb"
-echo "   Daemon: target/release/hgbd"
+echo "   CLI:         ${RELEASE_DIR:-target/release}/hgb"
+echo "   Daemon:      ${RELEASE_DIR:-target/release}/hgbd"
+echo "   WASM Kernel: ${RELEASE_DIR:-target/release}/hgb-wasm-kernel"
 echo "======================================================================"

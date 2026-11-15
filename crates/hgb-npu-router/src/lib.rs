@@ -7,6 +7,8 @@ pub mod error;
 pub mod hardware_discovery;
 pub mod governor_bridge;
 pub mod accelerator_backend;
+pub mod dynamic_benchmarker;
+pub mod shard_allocator;
 pub mod telemetry_router;
 
 pub use error::{NpuRouterError, Result};

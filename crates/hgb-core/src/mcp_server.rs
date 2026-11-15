@@ -4814,12 +4814,14 @@ impl HagibisMcpServer {
                 Ok(serde_json::to_string_pretty(&report).unwrap_or_default())
             }
 
-            // Dynamic skill tools dispatch (starts with `skill_` or registered in dynamic registry)
+            // Dynamic skill & WASM plugin tools dispatch (starts with `skill_`, `plugin_`, or registered in dynamic registry)
             other if other.starts_with("skill_")
+                || other.starts_with("plugin_")
                 || self
                     .dynamic_registry
                     .as_ref()
-                    .map_or(false, |r| r.get_tool(other).is_some()) =>
+                    .map_or(false, |r| r.get_tool(other).is_some())
+                || crate::dynamic_skill_mcp_hot_reloader::DynamicSkillRegistry::global().get_tool(other).is_some() =>
             {
                 progress_cb(30, "Dispatching dynamic MCP skill tool...");
                 let reg = self

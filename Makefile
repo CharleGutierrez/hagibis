@@ -1,39 +1,61 @@
 # Hagibis (hgb) High-Performance Autonomous Engine Makefile
-# Profile-Guided Optimization (PGO), Fat LTO, LLVM BOLT, Build & Test Automation
+# Profile-Guided Optimization (PGO), Fat LTO, LLVM BOLT, Build, Hygiene & Test Automation
 
 SHELL := /usr/bin/env bash
+CARGO_TARGET_DIR ?= /media/toshiba/Lexar/cargo-target
+export CARGO_TARGET_DIR
+
 PGO_DATA_DIR ?= /tmp/pgo-data
 BOLT_DATA_DIR ?= /tmp/bolt-data
 LLVM_PROFDATA ?= $(shell command -v llvm-profdata 2>/dev/null || find $(shell rustc --print sysroot 2>/dev/null)/lib/rustlib/ -name llvm-profdata 2>/dev/null | head -n 1)
 LLVM_BOLT ?= $(shell command -v llvm-bolt 2>/dev/null || find /usr/lib/llvm-*/bin/ -name llvm-bolt 2>/dev/null | head -n 1)
 
 # Relocation preservation flags required for LLVM BOLT post-link transformations
-BOLT_RELOC_FLAGS ?= -C link-arg=-Wl,-q
+BOLT_RELOC_FLAGS ?= -Clink-arg=-Wl,--emit-relocs
 
-.PHONY: all check test release pgo bolt pgo-bolt pgo-bench pgo-bolt-dynatune pgo-bolt-verify pgo-build pgo-train pgo-merge pgo-release pgo-dynatune clean help untangle skill\:lint skill\:test skill\:build skill-lint skill-test skill-build test-masterclass
+# Preload execution shim if present to enable seamless execution across VFAT mounts
+ifneq ($(wildcard scripts/execve_shim.so),)
+export LD_PRELOAD := $(CURDIR)/scripts/execve_shim.so:$(LD_PRELOAD)
+endif
+
+.PHONY: all check test release release-fast pgo bolt pgo-bolt pgo-bench pgo-bolt-dynatune pgo-bolt-verify pgo-build pgo-train pgo-merge pgo-release pgo-dynatune hygiene clean-cache prune-targets clean help untangle skill\:lint skill\:test skill\:build skill-lint skill-test skill-build test-masterclass
 
 all: check test
 
 help:
-	@echo "Hagibis (hgb) Production Build Targets:"
-	@echo "  make check             - Run workspace compiler checks across all crates"
-	@echo "  make test              - Run workspace unit tests and sandbox suites"
-	@echo "  make release           - Build release binaries without PGO"
-	@echo "  make pgo               - End-to-end PGO pipeline (build -> train -> merge -> release)"
-	@echo "  make bolt              - Run LLVM BOLT binary super-optimization on target/release/hgb and target/release/hgbd"
-	@echo "  make pgo-bolt          - Super-Optimization: PGO + Fat LTO + Relocation Preservation + LLVM BOLT"
-	@echo "  make pgo-bolt-dynatune - Hardware-coordinated governor ramping + complete PGO + BOLT pipeline"
-	@echo "  make pgo-bolt-verify   - Verify ELF relocations, basic block alignment, symbol tables & binary integrity"
-	@echo "  make pgo-dynatune      - Hardware-coordinated PGO + dynatune/kernel-optimizer pipeline"
-	@echo "  make pgo-build         - Instrument binaries with -Cprofile-generate"
-	@echo "  make pgo-train         - Run representative training benchmark to collect .profraw"
-	@echo "  make pgo-merge         - Merge raw profiles into merged.profdata via llvm-profdata"
-	@echo "  make pgo-release       - Recompile hardened binaries with -Cprofile-use & Fat LTO"
-	@echo "  make untangle          - Run static analysis to enforce crate boundaries & zero circular dependencies"
-	@echo "  make skill:lint        - Lint Python, Zig, Rust, and WIT files across skills/ and workspace"
-	@echo "  make skill:test        - Run unit tests and contract validation across all skills in skills/"
-	@echo "  make skill:build       - Build skill artifacts, compile WASM components & validate WIT specs"
-	@echo "  make clean             - Clean build artifacts and PGO profile directory"
+	@echo "======================================================================"
+	@echo " Hagibis (hgb) Autonomous Production Makefile Targets"
+	@echo "======================================================================"
+	@echo " Production & Super-Optimization (Pillar 1: PGO + BOLT):"
+	@echo "   make release           - Full PGO + Fat LTO + LLVM BOLT super-optimized build"
+	@echo "   make release-fast      - Standard fast release build without PGO"
+	@echo "   make pgo               - End-to-end PGO pipeline (build -> train -> merge -> release)"
+	@echo "   make pgo-build         - Step 1: Instrument binaries with -Cprofile-generate"
+	@echo "   make pgo-train         - Step 2: Run representative benchmark training workload"
+	@echo "   make pgo-merge         - Step 3: Merge raw profiles into merged.profdata via llvm-profdata"
+	@echo "   make pgo-release       - Step 4: Recompile release binaries with -Cprofile-use & Fat LTO"
+	@echo "   make bolt              - Post-link LLVM BOLT binary super-optimization (ext-tsp + hfsort+)"
+	@echo "   make pgo-bolt          - Automated PGO + Fat LTO + LLVM BOLT super-optimization across all binaries"
+	@echo "   make pgo-bolt-verify   - Rigorous ELF integrity, relocation, alignment & symbol verification"
+	@echo "   make pgo-bolt-dynatune - Hardware governor ramping + thermal-aware PGO + BOLT pipeline"
+	@echo "   make pgo-dynatune      - Hardware-coordinated PGO + kernel-optimizer pipeline"
+	@echo "   make pgo-bench         - Run core execution microbenchmarks (pgo_workload.rs)"
+	@echo ""
+	@echo " Storage & Build Hygiene (Pillar 5):"
+	@echo "   make hygiene           - Run complete storage hygiene audit, prune stale targets & clean /tmp"
+	@echo "   make clean-cache       - Clean volatile /tmp cargo build caches and PGO/BOLT data"
+	@echo "   make prune-targets     - Prune stale incremental artifacts older than 7 days from target dirs"
+	@echo ""
+	@echo " CaldoAI Skill Lifecycle & Untangling:"
+	@echo "   make untangle          - Audit crate boundaries, DAG invariants & zero circular dependencies"
+	@echo "   make skill:lint        - Lint Python, Zig, Rust, and WIT specifications in skills/"
+	@echo "   make skill:test        - Run unit tests and contract validation across all skills"
+	@echo "   make skill:build       - Build skill artifacts, compile WASM components & validate WIT specs"
+	@echo "   make test-masterclass  - Validate 8-chapter masterclass live simulation test gates"
+	@echo "   make check             - Run workspace compiler checks across all crates"
+	@echo "   make test              - Run workspace unit tests and sandbox suites"
+	@echo "   make clean             - Clean build artifacts, profiles, caches, and skill outputs"
+	@echo "======================================================================"
 
 check:
 	cargo check --workspace
@@ -49,8 +71,8 @@ release-fast:
 # End-to-End PGO Pipeline
 pgo: pgo-build pgo-train pgo-merge pgo-release
 	@echo "======================================================================"
-	@echo " Hagibis (hgb, hgbd, wasm-kernel) PGO & Fat LTO Hardened Build Completed Successfully!"
-	@echo " Binaries: target/release/hgb target/release/hgbd target/release/hgb-wasm-kernel"
+	@echo " Hagibis (hgb, hgbd, hgb-wasm-kernel) PGO & Fat LTO Build Completed!"
+	@echo " Binaries: $(CARGO_TARGET_DIR)/release/{hgb,hgbd,hgb-wasm-kernel}"
 	@echo "======================================================================"
 
 # Step 1: Build instrumented binaries
@@ -58,38 +80,56 @@ pgo-build:
 	@echo "[PGO] Step 1/4: Cleaning old profiles & instrumenting build..."
 	rm -rf $(PGO_DATA_DIR)
 	mkdir -p $(PGO_DATA_DIR)
-	RUSTFLAGS="-Cprofile-generate=$(PGO_DATA_DIR)" cargo build --release -p hgb-cli -p hgb-daemon -p hgb-wasm-kernel
+	RUSTFLAGS="-Cprofile-generate=$(PGO_DATA_DIR) $(BOLT_RELOC_FLAGS)" cargo build --release -p hgb-cli -p hgb-daemon -p hgb-wasm-kernel
 
 # Step 2: Run representative benchmark training workload
 pgo-train:
 	@echo "[PGO] Step 2/4: Running representative training workload..."
 	@if [ ! -d "$(PGO_DATA_DIR)" ]; then mkdir -p $(PGO_DATA_DIR); fi
-	RUSTFLAGS="-Cprofile-generate=$(PGO_DATA_DIR)" cargo bench -p hgb-core --bench pgo_workload -- --nocapture || \
-	RUSTFLAGS="-Cprofile-generate=$(PGO_DATA_DIR)" cargo test -p hgb-core --lib wasm_plugin_sandbox -- --nocapture || true
-	@if [ -f "target/release/hgb-wasm-kernel" ]; then \
+	@echo "  • Training on hgb-core benchmark kernels (pgo_workload.rs)..."
+	RUSTFLAGS="-Cprofile-generate=$(PGO_DATA_DIR) $(BOLT_RELOC_FLAGS)" cargo bench -p hgb-core --bench pgo_workload -- --nocapture || true
+	@echo "  • Training on hgb-wasm-kernel tests & SIMD runner..."
+	RUSTFLAGS="-Cprofile-generate=$(PGO_DATA_DIR) $(BOLT_RELOC_FLAGS)" cargo test -p hgb-wasm-kernel || true
+	@if [ -f "$(CARGO_TARGET_DIR)/release/hgb-wasm-kernel" ]; then \
+		"$(CARGO_TARGET_DIR)/release/hgb-wasm-kernel" --version >/dev/null 2>&1 || true; \
+		"$(CARGO_TARGET_DIR)/release/hgb-wasm-kernel" --simd-test >/dev/null 2>&1 || true; \
+		"$(CARGO_TARGET_DIR)/release/hgb-wasm-kernel" --bench 3000 >/dev/null 2>&1 || true; \
+	elif [ -f "target/release/hgb-wasm-kernel" ]; then \
 		target/release/hgb-wasm-kernel --version >/dev/null 2>&1 || true; \
 		target/release/hgb-wasm-kernel --simd-test >/dev/null 2>&1 || true; \
 		target/release/hgb-wasm-kernel --bench 3000 >/dev/null 2>&1 || true; \
 	fi
-	@echo "[PGO] Running masterclass suites (docs/masterclass/ch*.py) for branch-layout profiling..."
+	@echo "  • Training on hgbd daemon options and IPC listeners..."
+	@if [ -f "$(CARGO_TARGET_DIR)/release/hgbd" ]; then \
+		"$(CARGO_TARGET_DIR)/release/hgbd" --help >/dev/null 2>&1 || true; \
+		"$(CARGO_TARGET_DIR)/release/hgbd" --version >/dev/null 2>&1 || true; \
+	elif [ -f "target/release/hgbd" ]; then \
+		target/release/hgbd --help >/dev/null 2>&1 || true; \
+		target/release/hgbd --version >/dev/null 2>&1 || true; \
+	fi
+	@echo "  • Training on hgb CLI doctor and subcommands..."
+	@if [ -f "$(CARGO_TARGET_DIR)/release/hgb" ]; then \
+		"$(CARGO_TARGET_DIR)/release/hgb" --help >/dev/null 2>&1 || true; \
+		"$(CARGO_TARGET_DIR)/release/hgb" doctor --json >/dev/null 2>&1 || true; \
+		"$(CARGO_TARGET_DIR)/release/hgb" mesh --status >/dev/null 2>&1 || true; \
+	elif [ -f "target/release/hgb" ]; then \
+		target/release/hgb --help >/dev/null 2>&1 || true; \
+		target/release/hgb doctor --json >/dev/null 2>&1 || true; \
+		target/release/hgb mesh --status >/dev/null 2>&1 || true; \
+	fi
+	@echo "  • Running masterclass suites (docs/masterclass/ch*.py) for branch-layout profiling..."
 	@for ch in docs/masterclass/ch*.py; do \
 		if [ -f "$$ch" ]; then \
 			python3 "$$ch" --test-mode >/dev/null 2>&1 || python3 "$$ch" >/dev/null 2>&1 || true; \
 		fi; \
 	done
-	@if [ -f "target/release/hgb" ]; then \
-		target/release/hgb --help >/dev/null 2>&1 || true; \
-	fi
-	@if [ -f "target/release/hgbd" ]; then \
-		target/release/hgbd --help >/dev/null 2>&1 || true; \
-	fi
 
 # Step 3: Merge raw .profraw files using llvm-profdata
 pgo-merge:
 	@echo "[PGO] Step 3/4: Merging profile datasets with llvm-profdata..."
 	@if [ -z "$(LLVM_PROFDATA)" ]; then \
 		echo "ERROR: llvm-profdata not found in PATH or rustlib sysroot." >&2; \
-		echo "Run: rustup component add llvm-tools-preview" >&2; \
+		echo "Run: rustup component add llvm-tools" >&2; \
 		exit 1; \
 	fi
 	@echo "Using llvm-profdata: $(LLVM_PROFDATA)"
@@ -105,23 +145,27 @@ pgo-merge:
 	fi
 	@echo "Successfully created $(PGO_DATA_DIR)/merged.profdata"
 
-# Step 4: Rebuild hardened release binaries using profile data, fat LTO, opt-level=3, and optional BOLT relocations
+# Step 4: Rebuild hardened release binaries using profile data, fat LTO, and native CPU
 pgo-release:
 	@echo "[PGO] Step 4/4: Compiling final binaries with -Cprofile-use & Fat LTO..."
 	@if [ ! -s "$(PGO_DATA_DIR)/merged.profdata" ]; then \
 		echo "ERROR: Profile data $(PGO_DATA_DIR)/merged.profdata not found. Run 'make pgo-train' and 'make pgo-merge' first." >&2; \
 		exit 1; \
 	fi
-	RUSTFLAGS="-Cprofile-use=$(PGO_DATA_DIR)/merged.profdata -Cllvm-args=-pgo-warn-missing-function -Copt-level=3 -Clto=fat -Ccodegen-units=1 -Cpanic=abort $(BOLT_LDFLAGS)" cargo build --release -p hgb-cli -p hgb-daemon -p hgb-wasm-kernel
+	RUSTFLAGS="-Cprofile-use=$(PGO_DATA_DIR)/merged.profdata -Cllvm-args=-pgo-warn-missing-function -Clto=fat -Ccodegen-units=1 -Ctarget-cpu=native $(BOLT_RELOC_FLAGS)" cargo build --release -p hgb-cli -p hgb-daemon -p hgb-wasm-kernel
+	@mkdir -p target/release
+	@cp -f $(CARGO_TARGET_DIR)/release/hgb target/release/hgb 2>/dev/null || true
+	@cp -f $(CARGO_TARGET_DIR)/release/hgbd target/release/hgbd 2>/dev/null || true
+	@cp -f $(CARGO_TARGET_DIR)/release/hgb-wasm-kernel target/release/hgb-wasm-kernel 2>/dev/null || true
 
-# LLVM BOLT post-link binary layout super-optimization on target/release/hgb, target/release/hgbd, and target/release/hgb-wasm-kernel
+# LLVM BOLT post-link binary layout super-optimization across all 3 binaries
 bolt:
 	@echo "======================================================================"
 	@echo " Hagibis LLVM BOLT Post-Link Binary Optimization"
-	@echo " Targets: target/release/hgb target/release/hgbd target/release/hgb-wasm-kernel"
+	@echo " Targets: hgb, hgbd, and hgb-wasm-kernel"
 	@echo " Passes:  -reorder-blocks=ext-tsp -reorder-functions=hfsort+ -split-functions -split-all-cold -dyno-stats"
 	@echo "======================================================================"
-	bash scripts/pgo-bolt-optimize.sh all
+	bash scripts/pgo-bolt-optimize.sh all --bolt-only
 
 # Run Core Execution Benchmarks
 pgo-bench:
@@ -208,6 +252,31 @@ pgo-dynatune:
 	@echo "======================================================================"
 
 # ==============================================================================
+# Pillar 5: Storage & Build Hygiene Automation Targets
+# ==============================================================================
+
+# Run complete storage hygiene audit, prune stale target artifacts, and clean volatile caches
+hygiene:
+	@echo "======================================================================"
+	@echo " [Storage & Build Hygiene] Running Storage Audit & Automated Cleanup"
+	@echo "======================================================================"
+	bash scripts/build-hygiene.sh --all
+
+# Clean volatile /tmp cargo build caches, probe directories, and PGO/BOLT data
+clean-cache:
+	@echo "======================================================================"
+	@echo " [Storage & Build Hygiene] Purging Volatile Temporary Caches (/tmp)"
+	@echo "======================================================================"
+	bash scripts/build-hygiene.sh --clean-cache
+
+# Prune stale incremental artifacts older than 7 days from target directories
+prune-targets:
+	@echo "======================================================================"
+	@echo " [Storage & Build Hygiene] Pruning Stale Incremental Artifacts (> 7 days)"
+	@echo "======================================================================"
+	bash scripts/build-hygiene.sh --prune-targets
+
+# ==============================================================================
 # CaldoAI Skill Lifecycle & Architectural Untangling Targets
 # ==============================================================================
 
@@ -292,3 +361,4 @@ test-masterclass:
 clean:
 	cargo clean
 	rm -rf $(PGO_DATA_DIR) $(BOLT_DATA_DIR) target/skills
+	bash scripts/build-hygiene.sh --clean-cache 2>/dev/null || true

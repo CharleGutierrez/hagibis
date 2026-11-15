@@ -181,6 +181,14 @@ impl McpSseState {
                 .unwrap_or_else(|_| hgb_storage::vector_mcp_memory_mesh::VectorMcpMemoryMesh::in_memory().expect("in-memory vector mesh"))
         );
 
+        // Pre-warm and register dynamic skills and WASM plugins from plugins/wasm/
+        let reloader = hgb_core::dynamic_skill_mcp_hot_reloader::DynamicSkillMcpHotReloader::new(
+            ws.join("skills"),
+            Some(ws.join("hagibis.mcp.json")),
+            true,
+        );
+        let _ = reloader.scan_and_register_all();
+
         Self {
             workspace_root: ws.clone(),
             sessions: Arc::new(RwLock::new(HashMap::new())),

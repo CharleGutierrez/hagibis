@@ -2334,6 +2334,12 @@ pub use mcp_self_evolving_loop::{
     SelfEvolvingAgentLoop, SelfEvolvingCycleReport, TelemetrySnapshot as SelfEvolvingTelemetrySnapshot,
 };
 
+// Pillar 4: Dynamic WebAssembly MCP Plugin Loader
+pub mod pillar4_wasm_plugin_loader;
+pub use pillar4_wasm_plugin_loader::{
+    DynamicWasmPluginDescriptor, DynamicWasmPluginLoader,
+};
+
 
 
 

@@ -304,6 +304,46 @@ impl WasmEdgeHotLoader {
         result
     }
 
+    /// Discover and dynamically compile/hot-load all WebAssembly plugins in `plugins/wasm/`
+    pub fn discover_and_load_plugins_wasm<P: AsRef<Path>>(&self, plugins_dir: P) -> Result<Vec<HotLoadReceipt>> {
+        let p_dir = plugins_dir.as_ref();
+        let mut receipts = Vec::new();
+
+        if !p_dir.exists() {
+            fs::create_dir_all(p_dir)?;
+            return Ok(receipts);
+        }
+
+        let entries = fs::read_dir(p_dir)?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                if ext == "wasm" || ext == "wat" {
+                    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("plugin");
+                    let raw_bytes = fs::read(&path)?;
+                    let bytecode = if raw_bytes.starts_with(b"(module") || ext == "wat" {
+                        let wat_str = std::str::from_utf8(&raw_bytes).map_err(|e| HgbError::Execution(e.to_string()))?;
+                        wat::parse_str(wat_str).map_err(|e| HgbError::Execution(format!("WAT parse error: {}", e)))?
+                    } else {
+                        raw_bytes
+                    };
+
+                    let receipt = self.hot_load_kernel(
+                        &format!("plugin-{}", stem),
+                        &bytecode,
+                        Some("hagibis:plugin/operations"),
+                        None,
+                        None,
+                    )?;
+                    receipts.push(receipt);
+                }
+            }
+        }
+
+        Ok(receipts)
+    }
+
     /// Execute a tool adhering to WIT `hagibis:kernel/agent-component-model@0.2.0`
     pub fn execute_kernel_tool(
         &self,

@@ -749,6 +749,29 @@ impl DynamicSkillMcpHotReloader {
             }
         }
 
+        // Also discover and register standalone WASM plugins from plugins/wasm/
+        let plugins_wasm_dir = self.skills_dir.parent().map(|p| p.join("plugins").join("wasm"));
+        if let Some(ref p_dir) = plugins_wasm_dir {
+            if p_dir.exists() {
+                if let Ok(entries) = fs::read_dir(p_dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_file() {
+                            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                            if ext == "wasm" || ext == "wat" {
+                                if let Ok(tools) = self.scan_plugin_wasm_file(&path) {
+                                    for t in tools {
+                                        registered_tool_names.push(t.tool_name.clone());
+                                        self.registry.register_tool(t);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Emit MCP notification
         let notifications_sent = self.registry.broadcast_tools_list_changed();
 
@@ -895,6 +918,83 @@ impl DynamicSkillMcpHotReloader {
         Ok(tools)
     }
 
+    /// Scan a single standalone .wasm or .wat plugin from plugins/wasm/
+    pub fn scan_plugin_wasm_file(&self, wasm_path: &Path) -> Result<Vec<DynamicSkillTool>> {
+        let mut tools = Vec::new();
+        let file_stem = wasm_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("plugin");
+        let plugin_name = file_stem.to_string();
+
+        let wit_candidate = wasm_path.with_extension("wit");
+        let wit_path_opt = if wit_candidate.exists() {
+            Some(wit_candidate)
+        } else {
+            let sub_wit = wasm_path.parent().unwrap_or(Path::new(".")).join("wit").join(format!("{}.wit", plugin_name));
+            if sub_wit.exists() { Some(sub_wit) } else { None }
+        };
+
+        let now_ms = now_epoch_ms();
+
+        if let Some(ref wit_path) = wit_path_opt {
+            if let Ok(wit_content) = fs::read_to_string(wit_path) {
+                let spec = WitSpec::parse(&wit_content);
+                for func in &spec.functions {
+                    let func_slug = func.name.replace('-', "_");
+                    let tool_name = format!("plugin_{}_{}", plugin_name, func_slug);
+                    let description = func.doc.clone().unwrap_or_else(|| {
+                        format!("Dynamic WASM Plugin '{}' function: {}", plugin_name, func.name)
+                    });
+                    let input_schema = spec.build_input_schema(func);
+
+                    tools.push(DynamicSkillTool {
+                        tool_name,
+                        skill_name: format!("plugin_{}", plugin_name),
+                        function_name: Some(func.name.clone()),
+                        interface_name: func.interface.clone(),
+                        description,
+                        input_schema,
+                        wit_path: Some(wit_path.clone()),
+                        skill_dir: wasm_path.parent().unwrap_or(Path::new(".")).to_path_buf(),
+                        wasm_path: Some(wasm_path.to_path_buf()),
+                        registered_at: now_ms,
+                        is_active: true,
+                    });
+                }
+            }
+        }
+
+        if tools.is_empty() {
+            let tool_name = format!("plugin_{}", plugin_name);
+            let default_schema = json!({
+                "type": "object",
+                "properties": {
+                    "input": {
+                        "type": "string",
+                        "description": "Dynamic arguments or payload passed to WASM plugin"
+                    }
+                }
+            });
+
+            tools.push(DynamicSkillTool {
+                tool_name,
+                skill_name: format!("plugin_{}", plugin_name),
+                function_name: Some("hgb_tool_invoke".to_string()),
+                interface_name: None,
+                description: format!("Dynamic WebAssembly MCP plugin: {}", plugin_name),
+                input_schema: default_schema,
+                wit_path: None,
+                skill_dir: wasm_path.parent().unwrap_or(Path::new(".")).to_path_buf(),
+                wasm_path: Some(wasm_path.to_path_buf()),
+                registered_at: now_ms,
+                is_active: true,
+            });
+        }
+
+        Ok(tools)
+    }
+
     /// Search for compiled WASM file matching this skill
     fn find_skill_wasm(&self, skill_dir: &Path, skill_name: &str) -> Option<PathBuf> {
         let direct_wasm = skill_dir.join(format!("{}.wasm", skill_name));
@@ -951,6 +1051,14 @@ impl DynamicSkillMcpHotReloader {
 
         watcher.watch(&self.skills_dir, RecursiveMode::Recursive)
             .map_err(|e| HgbError::Execution(format!("Failed to watch skills directory: {}", e)))?;
+
+        // Also watch plugins/wasm directory if present
+        let plugins_wasm_dir = self.skills_dir.parent().map(|p| p.join("plugins").join("wasm"));
+        if let Some(ref p_dir) = plugins_wasm_dir {
+            if p_dir.exists() {
+                let _ = watcher.watch(p_dir, RecursiveMode::Recursive);
+            }
+        }
 
         self._watcher = Some(watcher);
 

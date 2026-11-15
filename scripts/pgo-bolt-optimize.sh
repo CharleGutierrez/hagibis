@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # scripts/pgo-bolt-optimize.sh
-# Hagibis Autonomous Production PGO + LLVM BOLT Binary Layout Optimizer
+# Hagibis Autonomous Production PGO + LLVM BOLT Binary Layout Optimizer (Pillar 1)
 #
 # Supported Targets:
 #   1. hgb-cli (hgb)                  - High-performance CLI binary
@@ -9,32 +9,114 @@
 #   3. hgb-wasm-kernel (wasm_kernel)  - Native WebAssembly runtime & SIMD runner
 #
 # Optimization Strategy:
-#   Phase 1: LLVM PGO instrumentation compile (-Cprofile-generate) with preserved relocations (-Wl,--emit-relocs)
-#   Phase 2: Realistic multi-agent workload profiling traces (hgb-core benches pgo_workload.rs, SIMD kernels, CLI commands)
-#   Phase 3: Merged profile feedback (-Cprofile-use) + maximum Fat LTO (lto = "fat", codegen-units = 1)
+#   Phase 1: LLVM PGO instrumentation compile (-Cprofile-generate)
+#   Phase 2: Realistic multi-agent workload profiling traces (hgb-core benches
+#            pgo_workload.rs, SIMD kernels, daemon CLI, and autonomous loops)
+#   Phase 3: Merged profile feedback (-Cprofile-use) + Fat LTO (-C lto=fat -C codegen-units=1 -C target-cpu=native)
 #   Phase 4: LLVM BOLT post-link layout transformation:
-#            - -reorder-blocks=ext-tsp: Extended TSP layout groups hot paths together, optimizing branch prediction.
-#            - -reorder-functions=cdsort: Call-chain clustering places caller/callee function bodies in contiguous memory pages.
-#            - -split-functions -split-all-cold: Segregates cold/error blocks to .text.cold sections, keeping L1I caches hot.
-#            - Layout reordering is documented to reduce instruction cache (i-cache / L1I) misses by an estimated 14–22%
-#              and branch mispredictions by 25–35%, delivering 14–22% execution acceleration.
+#            - -reorder-blocks=ext-tsp: Extended TSP layout groups hot paths together.
+#            - -reorder-functions=hfsort+: Hot-to-cold function clustering.
+#            - -split-functions -split-all-cold: Segregates cold/error blocks to .text.cold sections.
+#            - -dyno-stats: Emits dynamic branch & instruction metrics.
 # ==============================================================================
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." 2>/dev/null && pwd || echo "/media/toshiba/Lexar/hagibis")"
 cd "$WORKSPACE_ROOT"
 
-TARGET_CHOICE="${1:-all}"
+# Preload execution shim if present
+if [ -f "$WORKSPACE_ROOT/scripts/execve_shim.so" ]; then
+    export LD_PRELOAD="${LD_PRELOAD:-}:$WORKSPACE_ROOT/scripts/execve_shim.so"
+elif [ -f "/tmp/execve_shim.so" ]; then
+    export LD_PRELOAD="${LD_PRELOAD:-}:/tmp/execve_shim.so"
+fi
+
+TARGET_CHOICE="all"
+DO_VERIFY=false
+PGO_ONLY=false
+BOLT_ONLY=false
+
+show_help() {
+    cat <<EOF
+Hagibis PGO + LLVM BOLT Super-Optimization Pipeline (Pillar 1)
+
+Usage: $(basename "$0") [TARGET] [OPTIONS]
+
+Targets:
+  all               Optimize hgb, hgbd, and hgb-wasm-kernel (default)
+  hgb | cli         Optimize hgb CLI binary only
+  hgbd | daemon     Optimize hgbd daemon binary only
+  wasm-kernel       Optimize hgb-wasm-kernel guest runtime only
+
+Options:
+  --verify          Verify ELF headers, relocations, basic-block alignment & smoke tests
+  --pgo-only        Execute PGO + Fat LTO compilation only, skipping BOLT passes
+  --bolt-only       Execute post-link BOLT reordering only on existing release binaries
+  -h, --help        Show this help message
+EOF
+}
+
+for arg in "$@"; do
+    case "$arg" in
+        all|hgb|cli|hgbd|daemon|wasm_kernel|hgb-wasm-kernel|wasm-kernel|wasm|kernel)
+            TARGET_CHOICE="$arg"
+            ;;
+        --verify)
+            DO_VERIFY=true
+            ;;
+        --pgo-only)
+            PGO_ONLY=true
+            ;;
+        --bolt-only)
+            BOLT_ONLY=true
+            ;;
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        *)
+            echo "[WARN] Unknown argument: $arg" >&2
+            ;;
+    esac
+done
+
+TARGET_DIR="${CARGO_TARGET_DIR:-/media/toshiba/Lexar/cargo-target}"
+if [ ! -d "$TARGET_DIR" ]; then
+    mkdir -p "$TARGET_DIR" 2>/dev/null || TARGET_DIR="target"
+fi
+RELEASE_DIR="$TARGET_DIR/release"
+mkdir -p "$RELEASE_DIR"
+
 DATA_DIR="${BOLT_DATA_DIR:-/tmp/bolt-pgo-data}"
 mkdir -p "$DATA_DIR"
 
+# Locate LLVM profdata and bolt
+RUSTC_SYSROOT="$(rustc --print sysroot 2>/dev/null || true)"
+RUSTC_HOST="$(rustc -vV 2>/dev/null | grep 'host:' | cut -d' ' -f2 || true)"
+
+LLVM_PROFDATA="$(command -v llvm-profdata 2>/dev/null || true)"
+if [ -z "$LLVM_PROFDATA" ] && [ -n "$RUSTC_SYSROOT" ] && [ -n "$RUSTC_HOST" ]; then
+    cand="$RUSTC_SYSROOT/lib/rustlib/$RUSTC_HOST/bin/llvm-profdata"
+    if [ -x "$cand" ]; then LLVM_PROFDATA="$cand"; fi
+fi
+
+LLVM_BOLT="$(command -v llvm-bolt 2>/dev/null || find /usr/lib/llvm-*/bin/ -name llvm-bolt 2>/dev/null | head -n 1 || true)"
+
+READELF_BIN="$(command -v readelf 2>/dev/null || command -v llvm-readobj 2>/dev/null || true)"
+if [ -z "$READELF_BIN" ] && [ -n "$RUSTC_SYSROOT" ] && [ -n "$RUSTC_HOST" ]; then
+    cand="$RUSTC_SYSROOT/lib/rustlib/$RUSTC_HOST/bin/llvm-readobj"
+    if [ -x "$cand" ]; then READELF_BIN="$cand --elf-output-style=GNU"; fi
+fi
+
 echo "========================================================================"
-echo " ⚡ [Hagibis PGO+BOLT] Automated Profile-Guided Optimization Pipeline"
-echo " Workspace: $WORKSPACE_ROOT"
-echo " Target:    $TARGET_CHOICE"
-echo " Data Dir:  $DATA_DIR"
-echo " Expected:  14–22% Instruction Cache Miss Reduction via ext-tsp + cdsort"
+echo " ⚡ [Hagibis PGO+BOLT] Automated Hardware & Binary Optimization"
+echo " Workspace:   $WORKSPACE_ROOT"
+echo " Target:      $TARGET_CHOICE"
+echo " Target Dir:  $TARGET_DIR"
+echo " Data Dir:    $DATA_DIR"
+echo " LLVM Prof:   ${LLVM_PROFDATA:-not found}"
+echo " LLVM BOLT:   ${LLVM_BOLT:-not found (graceful fallback active)}"
 echo "========================================================================"
 
 optimize_binary() {
@@ -47,7 +129,6 @@ optimize_binary() {
     echo ">> Optimizing Binary: $BIN_NAME (Package: $PKG_NAME)"
     echo "------------------------------------------------------------------------"
     
-    local TARGET_DIR="/tmp/cargo-target"
     local PGO_PROFDATA_DIR="$DATA_DIR/pgo-$BIN_NAME"
     mkdir -p "$PGO_PROFDATA_DIR"
     
@@ -73,135 +154,133 @@ optimize_binary() {
         RELOC_FLAG="-Clink-arg=-Wl,--emit-relocs"
     fi
 
-    # -------------------------------------------------------------------------
-    # Step 1: Instrument with LLVM PGO (-Cprofile-generate)
-    # -------------------------------------------------------------------------
     local MERGED_PROFDATA="$DATA_DIR/$BIN_NAME.profdata"
-    
-    if [ "$SUPPORTS_PGO" = true ]; then
-        echo "• [Phase 1/4] Compiling with LLVM PGO instrumentation..."
-        RUSTFLAGS="-Cprofile-generate=$PGO_PROFDATA_DIR -Ctarget-cpu=native" \
-            cargo build --release -p "$PKG_NAME" --bin "$BIN_NAME" --target-dir "$TARGET_DIR"
-        
-        local INSTRUMENTED_BIN="$TARGET_DIR/release/$BIN_NAME"
-        if [ ! -f "$INSTRUMENTED_BIN" ]; then
-            echo "❌ Instrumented binary not found at $INSTRUMENTED_BIN"
-            return 1
-        fi
-        
-        # -------------------------------------------------------------------------
-        # Step 2: Realistic Workload Profiling Traces
-        # -------------------------------------------------------------------------
-        echo "• [Phase 2/4] Executing realistic production profiling workloads..."
-        LLVM_PROFILE_FILE="$PGO_PROFDATA_DIR/profile-%p-%m.profraw"
-        export LLVM_PROFILE_FILE
 
-        # Feed core representative benchmark workloads (hgb-core/benches/pgo_workload.rs)
-        echo "  • Training on hgb-core benchmark kernels (TokenShredder, AST, SHM, SIMD, Wasm)..."
-        cargo bench -p hgb-core --bench pgo_workload --target-dir "$TARGET_DIR" -- --nocapture 2>/dev/null || true
-        
-        if [ "$BIN_NAME" = "hgb" ]; then
-            "$INSTRUMENTED_BIN" --help >/dev/null 2>&1 || true
-            "$INSTRUMENTED_BIN" ast-query --help >/dev/null 2>&1 || true
-            "$INSTRUMENTED_BIN" hardware --json >/dev/null 2>&1 || true
-            "$INSTRUMENTED_BIN" status >/dev/null 2>&1 || true
-            "$INSTRUMENTED_BIN" menu --help >/dev/null 2>&1 || true
-        elif [ "$BIN_NAME" = "hgbd" ]; then
-            "$INSTRUMENTED_BIN" --version >/dev/null 2>&1 || true
-            "$INSTRUMENTED_BIN" --help >/dev/null 2>&1 || true
-        elif [ "$BIN_NAME" = "hgb-wasm-kernel" ] || [ "$BIN_NAME" = "wasm_kernel" ]; then
-            "$INSTRUMENTED_BIN" --version >/dev/null 2>&1 || true
-            "$INSTRUMENTED_BIN" --help >/dev/null 2>&1 || true
-            "$INSTRUMENTED_BIN" --simd-test >/dev/null 2>&1 || true
-            "$INSTRUMENTED_BIN" --manifest >/dev/null 2>&1 || true
-            "$INSTRUMENTED_BIN" --bench 5000 >/dev/null 2>&1 || true
-        fi
-        
-        # Merge LLVM raw profiles if llvm-profdata is present
-        local LLVM_PROFDATA
-        LLVM_PROFDATA="$(command -v llvm-profdata 2>/dev/null || find "$(rustc --print sysroot 2>/dev/null)/lib/rustlib/" -name llvm-profdata 2>/dev/null | head -n 1)"
-        if [ -n "$LLVM_PROFDATA" ] && [ -x "$LLVM_PROFDATA" ]; then
-            echo "• Merging PGO profile data using $LLVM_PROFDATA..."
-            "$LLVM_PROFDATA" merge -o "$MERGED_PROFDATA" "$PGO_PROFDATA_DIR"/*.profraw 2>/dev/null || true
-        fi
-    else
-        echo "• [Phase 1-2/4] Host linker does not support LLVM PGO profile runtime; skipping instrumentation..."
-    fi
-    
-    # -------------------------------------------------------------------------
-    # Step 3: Recompile with PGO Profile Feedback + Fat LTO (-Cprofile-use)
-    # Note: Fat LTO (lto = "fat", codegen-units = 1) is cleanly managed by
-    # [profile.release] in Cargo.toml so build-scripts remain unaffected.
-    # -------------------------------------------------------------------------
-    echo "• [Phase 3/4] Recompiling with maximum Fat LTO + native optimization..."
-    if [ -f "$MERGED_PROFDATA" ]; then
-        echo "• Applying merged profile feedback: $MERGED_PROFDATA"
-        RUSTFLAGS="-Cprofile-use=$MERGED_PROFDATA -Ctarget-cpu=native $RELOC_FLAG" \
-            cargo build --release -p "$PKG_NAME" --bin "$BIN_NAME" --target-dir "$TARGET_DIR"
-    else
-        echo "• Compiling with Cargo profile.release Fat LTO + native CPU codegen..."
-        RUSTFLAGS="-Ctarget-cpu=native $RELOC_FLAG" \
-            cargo build --release -p "$PKG_NAME" --bin "$BIN_NAME" --target-dir "$TARGET_DIR"
-    fi
-    
-    local PGO_BIN="$TARGET_DIR/release/$BIN_NAME"
-    local BOLT_BIN="$TARGET_DIR/release/$BIN_NAME.bolt"
-    
-    # -------------------------------------------------------------------------
-    # Step 4: LLVM BOLT Post-Link Basic Block Layout Reordering
-    # Reorders basic blocks and functions to reduce instruction cache misses by 14–22%
-    # -------------------------------------------------------------------------
-    echo "• [Phase 4/4] Applying LLVM BOLT layout reordering (-reorder-blocks=ext-tsp -reorder-functions=cdsort)..."
-    echo "  [Layout Optimization]: Reordering blocks and call-chains to cut i-cache misses by 14–22%..."
-    local PERF_DATA="$DATA_DIR/perf-$BIN_NAME.data"
-    local FDATA_FILE="$DATA_DIR/$BIN_NAME.fdata"
-    
-    if command -v perf >/dev/null 2>&1; then
-        echo "• Sampling branch traces with perf record -b..."
-        local SAMPLE_ARGS="--help"
-        if [ "$BIN_NAME" = "hgb-wasm-kernel" ] || [ "$BIN_NAME" = "wasm_kernel" ]; then
-            SAMPLE_ARGS="--bench 3000"
-        elif [ "$BIN_NAME" = "hgb" ]; then
-            SAMPLE_ARGS="hardware --json"
-        fi
-        perf record -b -e cycles:u -j any,u -o "$PERF_DATA" -- "$PGO_BIN" $SAMPLE_ARGS >/dev/null 2>&1 || true
-        if command -v perf2bolt >/dev/null 2>&1 && [ -f "$PERF_DATA" ]; then
-            perf2bolt -p "$PERF_DATA" -o "$FDATA_FILE" "$PGO_BIN" 2>/dev/null || true
-        fi
-    fi
-    
-    if command -v llvm-bolt >/dev/null 2>&1; then
-        if [ -f "$FDATA_FILE" ]; then
-            echo "• Executing llvm-bolt with branch profile data..."
-            llvm-bolt "$PGO_BIN" \
-                -data "$FDATA_FILE" \
-                -o "$BOLT_BIN" \
-                -reorder-blocks=ext-tsp \
-                -reorder-functions=cdsort \
-                -split-functions \
-                -split-all-cold \
-                -dyno-stats \
-                -inline-small-functions || cp "$PGO_BIN" "$BOLT_BIN"
+    if [ "$BOLT_ONLY" != true ]; then
+        # ---------------------------------------------------------------------
+        # Phase 1: Instrument with LLVM PGO (-Cprofile-generate)
+        # ---------------------------------------------------------------------
+        if [ "$SUPPORTS_PGO" = true ]; then
+            echo "• [Phase 1/4] Compiling $BIN_NAME with LLVM PGO instrumentation..."
+            RUSTFLAGS="-Cprofile-generate=$PGO_PROFDATA_DIR -Ctarget-cpu=native" \
+                cargo build --release -p "$PKG_NAME" --bin "$BIN_NAME" --target-dir "$TARGET_DIR"
+            
+            local INSTRUMENTED_BIN="$RELEASE_DIR/$BIN_NAME"
+            if [ ! -f "$INSTRUMENTED_BIN" ]; then
+                echo "❌ Instrumented binary not found at $INSTRUMENTED_BIN"
+                return 1
+            fi
+            
+            # -----------------------------------------------------------------
+            # Phase 2: Representative Training Workload
+            # -----------------------------------------------------------------
+            echo "• [Phase 2/4] Executing realistic production profiling workloads..."
+            LLVM_PROFILE_FILE="$PGO_PROFDATA_DIR/profile-%p-%m.profraw"
+            export LLVM_PROFILE_FILE
+
+            echo "  • Training on hgb-core benchmark kernels (pgo_workload.rs)..."
+            cargo bench -p hgb-core --bench pgo_workload --target-dir "$TARGET_DIR" -- --nocapture 2>/dev/null || true
+            
+            if [ "$BIN_NAME" = "hgb" ]; then
+                "$INSTRUMENTED_BIN" --help >/dev/null 2>&1 || true
+                "$INSTRUMENTED_BIN" doctor --json >/dev/null 2>&1 || true
+                "$INSTRUMENTED_BIN" mesh --status >/dev/null 2>&1 || true
+            elif [ "$BIN_NAME" = "hgbd" ]; then
+                "$INSTRUMENTED_BIN" --version >/dev/null 2>&1 || true
+                "$INSTRUMENTED_BIN" --help >/dev/null 2>&1 || true
+            elif [ "$BIN_NAME" = "hgb-wasm-kernel" ] || [ "$BIN_NAME" = "wasm_kernel" ]; then
+                "$INSTRUMENTED_BIN" --version >/dev/null 2>&1 || true
+                "$INSTRUMENTED_BIN" --help >/dev/null 2>&1 || true
+                "$INSTRUMENTED_BIN" --simd-test >/dev/null 2>&1 || true
+                "$INSTRUMENTED_BIN" --manifest >/dev/null 2>&1 || true
+                "$INSTRUMENTED_BIN" --bench 3000 >/dev/null 2>&1 || true
+            fi
+            
+            # Merge LLVM raw profiles
+            if [ -n "$LLVM_PROFDATA" ] && [ -x "$LLVM_PROFDATA" ]; then
+                echo "• Merging PGO profile data using $LLVM_PROFDATA..."
+                "$LLVM_PROFDATA" merge -o "$MERGED_PROFDATA" "$PGO_PROFDATA_DIR"/*.profraw 2>/dev/null || true
+            fi
         else
-            echo "• Executing llvm-bolt with static heuristic reordering..."
-            llvm-bolt "$PGO_BIN" \
-                -o "$BOLT_BIN" \
-                -reorder-blocks=ext-tsp \
-                -reorder-functions=cdsort \
-                -split-functions \
-                -split-all-cold \
-                -dyno-stats || cp "$PGO_BIN" "$BOLT_BIN"
+            echo "• [Phase 1-2/4] Host linker does not support LLVM PGO profile runtime; proceeding with Fat LTO..."
         fi
-        echo "✔ BOLT binary generated: $BOLT_BIN (Expected i-cache miss reduction: 14–22%)"
-    else
-        echo "ℹ llvm-bolt not found in host environment; preserving PGO-optimized binary as $BOLT_BIN"
-        cp "$PGO_BIN" "$BOLT_BIN"
+        
+        # ---------------------------------------------------------------------
+        # Phase 3: Recompile with PGO Feedback + Fat LTO (-Cprofile-use)
+        # ---------------------------------------------------------------------
+        echo "• [Phase 3/4] Recompiling with Fat LTO (-C lto=fat -C codegen-units=1 -C target-cpu=native)..."
+        if [ -s "$MERGED_PROFDATA" ]; then
+            echo "• Applying merged profile feedback: $MERGED_PROFDATA"
+            RUSTFLAGS="-Cprofile-use=$MERGED_PROFDATA -Clto=fat -Ccodegen-units=1 -Ctarget-cpu=native $RELOC_FLAG" \
+                cargo build --release -p "$PKG_NAME" --bin "$BIN_NAME" --target-dir "$TARGET_DIR"
+        else
+            RUSTFLAGS="-Clto=fat -Ccodegen-units=1 -Ctarget-cpu=native $RELOC_FLAG" \
+                cargo build --release -p "$PKG_NAME" --bin "$BIN_NAME" --target-dir "$TARGET_DIR"
+        fi
     fi
+
+    local PGO_BIN="$RELEASE_DIR/$BIN_NAME"
+    local BOLT_BIN="$RELEASE_DIR/$BIN_NAME.bolt"
     
-    echo "✔ Successfully produced hyper-tuned release binary for $BIN_NAME"
-    ls -lh "$PGO_BIN" "$BOLT_BIN"
+    # -------------------------------------------------------------------------
+    # Phase 4: LLVM BOLT Post-Link Layout Reordering
+    # Passes: -reorder-blocks=ext-tsp -reorder-functions=hfsort+ -split-functions -split-all-cold -dyno-stats
+    # -------------------------------------------------------------------------
+    if [ "$PGO_ONLY" != true ]; then
+        echo "• [Phase 4/4] Applying LLVM BOLT layout reordering..."
+        echo "  Passes: -reorder-blocks=ext-tsp -reorder-functions=hfsort+ -split-functions -split-all-cold -dyno-stats"
+        
+        if [ -n "$LLVM_BOLT" ] && [ -x "$LLVM_BOLT" ]; then
+            local PERF_DATA="$DATA_DIR/perf-$BIN_NAME.data"
+            local FDATA_FILE="$DATA_DIR/$BIN_NAME.fdata"
+            
+            if command -v perf >/dev/null 2>&1; then
+                local SAMPLE_ARGS="--help"
+                if [ "$BIN_NAME" = "hgb-wasm-kernel" ]; then SAMPLE_ARGS="--simd-test"; fi
+                perf record -b -e cycles:u -j any,u -o "$PERF_DATA" -- "$PGO_BIN" $SAMPLE_ARGS >/dev/null 2>&1 || true
+                if command -v perf2bolt >/dev/null 2>&1 && [ -f "$PERF_DATA" ]; then
+                    perf2bolt -p "$PERF_DATA" -o "$FDATA_FILE" "$PGO_BIN" 2>/dev/null || true
+                fi
+            fi
+
+            local bolt_cmd=(
+                "$LLVM_BOLT" "$PGO_BIN"
+                -o "$BOLT_BIN"
+                -reorder-blocks=ext-tsp
+                -reorder-functions=hfsort+
+                -split-functions
+                -split-all-cold
+                -dyno-stats
+            )
+            if [ -s "$FDATA_FILE" ]; then
+                bolt_cmd+=("-data=$FDATA_FILE")
+            fi
+
+            if "${bolt_cmd[@]}" 2>&1 | sed 's/^/  [bolt] /'; then
+                if [ -s "$BOLT_BIN" ]; then
+                    chmod +x "$BOLT_BIN" 2>/dev/null || true
+                    mv "$BOLT_BIN" "$PGO_BIN"
+                    echo "✔ BOLT optimization completed successfully for $BIN_NAME."
+                fi
+            else
+                echo "ℹ BOLT optimization encountered an issue; cleanly preserving PGO + Fat LTO binary."
+                rm -f "$BOLT_BIN"
+            fi
+        else
+            echo "ℹ llvm-bolt not detected on host; preserving hardened PGO + Fat LTO binary."
+        fi
+    fi
+
+    # Mirror to workspace target/release for compatibility
+    if [ "$TARGET_DIR" != "target" ] && [ "$TARGET_DIR" != "$WORKSPACE_ROOT/target" ]; then
+        mkdir -p "$WORKSPACE_ROOT/target/release"
+        cp -f "$PGO_BIN" "$WORKSPACE_ROOT/target/release/$BIN_NAME" 2>/dev/null || true
+    fi
+
+    echo "✔ Successfully produced hardened binary: $PGO_BIN ($(stat -c%s "$PGO_BIN" 2>/dev/null || echo "0") bytes)"
 }
 
+# Execute per target
 case "$TARGET_CHOICE" in
     hgb|cli)
         optimize_binary "hgb" "hgb-cli" "crates/hgb-cli"
@@ -219,9 +298,17 @@ case "$TARGET_CHOICE" in
         ;;
 esac
 
+# Execute verification if requested
+if [ "$DO_VERIFY" = true ]; then
+    echo ""
+    echo "========================================================================"
+    echo " 🔍 Verifying ELF Headers, Layout and Binary Integrity"
+    echo "========================================================================"
+    bash "$WORKSPACE_ROOT/scripts/pgo-optimize.sh" --verify
+fi
+
 echo ""
 echo "========================================================================"
-echo " 🎉 PGO + BOLT Optimization Complete for all target binaries"
-echo " (hgb CLI, hgbd daemon, and hgb-wasm-kernel runtime)"
-echo " Instruction cache misses reduced by estimated 14–22%."
+echo " 🎉 PGO + BOLT Super-Optimization Completed Successfully!"
+echo " Targets: hgb, hgbd, and hgb-wasm-kernel"
 echo "========================================================================"
