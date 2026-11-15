@@ -1,7 +1,8 @@
 //! # Hagibis Heterogeneous Hardware Accelerator & NPU Offloader Router
 //!
-//! Production-grade hardware acceleration, telemetry ingestion, and dynamic offloading
-//! for tensor batch embeddings, SLM inference, and LanceDB vector queries.
+//! Production-grade hardware acceleration, telemetry ingestion, dynamic offloading,
+//! and Pareto-optimal hardware auto-tuning for tensor batch embeddings, SLM inference,
+//! and LanceDB vector queries.
 
 pub mod error;
 pub mod hardware_discovery;
@@ -10,6 +11,7 @@ pub mod accelerator_backend;
 pub mod dynamic_benchmarker;
 pub mod shard_allocator;
 pub mod telemetry_router;
+pub mod pareto_frontier_autotuner;
 
 pub use error::{NpuRouterError, Result};
 pub use hardware_discovery::{
@@ -26,12 +28,24 @@ pub use accelerator_backend::{
 pub use telemetry_router::{
     NpuOffloadRouter, RouterConfig,
 };
+pub use dynamic_benchmarker::{
+    AcceleratorBenchmarkReport, BenchmarkMetricResult, BenchmarkTarget, BenchmarkWorkload,
+    DynamicHardwareBenchmarker,
+};
+pub use shard_allocator::{
+    AgentToolCall, AgentToolCallOutput, PowerAwareShardAllocator, ShardAllocatorConfig,
+    ShardPartitionPlan, ShardTarget, ShardedToolExecutionResult, ShardedVectorSearchResult,
+    WorkloadShard,
+};
+pub use pareto_frontier_autotuner::{
+    AcceleratorBackendTarget, HardwareTelemetrySnapshot, ParetoAnalysisReport,
+    ParetoAutoDispatcher, ParetoAutoTunerConfig, ParetoDispatchEvent,
+    ParetoOperatingPoint,
+};
 
 #[cfg(test)]
 mod integration_tests {
     use super::*;
-    use tempfile::tempdir;
-    use std::fs;
 
     #[test]
     fn test_end_to_end_router_dispatch() {
@@ -76,5 +90,21 @@ mod integration_tests {
 
         let wrong_key = b"wrong_secret_key";
         assert!(!receipt.verify_signature(wrong_key));
+    }
+
+    #[test]
+    fn test_pareto_auto_dispatcher_integration() {
+        let dispatcher = ParetoAutoDispatcher::auto_discover(ParetoAutoTunerConfig::default()).unwrap();
+
+        // Dispatch vector query through Pareto dispatcher
+        let query = vec![0.5f32; 32];
+        let candidates = vec![0.1f32; 20 * 32];
+        let (hits, receipt, event) = dispatcher.dispatch_vector_search(&query, &candidates, 32, 5).unwrap();
+
+        assert_eq!(hits.len(), 5);
+        assert!(!receipt.receipt_id.is_empty());
+        assert!(!receipt.sha256_signature.is_empty());
+        assert!(event.evaluated_points.len() >= 2);
+        assert!(!event.rationale.is_empty());
     }
 }

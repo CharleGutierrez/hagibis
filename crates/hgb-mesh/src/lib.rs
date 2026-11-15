@@ -18,6 +18,7 @@ pub mod error;
 pub mod microvm_raft_consensus;
 pub mod p2p_mesh;
 pub mod secure_transport;
+pub mod distributed_edge_memory_fabric;
 
 // Public re-exports
 pub use error::{MeshError, Result};
@@ -33,6 +34,11 @@ pub use secure_transport::{
     compute_hmac_sha256, compute_sha256, compute_sha256_hex, verify_hmac_sha256_constant_time,
     HgbSecurityHeader, NodeIdentity, NonceValidator, SecureEnvelope, SwarmChannelType,
     MAX_TIMESTAMP_SKEW_MS,
+};
+pub use distributed_edge_memory_fabric::{
+    DistributedEdgeMemoryFabric, EdgeMemoryWireMessage, LanceDbVectorIndex, LwwRegister,
+    MemoryRecord, MergeSummary, MerkleAntiEntropyEngine, MerkleDigest, OrSet,
+    MERKLE_BUCKET_COUNT,
 };
 
 #[cfg(test)]

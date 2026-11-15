@@ -1,5 +1,5 @@
 name: 'Hagibis Autonomous Verification & Blast-Radius Action'
-description: 'Autonomous AST blast radius radar, slopsquatting supply chain firewall, and golden invariant verification for pull requests.'
+description: 'Autonomous AST blast radius radar, slopsquatting supply chain firewall, golden invariant verification, and continuous PGO/BOLT regression auto-tuning for pull requests.'
 author: 'Charle Gutierrez'
 branding:
   icon: 'shield'
@@ -34,8 +34,20 @@ inputs:
     description: 'Automatically regenerate masterclass chapters and PDF via docs/masterclass/generate_pdf.py'
     required: false
     default: 'false'
+  check-regression:
+    description: 'Execute automated performance benchmark regression check (>5% latency delta in pgo_workload)'
+    required: false
+    default: 'true'
+  regression-threshold:
+    description: 'Percentage latency regression threshold before triggering continuous PGO/BOLT optimization'
+    required: false
+    default: '5.0'
+  auto-reoptimize-on-regression:
+    description: 'Automatically trigger continuous PGO + BOLT layout optimization when performance regression is detected'
+    required: false
+    default: 'true'
   optimize-pgo-bolt:
-    description: 'Execute automated PGO + LLVM BOLT profiling and release binary optimization for hgb and hgbd'
+    description: 'Execute automated PGO + LLVM BOLT profiling and release binary optimization for hgb, hgbd, and hgb-wasm-kernel'
     required: false
     default: 'false'
   github-token:
@@ -59,6 +71,9 @@ outputs:
   masterclass-validated:
     description: 'Whether all 8 masterclass chapters passed verification gates'
     value: ${{ steps.validate-masterclass-step.outputs.validated }}
+  regression-passed:
+    description: 'Whether performance benchmark remained within regression threshold'
+    value: ${{ steps.regression-bench-step.outputs.regression_passed }}
   pgo-bolt-optimized:
     description: 'Whether automated PGO + LLVM BOLT binary optimization succeeded'
     value: ${{ steps.pgo-bolt-optimizer.outputs.optimized }}
@@ -127,6 +142,23 @@ runs:
         else
           python3 docs/masterclass/generate_pdf.py || true
         fi
+
+    - name: Continuous Benchmark Regression & PGO/BOLT Gate
+      id: regression-bench-step
+      if: inputs.check-regression == 'true'
+      shell: bash
+      env:
+        REGRESSION_THRESHOLD_PCT: ${{ inputs.regression-threshold }}
+        AUTO_OPTIMIZE: ${{ inputs.auto-reoptimize-on-regression }}
+      run: |
+        echo "Running Continuous Performance Benchmark Regression Check..."
+        chmod +x scripts/regression-bench-check.sh scripts/pgo-bolt-optimize.sh scripts/pgo-optimize.sh
+        if [ "$AUTO_OPTIMIZE" = "true" ]; then
+          bash scripts/regression-bench-check.sh --threshold "$REGRESSION_THRESHOLD_PCT"
+        else
+          bash scripts/regression-bench-check.sh --threshold "$REGRESSION_THRESHOLD_PCT" --no-auto-optimize
+        fi
+        echo "regression_passed=true" >> "$GITHUB_OUTPUT"
 
     - name: Automated PGO + LLVM BOLT Optimization Pipeline
       id: pgo-bolt-optimizer

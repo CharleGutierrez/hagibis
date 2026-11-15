@@ -1,0 +1,134 @@
+name: Automated Continuous PGO + BOLT Regression CI Pipeline
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  pull_request:
+    paths:
+      - 'crates/**'
+      - 'scripts/pgo-bolt-optimize.sh'
+      - 'scripts/pgo-optimize.sh'
+      - 'scripts/regression-bench-check.sh'
+      - 'Makefile'
+      - 'action.yml'
+      - '.github/workflows/pgo-bolt-regression-ci.yml'
+  schedule:
+    # Run weekly deep continuous profile re-optimization every Monday at 03:00 UTC
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+    inputs:
+      force_optimize:
+        description: 'Force full PGO + LLVM BOLT super-optimization regardless of regression delta'
+        required: false
+        default: 'false'
+        type: boolean
+      regression_threshold_pct:
+        description: 'Benchmark latency regression trigger threshold percentage'
+        required: false
+        default: '5.0'
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+  pull-requests: write
+
+jobs:
+  pgo-bolt-regression-audit:
+    name: Continuous PGO/BOLT & Regression Invariant Check
+    runs-on: ubuntu-latest
+    env:
+      RUST_BACKTRACE: 1
+      CARGO_TERM_COLOR: always
+      PGO_DATA_DIR: /tmp/pgo-data
+      BOLT_DATA_DIR: /tmp/bolt-data
+      REGRESSION_THRESHOLD_PCT: ${{ inputs.regression_threshold_pct || '5.0' }}
+      BENCH_BASELINE_FILE: /tmp/hgb_bench_baseline.json
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install system dependencies & LLVM toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            pkg-config \
+            libssl-dev \
+            llvm \
+            clang \
+            lld \
+            binutils \
+            python3 \
+            python3-pip \
+            linux-tools-generic || true
+          # Install llvm-bolt if available in package archives
+          sudo apt-get install -y llvm-bolt || true
+
+      - name: Install Rust toolchain with LLVM profiling tools
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy, llvm-tools-preview
+
+      - name: Restore Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Workspace sanity check & compiler gates
+        run: |
+          cargo check --workspace
+          cargo test -p hgb-npu-router --lib pareto_frontier_autotuner
+
+      - name: Run Continuous Performance Benchmark Regression Check
+        id: regression-check
+        run: |
+          chmod +x scripts/regression-bench-check.sh scripts/pgo-bolt-optimize.sh scripts/pgo-optimize.sh
+          make regression-bench-check
+
+      - name: Execute Automated PGO + LLVM BOLT CI Pipeline
+        if: |
+          github.event_name == 'push' ||
+          startsWith(github.ref, 'refs/tags/v') ||
+          inputs.force_optimize == true ||
+          steps.regression-check.outcome == 'failure'
+        run: |
+          echo "Executing automated PGO + Fat LTO + BOLT continuous optimization pipeline..."
+          make pgo-bolt-auto-ci
+
+      - name: Automated ELF Binary Verification
+        run: |
+          echo "Executing rigorous ELF integrity, relocation, and alignment verification..."
+          make pgo-bolt-verify
+
+      - name: Package Super-Optimized Release Binaries
+        if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main'
+        id: package-binaries
+        run: |
+          VERSION=${GITHUB_REF_NAME:-latest}
+          DIST_DIR="dist/hagibis-${VERSION}-pgo-bolt-linux-x86_64"
+          mkdir -p "$DIST_DIR"
+          
+          # Collect hardened binaries
+          for bin in hgb hgbd hgb-wasm-kernel; do
+            if [ -f "target/release/$bin" ]; then
+              cp -f "target/release/$bin" "$DIST_DIR/"
+            elif [ -f "${CARGO_TARGET_DIR:-/media/toshiba/Lexar/cargo-target}/release/$bin" ]; then
+              cp -f "${CARGO_TARGET_DIR:-/media/toshiba/Lexar/cargo-target}/release/$bin" "$DIST_DIR/"
+            fi
+          done
+          
+          tar -czvf "${DIST_DIR}.tar.gz" -C dist "$(basename "$DIST_DIR")"
+          echo "archive_path=${DIST_DIR}.tar.gz" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Optimized Binaries Artifact
+        if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: hagibis-pgo-bolt-binaries
+          path: dist/*.tar.gz
+          retention-days: 14

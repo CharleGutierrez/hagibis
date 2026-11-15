@@ -8,6 +8,7 @@ pub mod ast_patcher;
 pub mod slm_synthesis_pipeline;
 pub mod sandbox_verifier;
 pub mod evolution_ledger;
+pub mod mcp_tool_synthesizer;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -23,6 +24,11 @@ pub use ast_patcher::{AstFunctionTarget, AstPatcher, SyntaxInvariantValidator};
 pub use slm_synthesis_pipeline::{OptimizationStrategy, PatchCandidate, SlmPatchSynthesizer};
 pub use sandbox_verifier::{SandboxVerificationReport, SandboxVerificationSpec, SandboxVerifier};
 pub use evolution_ledger::{EvolutionLedger, EvolutionReceipt, GENESIS_PARENT_HASH};
+pub use mcp_tool_synthesizer::{
+    GuestCodeSynthesizer, McpToolSynthesizer, SynthesizedArtifacts, SynthesizedParam,
+    SynthesizedToolReceipt, ToolGap, ToolGapDetector, WitSynthesizer,
+    DEFAULT_MCP_JSON_PATH, DEFAULT_PLUGINS_WASM_DIR,
+};
 
 /// Zero-Downtime Binary Hot-Swapper using atomic symlinks & connection draining
 pub struct ZeroDowntimeBinarySwapper {

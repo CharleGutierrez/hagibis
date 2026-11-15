@@ -18,7 +18,7 @@ ifneq ($(wildcard scripts/execve_shim.so),)
 export LD_PRELOAD := $(CURDIR)/scripts/execve_shim.so:$(LD_PRELOAD)
 endif
 
-.PHONY: all check test release release-fast pgo bolt pgo-bolt pgo-bench pgo-bolt-dynatune pgo-bolt-verify pgo-build pgo-train pgo-merge pgo-release pgo-dynatune hygiene clean-cache prune-targets clean help untangle skill\:lint skill\:test skill\:build skill-lint skill-test skill-build test-masterclass
+.PHONY: all check test release release-fast pgo bolt pgo-bolt pgo-bolt-auto-ci regression-bench-check pgo-bench pgo-bolt-dynatune pgo-bolt-verify pgo-build pgo-train pgo-merge pgo-release pgo-dynatune hygiene clean-cache prune-targets clean help untangle skill\:lint skill\:test skill\:build skill-lint skill-test skill-build test-masterclass
 
 all: check test
 
@@ -27,34 +27,36 @@ help:
 	@echo " Hagibis (hgb) Autonomous Production Makefile Targets"
 	@echo "======================================================================"
 	@echo " Production & Super-Optimization (Pillar 1: PGO + BOLT):"
-	@echo "   make release           - Full PGO + Fat LTO + LLVM BOLT super-optimized build"
-	@echo "   make release-fast      - Standard fast release build without PGO"
-	@echo "   make pgo               - End-to-end PGO pipeline (build -> train -> merge -> release)"
-	@echo "   make pgo-build         - Step 1: Instrument binaries with -Cprofile-generate"
-	@echo "   make pgo-train         - Step 2: Run representative benchmark training workload"
-	@echo "   make pgo-merge         - Step 3: Merge raw profiles into merged.profdata via llvm-profdata"
-	@echo "   make pgo-release       - Step 4: Recompile release binaries with -Cprofile-use & Fat LTO"
-	@echo "   make bolt              - Post-link LLVM BOLT binary super-optimization (ext-tsp + hfsort+)"
-	@echo "   make pgo-bolt          - Automated PGO + Fat LTO + LLVM BOLT super-optimization across all binaries"
-	@echo "   make pgo-bolt-verify   - Rigorous ELF integrity, relocation, alignment & symbol verification"
-	@echo "   make pgo-bolt-dynatune - Hardware governor ramping + thermal-aware PGO + BOLT pipeline"
-	@echo "   make pgo-dynatune      - Hardware-coordinated PGO + kernel-optimizer pipeline"
-	@echo "   make pgo-bench         - Run core execution microbenchmarks (pgo_workload.rs)"
+	@echo "   make release                - Full PGO + Fat LTO + LLVM BOLT super-optimized build"
+	@echo "   make release-fast           - Standard fast release build without PGO"
+	@echo "   make pgo                    - End-to-end PGO pipeline (build -> train -> merge -> release)"
+	@echo "   make pgo-build              - Step 1: Instrument binaries with -Cprofile-generate"
+	@echo "   make pgo-train              - Step 2: Run representative benchmark training workload"
+	@echo "   make pgo-merge              - Step 3: Merge raw profiles into merged.profdata via llvm-profdata"
+	@echo "   make pgo-release            - Step 4: Recompile release binaries with -Cprofile-use & Fat LTO"
+	@echo "   make bolt                   - Post-link LLVM BOLT binary super-optimization (ext-tsp + hfsort+)"
+	@echo "   make pgo-bolt               - Automated PGO + Fat LTO + LLVM BOLT super-optimization across all binaries"
+	@echo "   make pgo-bolt-auto-ci       - Automated Continuous PGO + BOLT CI pipeline with ELF verification"
+	@echo "   make regression-bench-check - Check for benchmark performance regressions (>5% trigger)"
+	@echo "   make pgo-bolt-verify        - Rigorous ELF integrity, relocation, alignment & symbol verification"
+	@echo "   make pgo-bolt-dynatune      - Hardware governor ramping + thermal-aware PGO + BOLT pipeline"
+	@echo "   make pgo-dynatune           - Hardware-coordinated PGO + kernel-optimizer pipeline"
+	@echo "   make pgo-bench              - Run core execution microbenchmarks (pgo_workload.rs)"
 	@echo ""
 	@echo " Storage & Build Hygiene (Pillar 5):"
-	@echo "   make hygiene           - Run complete storage hygiene audit, prune stale targets & clean /tmp"
-	@echo "   make clean-cache       - Clean volatile /tmp cargo build caches and PGO/BOLT data"
-	@echo "   make prune-targets     - Prune stale incremental artifacts older than 7 days from target dirs"
+	@echo "   make hygiene                - Run complete storage hygiene audit, prune stale targets & clean /tmp"
+	@echo "   make clean-cache            - Clean volatile /tmp cargo build caches and PGO/BOLT data"
+	@echo "   make prune-targets          - Prune stale incremental artifacts older than 7 days from target dirs"
 	@echo ""
 	@echo " CaldoAI Skill Lifecycle & Untangling:"
-	@echo "   make untangle          - Audit crate boundaries, DAG invariants & zero circular dependencies"
-	@echo "   make skill:lint        - Lint Python, Zig, Rust, and WIT specifications in skills/"
-	@echo "   make skill:test        - Run unit tests and contract validation across all skills"
-	@echo "   make skill:build       - Build skill artifacts, compile WASM components & validate WIT specs"
-	@echo "   make test-masterclass  - Validate 8-chapter masterclass live simulation test gates"
-	@echo "   make check             - Run workspace compiler checks across all crates"
-	@echo "   make test              - Run workspace unit tests and sandbox suites"
-	@echo "   make clean             - Clean build artifacts, profiles, caches, and skill outputs"
+	@echo "   make untangle               - Audit crate boundaries, DAG invariants & zero circular dependencies"
+	@echo "   make skill:lint             - Lint Python, Zig, Rust, and WIT specifications in skills/"
+	@echo "   make skill:test             - Run unit tests and contract validation across all skills"
+	@echo "   make skill:build            - Build skill artifacts, compile WASM components & validate WIT specs"
+	@echo "   make test-masterclass       - Validate 8-chapter masterclass live simulation test gates"
+	@echo "   make check                  - Run workspace compiler checks across all crates"
+	@echo "   make test                   - Run workspace unit tests and sandbox suites"
+	@echo "   make clean                  - Clean build artifacts, profiles, caches, and skill outputs"
 	@echo "======================================================================"
 
 check:
@@ -181,6 +183,30 @@ pgo-bolt:
 	@echo " Targets: crates/hgb-cli (hgb), crates/hgb-daemon (hgbd), crates/hgb-wasm-kernel"
 	@echo "======================================================================"
 	bash scripts/pgo-bolt-optimize.sh all
+
+# Automated Continuous PGO + BOLT Optimization Pipeline with ELF Verification
+pgo-bolt-auto-ci:
+	@echo "======================================================================"
+	@echo " [PGO-BOLT-Auto-CI] Executing Continuous PGO + BOLT Optimization Pipeline"
+	@echo " Targets: hgb, hgbd, and hgb-wasm-kernel"
+	@echo " Passes:  LLVM PGO -> Fat LTO -> LLVM BOLT layout reordering"
+	@echo "======================================================================"
+	bash scripts/pgo-bolt-optimize.sh all
+	@echo "[PGO-BOLT-Auto-CI] Verifying ELF binary integrity, relocations, and alignment..."
+	bash scripts/pgo-optimize.sh --verify
+	@echo "======================================================================"
+	@echo " [PGO-BOLT-Auto-CI] Completed Successfully with ELF Verification!"
+	@echo "======================================================================"
+
+# Automated Performance Benchmark Regression Check (>5% latency regression trigger)
+regression-bench-check:
+	@echo "======================================================================"
+	@echo " [Hagibis CI] Executing Performance Benchmark Regression Check"
+	@echo " Workload:  hgb-core/benches/pgo_workload.rs"
+	@echo " Threshold: >5.0% latency regression vs baseline"
+	@echo "======================================================================"
+	chmod +x scripts/regression-bench-check.sh scripts/pgo-bolt-optimize.sh scripts/pgo-optimize.sh
+	bash scripts/regression-bench-check.sh --threshold 5.0
 
 # Hardware-Coordinated PGO + BOLT + dynatune / kernel-optimizer Optimization Pipeline
 pgo-bolt-dynatune:

@@ -2385,6 +2385,17 @@ pub use edge_worker_bridge::{
     QUIC_TUNNEL_VERSION,
 };
 
+// Upgrade 1: Unified Zero-Copy Memory Sharing Across Dual-Sandbox
+pub mod dual_sandbox_zero_copy_ring;
+pub use dual_sandbox_zero_copy_ring::{
+    ConduitBenchmarkMetrics, DualSandboxEventSignaler, DualSandboxRingHeader, FrameHeader,
+    MicroVmGuestMapping, WasmGuestMapping, ZeroCopyRingConduit, CACHELINE_BYTES,
+    DEFAULT_RING_CAPACITY as ZERO_COPY_DEFAULT_RING_CAPACITY, FRAME_FLAG_HANDOFF,
+    FRAME_FLAG_MICROVM_MEM, FRAME_FLAG_NORMAL, FRAME_FLAG_WASM_MEM, FRAME_FLAG_WRAP,
+    HEADER_SIZE_BYTES, RING_MAGIC as ZERO_COPY_RING_MAGIC, RING_VERSION as ZERO_COPY_RING_VERSION,
+};
+
+
 
 
 

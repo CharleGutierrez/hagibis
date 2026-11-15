@@ -40,6 +40,15 @@ pub enum HgbError {
 
     #[error("Verification error: {0}")]
     Verification(String),
+
+    #[error("System error: {0}")]
+    System(String),
+
+    #[error("Invalid parameter: {0}")]
+    InvalidParameter(String),
+
+    #[error("Invalid state: {0}")]
+    InvalidState(String),
 }
 
 impl HgbError {
