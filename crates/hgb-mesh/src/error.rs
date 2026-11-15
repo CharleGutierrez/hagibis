@@ -50,4 +50,10 @@ pub enum MeshError {
 
     #[error("Internal I/O error: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("Invalid state: {0}")]
+    InvalidState(String),
+
+    #[error("Cryptographic failure: {0}")]
+    CryptographicFailure(String),
 }

@@ -12,8 +12,14 @@ pub mod dynamic_benchmarker;
 pub mod shard_allocator;
 pub mod telemetry_router;
 pub mod pareto_frontier_autotuner;
+pub mod hardware_aware_dynamic_router;
 
 pub use error::{NpuRouterError, Result};
+pub use hardware_aware_dynamic_router::{
+    DynamicOffloadReceipt, DynamicRouteTarget, HardwareAwareDynamicRouter, LatencySla,
+    LiveHardwareCounters, SlaRoutingDecision, VectorSearchResult, VectorShardPlan,
+    LANCEDB_EMBEDDING_DIM,
+};
 pub use hardware_discovery::{
     AcceleratorDevice, AcceleratorType, ComputeCapability, GpuVendor,
     HardwareInventory, NpuVendor, SimdFeatureSet,
@@ -106,5 +112,22 @@ mod integration_tests {
         assert!(!receipt.sha256_signature.is_empty());
         assert!(event.evaluated_points.len() >= 2);
         assert!(!event.rationale.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_hardware_aware_dynamic_router_integration() {
+        let router = HardwareAwareDynamicRouter::new(b"production-test-key-32b-secret!");
+        let dim = 768;
+        let query = vec![0.1f32; dim];
+        let candidates = vec![0.2f32; 16 * dim];
+
+        let (hits, receipt) = router
+            .dispatch_vector_search(&query, &candidates, dim, 3, LatencySla::SubMillisecond)
+            .await
+            .unwrap();
+
+        assert_eq!(hits.len(), 3);
+        assert_eq!(receipt.dimension, 768);
+        assert!(receipt.verify(b"production-test-key-32b-secret!"));
     }
 }

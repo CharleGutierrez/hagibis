@@ -18,7 +18,7 @@ ifneq ($(wildcard scripts/execve_shim.so),)
 export LD_PRELOAD := $(CURDIR)/scripts/execve_shim.so:$(LD_PRELOAD)
 endif
 
-.PHONY: all check test release release-fast pgo bolt pgo-bolt pgo-bolt-auto-ci regression-bench-check pgo-bench pgo-bolt-dynatune pgo-bolt-verify pgo-build pgo-train pgo-merge pgo-release pgo-dynatune hygiene clean-cache prune-targets clean help untangle skill\:lint skill\:test skill\:build skill-lint skill-test skill-build test-masterclass
+.PHONY: all check test release release-fast pgo bolt pgo-bolt pgo-bolt-auto-ci regression-bench-check pgo-bench pgo-bolt-dynatune pgo-bolt-verify pgo-build pgo-train pgo-merge pgo-release pgo-dynatune hygiene clean-cache prune-targets clean help untangle skill\:lint skill\:test skill\:build skill-lint skill-test skill-build test-masterclass self-heal-build self-heal-bench
 
 all: check test
 
@@ -42,6 +42,10 @@ help:
 	@echo "   make pgo-bolt-dynatune      - Hardware governor ramping + thermal-aware PGO + BOLT pipeline"
 	@echo "   make pgo-dynatune           - Hardware-coordinated PGO + kernel-optimizer pipeline"
 	@echo "   make pgo-bench              - Run core execution microbenchmarks (pgo_workload.rs)"
+	@echo ""
+	@echo " Autonomous Self-Healing Feedback Loops (Pillar 4):"
+	@echo "   make self-heal-build        - Autonomous build hygiene & closed-loop compiler error remediation"
+	@echo "   make self-heal-bench        - Automated benchmark regression trap & closed-loop performance recovery"
 	@echo ""
 	@echo " Storage & Build Hygiene (Pillar 5):"
 	@echo "   make hygiene                - Run complete storage hygiene audit, prune stale targets & clean /tmp"
@@ -197,6 +201,25 @@ pgo-bolt-auto-ci:
 	@echo "======================================================================"
 	@echo " [PGO-BOLT-Auto-CI] Completed Successfully with ELF Verification!"
 	@echo "======================================================================"
+
+# Autonomous Self-Healing Pipeline (Pillar 4 & Pillar 5)
+self-heal-build:
+	@echo "======================================================================"
+	@echo " [Hagibis CI] Executing Autonomous Self-Healing Build Pipeline"
+	@echo " Target:    scripts/build-hygiene.sh --self-heal-build"
+	@echo " Remediate: Compiler diagnostics -> AST patch synthesis -> First-Green"
+	@echo "======================================================================"
+	@chmod +x scripts/build-hygiene.sh scripts/autonomous-compiler-healer.sh 2>/dev/null || true
+	bash scripts/build-hygiene.sh --self-heal-build
+
+self-heal-bench:
+	@echo "======================================================================"
+	@echo " [Hagibis CI] Executing Autonomous Self-Healing Benchmark Pipeline"
+	@echo " Target:    scripts/regression-bench-check.sh --self-heal"
+	@echo " Threshold: >5.0% latency regression vs baseline"
+	@echo "======================================================================"
+	@chmod +x scripts/regression-bench-check.sh scripts/autonomous-compiler-healer.sh 2>/dev/null || true
+	bash scripts/regression-bench-check.sh --threshold 5.0 --self-heal
 
 # Automated Performance Benchmark Regression Check (>5% latency regression trigger)
 regression-bench-check:

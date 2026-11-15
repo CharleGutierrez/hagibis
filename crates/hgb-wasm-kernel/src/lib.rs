@@ -16,6 +16,14 @@
 use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 
+pub mod component_model_bridge;
+pub use component_model_bridge::{
+    CanonicalAbiFunction, CanonicalValue, ComponentHeaderInfo, ComponentTrap, MemoryRegionType,
+    PinnedTensorDescriptor, TensorDataType as BridgeTensorDataType, TypedMemoryView, WasmBinaryKind,
+    WasiComponentModelBridge, ZeroCopyLinearMemory, WASM_COMPONENT_VERSION, WASM_CORE_VERSION,
+    WASM_MAGIC, WASM_PAGE_SIZE,
+};
+
 pub mod wasi_nn_gpu;
 pub use wasi_nn_gpu::{
     wasi_ephemeral_nn, ExecutionTarget, FallbackExecutionEngine, GpuBindingDescriptor,

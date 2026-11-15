@@ -46,6 +46,7 @@ Options:
   --prune-targets    Prune build artifacts older than ${PRUNE_DAYS} days from target directories.
   --prepare-scratch  Create and verify scratch space at ${LEXAR_SCRATCH_DIR}.
   --all              Execute full hygiene pipeline (check, prune, clean, scratch). (Default)
+  --self-heal-build  Execute hygiene audit, trap cargo build errors & trigger autonomous self-healing.
   --json             Emit telemetry and status summary as JSON.
   -h, --help         Show this help message.
 EOF
@@ -67,6 +68,9 @@ for arg in "$@"; do
             ;;
         --all)
             MODE="all"
+            ;;
+        --self-heal-build)
+            MODE="self-heal-build"
             ;;
         --json)
             JSON_OUTPUT=true

@@ -1,0 +1,119 @@
+// Hagibis WASI 0.2 (Preview 2) Component Model Specification
+// Defines zero-copy memory sharing, typed views, and SIMD tensor acceleration
+package hagibis:component-model@0.2.0;
+
+/// Micro-kernel execution interface for sandboxed Zig components
+interface micro-kernel-execution {
+    /// Execution status of the micro-kernel
+    enum kernel-execution-status {
+        ready,
+        running,
+        halted,
+        trapped,
+    }
+
+    /// Typed execution trap descriptor
+    record execution-trap {
+        trap-code: u32,
+        instruction-pointer: u64,
+        message: string,
+    }
+
+    /// Execute bounded bytecode instructions inside micro-kernel
+    execute-step: func(instruction-budget: u64) -> result<u64, execution-trap>;
+
+    /// High-speed action invocation without serde serialization overhead
+    invoke-kernel-action: func(action: string, payload: list<u8>) -> result<list<u8>, execution-trap>;
+
+    /// Query current micro-kernel execution status
+    kernel-status: func() -> kernel-execution-status;
+}
+
+/// Typed linear memory view and lending interface
+interface typed-memory-views {
+    /// Memory region lending permissions
+    enum memory-region-type {
+        read-only,
+        read-write,
+        lent-host,
+        lent-guest,
+    }
+
+    /// Memory slice descriptor pointing directly to linear memory
+    record memory-slice {
+        pointer: u32,
+        length: u32,
+        capacity: u32,
+        flags: u32,
+    }
+
+    /// Typed memory view descriptor for host-guest sharing
+    record typed-view-descriptor {
+        view-id: u32,
+        offset: u32,
+        byte-size: u32,
+        element-type: string,
+        region-type: memory-region-type,
+    }
+
+    /// Lend linear memory slice from host to sandboxed component with zero-copy
+    lend-linear-memory: func(offset: u32, length: u32, flags: u32) -> result<typed-view-descriptor, string>;
+
+    /// Reclaim lent memory slice and invalidate guest handles
+    reclaim-linear-memory: func(view-id: u32) -> result<bool, string>;
+
+    /// Read typed memory slice directly from borrowed region
+    read-memory-view: func(view-id: u32, offset: u32, length: u32) -> result<list<u8>, string>;
+}
+
+/// Zero-copy tensor buffer and hardware-accelerated SIMD interface
+interface zero-copy-tensor-buffers {
+    /// Data type encoding for tensor elements
+    enum tensor-data-type {
+        f32,
+        f16,
+        bf16,
+        i32,
+        i8,
+        q8-0,
+    }
+
+    /// Pinned tensor buffer descriptor mapped directly to linear memory
+    record tensor-buffer-descriptor {
+        buffer-id: string,
+        memory-offset: u32,
+        byte-size: u32,
+        dimensions: list<u32>,
+        dtype: tensor-data-type,
+        is-pinned: bool,
+    }
+
+    /// Vector SIMD accelerated primitive operation
+    enum vector-simd-op {
+        dot-product,
+        cosine-similarity,
+        relu,
+        add,
+        scale,
+        matmul,
+    }
+
+    /// Pin tensor buffer into shared memory region for zero-copy execution
+    pin-tensor-buffer: func(descriptor: tensor-buffer-descriptor) -> result<u32, string>;
+
+    /// Unpin tensor buffer and release lock
+    unpin-tensor-buffer: func(tensor-id: u32) -> result<bool, string>;
+
+    /// Dispatch SIMD vector operation directly on pinned memory buffers
+    dispatch-simd-vector-op: func(op: vector-simd-op, tensor-a-id: u32, tensor-b-id: u32, output-tensor-id: u32) -> result<u32, string>;
+
+    /// Compute cosine similarity between two f32 embedding vectors in zero-copy memory
+    compute-vector-cosine-similarity: func(tensor-a-id: u32, tensor-b-id: u32) -> result<float32, string>;
+}
+
+/// World definition for WASI 0.2 Hagibis Component Runtime
+world hagibis-component-runtime {
+    export micro-kernel-execution;
+    export typed-memory-views;
+    export zero-copy-tensor-buffers;
+}

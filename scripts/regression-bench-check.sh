@@ -20,6 +20,7 @@ REGRESSION_THRESHOLD_PCT="${REGRESSION_THRESHOLD_PCT:-5.0}"
 BASELINE_FILE="${BENCH_BASELINE_FILE:-/tmp/hgb_bench_baseline.json}"
 AUTO_OPTIMIZE=true
 DO_VERIFY=true
+DO_SELF_HEAL=false
 ITERATIONS="${PGO_BENCHMARK_ITERATIONS:-40}"
 
 show_help() {
@@ -31,6 +32,7 @@ Usage: $(basename "$0") [OPTIONS]
 Options:
   --threshold <float>   Regression percentage threshold (default: 5.0%)
   --baseline <path>     Path to baseline JSON file (default: /tmp/hgb_bench_baseline.json)
+  --self-heal           Trigger autonomous compiler healer & LLM remediation agent
   --no-auto-optimize    Do not automatically trigger PGO/BOLT if regression detected
   --no-verify           Skip post-optimization ELF verification
   --iterations <int>    Benchmark iteration count (default: 40)
@@ -47,6 +49,10 @@ while [[ $# -gt 0 ]]; do
         --baseline)
             BASELINE_FILE="$2"
             shift 2
+            ;;
+        --self-heal)
+            DO_SELF_HEAL=true
+            shift
             ;;
         --no-auto-optimize)
             AUTO_OPTIMIZE=false
@@ -141,6 +147,11 @@ print('true' if diff > threshold else 'false')
         REGRESSION_DETECTED=true
         echo ""
         echo "⚠️ [REGRESSION ALERT] Performance regression detected: +${REGRESSION_PCT}% exceeds threshold ${REGRESSION_THRESHOLD_PCT}%!"
+
+        if [ "$DO_SELF_HEAL" = "true" ] && [ -f "$WORKSPACE_ROOT/scripts/autonomous-compiler-healer.sh" ]; then
+            echo ">> [Self-Healing Feedback Loop] Invoking autonomous compiler & regression remediation agent..."
+            bash "$WORKSPACE_ROOT/scripts/autonomous-compiler-healer.sh" --regression-delta "$REGRESSION_PCT" || true
+        fi
     else
         echo ""
         echo "✔ [PERF INVARIANT MAINTAINED] Performance within allowable variance: ${REGRESSION_PCT}% <= ${REGRESSION_THRESHOLD_PCT}%."

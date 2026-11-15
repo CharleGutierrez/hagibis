@@ -21,3 +21,13 @@ preview_id = "preview_c7d24e1098b644158141203091724"
 binding = "HAGIBIS_D1_DB"
 database_name = "hagibis_edge_journal"
 database_id = "d1-3b7498c0-2647-4952-b8d1-729486c8a7b9"
+
+# Pillar 3: Mesh State Durable Object for Edge CRDT Synchronization
+[durable_objects]
+bindings = [
+  { name = "MESH_STATE_DO", class_name = "MeshStateDurableObject" }
+]
+
+[[migrations]]
+tag = "v1"
+new_classes = ["MeshStateDurableObject"]

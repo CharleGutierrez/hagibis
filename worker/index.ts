@@ -210,6 +210,20 @@ export default {
         return await handleSemanticCacheInsert(request, env);
       }
 
+      // 9. Pillar 3: Mesh State Durable Object for Edge CRDT Synchronization
+      if (url.pathname === "/api/mesh/crdt/push" || url.pathname === "/api/mesh/crdt/sync") {
+        const doId = (env as any).MESH_STATE_DO
+          ? (env as any).MESH_STATE_DO.idFromName("global_mesh_control_plane")
+          : null;
+        if (doId) {
+          const stub = (env as any).MESH_STATE_DO.get(doId);
+          return await stub.fetch(request);
+        }
+        // Standalone fallback using MeshStateDurableObject instance
+        const meshDo = new MeshStateDurableObject(null, env);
+        return await meshDo.fetch(request);
+      }
+
       return new Response(
         JSON.stringify({
           error: "Not Found",
@@ -618,3 +632,252 @@ async function handleSemanticCacheInsert(request: Request, env: Env): Promise<Re
     headers: { ...getCorsHeaders(), "Content-Type": "application/json" },
   });
 }
+
+// ==============================================================================
+// Pillar 3: Cloudflare Edge CRDT Mesh State & Durable Object Synchronization
+// ==============================================================================
+
+export interface LwwRegisterState<T> {
+  value: T;
+  timestamp_ms: number;
+  generation: number;
+  author_node_id: string;
+}
+
+export interface OrSetState<T> {
+  add_set: Record<string, string[]>; // element -> array of unique addition tags
+  remove_set: string[];              // tombstone array of removed addition tags
+}
+
+export interface LamportEventLogItem {
+  event_id: string;
+  lamport_clock: number;
+  author_node_id: string;
+  event_type: string;
+  payload_summary: string;
+  timestamp_ms: number;
+}
+
+export interface AgentStateSnapshotEdge {
+  agent_id: string;
+  role: string;
+  status: "Active" | "MigratingToEdge" | "MigratedAtEdge" | "MigratingToLocal" | "Suspended";
+  runtime_location: "LocalSilicon" | "CloudflareEdgeWorker" | "FirecrackerMicroVm";
+  memory_context_hash: string;
+  vector_embedding_refs: string[];
+  metadata: Record<string, unknown>;
+  updated_at_ms: number;
+}
+
+export interface MeshCrdtWireEnvelope {
+  envelope_id: string;
+  source_node_id: string;
+  target_role: string;
+  lamport_clock: number;
+  timestamp_ms: number;
+  agent_states: Record<string, LwwRegisterState<AgentStateSnapshotEdge>>;
+  active_nodes: OrSetState<string>;
+  event_logs: LamportEventLogItem[];
+  sha256_payload_hash: string;
+  hmac_signature: string;
+}
+
+export class MeshStateDurableObject {
+  private state: any;
+  private env: Env;
+  private lamportClock: number = 0;
+  private agentStates: Map<string, LwwRegisterState<AgentStateSnapshotEdge>> = new Map();
+  private activeNodesAddSet: Map<string, Set<string>> = new Map();
+  private activeNodesRemoveSet: Set<string> = new Set();
+  private eventLogs: LamportEventLogItem[] = [];
+
+  constructor(state: any, env: Env) {
+    this.state = state;
+    this.env = env;
+  }
+
+  async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    const method = request.method.toUpperCase();
+
+    if (url.pathname === "/api/mesh/crdt/push" && method === "POST") {
+      return await this.handlePush(request);
+    }
+    if (url.pathname === "/api/mesh/crdt/sync" && (method === "GET" || method === "POST")) {
+      return await this.handleSync(request);
+    }
+
+    return new Response(JSON.stringify({ error: "Not Found in Mesh DO" }), {
+      status: 404,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  async handlePush(request: Request): Promise<Response> {
+    const rawBody = await request.arrayBuffer();
+    const sigHeader = request.headers.get("x-hgb-signature") || "";
+    const secret = this.env.EDGE_SHARED_SECRET || "hagibis-edge-default-secret-32b";
+
+    if (sigHeader) {
+      const isValid = await verifyHmacSha256(rawBody, sigHeader, secret);
+      if (!isValid) {
+        return new Response(JSON.stringify({ error: "Cryptographic HMAC verification failed" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+    }
+
+    const envelope: MeshCrdtWireEnvelope = JSON.parse(new TextDecoder().decode(rawBody));
+
+    // 1. Advance Lamport clock: max(local, remote) + 1
+    this.lamportClock = Math.max(this.lamportClock, envelope.lamport_clock) + 1;
+
+    let agentsUpdated = 0;
+    let agentsRetained = 0;
+
+    // 2. Merge LWW-Registers for Agent States
+    for (const [agentId, remoteReg] of Object.entries(envelope.agent_states || {})) {
+      const localReg = this.agentStates.get(agentId);
+      if (!localReg) {
+        if (remoteReg.value.status === "MigratingToEdge") {
+          remoteReg.value.status = "MigratedAtEdge";
+          remoteReg.value.runtime_location = "CloudflareEdgeWorker";
+        }
+        this.agentStates.set(agentId, remoteReg);
+        agentsUpdated++;
+      } else {
+        let isRemoteWinner = false;
+        if (remoteReg.timestamp_ms > localReg.timestamp_ms) {
+          isRemoteWinner = true;
+        } else if (remoteReg.timestamp_ms === localReg.timestamp_ms) {
+          if (remoteReg.generation > localReg.generation) {
+            isRemoteWinner = true;
+          } else if (remoteReg.generation === localReg.generation) {
+            isRemoteWinner = remoteReg.author_node_id > localReg.author_node_id;
+          }
+        }
+
+        if (isRemoteWinner) {
+          if (remoteReg.value.status === "MigratingToEdge") {
+            remoteReg.value.status = "MigratedAtEdge";
+            remoteReg.value.runtime_location = "CloudflareEdgeWorker";
+          }
+          this.agentStates.set(agentId, remoteReg);
+          agentsUpdated++;
+        } else {
+          agentsRetained++;
+        }
+      }
+    }
+
+    // 3. Merge OR-Set for Active Nodes
+    if (envelope.active_nodes) {
+      for (const [node, tags] of Object.entries(envelope.active_nodes.add_set || {})) {
+        if (!this.activeNodesAddSet.has(node)) {
+          this.activeNodesAddSet.set(node, new Set());
+        }
+        const set = this.activeNodesAddSet.get(node)!;
+        for (const t of tags) set.add(t);
+      }
+      for (const tag of envelope.active_nodes.remove_set || []) {
+        this.activeNodesRemoveSet.add(tag);
+      }
+    }
+
+    // 4. Merge Event Logs
+    const existingLogIds = new Set(this.eventLogs.map((l) => l.event_id));
+    for (const log of envelope.event_logs || []) {
+      if (!existingLogIds.has(log.event_id)) {
+        this.eventLogs.push(log);
+        existingLogIds.add(log.event_id);
+      }
+    }
+    this.eventLogs.sort((a, b) => a.lamport_clock - b.lamport_clock);
+
+    if (this.env.HAGIBIS_EDGE_KV) {
+      await this.env.HAGIBIS_EDGE_KV.put("crdt_mesh:lamport_clock", this.lamportClock.toString());
+      await this.env.HAGIBIS_EDGE_KV.put("crdt_mesh:active_node_count", this.getActiveNodeList().length.toString());
+    }
+
+    return new Response(
+      JSON.stringify({
+        success: true,
+        lamport_clock: this.lamportClock,
+        agents_updated: agentsUpdated,
+        agents_retained: agentsRetained,
+        active_nodes: this.getActiveNodeList(),
+        status: "converged",
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } }
+    );
+  }
+
+  async handleSync(request: Request): Promise<Response> {
+    const secret = this.env.EDGE_SHARED_SECRET || "hagibis-edge-default-secret-32b";
+    this.lamportClock++;
+
+    const agentStatesObj: Record<string, LwwRegisterState<AgentStateSnapshotEdge>> = {};
+    for (const [k, v] of this.agentStates.entries()) {
+      agentStatesObj[k] = v;
+    }
+
+    const addSetObj: Record<string, string[]> = {};
+    for (const [k, v] of this.activeNodesAddSet.entries()) {
+      addSetObj[k] = Array.from(v);
+    }
+
+    const activeNodesObj: OrSetState<string> = {
+      add_set: addSetObj,
+      remove_set: Array.from(this.activeNodesRemoveSet),
+    };
+
+    const envelope: MeshCrdtWireEnvelope = {
+      envelope_id: `edge_env_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      source_node_id: this.env.EDGE_NODE_ID || "cloudflare_edge_gateway",
+      target_role: "local_daemon",
+      lamport_clock: this.lamportClock,
+      timestamp_ms: Date.now(),
+      agent_states: agentStatesObj,
+      active_nodes: activeNodesObj,
+      event_logs: this.eventLogs.slice(-100),
+      sha256_payload_hash: "",
+      hmac_signature: "",
+    };
+
+    const serializedPayload = JSON.stringify(envelope);
+    const payloadBytes = new TextEncoder().encode(serializedPayload);
+
+    const key = await crypto.subtle.importKey(
+      "raw",
+      new TextEncoder().encode(secret),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"]
+    );
+    const sigBuf = await crypto.subtle.sign("HMAC", key, payloadBytes);
+    envelope.hmac_signature = Array.from(new Uint8Array(sigBuf))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+
+    return new Response(JSON.stringify(envelope), {
+      status: 200,
+      headers: {
+        "Content-Type": "application/json",
+        "X-Hgb-Signature": `sha256=${envelope.hmac_signature}`,
+      },
+    });
+  }
+
+  private getActiveNodeList(): string[] {
+    const list: string[] = [];
+    for (const [node, tags] of this.activeNodesAddSet.entries()) {
+      const hasActive = Array.from(tags).some((t) => !this.activeNodesRemoveSet.has(t));
+      if (hasActive) {
+        list.push(node);
+      }
+    }
+    return list;
+  }
+}
+

@@ -30,6 +30,9 @@ pub enum NpuRouterError {
 
     #[error("Buffer dimension mismatch: expected {expected}, found {actual}")]
     DimensionMismatch { expected: usize, actual: usize },
+
+    #[error("Invalid payload: {0}")]
+    InvalidPayload(String),
 }
 
 pub type Result<T> = std::result::Result<T, NpuRouterError>;

@@ -603,6 +603,16 @@ pub use semantic_knowledge_mesh::{
     PARTITION_MCP_TOOL, PARTITION_TELEMETRY,
 };
 
+// Pillar 5: Sub-Millisecond IVF-PQ & Hybrid Full-Text Engine
+pub mod lancedb_ivf_pq_quantizer;
+pub use lancedb_ivf_pq_quantizer::{
+    CompactionReport, FtsIndex, IvfIndex, IvfPqConfig, IvfPqPostingEntry,
+    LanceDbIvfPqQuantizer, MetricKind as IvfPqMetricKind, ProductQuantizer,
+    SearchResult as IvfPqSearchResult, SearchSource as IvfPqSearchSource,
+    WalEntry as IvfPqWalEntry,
+};
+
+
 
 
 

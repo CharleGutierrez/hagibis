@@ -19,9 +19,14 @@ pub mod microvm_raft_consensus;
 pub mod p2p_mesh;
 pub mod secure_transport;
 pub mod distributed_edge_memory_fabric;
+pub mod edge_worker_crdt_sync;
 
 // Public re-exports
 pub use error::{MeshError, Result};
+pub use edge_worker_crdt_sync::{
+    AgentMigrationStatus, AgentRuntimeLocation, AgentStateSnapshot, EdgeWorkerCrdtSyncClient,
+    LamportEventLog, MergeSummaryReport, MeshCrdtEnvelope,
+};
 pub use microvm_raft_consensus::{
     AppendEntriesArgs, AppendEntriesReply, MicroVmRaftEngine, MicroVmStateMigration,
     MigrationStatus, RaftLogEntry, RaftPayload, RaftRole, RequestVoteArgs, RequestVoteReply,
@@ -125,5 +130,15 @@ mod tests {
         authorized_migration
             .verify_integrity(&node_a.public_key())
             .expect("Cryptographic verification of state checkpoint must succeed");
+    }
+
+    #[tokio::test]
+    async fn test_edge_worker_crdt_sync_integration() {
+        let client = EdgeWorkerCrdtSyncClient::new("local-daemon-alpha", b"edge-secret-32b");
+        let active_nodes = client.active_nodes().await;
+        assert!(active_nodes.contains(&"local-daemon-alpha".to_string()));
+
+        let envelope = client.export_sync_envelope("cloudflare_edge").await;
+        assert!(envelope.verify(b"edge-secret-32b"));
     }
 }
