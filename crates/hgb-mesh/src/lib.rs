@@ -20,9 +20,18 @@ pub mod p2p_mesh;
 pub mod secure_transport;
 pub mod distributed_edge_memory_fabric;
 pub mod edge_worker_crdt_sync;
+pub mod quic_distributed_compute_grid;
 
 // Public re-exports
 pub use error::{MeshError, Result};
+pub use quic_distributed_compute_grid::{
+    ComputeCapability, MemoryPoolMetrics, NatTraversalManager, NodeComputeCapacity,
+    QuicDistributedComputeGrid, QuicFrame, QuicGridConfig, QuicHeader, QuicNodeSession,
+    QuicPacket, QuicPacketType, QuicSessionState, RemoteMemoryBlock, StunEndpoint, StunNatType,
+    StunProtocol, TargetHardware, TaskExecutionResult, TaskWorkload, WorkloadRouteDecision,
+    DEFAULT_HEARTBEAT_INTERVAL_MS, HGB_QUIC_VERSION, MAX_MISSED_HEARTBEATS,
+    MAX_QUIC_DATAGRAM_SIZE, STUN_MAGIC_COOKIE,
+};
 pub use edge_worker_crdt_sync::{
     AgentMigrationStatus, AgentRuntimeLocation, AgentStateSnapshot, EdgeWorkerCrdtSyncClient,
     LamportEventLog, MergeSummaryReport, MeshCrdtEnvelope,

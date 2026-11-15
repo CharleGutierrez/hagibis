@@ -12,6 +12,7 @@ path = "src/bin/hgbd.rs"
 [dependencies]
 hgb-core = { path = "../hgb-core" }
 hgb-storage = { path = "../hgb-storage" }
+hgb-compiler = { path = "../hgb-compiler" }
 hgb-nextgen = { path = "../hgb-nextgen" }
 hgb-wasm-kernel = { path = "../hgb-wasm-kernel" }
 wat = { path = "../wat" }

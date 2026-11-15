@@ -2395,6 +2395,27 @@ pub use dual_sandbox_zero_copy_ring::{
     HEADER_SIZE_BYTES, RING_MAGIC as ZERO_COPY_RING_MAGIC, RING_VERSION as ZERO_COPY_RING_VERSION,
 };
 
+// Enhancement 1: Hardware-Enforced MicroVM Isolation in Production
+pub mod hardware_enforced_microvm_isolation;
+pub use hardware_enforced_microvm_isolation::{
+    DynamicSocketManager,
+    FirecrackerAction,
+    FirecrackerBootSource,
+    FirecrackerDrive,
+    FirecrackerMachineConfig,
+    FirecrackerSocketClient,
+    HardwareEnforcedMicrovmIsolationEngine,
+    IsolationTier as HardwareIsolationTier,
+    KvmHardwareState,
+    KvmHardwareValidator,
+    KvmValidationReport,
+    LandlockLsmSandbox,
+    MicrovmConfigPayload,
+    MicrovmExecutionReport,
+    MicrovmExecutionRequest,
+};
+
+
 
 
 

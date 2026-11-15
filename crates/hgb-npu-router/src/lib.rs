@@ -13,6 +13,7 @@ pub mod shard_allocator;
 pub mod telemetry_router;
 pub mod pareto_frontier_autotuner;
 pub mod hardware_aware_dynamic_router;
+pub mod realtime_telemetry_load_balancer;
 
 pub use error::{NpuRouterError, Result};
 pub use hardware_aware_dynamic_router::{
@@ -47,6 +48,13 @@ pub use pareto_frontier_autotuner::{
     AcceleratorBackendTarget, HardwareTelemetrySnapshot, ParetoAnalysisReport,
     ParetoAutoDispatcher, ParetoAutoTunerConfig, ParetoDispatchEvent,
     ParetoOperatingPoint,
+};
+pub use realtime_telemetry_load_balancer::{
+    AcceleratorNodeTelemetry, AcceleratorTargetKind, CongestionWeights,
+    DynamicInferenceResult, ExecutionReceipt,
+    LlmInferenceJob, LoadBalancerConfig, MigrationReceipt, MigrationTriggerReason,
+    PcieSaturationMetrics, RealtimeTelemetryLoadBalancer, ThermalTelemetry,
+    VectorQueryJob, VramTelemetry,
 };
 
 #[cfg(test)]

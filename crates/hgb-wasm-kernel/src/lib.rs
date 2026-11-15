@@ -32,6 +32,12 @@ pub use wasi_nn_gpu::{
     WasiNnGuestModel,
 };
 
+pub mod kernel_build_cache_manager;
+pub use kernel_build_cache_manager::{
+    KernelArtifacts, KernelBuildCacheManager, KernelBuildMetadata, KernelBuildOptions,
+    WasmOptimizationMode, CACHE_METADATA_FILENAME, DEFAULT_MAX_CACHE_BYTES,
+};
+
 /// Tool input/output manifest exported by the WASM guest
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PluginManifest {

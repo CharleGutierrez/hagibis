@@ -407,6 +407,20 @@ test-masterclass:
 	@echo " [Masterclass Test] Completed: All Chapters & Simulations In-Sync!"
 	@echo "======================================================================"
 
+# Run automated CI self-healing daemon loop against test/compiler failures
+self-heal-ci:
+	@echo "======================================================================"
+	@echo " [Self-Healing CI] Running Autonomous Compiler & Test Healing Daemon Loop"
+	@echo "======================================================================"
+	bash scripts/autonomous-compiler-healer.sh --demo
+
+# Run complete storage hygiene audit, sccache setup & target quota pruning
+storage-hygiene:
+	@echo "======================================================================"
+	@echo " [Storage & Build Hygiene] Running Storage Audit, Sccache & Quota Cleanup"
+	@echo "======================================================================"
+	bash scripts/build-hygiene.sh --all
+
 clean:
 	cargo clean
 	rm -rf $(PGO_DATA_DIR) $(BOLT_DATA_DIR) target/skills

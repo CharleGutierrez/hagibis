@@ -831,6 +831,15 @@ pub use autonomous_stacktrace_self_healer::{
     MicrovmSandboxVerification, SelfHealingIncidentReceipt, SynthesizedPatchCandidate,
 };
 
+pub mod autonomous_cicd_self_healing_daemon;
+pub use autonomous_cicd_self_healing_daemon::{
+    AstFailureSite, AstPatchSynthesizer, AutonomousCicdSelfHealingDaemon,
+    CompilerErrorCode, DaemonConfig as CicdDaemonConfig, DiagnosticParser, DiagnosticSeverity,
+    DiagnosticSpan, ErrorCategory, FixKnowledgeStore, FirstGreenVerifier,
+    ProvenFixPattern, RemediationReceipt, SemanticDiagnostic,
+    SnapshotRollbackGuard, SynthesizedPatch, VerificationOutcome,
+};
+
 // Pillar I: Distributed Cluster Mesh & Multi-Node Synchronization Coordinator
 pub mod distributed_cluster_mesh;
 pub use distributed_cluster_mesh::{

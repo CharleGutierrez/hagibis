@@ -6,11 +6,13 @@
 # Core Capabilities:
 #   1. Root Filesystem Monitoring: Queries root (/) utilization; alarms if >= 80%.
 #   2. Stale Artifact Pruning: Prunes incremental artifacts & object caches older
-#      than 7 days from external and local cargo target directories.
-#   3. Temporary Build Target Cleanup: Cleans volatile scratch directories
+#      than 7 days or exceeding disk quotas from external and local cargo target dirs.
+#   3. Automated Sccache Detection & Setup: Detects sccache, configures SCCACHE_DIR,
+#      and manages compilation cache quotas.
+#   4. Temporary Build Target Cleanup: Cleans volatile scratch directories
 #      (/tmp/cargo*, /tmp/pgo-*, /tmp/bolt-*, /tmp/hgb-*).
-#   4. Scratch Space Provisioning: Prepares /media/toshiba/Lexar/scratch/
-#      for Docker containers and Firecracker microVM execution.
+#   5. Scratch Space Provisioning: Prepares /media/toshiba/Lexar/scratch/
+#      for Docker containers, WASM build cache, and Firecracker microVM execution.
 # ==============================================================================
 set -euo pipefail
 
@@ -23,12 +25,21 @@ LOCAL_TARGET_DIR="$WORKSPACE_ROOT/target"
 TMP_TARGET_DIR="/tmp/cargo-target"
 HOME_TARGET_DIR="$HOME/.cargo-target-hagibis"
 
+# Sccache directory & cache configuration
+SCCACHE_DIR="${SCCACHE_DIR:-/media/toshiba/Lexar/sccache}"
+if [ ! -d "/media/toshiba/Lexar" ]; then
+    SCCACHE_DIR="${HOME}/.cache/sccache"
+fi
+export SCCACHE_DIR
+export SCCACHE_CACHE_SIZE="${SCCACHE_CACHE_SIZE:-10G}"
+
 # Scratch directory for microVMs and containers
 LEXAR_SCRATCH_DIR="/media/toshiba/Lexar/scratch"
 
 # Thresholds
 DISK_ALARM_THRESHOLD_PERCENT=80
 PRUNE_DAYS=7
+TARGET_QUOTA_MB=15360 # 15 GB quota for target directories
 
 # Modes
 MODE="all"
@@ -44,8 +55,10 @@ Options:
   --check            Check root filesystem usage & target directory footprints without deletion.
   --clean-cache      Purge volatile /tmp build artifacts (/tmp/cargo*, /tmp/pgo*, /tmp/bolt*).
   --prune-targets    Prune build artifacts older than ${PRUNE_DAYS} days from target directories.
+  --sccache-status   Detect sccache installation, verify SCCACHE_DIR and report cache stats.
+  --storage-hygiene  Execute full storage hygiene audit, sccache setup, and target quota pruning.
   --prepare-scratch  Create and verify scratch space at ${LEXAR_SCRATCH_DIR}.
-  --all              Execute full hygiene pipeline (check, prune, clean, scratch). (Default)
+  --all              Execute full hygiene pipeline (check, sccache, prune, clean, scratch). (Default)
   --self-heal-build  Execute hygiene audit, trap cargo build errors & trigger autonomous self-healing.
   --json             Emit telemetry and status summary as JSON.
   -h, --help         Show this help message.
@@ -62,6 +75,12 @@ for arg in "$@"; do
             ;;
         --prune-targets)
             MODE="prune-targets"
+            ;;
+        --sccache-status)
+            MODE="sccache-status"
+            ;;
+        --storage-hygiene)
+            MODE="storage-hygiene"
             ;;
         --prepare-scratch)
             MODE="prepare-scratch"
@@ -161,7 +180,39 @@ check_disk_usage() {
 }
 
 # ------------------------------------------------------------------------------
-# 2. Prune Stale Artifacts Older Than N Days
+# 2. Automated Sccache Detection & Configuration
+# ------------------------------------------------------------------------------
+setup_sccache() {
+    mkdir -p "$SCCACHE_DIR"
+    local sccache_bin
+    sccache_bin=$(command -v sccache 2>/dev/null || true)
+
+    if [ "$JSON_OUTPUT" != true ]; then
+        echo ""
+        echo -e "${BLUE}======================================================================${RESET}"
+        echo -e "${BOLD} Automated Sccache Compilation Cache Management${RESET}"
+        echo -e "${BLUE}======================================================================${RESET}"
+        echo -e " SCCACHE_DIR:            ${SCCACHE_DIR}"
+        echo -e " SCCACHE_CACHE_SIZE:     ${SCCACHE_CACHE_SIZE}"
+    fi
+
+    if [ -n "$sccache_bin" ]; then
+        export RUSTC_WRAPPER="$sccache_bin"
+        if [ "$JSON_OUTPUT" != true ]; then
+            echo -e "${GREEN}  ✔ Sccache detected: ${sccache_bin}${RESET}"
+            echo -e "    Enabled: RUSTC_WRAPPER=${sccache_bin}"
+            "$sccache_bin" --show-stats 2>/dev/null || true
+        fi
+    else
+        if [ "$JSON_OUTPUT" != true ]; then
+            echo -e "${YELLOW}  [INFO] sccache is not installed in PATH. Compilations will proceed with native cargo caches.${RESET}"
+            echo -e "         To install: cargo install sccache --locked"
+        fi
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# 3. Prune Stale Artifacts Older Than N Days & Quota Enforcer
 # ------------------------------------------------------------------------------
 prune_target_directory() {
     local target_dir="$1"
@@ -175,11 +226,11 @@ prune_target_directory() {
         echo -e "${BLUE}[PRUNE] Auditing target directory: ${target_dir}${RESET}"
     fi
 
-    # Calculate pre-prune disk usage
     local pre_size_kb
     pre_size_kb=$(du -sk "$target_dir" 2>/dev/null | awk '{print $1}' || echo "0")
+    local pre_size_mb=$((pre_size_kb / 1024))
 
-    # Prune stale object files, incremental caches, rlibs older than $days
+    # 1. Prune stale object files, incremental caches, rlibs older than $days
     local pruned_count=0
     local stale_files
     stale_files=$(find "$target_dir" -type f \( -name "*.o" -o -name "*.rlib" -o -name "*.rmeta" -o -name "*.d" -o -name "*.profraw" \) -mtime "+$days" 2>/dev/null || true)
@@ -197,14 +248,26 @@ prune_target_directory() {
         find "$target_dir/release/incremental" -depth -mindepth 2 -type d -mtime "+$days" -exec rm -rf {} + 2>/dev/null || true
     fi
 
+    # 2. Enforce disk quota if directory exceeds TARGET_QUOTA_MB
     local post_size_kb
     post_size_kb=$(du -sk "$target_dir" 2>/dev/null | awk '{print $1}' || echo "0")
+    local current_mb=$((post_size_kb / 1024))
+
+    if [ "$current_mb" -gt "$TARGET_QUOTA_MB" ]; then
+        if [ "$JSON_OUTPUT" != true ]; then
+            echo -e "${YELLOW}  [QUOTA] Target directory size (${current_mb} MB) exceeds quota (${TARGET_QUOTA_MB} MB). Pruning oldest build artifacts...${RESET}"
+        fi
+        # Prune oldest files until under quota
+        find "$target_dir" -type f \( -name "*.rlib" -o -name "*.rmeta" -o -name "*.o" \) -printf '%T+ %p\n' 2>/dev/null | sort | head -n 50 | awk '{print $2}' | xargs -r rm -f 2>/dev/null || true
+        post_size_kb=$(du -sk "$target_dir" 2>/dev/null | awk '{print $1}' || echo "0")
+    fi
+
     local freed_kb=$((pre_size_kb > post_size_kb ? pre_size_kb - post_size_kb : 0))
     local freed_mb=$((freed_kb / 1024))
 
     if [ "$JSON_OUTPUT" != true ]; then
         echo -e "${GREEN}  ✔ Pruned ${pruned_count} files older than ${days} days from ${target_dir}.${RESET}"
-        echo -e "    Freed: ~${freed_mb} MB | Current size: ~$((post_size_kb / 1024)) MB"
+        echo -e "    Freed: ~${freed_mb} MB | Current size: ~$((post_size_kb / 1024)) MB (Quota: ${TARGET_QUOTA_MB} MB)"
     fi
 }
 
@@ -212,7 +275,7 @@ prune_all_targets() {
     if [ "$JSON_OUTPUT" != true ]; then
         echo ""
         echo -e "${BLUE}======================================================================${RESET}"
-        echo -e "${BOLD} Pruning Stale Incremental Artifacts (> ${PRUNE_DAYS} days)${RESET}"
+        echo -e "${BOLD} Pruning Stale Incremental Artifacts (> ${PRUNE_DAYS} days) & Enforcing Quotas${RESET}"
         echo -e "${BLUE}======================================================================${RESET}"
     fi
 
@@ -223,7 +286,7 @@ prune_all_targets() {
 }
 
 # ------------------------------------------------------------------------------
-# 3. Clean Volatile Temporary Build Artifacts
+# 4. Clean Volatile Temporary Build Artifacts
 # ------------------------------------------------------------------------------
 clean_volatile_cache() {
     if [ "$JSON_OUTPUT" != true ]; then
@@ -255,7 +318,7 @@ clean_volatile_cache() {
 }
 
 # ------------------------------------------------------------------------------
-# 4. Prepare Scratch Space on External Lexar Drive
+# 5. Prepare Scratch Space on External Lexar Drive
 # ------------------------------------------------------------------------------
 prepare_scratch_space() {
     if [ "$JSON_OUTPUT" != true ]; then
@@ -269,9 +332,10 @@ prepare_scratch_space() {
         mkdir -p "$LEXAR_SCRATCH_DIR/docker"
         mkdir -p "$LEXAR_SCRATCH_DIR/firecracker"
         mkdir -p "$LEXAR_SCRATCH_DIR/tmp"
+        mkdir -p "$LEXAR_SCRATCH_DIR/wasm_cache"
         mkdir -p "$EXTERNAL_TARGET_DIR"
+        mkdir -p "$SCCACHE_DIR"
 
-        # Verify writability
         local probe_file="$LEXAR_SCRATCH_DIR/tmp/.write_probe"
         touch "$probe_file" 2>/dev/null && rm -f "$probe_file"
         
@@ -279,7 +343,8 @@ prepare_scratch_space() {
             echo -e "${GREEN}  ✔ Scratch directory provisioned successfully:${RESET}"
             echo -e "    - Docker Root:       $LEXAR_SCRATCH_DIR/docker"
             echo -e "    - Firecracker vhost: $LEXAR_SCRATCH_DIR/firecracker"
-            echo -e "    - Temp Scratch:      $LEXAR_SCRATCH_DIR/tmp"
+            echo -e "    - WASM Cache:        $LEXAR_SCRATCH_DIR/wasm_cache"
+            echo -e "    - Sccache Cache:     $SCCACHE_DIR"
             echo -e "    - External Target:   $EXTERNAL_TARGET_DIR"
         fi
     else
@@ -296,7 +361,7 @@ check_disk_usage
 
 case "$MODE" in
     check)
-        # Check only
+        setup_sccache
         ;;
     clean-cache)
         clean_volatile_cache
@@ -304,12 +369,16 @@ case "$MODE" in
     prune-targets)
         prune_all_targets
         ;;
-    prepare-scratch)
-        prepare_scratch_space
+    sccache-status)
+        setup_sccache
         ;;
-    all)
+    storage-hygiene|all)
+        setup_sccache
         prune_all_targets
         clean_volatile_cache
+        prepare_scratch_space
+        ;;
+    prepare-scratch)
         prepare_scratch_space
         ;;
 esac
@@ -323,6 +392,7 @@ if [ "$JSON_OUTPUT" = true ]; then
   "alarm_triggered": $IS_ALARM,
   "alarm_threshold": $DISK_ALARM_THRESHOLD_PERCENT,
   "external_target_dir": "$EXTERNAL_TARGET_DIR",
+  "sccache_dir": "$SCCACHE_DIR",
   "scratch_dir": "$LEXAR_SCRATCH_DIR",
   "mode": "$MODE"
 }

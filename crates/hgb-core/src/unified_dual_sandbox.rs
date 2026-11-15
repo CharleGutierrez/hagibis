@@ -27,6 +27,9 @@ use serde_json::{json, Value};
 use crate::dual_layer_sandbox::{DualLayerSandboxEngine, ExecutionTier};
 use crate::dynamic_skill_mcp_hot_reloader::WitSpec;
 use crate::error::{HgbError, Result};
+use crate::hardware_enforced_microvm_isolation::{
+    HardwareEnforcedMicrovmIsolationEngine, MicrovmExecutionRequest,
+};
 use crate::microvm_sandbox_executor::{EphemeralExecSpec, FirecrackerEphemeralSandbox};
 use crate::wasm_component_runner::{WasmComponentRunner, WasmComponentRunnerConfig};
 
@@ -275,6 +278,7 @@ pub struct UnifiedDualSandboxEngine {
     workspace_root: PathBuf,
     dual_layer_engine: Arc<DualLayerSandboxEngine>,
     firecracker_sandbox: Arc<FirecrackerEphemeralSandbox>,
+    hardware_isolation_engine: Arc<HardwareEnforcedMicrovmIsolationEngine>,
     wasm_component_runner: Arc<WasmComponentRunner>,
     telemetry_history: Arc<RwLock<Vec<SandboxTelemetry>>>,
     wit_specs: Arc<RwLock<HashMap<String, WitSpec>>>,
@@ -288,6 +292,7 @@ impl UnifiedDualSandboxEngine {
         let ws = workspace_root.into();
         let dual_layer = Arc::new(DualLayerSandboxEngine::new(&ws));
         let fc_sandbox = Arc::new(FirecrackerEphemeralSandbox::new(&ws));
+        let hw_isolation = Arc::new(HardwareEnforcedMicrovmIsolationEngine::new(&ws));
 
         let mut runner_cfg = WasmComponentRunnerConfig::default();
         runner_cfg.fuel_limit = DEFAULT_WASM_FUEL_BUDGET;
@@ -298,6 +303,7 @@ impl UnifiedDualSandboxEngine {
             workspace_root: ws,
             dual_layer_engine: dual_layer,
             firecracker_sandbox: fc_sandbox,
+            hardware_isolation_engine: hw_isolation,
             wasm_component_runner: wasm_runner,
             telemetry_history: Arc::new(RwLock::new(Vec::new())),
             wit_specs: Arc::new(RwLock::new(HashMap::new())),
@@ -331,6 +337,11 @@ impl UnifiedDualSandboxEngine {
     /// Access inner handoffs count
     pub fn total_handoffs(&self) -> u64 {
         self.total_handoffs.load(Ordering::Relaxed)
+    }
+
+    /// Access inner HardwareEnforcedMicrovmIsolationEngine
+    pub fn hardware_isolation_engine(&self) -> &Arc<HardwareEnforcedMicrovmIsolationEngine> {
+        &self.hardware_isolation_engine
     }
 
     /// Execute lightweight in-process computation (FastWasm)
@@ -524,27 +535,36 @@ impl UnifiedDualSandboxEngine {
         let startup_latency_us = startup_start.elapsed().as_micros() as u64;
         let exec_start = Instant::now();
 
-        // 1. Attempt FirecrackerEphemeralSandbox execution
-        let spec = EphemeralExecSpec {
-            code: command_str.clone(),
-            language: "bash".to_string(),
-            patch_content: None,
-            timeout_ms: request.limits.max_execution_time_ms,
-            memory_mb: mem_mb,
-            vcpu: vcpus,
-        };
+        // 1. Primary path: Attempt HardwareEnforcedMicrovmIsolationEngine execution
+        let microvm_req = MicrovmExecutionRequest::new(&command_str)
+            .with_limits(vcpus, mem_mb, request.limits.max_execution_time_ms);
 
-        let (stdout, stderr, exit_code, isolation_tier) = match self.firecracker_sandbox.execute(&spec) {
-            Ok(res) => (res.stdout, res.stderr, res.exit_code, res.isolation_tier),
+        let (stdout, stderr, exit_code, isolation_tier) = match self.hardware_isolation_engine.execute(&microvm_req) {
+            Ok(rep) => (rep.stdout, rep.stderr, rep.exit_code, rep.security_boundary),
             Err(_) => {
-                // Fallback to DualLayerSandboxEngine's heavy microvm execution
-                let rep = self.dual_layer_engine.execute_heavy_microvm(
-                    &command_str,
-                    request.working_dir.as_deref(),
-                    Some(vcpus),
-                    Some(mem_mb),
-                )?;
-                (rep.stdout, rep.stderr, rep.exit_code, rep.security_boundary)
+                // Secondary path: Attempt FirecrackerEphemeralSandbox execution
+                let spec = EphemeralExecSpec {
+                    code: command_str.clone(),
+                    language: "bash".to_string(),
+                    patch_content: None,
+                    timeout_ms: request.limits.max_execution_time_ms,
+                    memory_mb: mem_mb,
+                    vcpu: vcpus,
+                };
+
+                match self.firecracker_sandbox.execute(&spec) {
+                    Ok(res) => (res.stdout, res.stderr, res.exit_code, res.isolation_tier),
+                    Err(_) => {
+                        // Final fallback to DualLayerSandboxEngine's heavy microvm execution
+                        let rep = self.dual_layer_engine.execute_heavy_microvm(
+                            &command_str,
+                            request.working_dir.as_deref(),
+                            Some(vcpus),
+                            Some(mem_mb),
+                        )?;
+                        (rep.stdout, rep.stderr, rep.exit_code, rep.security_boundary)
+                    }
+                }
             }
         };
 

@@ -2060,6 +2060,7 @@ dependencies = [
  "clap",
  "colored",
  "futures-util",
+ "hgb-compiler",
  "hgb-core",
  "hgb-nextgen",
  "hgb-storage",

@@ -50,6 +50,10 @@ inputs:
     description: 'Execute automated PGO + LLVM BOLT profiling and release binary optimization for hgb, hgbd, and hgb-wasm-kernel'
     required: false
     default: 'false'
+  autonomous-self-healing:
+    description: 'Trigger autonomous compiler self-healing loop (diagnose stderr, vector fix lookup, and AST patch) on compile/test failures'
+    required: false
+    default: 'true'
   github-token:
     description: 'GitHub token for PR comment authoring'
     required: false
