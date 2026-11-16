@@ -1,0 +1,274 @@
+// ==============================================================================
+// Hagibis Unified OpenTelemetry Polyglot Observability Specification (WIT)
+// Package: hagibis:observability@0.3.0
+//
+// Bridges:
+//  - Rust MicroVMs and Core Runtimes (`crates/hgb-core`, `crates/hgb-daemon`)
+//  - TypeScript Cloudflare Workers Edge Gateway (`worker/index.ts`)
+//  - Python Masterclass Simulations and Autonomous Governors
+// Under a unified W3C Traceparent standard, lock-free span buffers,
+// and dynamic hardware/microVM allocation telemetry.
+// ==============================================================================
+
+package hagibis:observability@0.3.0;
+
+/// Core telemetry types, W3C trace context, span attributes, and metric records
+interface types {
+    /// Standard OpenTelemetry span kinds
+    enum span-kind {
+        /// Default internal function or local computation
+        internal,
+        /// Inbound server request (e.g. edge worker receiving HTTP/webhook)
+        server,
+        /// Outbound client call (e.g. edge worker calling upstream or LLM)
+        client,
+        /// Message/task producer (e.g. enqueueing MicroVM task)
+        producer,
+        /// Message/task consumer (e.g. MicroVM worker executing task)
+        consumer,
+        /// Edge gateway router span
+        edge-gateway,
+        /// Firecracker MicroVM hypervisor supervisor span
+        microvm-hypervisor,
+    }
+
+    /// OpenTelemetry canonical status codes
+    enum span-status-code {
+        unset,
+        ok,
+        error,
+    }
+
+    /// Status descriptor with optional human-readable error description
+    record span-status {
+        code: span-status-code,
+        description: option<string>,
+    }
+
+    /// W3C Trace Context representation (RFC W3C Recommendation)
+    /// traceparent: {version}-{trace_id}-{parent_id}-{trace_flags}
+    record trace-context {
+        /// Version byte (default 0x00)
+        version: u8,
+        /// 128-bit trace identifier represented as 32 lowercase hex characters
+        trace-id: string,
+        /// 64-bit parent span identifier represented as 16 lowercase hex characters
+        parent-span-id: option<string>,
+        /// 64-bit active span identifier represented as 16 lowercase hex characters
+        span-id: string,
+        /// 8-bit trace flags (bit 0: sampled)
+        trace-flags: u8,
+        /// Optional W3C tracestate vendor string (e.g., 'hgb=eco;p=0')
+        trace-state: option<string>,
+    }
+
+    /// Strongly-typed attribute values supporting zero-allocation serialization
+    variant attribute-value {
+        val-string(string),
+        val-int64(s64),
+        val-float64(f64),
+        val-bool(bool),
+        val-bytes(list<u8>),
+        val-string-list(list<string>),
+    }
+
+    /// Key-value attribute attached to spans or events
+    record span-attribute {
+        key: string,
+        value: attribute-value,
+    }
+
+    /// Discrete instantaneous event occurring during span execution
+    record span-event {
+        name: string,
+        timestamp-unix-nano: u64,
+        attributes: list<span-attribute>,
+    }
+
+    /// Causal link pointing to a related span across distributed contexts
+    record span-link {
+        trace-id: string,
+        span-id: string,
+        trace-state: option<string>,
+        attributes: list<span-attribute>,
+    }
+
+    /// Polyglot runtime execution tier/role
+    enum execution-role {
+        edge-worker,
+        guest-wasm,
+        firecracker-microvm,
+        python-simulation,
+        bare-metal-daemon,
+    }
+
+    /// Immutable completed span record ready for lock-free buffering or export
+    record span-record {
+        trace-id: string,
+        span-id: string,
+        parent-span-id: option<string>,
+        name: string,
+        service-name: string,
+        role: execution-role,
+        kind: span-kind,
+        start-time-unix-nano: u64,
+        end-time-unix-nano: u64,
+        duration-ms: f64,
+        status: span-status,
+        attributes: list<span-attribute>,
+        events: list<span-event>,
+        links: list<span-link>,
+    }
+
+    /// Rolling latency percentile distribution
+    record latency-percentiles {
+        p50-ms: f64,
+        p90-ms: f64,
+        p95-ms: f64,
+        p99-ms: f64,
+        min-ms: f64,
+        max-ms: f64,
+        mean-ms: f64,
+        sample-count: u64,
+        error-rate: f64,
+    }
+
+    /// Dynamic MicroVM allocation feedback telemetry
+    record microvm-allocation-telemetry {
+        /// Dynamic vCPU core count allocated to the MicroVM
+        vcpu-count: u32,
+        /// Dynamic RAM limit in megabytes
+        memory-mb: u32,
+        /// Current queue depth awaiting hypervisor execution
+        queue-depth: u32,
+        /// Active bare-metal hardware governor profile ('performance', 'balanced', 'powersave')
+        governor-profile: string,
+        /// Active worker thread pool scale ('eco', 'nominal', 'boosted')
+        worker-concurrency-state: string,
+        /// Total execution duration in microseconds
+        execution-us: u64,
+        /// Whether memory or CPU throttling was detected
+        throttling-detected: bool,
+    }
+
+    /// Cloudflare Worker edge dispatch routing telemetry
+    record edge-dispatch-telemetry {
+        traceparent: string,
+        task-id: string,
+        routing-latency-us: u64,
+        payload-bytes: u32,
+        priority: string,
+        target-node: string,
+        recommended-vcpus: u32,
+        recommended-mem-mb: u32,
+    }
+}
+
+/// W3C Trace Context injection and extraction interfaces
+interface context-carrier {
+    use types.{trace-context};
+
+    /// Formats structured trace context into a canonical W3C traceparent header string
+    /// Example: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+    inject-traceparent: func(context: trace-context) -> string;
+
+    /// Parses and validates a canonical W3C traceparent header string
+    /// Returns error if format, hex lengths, or zero-values violate W3C specification
+    extract-traceparent: func(carrier: string) -> result<trace-context, string>;
+
+    /// Synthesizes a new root trace context with randomized IDs and sampled flag
+    generate-root-context: func() -> trace-context;
+
+    /// Creates a child context inheriting trace-id and setting new span-id
+    create-child-context: func(parent: trace-context) -> trace-context;
+}
+
+/// Active tracer interface for high-resolution span management
+interface tracer {
+    use types.{span-kind, span-attribute, span-event, span-status, span-record, trace-context};
+
+    /// Starts an active span with optional parent context and initial attributes
+    start-span: func(
+        name: string,
+        kind: span-kind,
+        parent: option<trace-context>,
+        attributes: list<span-attribute>
+    ) -> trace-context;
+
+    /// Attaches an instantaneous structured event to an active span
+    attach-event: func(
+        span-id: string,
+        event-name: string,
+        attributes: list<span-attribute>
+    ) -> result<_, string>;
+
+    /// Attaches or updates an attribute on an active span
+    set-attribute: func(
+        span-id: string,
+        attribute: span-attribute
+    ) -> result<_, string>;
+
+    /// Completes an active span, calculating exact duration and pushing to buffer
+    finish-span: func(
+        span-id: string,
+        status: span-status
+    ) -> result<span-record, string>;
+}
+
+/// High-throughput lock-free span ring buffer interface
+interface lockfree-buffer {
+    use types.{span-record, latency-percentiles};
+
+    /// Appends a completed span into the ring buffer with zero locking overhead
+    push-span: func(record: span-record) -> bool;
+
+    /// Drains up to `max-records` from the buffer in FIFO order
+    drain-spans: func(max-records: u32) -> list<span-record>;
+
+    /// Retrieves a non-destructive read-only snapshot of current buffered spans
+    snapshot-spans: func(limit: u32) -> list<span-record>;
+
+    /// Calculates sliding-window latency percentiles from recent spans
+    compute-percentiles: func() -> latency-percentiles;
+
+    /// Clears the span ring buffer
+    reset-buffer: func();
+}
+
+/// Dynamic Hardware Governor & MicroVM Allocation Bridge
+interface governor-bridge {
+    use types.{microvm-allocation-telemetry, latency-percentiles};
+
+    /// Evaluates real-time P99 latency SLA and queue depth against thresholds
+    /// Returns recommended governor profile and resource scaling
+    evaluate-sla-feedback: func(
+        p99-ms: f64,
+        queue-depth: u32,
+        settle-seconds: f64
+    ) -> microvm-allocation-telemetry;
+
+    /// Dispatches dynamic resource scale command to Firecracker MicroVM jail
+    scale-microvm-limits: func(
+        target-vcpus: u32,
+        target-memory-mb: u32
+    ) -> result<bool, string>;
+
+    /// Commands bare-metal kernel governor state via cpu-governor.sh
+    apply-governor-profile: func(
+        profile: string
+    ) -> result<bool, string>;
+}
+
+/// Unified Polyglot Observability Mesh World
+world polyglot-observability-mesh {
+    import types;
+    import context-carrier;
+    import tracer;
+    import lockfree-buffer;
+    import governor-bridge;
+
+    export context-carrier;
+    export tracer;
+    export lockfree-buffer;
+    export governor-bridge;
+}

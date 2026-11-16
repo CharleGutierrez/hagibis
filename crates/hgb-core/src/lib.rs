@@ -2433,6 +2433,15 @@ pub use zero_copy_shm_ring_buffer::{
     ZeroCopyShmRingBuffer,
 };
 
+// Phase 3: Polyglot Observability Mesh & Zero-Copy WIT Telemetry
+pub mod polyglot_wit_telemetry;
+pub use polyglot_wit_telemetry::{
+    LockFreeSpanRingBuffer, PolyglotGovernorFeedback, SpanAttribute, SpanEvent,
+    SpanKind as PolyglotSpanKind, SpanMetricsEngine, SpanRecord as PolyglotSpanRecord,
+    SpanStatus as PolyglotSpanStatus, TraceContext as PolyglotTraceContext,
+};
+
+
 
 
 

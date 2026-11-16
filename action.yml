@@ -50,6 +50,18 @@ inputs:
     description: 'Execute automated PGO + LLVM BOLT profiling and release binary optimization for hgb, hgbd, and hgb-wasm-kernel'
     required: false
     default: 'false'
+  optimize-masterclass-pgo-bolt:
+    description: 'Execute automated simulated masterclass workload PGO + LLVM BOLT profile-guided optimization'
+    required: false
+    default: 'false'
+  masterclass-pgo-iterations:
+    description: 'Number of simulated masterclass workload training iterations for PGO profiling'
+    required: false
+    default: '3'
+  masterclass-pgo-cache:
+    description: 'Enable cross-run caching of masterclass .profraw and .profdata artifacts'
+    required: false
+    default: 'true'
   pgo-bolt-cache:
     description: 'Enable caching of PGO raw profile data and BOLT branch trace tables across CI runs'
     required: false
@@ -93,6 +105,9 @@ outputs:
   pgo-bolt-optimized:
     description: 'Whether automated PGO + LLVM BOLT binary optimization succeeded'
     value: ${{ steps.pgo-bolt-optimizer.outputs.optimized }}
+  masterclass-pgo-bolt-optimized:
+    description: 'Whether automated Masterclass PGO + LLVM BOLT binary layout optimization succeeded'
+    value: ${{ steps.masterclass-pgo-bolt-optimizer.outputs.optimized }}
 
 runs:
   using: 'composite'
@@ -219,3 +234,22 @@ runs:
           bash scripts/pgo-bolt-optimize.sh "$PGO_TARGETS" --verify
         fi
         echo "optimized=true" >> "$GITHUB_OUTPUT"
+
+    # Masterclass Workload Simulated PGO + BOLT Optimization
+    - name: Masterclass Simulated Workload PGO + LLVM BOLT Pipeline
+      id: masterclass-pgo-bolt-optimizer
+      if: inputs.optimize-masterclass-pgo-bolt == 'true'
+      shell: bash
+      env:
+        ITERATIONS: ${{ inputs.masterclass-pgo-iterations }}
+        CI_MODE: 'true'
+      run: |
+        echo "::group::Executing Hagibis Masterclass PGO + BOLT Super-Optimization"
+        chmod +x scripts/pgo-bolt-masterclass-automation.sh scripts/pgo_bolt_masterclass_automation.sh 2>/dev/null || true
+        if [ -f "scripts/pgo-bolt-masterclass-automation.sh" ]; then
+          bash scripts/pgo-bolt-masterclass-automation.sh all --ci --iterations "$ITERATIONS"
+        elif [ -f "scripts/pgo_bolt_masterclass_automation.sh" ]; then
+          bash scripts/pgo_bolt_masterclass_automation.sh all --ci --iterations "$ITERATIONS"
+        fi
+        echo "optimized=true" >> "$GITHUB_OUTPUT"
+        echo "::endgroup::"

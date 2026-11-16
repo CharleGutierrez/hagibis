@@ -9,6 +9,7 @@ pub mod slm_synthesis_pipeline;
 pub mod sandbox_verifier;
 pub mod evolution_ledger;
 pub mod mcp_tool_synthesizer;
+pub mod live_closed_loop_compiler_healer;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -28,6 +29,12 @@ pub use mcp_tool_synthesizer::{
     GuestCodeSynthesizer, McpToolSynthesizer, SynthesizedArtifacts, SynthesizedParam,
     SynthesizedToolReceipt, ToolGap, ToolGapDetector, WitSynthesizer,
     DEFAULT_MCP_JSON_PATH, DEFAULT_PLUGINS_WASM_DIR,
+};
+pub use live_closed_loop_compiler_healer::{
+    AstContextSlice, AstContextSlicer, AstPatchSynthesizer, ClosedLoopCompilerHealer,
+    CompilerDiagnostic, DiagnosticParser, FirstGreenVerifier, HealerError,
+    McpBridgePipedDiagnostic, PatchStrategy, PatchSynthesisResult,
+    RemediationCertificate, SnapshotRollbackGuard, VerificationReport,
 };
 
 /// Zero-Downtime Binary Hot-Swapper using atomic symlinks & connection draining

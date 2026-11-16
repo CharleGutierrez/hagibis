@@ -1210,3 +1210,7 @@ export async function dispatchTaskToLocalNode(
   });
 }
 
+// Phase 3: Polyglot Observability Mesh - OpenTelemetry Edge Integration
+export * from "./worker_otel_telemetry";
+
+

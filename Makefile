@@ -440,3 +440,73 @@ clean:
 	cargo clean
 	rm -rf $(PGO_DATA_DIR) $(BOLT_DATA_DIR) target/skills
 	bash scripts/build-hygiene.sh --clean-cache 2>/dev/null || true
+
+# ==============================================================================
+# Makefile Target Additions: pgo-bolt-masterclass
+# Hagibis Autonomous Production Core (Pillar 1 & Pillar 4)
+# ==============================================================================
+
+.PHONY: pgo-bolt-masterclass pgo-bolt-masterclass-ci pgo-bolt-masterclass-train pgo-bolt-masterclass-verify
+
+# Automated Masterclass Workload-Driven PGO + Fat LTO + LLVM BOLT Super-Optimization
+pgo-bolt-masterclass:
+	@echo "======================================================================"
+	@echo " 🪽 Hagibis Masterclass Profile-Guided & BOLT Super-Optimization Pipeline"
+	@echo " Workload: docs/masterclass/test_masterclass_live_simulations.py (Phases 1-5)"
+	@echo " Targets:  hgb (CLI), hgbd (daemon), and hgb-wasm-kernel (SIMD runner)"
+	@echo " Layout:   -reorder-blocks=ext-tsp -reorder-functions=hfsort+ -split-all-cold"
+	@echo "======================================================================"
+	@if [ -f "scripts/pgo-bolt-masterclass-automation.sh" ]; then \
+		chmod +x scripts/pgo-bolt-masterclass-automation.sh; \
+		bash scripts/pgo-bolt-masterclass-automation.sh all; \
+	elif [ -f "scripts/pgo_bolt_masterclass_automation.sh" ]; then \
+		chmod +x scripts/pgo_bolt_masterclass_automation.sh; \
+		bash scripts/pgo_bolt_masterclass_automation.sh all; \
+	else \
+		echo "ERROR: pgo-bolt-masterclass-automation.sh script not found!" >&2; \
+		exit 1; \
+	fi
+
+# Automated Headless CI Masterclass PGO + BOLT Optimization with ELF Verification
+pgo-bolt-masterclass-ci:
+	@echo "======================================================================"
+	@echo " 🪽 [CI] Headless Masterclass PGO + LLVM BOLT Super-Optimization Pipeline"
+	@echo " Mode:    Automated CI Mode (--ci --verify)"
+	@echo " Cache:   Profile caching & LLVM toolchain auto-detection active"
+	@echo "======================================================================"
+	@if [ -f "scripts/pgo-bolt-masterclass-automation.sh" ]; then \
+		chmod +x scripts/pgo-bolt-masterclass-automation.sh; \
+		bash scripts/pgo-bolt-masterclass-automation.sh all --ci --verify; \
+	elif [ -f "scripts/pgo_bolt_masterclass_automation.sh" ]; then \
+		chmod +x scripts/pgo_bolt_masterclass_automation.sh; \
+		bash scripts/pgo_bolt_masterclass_automation.sh all --ci --verify; \
+	else \
+		echo "ERROR: pgo-bolt-masterclass-automation.sh script not found!" >&2; \
+		exit 1; \
+	fi
+
+# Masterclass Profile Training Only (capture raw .profraw profiles)
+pgo-bolt-masterclass-train:
+	@echo "======================================================================"
+	@echo " [PGO-Masterclass] Executing Simulated Masterclass Profiling Training"
+	@echo " Workload: docs/masterclass/test_masterclass_live_simulations.py"
+	@echo "======================================================================"
+	@if [ -f "docs/masterclass/test_masterclass_live_simulations.py" ]; then \
+		python3 docs/masterclass/test_masterclass_live_simulations.py; \
+	fi
+	cargo bench -p hgb-core --bench pgo_workload -- --nocapture
+
+# Verification of Masterclass Optimized Binary Layout
+pgo-bolt-masterclass-verify:
+	@echo "======================================================================"
+	@echo " [Verify] Checking ELF Layout & Text Splitting for Masterclass Binaries"
+	@echo "======================================================================"
+	@for bin in hgb hgbd hgb-wasm-kernel; do \
+		target_bin="$(CARGO_TARGET_DIR)/release/$$bin"; \
+		if [ ! -f "$$target_bin" ]; then target_bin="target/release/$$bin"; fi; \
+		if [ -f "$$target_bin" ]; then \
+			echo "Checking $$bin ($$target_bin)..."; \
+			readelf -S "$$target_bin" 2>/dev/null | grep -E '\.text|\.text\.cold|\.rodata' | head -n 4 || true; \
+		fi; \
+	done
+

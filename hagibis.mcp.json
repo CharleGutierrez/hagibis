@@ -1,5 +1,58 @@
 {
   "tools": {
+    "hgb_compiler_self_heal_ast": {
+      "description": "Autonomous closed-loop AST compiler error localization, surgical token slicing, deterministic patch synthesis, and speculative verification with atomic SnapshotRollbackGuard rollback guarantees",
+      "parameters": {
+        "crate_name": {
+          "type": "string",
+          "description": "Target workspace crate name (e.g. hgb-autopoietic, hgb-compiler, hgb-daemon)"
+        },
+        "target_file": {
+          "type": "string",
+          "description": "Path to the broken source file containing compiler error"
+        },
+        "diagnostic_code": {
+          "type": "string",
+          "description": "Rust compiler error code (e.g. E0308, E0596, E0428, E0425)"
+        },
+        "error_message": {
+          "type": "string",
+          "description": "Exact compiler diagnostic message"
+        },
+        "error_line": {
+          "type": "integer",
+          "description": "1-based line number of the compiler diagnostic site"
+        },
+        "error_column": {
+          "type": "integer",
+          "description": "1-based column number of the compiler diagnostic site"
+        },
+        "ast_context_snippet": {
+          "type": "string",
+          "description": "Surgically extracted AST token context enclosing the diagnostic fault"
+        },
+        "suggested_patch": {
+          "type": "string",
+          "description": "Optional synthetic patch replacement candidate"
+        },
+        "dry_run": {
+          "type": "boolean",
+          "description": "Speculatively verify patch in sandbox without persisting to working copy",
+          "default": false
+        },
+        "auto_rollback_on_failure": {
+          "type": "boolean",
+          "description": "Enforce atomic rollback via SnapshotRollbackGuard if verification fails",
+          "default": true
+        }
+      },
+      "required": [
+        "target_file",
+        "diagnostic_code",
+        "error_message",
+        "error_line"
+      ]
+    },
     "hgb_microvm_spinup": {
       "description": "Spin up an isolated Firecracker microVM instance with configurable memory_mb, vcpu_count, rootfs/kernel images, and snapshot caching",
       "parameters": {

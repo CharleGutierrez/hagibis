@@ -612,6 +612,22 @@ pub use lancedb_ivf_pq_quantizer::{
     WalEntry as IvfPqWalEntry,
 };
 
+// Phase 4: Unified Associative Memory Bus & Sub-Millisecond Local RAG Engine
+pub mod unified_associative_memory_bus;
+pub use unified_associative_memory_bus::{
+    compute_associative_embedding,
+    compute_blake3_digest, simd_l2_distance_sq,
+    ArchitectureDecisionRecord, AssociativeBusConfig, AssociativeMemoryBusStats,
+    AssociativeMemoryEnvelope, AssociativeRagHit, AssociativeRagQuery,
+    AstTokenSlice, Blake3Receipt, BudgetFormat, CandidatePatch as AssociativeCandidatePatch,
+    ChaosFaultType, ChaosInjectionRecord, CompactedContextBundle, CompilationEventRecord,
+    ContextTokenBudget, FirstGreenCertificate, MemoryDomain, RecencyDecayConfig,
+    RecoveryLatencyTelemetry, TagMatchMode, TimeWindowFilter,
+    UnifiedAssociativeMemoryBus, UnifiedAssociativeMemoryBusBuilder,
+    CHARS_PER_TOKEN_APPROX, DEFAULT_ASSOCIATIVE_DIM, DEFAULT_MAX_TOKEN_BUDGET,
+    DEFAULT_RECENCY_HALF_LIFE_MS, SUB_MILLISECOND_LATENCY_BUDGET_US,
+};
+
 
 
 
