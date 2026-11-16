@@ -301,6 +301,15 @@ pub use pwa_leptos_cockpit::{
     MicroVmCard, MicroVmState, PwaLeptosCockpit, Signal, VNode,
 };
 
+// Strategic Upgrade: Unified PWA Control Plane & Web UI Dashboard (Pillar 1)
+pub mod unified_pwa_control_dashboard;
+pub use unified_pwa_control_dashboard::{
+    DashboardError, DashboardState, McpCatalog, McpExecuteRequest, McpExecuteResponse,
+    McpParameterField, McpToolDefinition, MicroVmState as PwaMicroVmState, MicroVmTelemetry,
+    NodeTelemetry, PwaConfig, SelfHealingReceipt, SelfHealingTarget, SelfHealingTriggerRequest,
+    WasmComponentMetadata, WasmDeployRequest,
+};
+
 
 
 

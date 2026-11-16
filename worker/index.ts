@@ -224,6 +224,11 @@ export default {
         return await meshDo.fetch(request);
       }
 
+      // 10. Pillar 5: Bidirectional WebSocket Tunnel for Local Mesh Federation
+      if (url.pathname === "/api/mesh/ws/tunnel") {
+        return await handleMeshWebSocketTunnel(request, env);
+      }
+
       return new Response(
         JSON.stringify({
           error: "Not Found",
@@ -879,5 +884,329 @@ export class MeshStateDurableObject {
     }
     return list;
   }
+}
+
+// ==============================================================================
+// Pillar 5: Bidirectional WebSocket Tunnel Protocol for Local Mesh Federation
+// ==============================================================================
+
+export type EdgeTunnelMessageType =
+  | "HandshakeSyn"
+  | "HandshakeAck"
+  | "CapabilityAdvertisement"
+  | "CapabilityAck"
+  | "TaskDispatch"
+  | "TaskResult"
+  | "HeartbeatPing"
+  | "HeartbeatPong"
+  | "TunnelError";
+
+export interface EdgeTunnelEnvelope {
+  envelope_id: string;
+  node_id: string;
+  seq: number;
+  message_type: EdgeTunnelMessageType;
+  payload_json: string;
+  timestamp_epoch_ms: number;
+  hmac_sha256_hex: string;
+}
+
+export interface HardwareCapabilityProfile {
+  node_id: string;
+  vcpus: number;
+  total_ram_mb: number;
+  available_ram_mb: number;
+  kvm_microvm_available: boolean;
+  lancedb_vector_search_available: boolean;
+  wasm_kernel_available: boolean;
+  storage_mount_path: string;
+  storage_capacity_gb: number;
+  active_microvm_count: number;
+  uptime_seconds: number;
+}
+
+export interface FederatedTaskRequest {
+  task_id: string;
+  source: string;
+  execution_engine: "FirecrackerMicroVm" | "WasmSandbox";
+  payload: string;
+  timeout_ms: number;
+  priority: number;
+}
+
+export interface FederatedTaskResult {
+  task_id: string;
+  node_id: string;
+  execution_engine: "FirecrackerMicroVm" | "WasmSandbox";
+  status_code: number;
+  output: string;
+  execution_duration_us: number;
+  signature_hex: string;
+}
+
+export interface ConnectedLocalNode {
+  nodeId: string;
+  webSocket: WebSocket;
+  capabilities?: HardwareCapabilityProfile;
+  lastHeartbeat: number;
+  pendingTasks: Map<string, {
+    resolve: (result: FederatedTaskResult) => void;
+    reject: (error: Error) => void;
+    timeoutTimer: any;
+  }>;
+}
+
+export const activeEdgeTunnels: Map<string, ConnectedLocalNode> = new Map();
+
+export function computeCanonicalEnvelopeString(env: Omit<EdgeTunnelEnvelope, "hmac_sha256_hex">): string {
+  return `${env.envelope_id}:${env.node_id}:${env.seq}:${env.message_type}:${env.payload_json}:${env.timestamp_epoch_ms}`;
+}
+
+export async function signEnvelopeHmacSha256(
+  env: Omit<EdgeTunnelEnvelope, "hmac_sha256_hex">,
+  secretKey: string
+): Promise<string> {
+  const canonical = computeCanonicalEnvelopeString(env);
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secretKey),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const sigBuf = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(canonical));
+  return Array.from(new Uint8Array(sigBuf))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+export async function verifyEnvelopeHmacSha256(
+  env: EdgeTunnelEnvelope,
+  secretKey: string
+): Promise<boolean> {
+  try {
+    const canonical = computeCanonicalEnvelopeString(env);
+    const key = await crypto.subtle.importKey(
+      "raw",
+      new TextEncoder().encode(secretKey),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"]
+    );
+    const expectedSigBuf = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(canonical));
+    const expectedHex = Array.from(new Uint8Array(expectedSigBuf))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+    return expectedHex.toLowerCase() === env.hmac_sha256_hex.toLowerCase();
+  } catch {
+    return false;
+  }
+}
+
+export async function handleMeshWebSocketTunnel(request: Request, env: Env): Promise<Response> {
+  const upgradeHeader = request.headers.get("Upgrade");
+  if (upgradeHeader !== "websocket" || typeof WebSocketPair === "undefined") {
+    return new Response(
+      JSON.stringify({
+        error: "Upgrade Required",
+        message: "Endpoint /api/mesh/ws/tunnel requires WebSocket upgrade header",
+        status: 426,
+      }),
+      { status: 426, headers: { "Content-Type": "application/json" } }
+    );
+  }
+
+  const sharedSecret = env.EDGE_SHARED_SECRET || "hagibis-global-edge-federation-secret-key-32b";
+  const edgeNodeId = env.EDGE_NODE_ID || "cloudflare-edge-primary";
+
+  const pair = new WebSocketPair();
+  const clientWs = pair[0];
+  const serverWs = pair[1];
+
+  serverWs.accept();
+
+  let registeredNodeId: string | null = null;
+  let sessionSeq = 1;
+
+  serverWs.addEventListener("message", async (event: MessageEvent) => {
+    try {
+      const rawText = typeof event.data === "string" ? event.data : new TextDecoder().decode(event.data as ArrayBuffer);
+      const envelope: EdgeTunnelEnvelope = JSON.parse(rawText);
+
+      const isValid = await verifyEnvelopeHmacSha256(envelope, sharedSecret);
+      if (!isValid) {
+        const errorReply: Omit<EdgeTunnelEnvelope, "hmac_sha256_hex"> = {
+          envelope_id: `err-${crypto.randomUUID()}`,
+          node_id: edgeNodeId,
+          seq: sessionSeq++,
+          message_type: "TunnelError",
+          payload_json: JSON.stringify({ error: "HMAC verification failed: Signature mismatch or invalid secret" }),
+          timestamp_epoch_ms: Date.now(),
+        };
+        const sig = await signEnvelopeHmacSha256(errorReply, sharedSecret);
+        serverWs.send(JSON.stringify({ ...errorReply, hmac_sha256_hex: sig }));
+        serverWs.close(1008, "Policy Violation: Invalid HMAC");
+        return;
+      }
+
+      switch (envelope.message_type) {
+        case "HandshakeSyn": {
+          registeredNodeId = envelope.node_id;
+
+          const session: ConnectedLocalNode = {
+            nodeId: registeredNodeId,
+            webSocket: serverWs,
+            lastHeartbeat: Date.now(),
+            pendingTasks: new Map(),
+          };
+          activeEdgeTunnels.set(registeredNodeId, session);
+
+          const ackPayload = JSON.stringify({
+            accepted: true,
+            edge_node_id: edgeNodeId,
+            edge_colo: (request as any).cf?.colo || "EDGE",
+            protocol: "hgb-edge-tunnel-v1",
+          });
+
+          const ackEnvelope: Omit<EdgeTunnelEnvelope, "hmac_sha256_hex"> = {
+            envelope_id: `ack-${crypto.randomUUID()}`,
+            node_id: edgeNodeId,
+            seq: sessionSeq++,
+            message_type: "HandshakeAck",
+            payload_json: ackPayload,
+            timestamp_epoch_ms: Date.now(),
+          };
+          const sig = await signEnvelopeHmacSha256(ackEnvelope, sharedSecret);
+          serverWs.send(JSON.stringify({ ...ackEnvelope, hmac_sha256_hex: sig }));
+          break;
+        }
+
+        case "CapabilityAdvertisement": {
+          if (!registeredNodeId) {
+            registeredNodeId = envelope.node_id;
+          }
+          const capabilities: HardwareCapabilityProfile = JSON.parse(envelope.payload_json);
+          const session = activeEdgeTunnels.get(envelope.node_id);
+          if (session) {
+            session.capabilities = capabilities;
+            session.lastHeartbeat = Date.now();
+          }
+
+          if (env.HAGIBIS_EDGE_KV) {
+            await env.HAGIBIS_EDGE_KV.put(
+              `node:capabilities:${envelope.node_id}`,
+              envelope.payload_json,
+              { expirationTtl: 3600 }
+            );
+          }
+
+          const ackEnvelope: Omit<EdgeTunnelEnvelope, "hmac_sha256_hex"> = {
+            envelope_id: `cap-ack-${crypto.randomUUID()}`,
+            node_id: edgeNodeId,
+            seq: sessionSeq++,
+            message_type: "CapabilityAck",
+            payload_json: JSON.stringify({ registered: true, node_id: envelope.node_id }),
+            timestamp_epoch_ms: Date.now(),
+          };
+          const sig = await signEnvelopeHmacSha256(ackEnvelope, sharedSecret);
+          serverWs.send(JSON.stringify({ ...ackEnvelope, hmac_sha256_hex: sig }));
+          break;
+        }
+
+        case "HeartbeatPing": {
+          const session = activeEdgeTunnels.get(envelope.node_id);
+          if (session) {
+            session.lastHeartbeat = Date.now();
+          }
+
+          const pongEnvelope: Omit<EdgeTunnelEnvelope, "hmac_sha256_hex"> = {
+            envelope_id: `pong-${crypto.randomUUID()}`,
+            node_id: edgeNodeId,
+            seq: sessionSeq++,
+            message_type: "HeartbeatPong",
+            payload_json: JSON.stringify({ status: "alive", timestamp: Date.now() }),
+            timestamp_epoch_ms: Date.now(),
+          };
+          const sig = await signEnvelopeHmacSha256(pongEnvelope, sharedSecret);
+          serverWs.send(JSON.stringify({ ...pongEnvelope, hmac_sha256_hex: sig }));
+          break;
+        }
+
+        case "TaskResult": {
+          const result: FederatedTaskResult = JSON.parse(envelope.payload_json);
+          const session = activeEdgeTunnels.get(envelope.node_id);
+          if (session) {
+            const pending = session.pendingTasks.get(result.task_id);
+            if (pending) {
+              clearTimeout(pending.timeoutTimer);
+              session.pendingTasks.delete(result.task_id);
+              pending.resolve(result);
+            }
+          }
+          break;
+        }
+
+        default:
+          break;
+      }
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      serverWs.send(JSON.stringify({ error: "Malformed payload or internal processing error", details: errMsg }));
+    }
+  });
+
+  serverWs.addEventListener("close", () => {
+    if (registeredNodeId) {
+      activeEdgeTunnels.delete(registeredNodeId);
+    }
+  });
+
+  serverWs.addEventListener("error", () => {
+    if (registeredNodeId) {
+      activeEdgeTunnels.delete(registeredNodeId);
+    }
+  });
+
+  return new Response(null, {
+    status: 101,
+    webSocket: clientWs,
+  } as any);
+}
+
+export async function dispatchTaskToLocalNode(
+  nodeId: string,
+  task: FederatedTaskRequest,
+  secretKey: string,
+  timeoutMs: number = 10000
+): Promise<FederatedTaskResult> {
+  const session = activeEdgeTunnels.get(nodeId);
+  if (!session) {
+    throw new Error(`Node '${nodeId}' is not connected via WebSocket edge tunnel`);
+  }
+
+  return new Promise(async (resolve, reject) => {
+    const timeoutTimer = setTimeout(() => {
+      session.pendingTasks.delete(task.task_id);
+      reject(new Error(`Task '${task.task_id}' timed out after ${timeoutMs}ms waiting for node '${nodeId}'`));
+    }, timeoutMs);
+
+    session.pendingTasks.set(task.task_id, {
+      resolve,
+      reject,
+      timeoutTimer,
+    });
+
+    const dispatchEnvelope: Omit<EdgeTunnelEnvelope, "hmac_sha256_hex"> = {
+      envelope_id: `task-disp-${task.task_id}`,
+      node_id: "cloudflare-edge-primary",
+      seq: Math.floor(Date.now() / 1000),
+      message_type: "TaskDispatch",
+      payload_json: JSON.stringify(task),
+      timestamp_epoch_ms: Date.now(),
+    };
+
+    const sig = await signEnvelopeHmacSha256(dispatchEnvelope, secretKey);
+    session.webSocket.send(JSON.stringify({ ...dispatchEnvelope, hmac_sha256_hex: sig }));
+  });
 }
 

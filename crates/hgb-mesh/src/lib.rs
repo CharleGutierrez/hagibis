@@ -21,9 +21,22 @@ pub mod secure_transport;
 pub mod distributed_edge_memory_fabric;
 pub mod edge_worker_crdt_sync;
 pub mod quic_distributed_compute_grid;
+pub mod edge_websocket_quic_federation;
+pub mod distributed_vector_fabric;
 
 // Public re-exports
 pub use error::{MeshError, Result};
+pub use distributed_vector_fabric::{
+    AgentEpisodicMemoryCluster, DistributedRagSearchResult, EpisodicMemoryRecord,
+    LanceDbShard, LanceVecHeader, MeshNodeInfo, MeshVectorShardRouter,
+    MockableMeshTransport, NodeStatus as MeshNodeStatus, P2pRagQueryEngine,
+    ShardRebalanceDelta, VectorFabricError, VectorFabricQuorum,
+};
+pub use edge_websocket_quic_federation::{
+    EdgeFederationConfig, EdgeTunnelEnvelope, EdgeTunnelMessageType,
+    EdgeWebSocketFederationClient, FederatedTaskRequest, FederatedTaskResult,
+    HardwareCapabilityProfile, LocalTaskExecutor, TaskExecutionEngine, TunnelState,
+};
 pub use quic_distributed_compute_grid::{
     ComputeCapability, MemoryPoolMetrics, NatTraversalManager, NodeComputeCapacity,
     QuicDistributedComputeGrid, QuicFrame, QuicGridConfig, QuicHeader, QuicNodeSession,

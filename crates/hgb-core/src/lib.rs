@@ -2415,6 +2415,24 @@ pub use hardware_enforced_microvm_isolation::{
     MicrovmExecutionRequest,
 };
 
+// Strategic Upgrade: WASI 0.2 Canonical ABI Inter-Component Bridge (Pillar 1)
+pub mod inter_component_wit_bridge;
+pub use inter_component_wit_bridge::{
+    CanonicalAbiError, CanonicalAbiMemory, CanonicalAbiType, CanonicalAbiValue,
+    FlatValue, InterComponentError, InterComponentRouter, LeaseError, LeaseId,
+    LeasePermission, LeaseStatus, LeasedMemorySliceTracker, MemorySliceDescriptor,
+    ReclaimReceipt,
+};
+
+// Strategic Upgrade: Zero-Copy IPC & POSIX/io_uring Ring Buffer (Pillar 2)
+pub mod zero_copy_shm_ring_buffer;
+pub use zero_copy_shm_ring_buffer::{
+    ConsumerHeader, EntryHeader, EntryType, FutexSignaler, LeaseTicket, ProducerHeader,
+    RingMetadata, ShmBacking, ShmRingBufferHeader, ShmRingError, SignalingMode,
+    TensorDtype as ShmRingTensorDtype, TensorSliceDescriptor, VectorBatchDescriptor, VectorDistanceMetric,
+    ZeroCopyShmRingBuffer,
+};
+
 
 
 

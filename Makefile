@@ -18,7 +18,7 @@ ifneq ($(wildcard scripts/execve_shim.so),)
 export LD_PRELOAD := $(CURDIR)/scripts/execve_shim.so:$(LD_PRELOAD)
 endif
 
-.PHONY: all check test release release-fast pgo bolt pgo-bolt pgo-bolt-auto-ci regression-bench-check pgo-bench pgo-bolt-dynatune pgo-bolt-verify pgo-build pgo-train pgo-merge pgo-release pgo-dynatune hygiene clean-cache prune-targets clean help untangle skill\:lint skill\:test skill\:build skill-lint skill-test skill-build test-masterclass self-heal-build self-heal-bench
+.PHONY: all check test release release-fast pgo bolt pgo-bolt ci-pgo-bolt pgo-bolt-auto-ci regression-bench-check pgo-bench pgo-bolt-dynatune pgo-bolt-verify pgo-build pgo-train pgo-merge pgo-release pgo-dynatune hygiene clean-cache prune-targets clean help untangle skill\:lint skill\:test skill\:build skill-lint skill-test skill-build test-masterclass self-heal-build self-heal-bench
 
 all: check test
 
@@ -36,6 +36,7 @@ help:
 	@echo "   make pgo-release            - Step 4: Recompile release binaries with -Cprofile-use & Fat LTO"
 	@echo "   make bolt                   - Post-link LLVM BOLT binary super-optimization (ext-tsp + hfsort+)"
 	@echo "   make pgo-bolt               - Automated PGO + Fat LTO + LLVM BOLT super-optimization across all binaries"
+	@echo "   make ci-pgo-bolt            - Headless automated continuous CI PGO/BOLT pipeline with caching & verification"
 	@echo "   make pgo-bolt-auto-ci       - Automated Continuous PGO + BOLT CI pipeline with ELF verification"
 	@echo "   make regression-bench-check - Check for benchmark performance regressions (>5% trigger)"
 	@echo "   make pgo-bolt-verify        - Rigorous ELF integrity, relocation, alignment & symbol verification"
@@ -189,6 +190,20 @@ pgo-bolt:
 	bash scripts/pgo-bolt-optimize.sh all
 
 # Automated Continuous PGO + BOLT Optimization Pipeline with ELF Verification
+ci-pgo-bolt:
+	@echo "======================================================================"
+	@echo " [CI-PGO-BOLT] Executing Automated Headless CI PGO/BOLT Optimization"
+	@echo " Targets: hgb, hgbd, and hgb-wasm-kernel"
+	@echo " Mode:    Headless Non-Interactive CI (--ci --verify)"
+	@echo " Profiling Workload: hgb-core/benches/pgo_workload.rs + synthetic CLI sweeps"
+	@echo " Layout Passes:      -reorder-blocks=ext-tsp -reorder-functions=hfsort+ -split-all-cold"
+	@echo "======================================================================"
+	@chmod +x scripts/pgo-bolt-optimize.sh scripts/pgo-optimize.sh 2>/dev/null || true
+	bash scripts/pgo-bolt-optimize.sh all --ci --verify
+	@echo "======================================================================"
+	@echo " [CI-PGO-BOLT] Headless CI Pipeline Finished with Validated ELF Layouts!"
+	@echo "======================================================================"
+
 pgo-bolt-auto-ci:
 	@echo "======================================================================"
 	@echo " [PGO-BOLT-Auto-CI] Executing Continuous PGO + BOLT Optimization Pipeline"

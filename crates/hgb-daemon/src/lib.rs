@@ -1004,3 +1004,23 @@ pub use pgo_bolt_closed_loop_healer::{
     DEFAULT_ICACHE_THRASHING_THRESHOLD_PCT,
     DEFAULT_OPTIMIZATION_COOLDOWN_MS, DEFAULT_ROLLBACK_REGRESSION_THRESHOLD_PCT,
 };
+
+// Strategic Upgrade: Ambient Chaos Self-Healer Daemon (Pillar 4)
+pub mod ambient_chaos_self_healer;
+pub use ambient_chaos_self_healer::{
+    AmbientChaosConfig, AmbientChaosDaemon, ChaosProfile, ChaosRemediationReceipt,
+    CorruptedWasmComponentFault, DaemonHealthStatus, DroppedMeshPacketFault,
+    MemoryBudgetExhaustionFault, MemoryCircuitBreaker, MeshSocketConduit,
+    WasmCorruptionMode, WasmLiveHotpatcher,
+};
+
+// Strategic Upgrade: Enhanced Continuous Chaos & Automated Inoculation Daemon (Pillar 5)
+pub mod continuous_chaos_inoculation_daemon;
+pub use continuous_chaos_inoculation_daemon::{
+    AstHealingReceipt, AutonomousAstHealer, ChaosDaemonError, ChaosFaultKind as InoculationFaultKind,
+    ChaosMode, ChaosScheduleConfig, ContinuousChaosInoculationDaemon, HealerAction, InoculationReceipt,
+    MeshPartitionGovernor, MeshPartitionReceipt, MeshReconvergenceReceipt, MicroVmFailoverReceipt,
+    MicroVmInstance, MicroVmJailManager, MicroVmKillReceipt, MicroVmStatus, RaftQuorumInoculator,
+    RaftRecoveryReceipt, RecoveryStatus, StorageWalCorruptor, WalCorruptionMode, WalCorruptionReceipt,
+    WalRecordFrame, WalRecoveryReceipt,
+};

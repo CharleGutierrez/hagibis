@@ -50,6 +50,18 @@ inputs:
     description: 'Execute automated PGO + LLVM BOLT profiling and release binary optimization for hgb, hgbd, and hgb-wasm-kernel'
     required: false
     default: 'false'
+  pgo-bolt-cache:
+    description: 'Enable caching of PGO raw profile data and BOLT branch trace tables across CI runs'
+    required: false
+    default: 'true'
+  pgo-bolt-ci-mode:
+    description: 'Run PGO/BOLT pipeline in headless non-interactive CI mode with automated toolchain detection'
+    required: false
+    default: 'true'
+  pgo-targets:
+    description: 'Specific binaries to optimize: all, hgb, hgbd, wasm-kernel'
+    required: false
+    default: 'all'
   autonomous-self-healing:
     description: 'Trigger autonomous compiler self-healing loop (diagnose stderr, vector fix lookup, and AST patch) on compile/test failures'
     required: false
@@ -164,11 +176,46 @@ runs:
         fi
         echo "regression_passed=true" >> "$GITHUB_OUTPUT"
 
+    - name: Cache PGO / BOLT Profiling Artifacts
+      id: pgo-bolt-cache-step
+      if: inputs.pgo-bolt-cache == 'true' && (inputs.optimize-pgo-bolt == 'true' || inputs.auto-reoptimize-on-regression == 'true')
+      uses: actions/cache@v4
+      with:
+        path: |
+          /tmp/bolt-pgo-data
+          /tmp/bolt-pgo-cache
+          target/pgo-profiles
+        key: pgo-bolt-profile-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'crates/**/src/**') }}
+        restore-keys: |
+          pgo-bolt-profile-${{ runner.os }}-
+
+    - name: Setup LLVM & BOLT Profiling Toolchain
+      if: inputs.optimize-pgo-bolt == 'true' || inputs.auto-reoptimize-on-regression == 'true'
+      shell: bash
+      run: |
+        echo "Ensuring LLVM profiling and BOLT tools are present on CI runner..."
+        rustup component add llvm-tools-preview 2>/dev/null || rustup component add llvm-tools 2>/dev/null || true
+        if ! command -v llvm-bolt &> /dev/null && command -v apt-get &> /dev/null; then
+          echo "Attempting to install llvm-bolt & linux-tools..."
+          sudo apt-get update -qq 2>/dev/null || true
+          sudo apt-get install -y -qq llvm-bolt linux-tools-generic 2>/dev/null || true
+        fi
+        echo "LLVM profdata candidate: $(command -v llvm-profdata 2>/dev/null || echo 'sysroot')"
+        echo "LLVM BOLT candidate:     $(command -v llvm-bolt 2>/dev/null || echo 'not installed')"
+
     - name: Automated PGO + LLVM BOLT Optimization Pipeline
       id: pgo-bolt-optimizer
       if: inputs.optimize-pgo-bolt == 'true'
       shell: bash
+      env:
+        PGO_TARGETS: ${{ inputs.pgo-targets }}
+        CI_MODE: ${{ inputs.pgo-bolt-ci-mode }}
       run: |
         echo "Executing Automated PGO + LLVM BOLT Layout Optimization..."
-        bash scripts/pgo-bolt-optimize.sh all
+        chmod +x scripts/pgo-bolt-optimize.sh scripts/pgo-optimize.sh
+        if [ "$CI_MODE" = "true" ]; then
+          bash scripts/pgo-bolt-optimize.sh "$PGO_TARGETS" --ci --verify
+        else
+          bash scripts/pgo-bolt-optimize.sh "$PGO_TARGETS" --verify
+        fi
         echo "optimized=true" >> "$GITHUB_OUTPUT"

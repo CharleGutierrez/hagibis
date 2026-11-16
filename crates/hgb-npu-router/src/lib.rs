@@ -14,8 +14,21 @@ pub mod telemetry_router;
 pub mod pareto_frontier_autotuner;
 pub mod hardware_aware_dynamic_router;
 pub mod realtime_telemetry_load_balancer;
+pub mod npu_lancedb_embedding_router;
+pub mod perf_dynatune_kernel_autotuner;
 
 pub use error::{NpuRouterError, Result};
+pub use perf_dynatune_kernel_autotuner::{
+    CpuInstructionSet, HardwareMicroBenchmarker, HostHardwareProfile, KernelTuningParameters,
+    SpecializedWasmKernel, TensorAcceleratorKind, TensorAcceleratorProfile,
+    WasmKernelSpecializer, WorkloadKind,
+};
+pub use npu_lancedb_embedding_router::{
+    compute_zero_cost_embedding, simd_cosine_similarity, CompilerDiagnostic,
+    CompilerFailurePattern, CompilerRemediationPayload, NpuLanceDbRouter,
+    NpuLanceDbRouterConfig, PatchMatchResult, COMPILER_EMBEDDING_DIM,
+    DEFAULT_SIMILARITY_THRESHOLD, SUB_MILLISECOND_LATENCY_BUDGET_US,
+};
 pub use hardware_aware_dynamic_router::{
     DynamicOffloadReceipt, DynamicRouteTarget, HardwareAwareDynamicRouter, LatencySla,
     LiveHardwareCounters, SlaRoutingDecision, VectorSearchResult, VectorShardPlan,
