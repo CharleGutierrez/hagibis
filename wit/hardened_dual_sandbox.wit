@@ -1,0 +1,290 @@
+// Hagibis Hardened WebAssembly & Firecracker Dual-Sandbox Specification (WIT)
+// Standardizes capability-based security, memory-safe SHM ring buffer IPC, and microVM isolation.
+package hagibis:hardened-dual-sandbox@0.2.0;
+
+/// Granular capability primitives enforcing zero ambient authority
+interface capability-types {
+    /// Fine-grained filesystem read permission flags
+    flags fs-read-flags {
+        /// Read single exact path
+        read-exact,
+        /// Recursive read on subtree directory
+        read-subtree,
+        /// Allow dereferencing verified symbolic links within boundary
+        allow-symlink,
+        /// Read metadata (size, timestamps, permissions) only
+        read-metadata,
+    }
+
+    /// Fine-grained filesystem write permission flags
+    flags fs-write-flags {
+        /// Atomic file write/replace via temporary swap
+        write-atomic,
+        /// Append-only write without truncation
+        write-append,
+        /// Overwrite and truncate existing files
+        write-truncate,
+        /// Create temporary scratch files
+        create-temp,
+        /// Unlink/delete file permission
+        delete-allowed,
+    }
+
+    /// Network communication transport protocols
+    enum net-protocol {
+        tcp,
+        udp,
+        tls,
+        unix-domain,
+    }
+
+    /// IP CIDR subnet and port filtering rule
+    record ip-cidr-rule {
+        cidr: string,
+        port-min: u16,
+        port-max: u16,
+        allow-dns: bool,
+    }
+
+    /// Network capability constraint descriptor
+    record net-capability {
+        /// Explicit whitelist of allowed hostnames (e.g., "*.internal.hagibis.ai")
+        allowed-hosts: list<string>,
+        /// Explicit whitelist of CIDR subnets and port bounds
+        allowed-cidrs: list<ip-cidr-rule>,
+        /// Outbound egress permission toggle
+        allow-egress: bool,
+        /// Inbound ingress permission toggle (microVM listeners)
+        allow-ingress: bool,
+        /// Maximum allowed bandwidth rate in kilobits per second
+        max-bandwidth-kbps: u32,
+    }
+
+    /// Compute and hardware resource capability boundaries
+    record compute-capability {
+        /// WebAssembly deterministic instruction fuel budget
+        instruction-fuel-quota: u64,
+        /// Maximum linear memory ceiling in bytes (default <= 64MB for FastWasm)
+        memory-ceiling-bytes: u64,
+        /// Execution timeout SLA in microseconds
+        timeout-sla-microseconds: u64,
+        /// Maximum virtual CPUs allowed for microVM tier
+        vcpu-quota: u32,
+        /// Permission to invoke AVX-512 / NEON SIMD vector instructions
+        allow-simd-vectors: bool,
+        /// Permission to access GPU / NPU hardware accelerator inference
+        allow-gpu-tensor: bool,
+    }
+
+    /// Subprocess spawning and binary execution capabilities
+    record process-capability {
+        /// Whether native subprocess execution is permitted
+        allow-process-spawn: bool,
+        /// Whitelisted cryptographic BLAKE3 hashes of allowed executable binaries
+        allowed-binary-hashes: list<string>,
+        /// Whether privilege escalation or sudo is permitted (strictly false)
+        allow-elevated-privileges: bool,
+    }
+
+    /// Unforgeable cryptographic capability token
+    record capability-token {
+        /// Unique capability token identifier
+        token-id: string,
+        /// Principal ID (agent or service identity)
+        principal-id: string,
+        /// Cryptographic signature (BLAKE3 keyed MAC or Ed25519)
+        issuer-signature: string,
+        /// Issue timestamp in UNIX nanoseconds
+        issued-timestamp-ns: u64,
+        /// Expiration timestamp in UNIX nanoseconds
+        expiry-timestamp-ns: u64,
+        /// Whitelist of canonical read directory roots
+        read-roots: list<string>,
+        /// Whitelist of canonical write directory roots
+        write-roots: list<string>,
+        /// Read permission flags
+        fs-read-caps: fs-read-flags,
+        /// Write permission flags
+        fs-write-caps: fs-write-flags,
+        /// Bound network capability
+        network: net-capability,
+        /// Bound compute capability
+        compute: compute-capability,
+        /// Bound process capability
+        process: process-capability,
+    }
+
+    /// Severity levels for capability violations
+    enum violation-severity {
+        low,
+        medium,
+        high,
+        critical,
+    }
+
+    /// Structured report describing an intercepted capability security breach
+    record capability-violation {
+        violation-id: string,
+        caller-id: string,
+        attempted-capability: string,
+        target-resource: string,
+        severity: violation-severity,
+        timestamp-ns: u64,
+        message: string,
+    }
+}
+
+/// Dual-sandbox execution lifecycle and tiering definitions
+interface sandbox-types {
+    use capability-types.{capability-token, capability-violation};
+
+    /// Sandboxed execution tier dynamically selected by the arbiter
+    enum execution-tier {
+        /// Fast Path: In-process WebAssembly sandbox (<5ms SLA, pure compute, stripped imports)
+        fast-wasm,
+        /// Heavy Path: Hardware-virtualized Firecracker microVM with seccomp jail & SHM ring buffer
+        heavy-microvm,
+    }
+
+    /// Sandboxed execution lifecycle state
+    enum sandbox-lifecycle {
+        initializing,
+        active,
+        suspended,
+        terminating,
+        halted,
+        faulted,
+    }
+
+    /// Configuration for zero-copy shared memory ring buffer IPC
+    record shm-ring-config {
+        /// POSIX shared memory name (e.g., "/dev/shm/hgb_shm_vm_01")
+        ring-name: string,
+        /// Ring buffer circular arena capacity in bytes (must be power of two)
+        capacity-bytes: u64,
+        /// Low-latency signaling mode (0 = AtomicSpin, 1 = Futex, 2 = Eventfd)
+        signaling-mode: u32,
+    }
+
+    /// Hardware microVM jail specification
+    record microvm-spec {
+        kernel-image-hash: string,
+        rootfs-image-hash: string,
+        vcpu-count: u32,
+        memory-mib: u32,
+        seccomp-profile-id: string,
+        shm-ring: shm-ring-config,
+    }
+
+    /// Stripped WebAssembly container specification
+    record wasm-spec {
+        module-digest: string,
+        stripped-host-imports: list<string>,
+        fuel-limit: u64,
+        memory-limit-bytes: u64,
+    }
+
+    /// Standardized untrusted tool invocation request
+    record tool-invocation-envelope {
+        call-id: string,
+        agent-id: string,
+        tool-name: string,
+        payload-json: string,
+        token: capability-token,
+    }
+
+    /// Execution verdict returned by the dual-sandbox arbiter
+    record tool-execution-verdict {
+        call-id: string,
+        success: bool,
+        output-payload-json: string,
+        exit-code: s32,
+        execution-time-ns: u64,
+        fuel-consumed: u64,
+        tier-used: execution-tier,
+        violation: option<capability-violation>,
+    }
+}
+
+/// Verification engine for cryptographic capability tokens
+interface capability-verifier {
+    use capability-types.{capability-token, capability-violation};
+
+    /// Verify cryptographic integrity and timestamp validity of a capability token
+    verify-token: func(token: capability-token) -> result<bool, string>;
+
+    /// Verify guest file read request against token read roots and traversal policies
+    check-fs-read: func(token: capability-token, path: string) -> result<bool, capability-violation>;
+
+    /// Verify guest file write request against token write roots and quota
+    check-fs-write: func(token: capability-token, path: string) -> result<bool, capability-violation>;
+
+    /// Verify outbound egress request against token network rules
+    check-net-egress: func(token: capability-token, host: string, port: u16) -> result<bool, capability-violation>;
+
+    /// Verify subprocess execution against token process permissions and binary hash whitelist
+    check-process-exec: func(token: capability-token, binary-path: string, binary-hash: string) -> result<bool, capability-violation>;
+}
+
+/// Dual-sandbox workload routing and execution arbiter
+interface dual-sandbox-arbiter {
+    use sandbox-types.{execution-tier, tool-invocation-envelope, tool-execution-verdict};
+
+    /// Analyze workload profile and determine whether to run in FastWasm or escalate to HeavyMicroVM
+    route-workload: func(envelope: tool-invocation-envelope) -> execution-tier;
+
+    /// Escalate a running or capability-constrained Wasm workload to a Firecracker microVM
+    escalate-to-microvm: func(envelope: tool-invocation-envelope, reason: string) -> result<tool-execution-verdict, string>;
+
+    /// Execute tool invocation under strict capability sandbox isolation
+    execute-sandboxed: func(envelope: tool-invocation-envelope) -> tool-execution-verdict;
+}
+
+/// Zero-copy shared memory ring buffer IPC interface between host and microVM
+interface shm-ipc-channel {
+    /// Frame descriptor within the zero-copy circular arena
+    record shm-frame-descriptor {
+        sequence-id: u64,
+        entry-type: u16,
+        payload-len: u32,
+        checksum-crc32: u32,
+    }
+
+    /// Publish a zero-copy payload frame to the shared memory ring buffer
+    publish-frame: func(ring-name: string, entry-type: u16, payload: list<u8>) -> result<u64, string>;
+
+    /// Poll for an incoming payload frame from the guest microVM
+    poll-frame: func(ring-name: string) -> result<option<shm-frame-descriptor>, string>;
+}
+
+/// Immutable security audit logging sink
+interface security-audit-sink {
+    /// Structured audit event entry
+    record audit-event {
+        event-id: string,
+        sequence-number: u64,
+        event-timestamp-ns: u64,
+        agent-id: string,
+        action: string,
+        decision: string,
+        risk-score: f32,
+        prev-entry-digest: string,
+        entry-digest: string,
+    }
+
+    /// Emit an immutable audit log entry
+    emit-audit-event: func(event: audit-event) -> result<bool, string>;
+
+    /// Cryptographically verify the integrity of an audit ledger chain
+    verify-ledger-chain: func(events: list<audit-event>) -> result<bool, string>;
+}
+
+/// Hardened dual-sandbox world definition
+world hardened-dual-sandbox {
+    import capability-types;
+    import sandbox-types;
+    import security-audit-sink;
+    export capability-verifier;
+    export dual-sandbox-arbiter;
+    export shm-ipc-channel;
+}

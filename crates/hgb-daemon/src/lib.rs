@@ -1024,3 +1024,15 @@ pub use continuous_chaos_inoculation_daemon::{
     RaftRecoveryReceipt, RecoveryStatus, StorageWalCorruptor, WalCorruptionMode, WalCorruptionReceipt,
     WalRecordFrame, WalRecoveryReceipt,
 };
+
+// Strategic Upgrade: Continuous PGO/BOLT Feedback Loop Daemon (Pillar 5)
+pub mod continuous_pgo_bolt_feedback_daemon;
+pub use continuous_pgo_bolt_feedback_daemon::{
+    AdaptiveProfilingScheduler, AdaptiveSchedulerConfig, BinarySwapReceipt,
+    BoltOptimizationOptions, ContinuousPgoBoltFeedbackDaemon,
+    DaemonConfig as ContinuousPgoDaemonConfig,
+    DaemonStatusSnapshot as ContinuousPgoDaemonStatusSnapshot, HotPathFunction,
+    HotPathTelemetry, PgoBoltError as ContinuousPgoBoltError, ProfileLifecycleManager,
+    ZeroDowntimeBinarySwapper as ContinuousBinarySwapper,
+};
+

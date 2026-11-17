@@ -1931,6 +1931,8 @@ dependencies = [
  "async-trait",
  "blake3",
  "chrono",
+ "ed25519-dalek",
+ "hex",
  "hgb-core",
  "hgb-wasm-kernel",
  "quote",
@@ -2060,6 +2062,7 @@ dependencies = [
  "clap",
  "colored",
  "futures-util",
+ "hex",
  "hgb-compiler",
  "hgb-core",
  "hgb-nextgen",
@@ -2173,10 +2176,13 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "chrono",
+ "crc32fast",
+ "flate2",
  "hex",
  "hgb-core",
  "hgb-wasm-kernel",
  "hmac 0.12.1",
+ "libc",
  "memmap2",
  "regex",
  "rusqlite",
@@ -2189,6 +2195,7 @@ dependencies = [
  "uuid",
  "wasmtime",
  "wat 1.0.0",
+ "zstd",
 ]
 
 [[package]]

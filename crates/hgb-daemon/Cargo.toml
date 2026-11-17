@@ -32,6 +32,7 @@ futures-util = "0.3"
 uuid = { version = "1.27.0", features = ["v4"] }
 base64 = { workspace = true }
 blake3 = { workspace = true }
+hex = "0.4.3"
 rusqlite = { workspace = true }
 memmap2 = { workspace = true }
 regex = { workspace = true }

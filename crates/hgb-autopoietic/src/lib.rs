@@ -10,6 +10,9 @@ pub mod sandbox_verifier;
 pub mod evolution_ledger;
 pub mod mcp_tool_synthesizer;
 pub mod live_closed_loop_compiler_healer;
+pub mod cryptographic_patch_attestation;
+pub mod patch_healer_integration;
+pub mod continuous_pgo_bolt_feedback_daemon;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -35,6 +38,17 @@ pub use live_closed_loop_compiler_healer::{
     CompilerDiagnostic, DiagnosticParser, FirstGreenVerifier, HealerError,
     McpBridgePipedDiagnostic, PatchStrategy, PatchSynthesisResult,
     RemediationCertificate, SnapshotRollbackGuard, VerificationReport,
+};
+pub use cryptographic_patch_attestation::{
+    AttestationEngine, AttestationError, AttestationProofToken, CircuitBreakerConfig,
+    CircuitState, DeterministicPatchReceipt, GitRollbackCircuitBreaker, HealingCycleRecord,
+    MerkleChunk, MerkleInclusionProof, PatchMerkleTree, PatchStaticAnalyzer,
+    RollbackIncidentEvent, RollbackReceipt, SecurityPolicy, SecurityViolation,
+    ViolationSeverity,
+};
+pub use patch_healer_integration::{
+    AutonomousHealerOrchestrator, HealerRemediationCertificate, HealingPipelineResult,
+    PatchCandidate as IntegrationPatchCandidate, VerificationProbeOutcome,
 };
 
 /// Zero-Downtime Binary Hot-Swapper using atomic symlinks & connection draining

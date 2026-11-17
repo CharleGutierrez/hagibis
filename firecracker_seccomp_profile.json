@@ -1,0 +1,215 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "metadata": {
+    "profile_name": "hagibis_firecracker_hardened_jail",
+    "version": "2.0.0",
+    "security_level": "HIGH_SECURITY_ZERO_TRUST",
+    "enforcement_tier": "Pillar2_HardwareVirtualization_Seccomp",
+    "default_action": "trap",
+    "errno_fallback": 1,
+    "description": "Zero-trust Seccomp BPF filter for Firecracker microVM VMM, vCPU, and SHM worker threads. Enforces strict default-deny (TRAP/EPERM) and blocks all dangerous kernel/host attack vectors."
+  },
+  "blocked_dangerous_syscalls": [
+    { "name": "ptrace", "threat": "Process tracing, memory tampering, registers hijacking", "action": "trap" },
+    { "name": "kexec_load", "threat": "Host kernel replacement / kexec reboot attack", "action": "trap" },
+    { "name": "kexec_file_load", "threat": "Host kernel replacement via file descriptor", "action": "trap" },
+    { "name": "clone3", "threat": "Modern process namespace creation bypass", "action": "trap" },
+    { "name": "process_vm_readv", "threat": "Direct cross-process memory extraction", "action": "trap" },
+    { "name": "process_vm_writev", "threat": "Direct cross-process code/memory injection", "action": "trap" },
+    { "name": "userfaultfd", "threat": "Kernel heap exploitation and page fault race manipulation", "action": "trap" },
+    { "name": "reboot", "threat": "Host system reboot / denial of service", "action": "trap" },
+    { "name": "sys_chroot", "threat": "Chroot jailbreak and root filesystem manipulation", "action": "trap" },
+    { "name": "bpf", "threat": "Host eBPF program injection and kernel verifier bypass", "action": "trap" },
+    { "name": "mount", "threat": "Filesystem mount manipulation on host", "action": "trap" },
+    { "name": "umount2", "threat": "Host filesystem unmounting", "action": "trap" },
+    { "name": "pivot_root", "threat": "Root filesystem reassignment", "action": "trap" },
+    { "name": "setns", "threat": "Host namespace joining / escape", "action": "trap" },
+    { "name": "unshare", "threat": "Unprivileged namespace creation and user namespace exploit", "action": "trap" },
+    { "name": "iopl", "threat": "Direct x86 I/O port privilege level elevation", "action": "trap" },
+    { "name": "ioperm", "threat": "Arbitrary x86 I/O port permission modification", "action": "trap" },
+    { "name": "init_module", "threat": "Loading arbitrary malicious host kernel modules", "action": "trap" },
+    { "name": "finit_module", "threat": "Loading kernel module from file descriptor", "action": "trap" },
+    { "name": "delete_module", "threat": "Unloading security-critical kernel modules", "action": "trap" },
+    { "name": "perf_event_open", "threat": "Kernel performance counter side-channel extraction", "action": "trap" },
+    { "name": "open_by_handle_at", "threat": "Filesystem inode handle jailbreak bypassing directory trees", "action": "trap" },
+    { "name": "name_to_handle_at", "threat": "Obtaining file handles for jailbreak attacks", "action": "trap" },
+    { "name": "keyctl", "threat": "Accessing host kernel keyring credentials", "action": "trap" },
+    { "name": "add_key", "threat": "Injecting keys into host kernel keyring", "action": "trap" },
+    { "name": "request_key", "threat": "Requesting keys from host kernel keyring", "action": "trap" },
+    { "name": "acct", "threat": "BSD process accounting tampering", "action": "trap" },
+    { "name": "swapon", "threat": "Enabling malicious swap device", "action": "trap" },
+    { "name": "swapoff", "threat": "Disabling host swap memory", "action": "trap" },
+    { "name": "lookup_dcookie", "threat": "Directory entry cookie leaking", "action": "trap" },
+    { "name": "nfsservctl", "threat": "Legacy NFS daemon syscall", "action": "trap" }
+  ],
+  "architectures": ["x86_64", "aarch64"],
+  "profiles": {
+    "vmm_main": {
+      "default_action": "trap",
+      "filter_action": "allow",
+      "allowed_syscalls": [
+        "read",
+        "write",
+        "readv",
+        "writev",
+        "close",
+        "fstat",
+        "newfstatat",
+        "lseek",
+        "ioctl",
+        "mmap",
+        "mprotect",
+        "munmap",
+        "madvise",
+        "brk",
+        "rt_sigaction",
+        "rt_sigprocmask",
+        "rt_sigreturn",
+        "sigaltstack",
+        "futex",
+        "nanosleep",
+        "clock_gettime",
+        "clock_nanosleep",
+        "gettimeofday",
+        "epoll_create1",
+        "epoll_ctl",
+        "epoll_wait",
+        "epoll_pwait",
+        "eventfd2",
+        "timerfd_create",
+        "timerfd_settime",
+        "timerfd_gettime",
+        "pipe2",
+        "dup",
+        "dup2",
+        "dup3",
+        "fcntl",
+        "getpid",
+        "gettid",
+        "getuid",
+        "geteuid",
+        "getgid",
+        "getegid",
+        "exit",
+        "exit_group",
+        "sched_yield",
+        "sched_getaffinity",
+        "sched_setaffinity",
+        "prctl",
+        "rseq"
+      ],
+      "argument_filters": {
+        "prctl": [
+          { "index": 0, "op": "EQ", "val": 15, "comment": "PR_SET_NAME" },
+          { "index": 0, "op": "EQ", "val": 16, "comment": "PR_GET_NAME" },
+          { "index": 0, "op": "EQ", "val": 1, "comment": "PR_SET_PDEATHSIG" },
+          { "index": 0, "op": "EQ", "val": 38, "comment": "PR_SET_NO_NEW_PRIVS" }
+        ],
+        "mmap": [
+          { "index": 2, "op": "MASKED_EQ", "mask": 4, "val": 0, "comment": "Disallow PROT_EXEC on heap/mmap" }
+        ],
+        "mprotect": [
+          { "index": 2, "op": "MASKED_EQ", "mask": 4, "val": 0, "comment": "Disallow PROT_EXEC on runtime memory changes" }
+        ]
+      }
+    },
+    "vcpu": {
+      "default_action": "trap",
+      "filter_action": "allow",
+      "allowed_syscalls": [
+        "ioctl",
+        "futex",
+        "rt_sigprocmask",
+        "rt_sigreturn",
+        "sigaltstack",
+        "clock_gettime",
+        "nanosleep",
+        "sched_yield",
+        "exit",
+        "exit_group"
+      ],
+      "argument_filters": {
+        "ioctl": [
+          { "index": 1, "op": "EQ", "val": 44672, "comment": "KVM_RUN (0xAE80)" },
+          { "index": 1, "op": "EQ", "val": 44673, "comment": "KVM_GET_REGS" },
+          { "index": 1, "op": "EQ", "val": 44674, "comment": "KVM_SET_REGS" },
+          { "index": 1, "op": "EQ", "val": 44675, "comment": "KVM_GET_SREGS" },
+          { "index": 1, "op": "EQ", "val": 44676, "comment": "KVM_SET_SREGS" },
+          { "index": 1, "op": "EQ", "val": 44677, "comment": "KVM_TRANSLATE" },
+          { "index": 1, "op": "EQ", "val": 44678, "comment": "KVM_INTERRUPT" },
+          { "index": 1, "op": "EQ", "val": 44687, "comment": "KVM_GET_MP_STATE" },
+          { "index": 1, "op": "EQ", "val": 44688, "comment": "KVM_SET_MP_STATE" },
+          { "index": 1, "op": "EQ", "val": 44700, "comment": "KVM_GET_VCPU_EVENTS" },
+          { "index": 1, "op": "EQ", "val": 44701, "comment": "KVM_SET_VCPU_EVENTS" }
+        ]
+      }
+    },
+    "block_device": {
+      "default_action": "trap",
+      "filter_action": "allow",
+      "allowed_syscalls": [
+        "read",
+        "write",
+        "readv",
+        "writev",
+        "pread64",
+        "pwrite64",
+        "fdatasync",
+        "fsync",
+        "close",
+        "fstat",
+        "epoll_wait",
+        "epoll_ctl",
+        "futex",
+        "eventfd2",
+        "nanosleep",
+        "clock_gettime",
+        "exit",
+        "exit_group"
+      ]
+    },
+    "net_device": {
+      "default_action": "trap",
+      "filter_action": "allow",
+      "allowed_syscalls": [
+        "read",
+        "write",
+        "readv",
+        "writev",
+        "ioctl",
+        "epoll_wait",
+        "epoll_ctl",
+        "futex",
+        "eventfd2",
+        "nanosleep",
+        "clock_gettime",
+        "exit",
+        "exit_group"
+      ],
+      "argument_filters": {
+        "ioctl": [
+          { "index": 1, "op": "EQ", "val": 1074025674, "comment": "TUNSETIFF" },
+          { "index": 1, "op": "EQ", "val": 1074025682, "comment": "TUNSETPERSIST" }
+        ]
+      }
+    },
+    "shm_device": {
+      "default_action": "trap",
+      "filter_action": "allow",
+      "allowed_syscalls": [
+        "futex",
+        "eventfd2",
+        "read",
+        "write",
+        "epoll_wait",
+        "epoll_ctl",
+        "clock_gettime",
+        "nanosleep",
+        "sched_yield",
+        "exit",
+        "exit_group"
+      ],
+      "comments": "Dedicated zero-copy SHM ring buffer worker thread. Disallows all socket and filesystem operations, operating solely via atomic spin, futex, and eventfd signaling over pre-mapped shared memory."
+    }
+  }
+}

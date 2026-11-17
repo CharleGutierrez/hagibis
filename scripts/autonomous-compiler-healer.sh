@@ -31,8 +31,73 @@ TARGET_FILE=""
 REGRESSION_MODE=false
 REGRESSION_DELTA="0.0"
 BENCHMARK_NAME="pgo_workload"
-DEMO_MODE=false
-MAX_RETRIES=3
+CIRCUIT_BREAKER_FILE="/tmp/hgb_healer_circuit_breaker.json"
+
+check_circuit_breaker() {
+    if [ -f "$CIRCUIT_BREAKER_FILE" ]; then
+        local state consecutive_failures
+        state=$(python3 -c "import json; d=json.load(open('$CIRCUIT_BREAKER_FILE')); print(d.get('state', 'Closed'))" 2>/dev/null || echo "Closed")
+        consecutive_failures=$(python3 -c "import json; d=json.load(open('$CIRCUIT_BREAKER_FILE')); print(d.get('consecutive_failures', 0))" 2>/dev/null || echo "0")
+        if [ "$state" = "Tripped" ]; then
+            log_err "⚡ [CIRCUIT BREAKER TRIPPED] Healing merges locked! 3 consecutive failed cycles recorded."
+            log_err "Automatic Git rollback was executed. Human-in-the-loop audit required."
+            return 1
+        fi
+    fi
+    return 0
+}
+
+record_healing_result() {
+    local success="$1"
+    local error_count="$2"
+    python3 -c "
+import json, time, os
+cb_file = '$CIRCUIT_BREAKER_FILE'
+data = {'state': 'Closed', 'consecutive_failures': 0, 'history': []}
+if os.path.exists(cb_file):
+    try: data = json.load(open(cb_file))
+    except Exception: pass
+history = data.get('history', [])
+history.append({'timestamp': time.time(), 'success': $success, 'errors': $error_count})
+history = history[-10:]
+data['history'] = history
+
+if not $success:
+    failures = data.get('consecutive_failures', 0) + 1
+    data['consecutive_failures'] = failures
+    if failures >= 3:
+        data['state'] = 'Tripped'
+        print('TRIP')
+    else:
+        data['state'] = 'HalfOpen'
+        print('FAIL')
+else:
+    data['consecutive_failures'] = 0
+    data['state'] = 'Closed'
+    print('OK')
+
+with open(cb_file, 'w') as f:
+    json.dump(data, f, indent=2)
+"
+}
+
+execute_git_rollback() {
+    log_err "Executing automated Git rollback circuit breaker..."
+    git reset --hard HEAD || true
+    git clean -fd || true
+    log_ok "Automated Git rollback completed. Working tree restored to clean HEAD commit."
+}
+
+validate_patch_security_and_determinism() {
+    local patch_text="$1"
+    # Static analysis: disallow forbidden patterns
+    if echo "$patch_text" | grep -E "(unsafe[[:space:]]*\{|Command::new|libc::system|/bin/sh|curl |chmod \+x)" >/dev/null; then
+        log_err "❌ [ATTESTATION DENIED] Patch contains forbidden unsafe or command execution patterns!"
+        return 1
+    fi
+    log_ok "✔ [STATIC ANALYSIS] Static analysis determinism check passed (0 security violations)."
+    return 0
+}
 
 show_help() {
     cat <<EOF
@@ -209,6 +274,11 @@ fi
 # ------------------------------------------------------------------------------
 # Diagnostic Parser & AST Healer
 # ------------------------------------------------------------------------------
+# Check Circuit Breaker before proceeding
+if ! check_circuit_breaker; then
+    exit 1
+fi
+
 log_step "Hagibis Closed-Loop Self-Healing Remediation Initiated"
 log_info "Workspace Root: $WORKSPACE_ROOT"
 
@@ -408,6 +478,22 @@ for i in "${!DIAGNOSTIC_FILES[@]}"; do
         fi
     fi
 done
+
+# Update Circuit Breaker State & Trigger Rollback if Threshold Exceeded
+if [ "$RESOLVED_COUNT" -gt 0 ]; then
+    record_healing_result "True" 0 >/dev/null
+    log_ok "✔ Circuit breaker: Recorded successful healing cycle (State: Closed, 0 consecutive failures)."
+else
+    local cb_res
+    cb_res=$(record_healing_result "False" ${#DIAGNOSTIC_FILES[@]})
+    if [ "$cb_res" = "TRIP" ]; then
+        log_err "⚡ [CIRCUIT BREAKER TRIPPED] Error rates increased across 3 consecutive healing cycles!"
+        execute_git_rollback
+        exit 1
+    else
+        log_warn "Circuit breaker: Recorded failure (Consecutive failures advancing to threshold)."
+    fi
+fi
 
 # Mint Consensus Certificate
 CERT_ID="CERT-$(uuidgen 2>/dev/null || date +%s%N | sha256sum | head -c 16)"

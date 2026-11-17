@@ -1,4 +1,23 @@
 {
+  "pep_security_gateway": {
+    "enabled": true,
+    "proxy_module": "crates/hgb-core/src/zero_trust_mcp_pep_gateway.rs",
+    "risk_scoring_engine": {
+      "hitl_approval_threshold": 0.70,
+      "absolute_deny_threshold": 0.98,
+      "perf_dynatune_coupling": true,
+      "destructive_tools": [
+        "hgb_microvm_destroy",
+        "hgb_file_delete",
+        "hgb_network_egress",
+        "hgb_shell_exec"
+      ]
+    },
+    "audit_ledger": {
+      "merkle_chained": true,
+      "blake3_integrity": true
+    }
+  },
   "tools": {
     "hgb_compiler_self_heal_ast": {
       "description": "Autonomous closed-loop AST compiler error localization, surgical token slicing, deterministic patch synthesis, and speculative verification with atomic SnapshotRollbackGuard rollback guarantees",

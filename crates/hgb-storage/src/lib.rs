@@ -628,6 +628,25 @@ pub use unified_associative_memory_bus::{
     DEFAULT_RECENCY_HALF_LIFE_MS, SUB_MILLISECOND_LATENCY_BUDGET_US,
 };
 
+// Strategic Upgrade: Intelligent Telemetry Backpressure & Storage Guardrails (Pillar 3)
+pub mod storage_guardrails_pruning_daemon;
+pub use storage_guardrails_pruning_daemon::{
+    BackpressureController, CompactionPassReport, CompactorConfig,
+    CompressionCodec as StorageCompressionCodec, IngestionAction,
+    LogLevel as StorageLogLevel, PartitionStats, StorageGuardrailsDaemon,
+    StorageMonitor, StoragePressureIpcPayload, StoragePressureLevel,
+    TelemetryCompactor,
+};
+
+pub mod cold_vector_columnar_offloader;
+pub use cold_vector_columnar_offloader::{
+    ColdOffloadPolicy, ColdVectorArchiveHeader, ColdVectorEngine,
+    ColumnarVectorBatch, OffloadReport as ColdOffloadReport,
+    SparseIndexTable, TombstoneEntry, VectorRecord as ColdVectorRecord,
+    cosine_similarity as simd_cold_cosine_similarity,
+};
+
+
 
 
 

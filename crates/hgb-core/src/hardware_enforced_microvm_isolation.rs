@@ -762,14 +762,26 @@ impl HardwareEnforcedMicrovmIsolationEngine {
         // 1. Clean previous socket if stale
         DynamicSocketManager::cleanup_socket(&socket_path);
 
-        // 2. Spawn Firecracker microVM daemon
-        let mut child = Command::new(fc_bin)
-            .arg("--api-sock")
-            .arg(&socket_path)
+        // 2. Spawn Firecracker microVM daemon with hardened seccomp profile if present
+        let mut cmd = Command::new(fc_bin);
+        cmd.arg("--api-sock").arg(&socket_path)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
+            .stderr(Stdio::piped());
+
+        let seccomp_candidates = [
+            PathBuf::from("firecracker_seccomp_profile.json"),
+            PathBuf::from("/media/toshiba/Lexar/hagibis/firecracker_seccomp_profile.json"),
+            PathBuf::from("/etc/firecracker/firecracker_seccomp_profile.json"),
+        ];
+        for candidate in &seccomp_candidates {
+            if candidate.exists() {
+                cmd.arg("--seccomp-filter").arg(candidate);
+                break;
+            }
+        }
+
+        let mut child = cmd.spawn()
             .map_err(|e| {
                 DynamicSocketManager::cleanup_socket(&socket_path);
                 HgbError::Execution(format!("Failed to spawn Firecracker daemon: {}", e))
@@ -943,6 +955,13 @@ impl HardwareEnforcedMicrovmIsolationEngine {
     /// Retrieve recorded telemetry snapshots
     pub fn get_telemetry_history(&self) -> Vec<MicrovmExecutionReport> {
         self.telemetry_history.read().map(|h| h.clone()).unwrap_or_default()
+    }
+
+    /// Create a memory-safe bidirectional shared memory IPC ring buffer channel for microVM communication
+    pub fn open_memory_safe_shm_channel(&self, capacity_bytes: usize, token: crate::hardened_sandbox_capabilities::CapabilityToken) -> Result<crate::hardened_sandbox_capabilities::MicrovmShmChannel> {
+        let (host_channel, _vm_channel) = crate::hardened_sandbox_capabilities::MicrovmShmChannel::new_pair(capacity_bytes, token)
+            .map_err(|e| HgbError::Execution(format!("Failed to open memory-safe SHM channel: {}", e)))?;
+        Ok(host_channel)
     }
 
     /// Teardown and cleanup any remaining active sockets

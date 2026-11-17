@@ -2441,6 +2441,29 @@ pub use polyglot_wit_telemetry::{
     SpanStatus as PolyglotSpanStatus, TraceContext as PolyglotTraceContext,
 };
 
+// Strategic Upgrade: Harden Dual-Sandbox Isolation Layer (Pillar 2)
+pub mod hardened_sandbox_capabilities;
+pub use hardened_sandbox_capabilities::{
+    create_shm_ipc_pair, normalize_path as normalize_sandbox_path,
+    CapabilityToken, CapabilityVerifier, ComputeCapability, FsReadCaps, FsWriteCaps,
+    HardenedDualSandboxRouter, HardenedWasmHostEnv, HostAccessAuditRecord,
+    IpcEntryType, IpcFrameHeader, IpCidrRule, MicrovmShmChannel, NetCapability,
+    ProcessCapability, SandboxError, SandboxTier as HardenedSandboxTier,
+    ShmIpcConsumer, ShmIpcProducer, ShmIpcRingHeader, TokenIssuer,
+    ViolationSeverity as SandboxViolationSeverity, WorkloadSpec,
+};
+
+// Strategic Upgrade: Zero-Trust MCP Policy Enforcement Point (PEP) Gateway (Pillar 4)
+pub mod zero_trust_mcp_pep_gateway;
+pub use zero_trust_mcp_pep_gateway::{
+    AgentContext as McpAgentContext, AgentTrustTier, CallProvenance, DynamicRiskScoringEngine,
+    HumanApprovalToken, McpApprovalChallenge, McpContentItem, McpToolCallRequest as PepToolCallRequest,
+    McpToolCallResponse, McpToolMetadata, OperatorKeyStore, OperationType, PepAuditEntry,
+    PepAuditLedger, PepDecisionType, PepError, PepProxyResult, RiskEvaluationReport,
+    RiskFactorBreakdown, ZeroTrustMcpPepGateway,
+};
+
+
 
 
 

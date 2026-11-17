@@ -110,6 +110,33 @@ mod host_ffi {
     }
 }
 
+static ACTIVE_CAPABILITIES: Mutex<Option<Vec<String>>> = Mutex::new(None);
+
+/// Set the explicit capability tokens for the guest runtime, stripping ambient authority
+pub fn set_active_capabilities(caps: Vec<String>) {
+    if let Ok(mut lock) = ACTIVE_CAPABILITIES.lock() {
+        *lock = Some(caps);
+    }
+}
+
+/// Reset capabilities to deny all ambient authority
+pub fn clear_active_capabilities() {
+    if let Ok(mut lock) = ACTIVE_CAPABILITIES.lock() {
+        *lock = Some(Vec::new());
+    }
+}
+
+/// Capability check verifying whether guest possesses explicit permission
+pub fn has_capability(cap: &str) -> bool {
+    if let Ok(lock) = ACTIVE_CAPABILITIES.lock() {
+        if let Some(ref caps) = *lock {
+            return caps.iter().any(|c| c == cap || c == "*");
+        }
+    }
+    // Default: Deny ambient authority
+    false
+}
+
 /// Safe host log wrapper
 pub fn host_log(message: &str) {
     #[cfg(target_arch = "wasm32")]
@@ -122,6 +149,9 @@ pub fn host_log(message: &str) {
 
 /// Safe capability-checked filesystem read
 pub fn fs_read(path: &str, max_bytes: usize) -> Result<Vec<u8>, String> {
+    if !has_capability("fs_read") && !has_capability("fs:*") {
+        return Err(format!("Capability denied: 'fs_read' capability required to read '{}'", path));
+    }
     #[cfg(target_arch = "wasm32")]
     {
         let mut buffer = vec![0u8; max_bytes];
@@ -149,6 +179,9 @@ pub fn fs_read(path: &str, max_bytes: usize) -> Result<Vec<u8>, String> {
 
 /// Safe capability-checked filesystem write
 pub fn fs_write(path: &str, data: &[u8]) -> Result<(), String> {
+    if !has_capability("fs_write") && !has_capability("fs:*") {
+        return Err(format!("Capability denied: 'fs_write' capability required to write '{}'", path));
+    }
     #[cfg(target_arch = "wasm32")]
     {
         let res = unsafe {
@@ -173,6 +206,9 @@ pub fn fs_write(path: &str, data: &[u8]) -> Result<(), String> {
 
 /// Safe capability-checked outbound network request
 pub fn net_fetch(url: &str) -> Result<Vec<u8>, String> {
+    if !has_capability("net_fetch") && !has_capability("net:*") {
+        return Err(format!("Capability denied: 'net_fetch' capability required for '{}'", url));
+    }
     #[cfg(target_arch = "wasm32")]
     {
         let mut buffer = vec![0u8; 64 * 1024];
