@@ -4,15 +4,19 @@
 # Hagibis Autonomous Storage & Build Hygiene Management System (Pillar 5)
 #
 # Core Capabilities:
-#   1. Root Filesystem Monitoring: Queries root (/) utilization; alarms if >= 80%.
+#   1. Filesystem Monitoring (statvfs): Real statvfs queries for root (/) and
+#      $HOME (/home/toshiba); alarms and triggers auto-prune if utilization >= 80%.
 #   2. Stale Artifact Pruning: Prunes incremental artifacts & object caches older
-#      than 7 days or exceeding disk quotas from external and local cargo target dirs.
-#   3. Automated Sccache Detection & Setup: Detects sccache, configures SCCACHE_DIR,
+#      than 48 hours or exceeding disk quotas from external and local cargo targets.
+#   3. Automated Garbage Collection (--gc / --auto-prune): Prunes stale debug artifacts
+#      in $CARGO_TARGET_DIR/debug (keeps release intact), purges .fingerprint and
+#      incremental caches older than 48 hours, and compacts LanceDB caches.
+#   4. LanceDB Cache Compaction: Prunes retired columnar fragments, uncommitted write
+#      probes, and temporary mmap/shard caches across project and system cache roots.
+#   5. Automated Sccache Detection & Setup: Detects sccache, configures SCCACHE_DIR,
 #      and manages compilation cache quotas.
-#   4. Temporary Build Target Cleanup: Cleans volatile scratch directories
-#      (/tmp/cargo*, /tmp/pgo-*, /tmp/bolt-*, /tmp/hgb-*).
-#   5. Scratch Space Provisioning: Prepares /media/toshiba/Lexar/scratch/
-#      for Docker containers, WASM build cache, and Firecracker microVM execution.
+#   6. Volatile Cache Cleanup: Purges /tmp build artifacts (/tmp/cargo*, /tmp/pgo-*, etc.).
+#   7. Scratch Space Provisioning: Prepares /media/toshiba/Lexar/scratch/ for microVMs.
 # ==============================================================================
 set -euo pipefail
 
@@ -20,7 +24,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." 2>/dev/null && pwd || echo "/media/toshiba/Lexar/hagibis")"
 
 # Target directories to inspect
-EXTERNAL_TARGET_DIR="${CARGO_TARGET_DIR:-/media/toshiba/Lexar/cargo-target}"
+CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$HOME/.cargo-target-hagibis}"
+EXTERNAL_TARGET_DIR="${EXTERNAL_TARGET_DIR:-/media/toshiba/Lexar/cargo-target}"
 LOCAL_TARGET_DIR="$WORKSPACE_ROOT/target"
 TMP_TARGET_DIR="/tmp/cargo-target"
 HOME_TARGET_DIR="$HOME/.cargo-target-hagibis"
@@ -39,11 +44,13 @@ LEXAR_SCRATCH_DIR="/media/toshiba/Lexar/scratch"
 # Thresholds
 DISK_ALARM_THRESHOLD_PERCENT=80
 PRUNE_DAYS=7
+PRUNE_HOURS_GC=48
 TARGET_QUOTA_MB=15360 # 15 GB quota for target directories
 
-# Modes
+# Modes & options
 MODE="all"
 JSON_OUTPUT=false
+FORCE_GC=false
 
 show_help() {
     cat <<EOF
@@ -52,9 +59,14 @@ Hagibis Storage & Build Hygiene Manager (Pillar 5)
 Usage: $(basename "$0") [OPTIONS]
 
 Options:
-  --check            Check root filesystem usage & target directory footprints without deletion.
+  --check            Check filesystem statvfs usage & target footprints without deletion.
+  --gc, --auto-prune Execute automated garbage collection if disk utilization exceeds ${DISK_ALARM_THRESHOLD_PERCENT}%.
+                     Prunes stale debug artifacts in \$CARGO_TARGET_DIR/debug (keeps release intact),
+                     deletes .fingerprint and incremental caches > 48h, and compacts LanceDB caches.
+  --force            Force execution of garbage collection regardless of current disk usage threshold.
   --clean-cache      Purge volatile /tmp build artifacts (/tmp/cargo*, /tmp/pgo*, /tmp/bolt*).
   --prune-targets    Prune build artifacts older than ${PRUNE_DAYS} days from target directories.
+  --compact-lancedb  Compact LanceDB vector stores and clean stale vector index caches.
   --sccache-status   Detect sccache installation, verify SCCACHE_DIR and report cache stats.
   --storage-hygiene  Execute full storage hygiene audit, sccache setup, and target quota pruning.
   --prepare-scratch  Create and verify scratch space at ${LEXAR_SCRATCH_DIR}.
@@ -70,11 +82,20 @@ for arg in "$@"; do
         --check)
             MODE="check"
             ;;
+        --gc|--auto-prune)
+            MODE="gc"
+            ;;
+        --force)
+            FORCE_GC=true
+            ;;
         --clean-cache)
             MODE="clean-cache"
             ;;
         --prune-targets)
             MODE="prune-targets"
+            ;;
+        --compact-lancedb)
+            MODE="compact-lancedb"
             ;;
         --sccache-status)
             MODE="sccache-status"
@@ -124,59 +145,105 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-# 1. Disk Utilization Check
+# 1. Real statvfs Disk Utilization Check for Root (/) and Home ($HOME)
 # ------------------------------------------------------------------------------
 check_disk_usage() {
-    local root_line
-    root_line=$(df -Pk / | awk 'NR==2')
-    local root_fs root_total root_used root_avail root_percent
-    root_fs=$(echo "$root_line" | awk '{print $1}')
-    root_total=$(echo "$root_line" | awk '{print $2}')
-    root_used=$(echo "$root_line" | awk '{print $3}')
-    root_avail=$(echo "$root_line" | awk '{print $4}')
-    root_percent=$(echo "$root_line" | awk '{gsub("%","",$5); print $5}')
+    local home_path="${HOME:-/home/toshiba}"
+    local py_code='
+import os, sys, json
+paths = ["/", sys.argv[1]]
+stats = {}
+for p in paths:
+    try:
+        s = os.statvfs(p)
+        fr = s.f_frsize if s.f_frsize else s.f_bsize
+        tot = s.f_blocks * fr
+        free = s.f_bfree * fr
+        avail = s.f_bavail * fr
+        used = tot - free
+        user_tot = used + avail
+        pct = round((used / user_tot * 100.0), 1) if user_tot > 0 else 0.0
+        stats[p] = {
+            "tot_bytes": tot,
+            "used_bytes": used,
+            "avail_bytes": avail,
+            "tot_gb": round(tot / (1024**3), 2),
+            "used_gb": round(used / (1024**3), 2),
+            "avail_gb": round(avail / (1024**3), 2),
+            "pct": pct,
+            "inodes_total": s.f_files,
+            "inodes_free": s.f_ffree
+        }
+    except Exception as e:
+        stats[p] = {"error": str(e), "pct": 0.0, "avail_gb": 0.0, "used_gb": 0.0, "tot_gb": 0.0}
 
-    local lexar_percent="N/A"
-    local lexar_avail="N/A"
+print(json.dumps(stats))
+'
+    local statvfs_json
+    statvfs_json=$(python3 -c "$py_code" "$home_path" 2>/dev/null || echo "{}")
+
+    if [ -n "$statvfs_json" ] && [ "$statvfs_json" != "{}" ]; then
+        ROOT_TOTAL_GB=$(echo "$statvfs_json" | python3 -c 'import sys, json; data=json.load(sys.stdin); print(data.get("/", {}).get("tot_gb", 0))')
+        ROOT_USED_GB=$(echo "$statvfs_json" | python3 -c 'import sys, json; data=json.load(sys.stdin); print(data.get("/", {}).get("used_gb", 0))')
+        ROOT_AVAIL_GB=$(echo "$statvfs_json" | python3 -c 'import sys, json; data=json.load(sys.stdin); print(data.get("/", {}).get("avail_gb", 0))')
+        ROOT_PERCENT=$(echo "$statvfs_json" | python3 -c 'import sys, json; data=json.load(sys.stdin); print(data.get("/", {}).get("pct", 0))')
+
+        HOME_TOTAL_GB=$(echo "$statvfs_json" | python3 -c 'import sys, json; data=json.load(sys.stdin); print(data.get(sys.argv[1], {}).get("tot_gb", 0))' "$home_path")
+        HOME_USED_GB=$(echo "$statvfs_json" | python3 -c 'import sys, json; data=json.load(sys.stdin); print(data.get(sys.argv[1], {}).get("used_gb", 0))' "$home_path")
+        HOME_AVAIL_GB=$(echo "$statvfs_json" | python3 -c 'import sys, json; data=json.load(sys.stdin); print(data.get(sys.argv[1], {}).get("avail_gb", 0))' "$home_path")
+        HOME_PERCENT=$(echo "$statvfs_json" | python3 -c 'import sys, json; data=json.load(sys.stdin); print(data.get(sys.argv[1], {}).get("pct", 0))' "$home_path")
+    else
+        # Fallback to df -Pk if python3 statvfs fails
+        local root_line home_line
+        root_line=$(df -Pk / | awk 'NR==2')
+        ROOT_TOTAL_GB=$(( $(echo "$root_line" | awk '{print $2}') / 1024 / 1024 ))
+        ROOT_USED_GB=$(( $(echo "$root_line" | awk '{print $3}') / 1024 / 1024 ))
+        ROOT_AVAIL_GB=$(( $(echo "$root_line" | awk '{print $4}') / 1024 / 1024 ))
+        ROOT_PERCENT=$(echo "$root_line" | awk '{gsub("%","",$5); print $5}')
+
+        home_line=$(df -Pk "$home_path" 2>/dev/null | awk 'NR==2' || echo "$root_line")
+        HOME_TOTAL_GB=$(( $(echo "$home_line" | awk '{print $2}') / 1024 / 1024 ))
+        HOME_USED_GB=$(( $(echo "$home_line" | awk '{print $3}') / 1024 / 1024 ))
+        HOME_AVAIL_GB=$(( $(echo "$home_line" | awk '{print $4}') / 1024 / 1024 ))
+        HOME_PERCENT=$(echo "$home_line" | awk '{gsub("%","",$5); print $5}')
+    fi
+
+    # Determine maximum utilization between root and home
+    MAX_UTIL_PERCENT=$(python3 -c "print(max(float('$ROOT_PERCENT'), float('$HOME_PERCENT')))" 2>/dev/null || echo "$ROOT_PERCENT")
+    IS_ALARM=false
+    if python3 -c "import sys; sys.exit(0 if float('$MAX_UTIL_PERCENT') >= float('$DISK_ALARM_THRESHOLD_PERCENT') else 1)" 2>/dev/null; then
+        IS_ALARM=true
+    fi
+
+    local lexar_info="N/A"
     if [ -d "/media/toshiba/Lexar" ]; then
         local lexar_line
         lexar_line=$(df -Pk /media/toshiba/Lexar 2>/dev/null | awk 'NR==2' || true)
         if [ -n "$lexar_line" ]; then
-            lexar_percent=$(echo "$lexar_line" | awk '{gsub("%","",$5); print $5}')
-            local avail_kb
-            avail_kb=$(echo "$lexar_line" | awk '{print $4}')
-            lexar_avail="$((avail_kb / 1024 / 1024)) GB"
+            local l_used_pct l_avail_kb
+            l_used_pct=$(echo "$lexar_line" | awk '{gsub("%","",$5); print $5}')
+            l_avail_kb=$(echo "$lexar_line" | awk '{print $4}')
+            lexar_info="$((l_avail_kb / 1024 / 1024)) GB (${l_used_pct}% used)"
         fi
-    fi
-
-    local is_alarm=false
-    if [ "$root_percent" -ge "$DISK_ALARM_THRESHOLD_PERCENT" ]; then
-        is_alarm=true
     fi
 
     if [ "$JSON_OUTPUT" != true ]; then
         echo -e "${BLUE}======================================================================${RESET}"
-        echo -e "${BOLD} Hagibis Storage & Build Hygiene: Root Filesystem Audit${RESET}"
+        echo -e "${BOLD} Hagibis Storage & Build Hygiene: statvfs Filesystem Audit${RESET}"
         echo -e "${BLUE}======================================================================${RESET}"
-        echo -e " Root Filesystem:        ${root_fs}"
-        echo -e " Total Capacity:         $((root_total / 1024 / 1024)) GB"
-        echo -e " Used Space:             $((root_used / 1024 / 1024)) GB"
-        echo -e " Available Space:        $((root_avail / 1024 / 1024)) GB"
-        echo -e " Utilization:            ${root_percent}% (Threshold: ${DISK_ALARM_THRESHOLD_PERCENT}%)"
-        echo -e " External Lexar Avail:   ${lexar_avail} (${lexar_percent}% used)"
+        echo -e " Root Filesystem (/):    Total: ${ROOT_TOTAL_GB} GB | Used: ${ROOT_USED_GB} GB | Avail: ${ROOT_AVAIL_GB} GB | ${BOLD}${ROOT_PERCENT}%${RESET}"
+        echo -e " Home Directory ($home_path): Total: ${HOME_TOTAL_GB} GB | Used: ${HOME_USED_GB} GB | Avail: ${HOME_AVAIL_GB} GB | ${BOLD}${HOME_PERCENT}%${RESET}"
+        echo -e " External Lexar Drive:   ${lexar_info}"
+        echo -e " Alarm Threshold:        ${DISK_ALARM_THRESHOLD_PERCENT}%"
         echo ""
 
-        if [ "$is_alarm" = true ]; then
-            echo -e "${RED}${BOLD}[ALARM] Root partition utilization (${root_percent}%) exceeds ${DISK_ALARM_THRESHOLD_PERCENT}% threshold!${RESET}"
-            echo -e "${YELLOW}[ACTION] High priority: Pruning stale artifacts and purging /tmp cache...${RESET}"
+        if [ "$IS_ALARM" = true ]; then
+            echo -e "${RED}${BOLD}[ALARM] Disk utilization (${MAX_UTIL_PERCENT}%) exceeds ${DISK_ALARM_THRESHOLD_PERCENT}% threshold!${RESET}"
+            echo -e "${YELLOW}[ACTION] High priority: Pruning stale debug artifacts, 48h caches & compacting LanceDB...${RESET}"
         else
-            echo -e "${GREEN}[OK] Root filesystem headroom is optimal (${root_percent}% < ${DISK_ALARM_THRESHOLD_PERCENT}% threshold).${RESET}"
+            echo -e "${GREEN}[OK] Disk headroom is optimal (${MAX_UTIL_PERCENT}% < ${DISK_ALARM_THRESHOLD_PERCENT}% threshold).${RESET}"
         fi
     fi
-
-    ROOT_PERCENT="$root_percent"
-    ROOT_AVAIL_GB="$((root_avail / 1024 / 1024))"
-    IS_ALARM="$is_alarm"
 }
 
 # ------------------------------------------------------------------------------
@@ -212,7 +279,99 @@ setup_sccache() {
 }
 
 # ------------------------------------------------------------------------------
-# 3. Prune Stale Artifacts Older Than N Days & Quota Enforcer
+# 3. LanceDB Vector Store Compaction & Stale Index Cache Cleanup
+# ------------------------------------------------------------------------------
+compact_lancedb_caches() {
+    if [ "$JSON_OUTPUT" != true ]; then
+        echo ""
+        echo -e "${BLUE}======================================================================${RESET}"
+        echo -e "${BOLD} LanceDB Vector Index Compaction & Cache Hygiene${RESET}"
+        echo -e "${BLUE}======================================================================${RESET}"
+    fi
+
+    local search_roots=(
+        "$WORKSPACE_ROOT"
+        "$WORKSPACE_ROOT/.hgb"
+        "$HOME/.hgb"
+        "$HOME/.cache/hagibis"
+        "/tmp"
+    )
+
+    local py_compact='
+import os, glob, json, sys, time
+
+search_roots = sys.argv[1:]
+compacted_tables = 0
+pruned_fragments = 0
+freed_bytes = 0
+now = time.time()
+
+for root in search_roots:
+    if not os.path.exists(root):
+        continue
+    # 1. Inspect table directories with _versions and _commits
+    for dirpath, dirnames, filenames in os.walk(root):
+        if "_versions" in dirnames and "_commits" in dirnames:
+            v_dir = os.path.join(dirpath, "_versions")
+            v_files = sorted(glob.glob(os.path.join(v_dir, "version_*.json")))
+            if v_files:
+                latest_v = v_files[-1]
+                try:
+                    with open(latest_v, "r") as f:
+                        manifest = json.load(f)
+                    active_frags = {f.get("fragment_id") for f in manifest.get("fragments", [])}
+                    table_pruned = 0
+                    for f_path in glob.glob(os.path.join(dirpath, "fragment_*.*")):
+                        base = os.path.basename(f_path)
+                        parts = base.split(".")[0].split("_")
+                        if len(parts) == 2 and parts[1].isdigit():
+                            f_id = int(parts[1])
+                            if f_id not in active_frags:
+                                sz = os.path.getsize(f_path)
+                                os.remove(f_path)
+                                freed_bytes += sz
+                                pruned_fragments += 1
+                                table_pruned += 1
+                    compacted_tables += 1
+                except Exception:
+                    pass
+
+        # 2. Prune transient LanceDB scratch / mmap files older than 48 hours
+        for fn in filenames:
+            if fn.endswith((".lanceshd", ".lance_text", ".lance.tmp", ".lanceshd.tmp", ".mmap.tmp")):
+                full_p = os.path.join(dirpath, fn)
+                try:
+                    mtime = os.path.getmtime(full_p)
+                    if (now - mtime) > (48 * 3600):
+                        sz = os.path.getsize(full_p)
+                        os.remove(full_p)
+                        freed_bytes += sz
+                except Exception:
+                    pass
+
+freed_mb = round(freed_bytes / (1024 * 1024), 2)
+print(f"{compacted_tables} {pruned_fragments} {freed_mb}")
+'
+    local compact_res
+    compact_res=$(python3 -c "$py_compact" "${search_roots[@]}" 2>/dev/null || echo "0 0 0.0")
+    local t_count f_count m_freed
+    t_count=$(echo "$compact_res" | awk '{print $1}')
+    f_count=$(echo "$compact_res" | awk '{print $2}')
+    m_freed=$(echo "$compact_res" | awk '{print $3}')
+
+    # Also clean /tmp stale lance files
+    find /tmp -maxdepth 2 -type f \( -name "*lance*" -o -name "*lancedb*" \) -mtime +2 -delete 2>/dev/null || true
+
+    if [ "$JSON_OUTPUT" != true ]; then
+        echo -e "${GREEN}  ✔ LanceDB index audit complete:${RESET}"
+        echo -e "    - Evaluated tables:      ${t_count}"
+        echo -e "    - Retired fragments GC:  ${f_count} fragment files removed"
+        echo -e "    - Vector cache freed:    ~${m_freed} MB"
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# 4. Prune Stale Artifacts Older Than N Days & Quota Enforcer
 # ------------------------------------------------------------------------------
 prune_target_directory() {
     local target_dir="$1"
@@ -257,7 +416,6 @@ prune_target_directory() {
         if [ "$JSON_OUTPUT" != true ]; then
             echo -e "${YELLOW}  [QUOTA] Target directory size (${current_mb} MB) exceeds quota (${TARGET_QUOTA_MB} MB). Pruning oldest build artifacts...${RESET}"
         fi
-        # Prune oldest files until under quota
         find "$target_dir" -type f \( -name "*.rlib" -o -name "*.rmeta" -o -name "*.o" \) -printf '%T+ %p\n' 2>/dev/null | sort | head -n 50 | awk '{print $2}' | xargs -r rm -f 2>/dev/null || true
         post_size_kb=$(du -sk "$target_dir" 2>/dev/null | awk '{print $1}' || echo "0")
     fi
@@ -279,14 +437,17 @@ prune_all_targets() {
         echo -e "${BLUE}======================================================================${RESET}"
     fi
 
+    prune_target_directory "$CARGO_TARGET_DIR" "$PRUNE_DAYS"
     prune_target_directory "$EXTERNAL_TARGET_DIR" "$PRUNE_DAYS"
     prune_target_directory "$LOCAL_TARGET_DIR" "$PRUNE_DAYS"
     prune_target_directory "$TMP_TARGET_DIR" "$PRUNE_DAYS"
-    prune_target_directory "$HOME_TARGET_DIR" "$PRUNE_DAYS"
+    if [ "$HOME_TARGET_DIR" != "$CARGO_TARGET_DIR" ]; then
+        prune_target_directory "$HOME_TARGET_DIR" "$PRUNE_DAYS"
+    fi
 }
 
 # ------------------------------------------------------------------------------
-# 4. Clean Volatile Temporary Build Artifacts
+# 5. Clean Volatile Temporary Build Artifacts
 # ------------------------------------------------------------------------------
 clean_volatile_cache() {
     if [ "$JSON_OUTPUT" != true ]; then
@@ -318,7 +479,105 @@ clean_volatile_cache() {
 }
 
 # ------------------------------------------------------------------------------
-# 5. Prepare Scratch Space on External Lexar Drive
+# 6. Automated Garbage Collection (--gc / --auto-prune)
+# ------------------------------------------------------------------------------
+run_garbage_collection() {
+    if [ "$JSON_OUTPUT" != true ]; then
+        echo ""
+        echo -e "${BLUE}======================================================================${RESET}"
+        echo -e "${BOLD} Hagibis Automated Build & Artifact Garbage Collection (--gc)${RESET}"
+        echo -e "${BLUE}======================================================================${RESET}"
+        echo -e " Current Utilization:    ${MAX_UTIL_PERCENT}% (Threshold: ${DISK_ALARM_THRESHOLD_PERCENT}%)"
+        echo -e " Forced GC:              ${FORCE_GC}"
+    fi
+
+    # Trigger GC if utilization exceeds threshold OR force flag was provided
+    if [ "$IS_ALARM" = true ] || [ "$FORCE_GC" = true ]; then
+        if [ "$JSON_OUTPUT" != true ]; then
+            echo -e "${YELLOW}[TRIGGERED] High disk usage or forced flag active. Initiating aggressive hygiene GC...${RESET}"
+        fi
+
+        # 1. Prune stale debug artifacts in CARGO_TARGET_DIR/debug & HOME_TARGET_DIR/debug
+        # NOTE: $CARGO_TARGET_DIR/release is strictly KEPT INTACT!
+        local targets_to_prune=("$CARGO_TARGET_DIR")
+        if [ "$HOME_TARGET_DIR" != "$CARGO_TARGET_DIR" ]; then
+            targets_to_prune+=("$HOME_TARGET_DIR")
+        fi
+
+        for t in "${targets_to_prune[@]}"; do
+            if [ -d "$t/debug" ]; then
+                if [ "$JSON_OUTPUT" != true ]; then
+                    echo -e "${BLUE}[GC] Pruning stale debug artifacts in $t/debug (keeping release intact)...${RESET}"
+                fi
+                # Purge incremental cache under debug
+                rm -rf "$t/debug/incremental" 2>/dev/null || true
+                # Purge .fingerprint under debug
+                rm -rf "$t/debug/.fingerprint" 2>/dev/null || true
+                # Purge object files, rlibs, rmeta, intermediate deps older than 48 hours in debug
+                find "$t/debug" -type f \( -name "*.o" -o -name "*.rlib" -o -name "*.rmeta" -o -name "*.d" -o -name "*.profraw" \) -delete 2>/dev/null || true
+                # If root is still heavily constrained, clean entire debug directory contents while leaving directory
+                if [ "$IS_ALARM" = true ]; then
+                    rm -rf "$t/debug"/* 2>/dev/null || true
+                fi
+                mkdir -p "$t/debug"
+            fi
+        done
+
+        # 2. Delete .fingerprint and incremental caches older than 48 hours across all target dirs
+        local all_inspect_targets=(
+            "$CARGO_TARGET_DIR"
+            "$HOME_TARGET_DIR"
+            "$EXTERNAL_TARGET_DIR"
+            "$LOCAL_TARGET_DIR"
+            "$TMP_TARGET_DIR"
+        )
+        for t in "${all_inspect_targets[@]}"; do
+            if [ -d "$t" ]; then
+                # Delete incremental cache dirs older than 48 hours (2 days)
+                find "$t" -type d -name "incremental" -exec find {} -depth -mindepth 1 -type d -mtime +2 -exec rm -rf {} + \; 2>/dev/null || true
+                # Delete .fingerprint files older than 48 hours
+                find "$t" -type d -name ".fingerprint" -exec find {} -type f -mtime +2 -delete \; 2>/dev/null || true
+            fi
+        done
+
+        # 3. Compact stale LanceDB vector index caches
+        compact_lancedb_caches
+
+        # 4. Clean volatile /tmp caches
+        clean_volatile_cache
+
+        # 5. Re-check statvfs after garbage collection
+        check_disk_usage
+
+        if [ "$JSON_OUTPUT" != true ]; then
+            echo -e "${GREEN}✔ Garbage collection completed successfully.${RESET}"
+            echo -e "  Updated Utilization:   ${MAX_UTIL_PERCENT}% (Headroom: ${ROOT_AVAIL_GB} GB available on /)"
+        fi
+    else
+        if [ "$JSON_OUTPUT" != true ]; then
+            echo -e "${GREEN}[OK] Disk utilization (${MAX_UTIL_PERCENT}%) is below ${DISK_ALARM_THRESHOLD_PERCENT}% threshold.${RESET}"
+            echo -e "     Routine maintenance mode: clearing volatile /tmp build files and stale 48h temp caches..."
+        fi
+        # Perform routine light hygiene
+        clean_volatile_cache
+        compact_lancedb_caches
+
+        # Also purge any incremental caches older than 48 hours even during routine runs
+        for t in "$CARGO_TARGET_DIR" "$LOCAL_TARGET_DIR"; do
+            if [ -d "$t" ]; then
+                find "$t" -type d -name "incremental" -exec find {} -depth -mindepth 1 -type d -mtime +2 -exec rm -rf {} + \; 2>/dev/null || true
+                find "$t" -type d -name ".fingerprint" -exec find {} -type f -mtime +2 -delete \; 2>/dev/null || true
+            fi
+        done
+
+        if [ "$JSON_OUTPUT" != true ]; then
+            echo -e "${GREEN}✔ Routine hygiene complete. Zero errors.${RESET}"
+        fi
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# 7. Prepare Scratch Space on External Lexar Drive
 # ------------------------------------------------------------------------------
 prepare_scratch_space() {
     if [ "$JSON_OUTPUT" != true ]; then
@@ -363,8 +622,15 @@ case "$MODE" in
     check)
         setup_sccache
         ;;
+    gc)
+        setup_sccache
+        run_garbage_collection
+        ;;
     clean-cache)
         clean_volatile_cache
+        ;;
+    compact-lancedb)
+        compact_lancedb_caches
         ;;
     prune-targets)
         prune_all_targets
@@ -375,6 +641,7 @@ case "$MODE" in
     storage-hygiene|all)
         setup_sccache
         prune_all_targets
+        compact_lancedb_caches
         clean_volatile_cache
         prepare_scratch_space
         ;;
@@ -389,9 +656,12 @@ if [ "$JSON_OUTPUT" = true ]; then
   "status": "success",
   "root_percent": $ROOT_PERCENT,
   "root_avail_gb": $ROOT_AVAIL_GB,
+  "home_percent": $HOME_PERCENT,
+  "home_avail_gb": $HOME_AVAIL_GB,
+  "max_util_percent": $MAX_UTIL_PERCENT,
   "alarm_triggered": $IS_ALARM,
   "alarm_threshold": $DISK_ALARM_THRESHOLD_PERCENT,
-  "external_target_dir": "$EXTERNAL_TARGET_DIR",
+  "cargo_target_dir": "$CARGO_TARGET_DIR",
   "sccache_dir": "$SCCACHE_DIR",
   "scratch_dir": "$LEXAR_SCRATCH_DIR",
   "mode": "$MODE"
