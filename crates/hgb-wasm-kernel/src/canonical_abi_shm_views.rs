@@ -224,6 +224,545 @@ pub struct TypedShmViewDescriptor {
     pub flags: u32,
 }
 
+// ============================================================================
+// MULTI-MEMORY CAPABILITY SECURITY & READ-ONLY TOKENS
+// ============================================================================
+
+/// Memory capability permission level
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(u32)]
+pub enum CapabilityPermission {
+    ReadOnly = 0,
+    ReadWrite = 1,
+}
+
+/// Functional usage role of a linear memory in multi-memory Wasmtime components
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(u32)]
+pub enum MemoryUsageRole {
+    PrivateHeap = 0,
+    SharedShmRing = 1,
+    TensorDma = 2,
+    IoBuffer = 3,
+}
+
+/// Standard WebAssembly page size: 64 KiB (65536 bytes)
+pub const WASM_PAGE_SIZE_BYTES: usize = 65536;
+
+/// Unforgeable cryptographically signed read-only capability token.
+/// Uses keyed SHA-256 with nonce and parameter binding to guarantee non-repudiation
+/// and tamper evidence. Enforces that plugins presenting this token are strictly
+/// forbidden from acquiring mutable views or writing to shared memory.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReadOnlyCapabilityToken {
+    pub token_id: u64,
+    pub memory_index: u32,
+    pub view_id: u64,
+    pub nonce: u64,
+    pub allowed_offset: usize,
+    pub allowed_len: usize,
+    pub signature: [u8; 32],
+}
+
+impl ReadOnlyCapabilityToken {
+    /// Compute unforgeable SHA-256 signature over capability token attributes
+    pub fn compute_signature(
+        secret: &[u8],
+        token_id: u64,
+        memory_index: u32,
+        view_id: u64,
+        nonce: u64,
+        allowed_offset: usize,
+        allowed_len: usize,
+    ) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(secret);
+        hasher.update(b":hgb:cap:ro:v1:");
+        hasher.update(&token_id.to_le_bytes());
+        hasher.update(&memory_index.to_le_bytes());
+        hasher.update(&view_id.to_le_bytes());
+        hasher.update(&nonce.to_le_bytes());
+        hasher.update(&(allowed_offset as u64).to_le_bytes());
+        hasher.update(&(allowed_len as u64).to_le_bytes());
+        let result = hasher.finalize();
+        let mut sig = [0u8; 32];
+        sig.copy_from_slice(&result);
+        sig
+    }
+
+    /// Issue a new cryptographically signed ReadOnlyCapabilityToken
+    pub fn issue(
+        secret: &[u8],
+        token_id: u64,
+        memory_index: u32,
+        view_id: u64,
+        nonce: u64,
+        allowed_offset: usize,
+        allowed_len: usize,
+    ) -> Self {
+        let signature = Self::compute_signature(
+            secret,
+            token_id,
+            memory_index,
+            view_id,
+            nonce,
+            allowed_offset,
+            allowed_len,
+        );
+        Self {
+            token_id,
+            memory_index,
+            view_id,
+            nonce,
+            allowed_offset,
+            allowed_len,
+            signature,
+        }
+    }
+
+    /// Verify token signature against authority secret
+    pub fn verify(&self, secret: &[u8]) -> Result<(), AbiError> {
+        let expected = Self::compute_signature(
+            secret,
+            self.token_id,
+            self.memory_index,
+            self.view_id,
+            self.nonce,
+            self.allowed_offset,
+            self.allowed_len,
+        );
+        if self.signature != expected {
+            return Err(AbiError::PermissionDenied);
+        }
+        Ok(())
+    }
+
+    /// Fast boolean check whether token signature matches secret
+    pub fn is_valid(&self, secret: &[u8]) -> bool {
+        self.verify(secret).is_ok()
+    }
+
+    /// Verify whether requested offset and len fall within token bounds
+    pub fn allows_range(&self, offset: usize, len: usize) -> bool {
+        let req_end = match offset.checked_add(len) {
+            Some(end) => end,
+            None => return false,
+        };
+        let token_end = match self.allowed_offset.checked_add(self.allowed_len) {
+            Some(end) => end,
+            None => return false,
+        };
+        offset >= self.allowed_offset && req_end <= token_end
+    }
+
+    /// Permission level is strictly ReadOnly
+    pub fn permission(&self) -> CapabilityPermission {
+        CapabilityPermission::ReadOnly
+    }
+
+    /// Always false for read-only capability token
+    pub fn can_write(&self) -> bool {
+        false
+    }
+
+    /// Always true for valid read-only capability token
+    pub fn can_read(&self) -> bool {
+        true
+    }
+
+    /// Strict rejection of any mutation attempt
+    pub fn reject_mutation(&self) -> Result<(), AbiError> {
+        Err(AbiError::PermissionDenied)
+    }
+}
+
+/// Cryptographically signed read-write capability token for privileged channels
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReadWriteCapabilityToken {
+    pub token_id: u64,
+    pub memory_index: u32,
+    pub view_id: u64,
+    pub nonce: u64,
+    pub allowed_offset: usize,
+    pub allowed_len: usize,
+    pub signature: [u8; 32],
+}
+
+impl ReadWriteCapabilityToken {
+    /// Compute unforgeable SHA-256 signature over read-write capability token attributes
+    pub fn compute_signature(
+        secret: &[u8],
+        token_id: u64,
+        memory_index: u32,
+        view_id: u64,
+        nonce: u64,
+        allowed_offset: usize,
+        allowed_len: usize,
+    ) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(secret);
+        hasher.update(b":hgb:cap:rw:v1:");
+        hasher.update(&token_id.to_le_bytes());
+        hasher.update(&memory_index.to_le_bytes());
+        hasher.update(&view_id.to_le_bytes());
+        hasher.update(&nonce.to_le_bytes());
+        hasher.update(&(allowed_offset as u64).to_le_bytes());
+        hasher.update(&(allowed_len as u64).to_le_bytes());
+        let result = hasher.finalize();
+        let mut sig = [0u8; 32];
+        sig.copy_from_slice(&result);
+        sig
+    }
+
+    /// Issue a new cryptographically signed ReadWriteCapabilityToken
+    pub fn issue(
+        secret: &[u8],
+        token_id: u64,
+        memory_index: u32,
+        view_id: u64,
+        nonce: u64,
+        allowed_offset: usize,
+        allowed_len: usize,
+    ) -> Self {
+        let signature = Self::compute_signature(
+            secret,
+            token_id,
+            memory_index,
+            view_id,
+            nonce,
+            allowed_offset,
+            allowed_len,
+        );
+        Self {
+            token_id,
+            memory_index,
+            view_id,
+            nonce,
+            allowed_offset,
+            allowed_len,
+            signature,
+        }
+    }
+
+    /// Verify token signature against authority secret
+    pub fn verify(&self, secret: &[u8]) -> Result<(), AbiError> {
+        let expected = Self::compute_signature(
+            secret,
+            self.token_id,
+            self.memory_index,
+            self.view_id,
+            self.nonce,
+            self.allowed_offset,
+            self.allowed_len,
+        );
+        if self.signature != expected {
+            return Err(AbiError::PermissionDenied);
+        }
+        Ok(())
+    }
+
+    /// Fast boolean check whether token signature matches secret
+    pub fn is_valid(&self, secret: &[u8]) -> bool {
+        self.verify(secret).is_ok()
+    }
+
+    /// Verify whether requested offset and len fall within token bounds
+    pub fn allows_range(&self, offset: usize, len: usize) -> bool {
+        let req_end = match offset.checked_add(len) {
+            Some(end) => end,
+            None => return false,
+        };
+        let token_end = match self.allowed_offset.checked_add(self.allowed_len) {
+            Some(end) => end,
+            None => return false,
+        };
+        offset >= self.allowed_offset && req_end <= token_end
+    }
+
+    /// Permission level is ReadWrite
+    pub fn permission(&self) -> CapabilityPermission {
+        CapabilityPermission::ReadWrite
+    }
+
+    pub fn can_write(&self) -> bool {
+        true
+    }
+
+    pub fn can_read(&self) -> bool {
+        true
+    }
+}
+
+/// Generic capability token representing either ReadOnly or ReadWrite access
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MemoryCapabilityToken {
+    ReadOnly(ReadOnlyCapabilityToken),
+    ReadWrite(ReadWriteCapabilityToken),
+}
+
+impl MemoryCapabilityToken {
+    pub fn permission(&self) -> CapabilityPermission {
+        match self {
+            Self::ReadOnly(t) => t.permission(),
+            Self::ReadWrite(t) => t.permission(),
+        }
+    }
+
+    pub fn memory_index(&self) -> u32 {
+        match self {
+            Self::ReadOnly(t) => t.memory_index,
+            Self::ReadWrite(t) => t.memory_index,
+        }
+    }
+
+    pub fn view_id(&self) -> u64 {
+        match self {
+            Self::ReadOnly(t) => t.view_id,
+            Self::ReadWrite(t) => t.view_id,
+        }
+    }
+
+    pub fn verify(&self, secret: &[u8]) -> Result<(), AbiError> {
+        match self {
+            Self::ReadOnly(t) => t.verify(secret),
+            Self::ReadWrite(t) => t.verify(secret),
+        }
+    }
+
+    pub fn allows_range(&self, offset: usize, len: usize) -> bool {
+        match self {
+            Self::ReadOnly(t) => t.allows_range(offset, len),
+            Self::ReadWrite(t) => t.allows_range(offset, len),
+        }
+    }
+
+    pub fn can_write(&self) -> bool {
+        matches!(self, Self::ReadWrite(_))
+    }
+
+    pub fn can_read(&self) -> bool {
+        true
+    }
+}
+
+/// Linear memory descriptor supporting Wasmtime multi-memory configurations.
+/// Models multiple discrete linear memories within a single WebAssembly component instance.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearMemoryDescriptor {
+    pub memory_index: u32,
+    pub name: String,
+    pub initial_pages: u32,
+    pub maximum_pages: Option<u32>,
+    pub is_shared: bool,
+    pub role: MemoryUsageRole,
+    pub access_mode: MemoryAccessMode,
+    pub size_bytes: usize,
+}
+
+impl LinearMemoryDescriptor {
+    pub fn new(
+        memory_index: u32,
+        name: impl Into<String>,
+        initial_pages: u32,
+        maximum_pages: Option<u32>,
+        is_shared: bool,
+        role: MemoryUsageRole,
+        access_mode: MemoryAccessMode,
+    ) -> Self {
+        let size_bytes = (initial_pages as usize) * WASM_PAGE_SIZE_BYTES;
+        Self {
+            memory_index,
+            name: name.into(),
+            initial_pages,
+            maximum_pages,
+            is_shared,
+            role,
+            access_mode,
+            size_bytes,
+        }
+    }
+
+    /// Private heap configuration (typically Memory 0 in multi-memory components)
+    pub fn new_private_heap(memory_index: u32, initial_pages: u32, maximum_pages: Option<u32>) -> Self {
+        Self::new(
+            memory_index,
+            format!("memory_{}_heap", memory_index),
+            initial_pages,
+            maximum_pages,
+            false,
+            MemoryUsageRole::PrivateHeap,
+            MemoryAccessMode::ReadWrite,
+        )
+    }
+
+    /// Shared zero-copy read-only ring buffer (typically Memory 1 in multi-memory components)
+    pub fn new_shared_readonly_ring(memory_index: u32, pages: u32) -> Self {
+        Self::new(
+            memory_index,
+            format!("memory_{}_shm_ring_ro", memory_index),
+            pages,
+            Some(pages),
+            true,
+            MemoryUsageRole::SharedShmRing,
+            MemoryAccessMode::ReadOnly,
+        )
+    }
+
+    /// Shared zero-copy read-write buffer
+    pub fn new_shared_readwrite(memory_index: u32, pages: u32, role: MemoryUsageRole) -> Self {
+        Self::new(
+            memory_index,
+            format!("memory_{}_shm_rw", memory_index),
+            pages,
+            Some(pages),
+            true,
+            role,
+            MemoryAccessMode::ReadWrite,
+        )
+    }
+
+    pub fn capacity_bytes(&self) -> usize {
+        self.size_bytes
+    }
+}
+
+/// Multi-memory component runtime manager supporting Wasmtime multi-memory isolation.
+/// Manages distinct linear memories (e.g., Memory 0: private heap, Memory 1: shared zero-copy read-only ring)
+/// and strictly enforces capability token authorization boundaries.
+#[derive(Debug)]
+pub struct MultiMemoryComponentRuntime {
+    descriptors: HashMap<u32, LinearMemoryDescriptor>,
+    buffers: HashMap<u32, Vec<u8>>,
+    signing_secret: Vec<u8>,
+}
+
+impl MultiMemoryComponentRuntime {
+    /// Initialize runtime with explicit multi-memory descriptors and security secret
+    pub fn new(descriptors: Vec<LinearMemoryDescriptor>, signing_secret: impl Into<Vec<u8>>) -> Result<Self, AbiError> {
+        let mut desc_map = HashMap::new();
+        let mut buf_map = HashMap::new();
+
+        for desc in descriptors {
+            let buf = vec![0u8; desc.size_bytes];
+            desc_map.insert(desc.memory_index, desc.clone());
+            buf_map.insert(desc.memory_index, buf);
+        }
+
+        Ok(Self {
+            descriptors: desc_map,
+            buffers: buf_map,
+            signing_secret: signing_secret.into(),
+        })
+    }
+
+    /// Lookup descriptor by memory index
+    pub fn descriptor(&self, memory_index: u32) -> Option<&LinearMemoryDescriptor> {
+        self.descriptors.get(&memory_index)
+    }
+
+    /// Total number of configured linear memories
+    pub fn memory_count(&self) -> usize {
+        self.descriptors.len()
+    }
+
+    /// Directly borrow linear memory buffer slice
+    pub fn get_memory(&self, memory_index: u32) -> Result<&[u8], AbiError> {
+        self.buffers
+            .get(&memory_index)
+            .map(|v| v.as_slice())
+            .ok_or_else(|| AbiError::ViewNotFound { view_id: memory_index as u64 })
+    }
+
+    /// Directly borrow mutable linear memory buffer slice
+    pub fn get_memory_mut(&mut self, memory_index: u32) -> Result<&mut [u8], AbiError> {
+        self.buffers
+            .get_mut(&memory_index)
+            .map(|v| v.as_mut_slice())
+            .ok_or_else(|| AbiError::ViewNotFound { view_id: memory_index as u64 })
+    }
+
+    /// Create a zero-copy read-only view on a specific linear memory
+    pub fn create_view(
+        &self,
+        memory_index: u32,
+        offset: usize,
+        len: usize,
+        alignment: usize,
+    ) -> Result<CanonicalAbiShmView<'_>, AbiError> {
+        let desc = self.descriptors.get(&memory_index)
+            .ok_or_else(|| AbiError::ViewNotFound { view_id: memory_index as u64 })?;
+        let buf = self.buffers.get(&memory_index).unwrap();
+        CanonicalAbiShmView::new(memory_index as u64, buf, offset, len, alignment, desc.access_mode)
+    }
+
+    /// Create a zero-copy mutable view on a specific linear memory
+    pub fn create_view_mut(
+        &mut self,
+        memory_index: u32,
+        offset: usize,
+        len: usize,
+        alignment: usize,
+    ) -> Result<CanonicalAbiShmViewMut<'_>, AbiError> {
+        let desc = self.descriptors.get(&memory_index)
+            .ok_or_else(|| AbiError::ViewNotFound { view_id: memory_index as u64 })?;
+        if desc.access_mode == MemoryAccessMode::ReadOnly {
+            return Err(AbiError::PermissionDenied);
+        }
+        let buf = self.buffers.get_mut(&memory_index).unwrap();
+        CanonicalAbiShmViewMut::new(memory_index as u64, buf, offset, len, alignment, desc.access_mode)
+    }
+
+    /// Acquire a zero-copy read-only view presenting a valid `ReadOnlyCapabilityToken`
+    pub fn acquire_view_with_ro_token<'a>(
+        &'a self,
+        token: &ReadOnlyCapabilityToken,
+        alignment: usize,
+    ) -> Result<CanonicalAbiShmView<'a>, AbiError> {
+        token.verify(&self.signing_secret)?;
+
+        let desc = self.descriptors.get(&token.memory_index)
+            .ok_or_else(|| AbiError::ViewNotFound { view_id: token.view_id })?;
+
+        let buf = self.buffers.get(&token.memory_index)
+            .ok_or_else(|| AbiError::ViewNotFound { view_id: token.view_id })?;
+
+        CanonicalAbiShmView::new(
+            token.view_id,
+            buf,
+            token.allowed_offset,
+            token.allowed_len,
+            alignment,
+            desc.access_mode,
+        )
+    }
+
+    /// Attempt to acquire a mutable view presenting a `ReadOnlyCapabilityToken`.
+    /// STRICTLY FORBIDDEN: Always returns Err(CanonicalAbiError::PermissionDenied).
+    pub fn acquire_view_mut_with_ro_token<'a>(
+        &'a mut self,
+        token: &ReadOnlyCapabilityToken,
+        _alignment: usize,
+    ) -> Result<CanonicalAbiShmViewMut<'a>, AbiError> {
+        // Cryptographically verify token first (tampered tokens fail immediately)
+        token.verify(&self.signing_secret)?;
+
+        // Enforce strict read-only boundary: mutation is completely forbidden
+        Err(AbiError::PermissionDenied)
+    }
+
+    /// Attempt to write to shared memory presenting a `ReadOnlyCapabilityToken`.
+    /// STRICTLY FORBIDDEN: Always returns Err(CanonicalAbiError::PermissionDenied).
+    pub fn write_with_ro_token(
+        &mut self,
+        token: &ReadOnlyCapabilityToken,
+        _offset: usize,
+        _data: &[u8],
+    ) -> Result<usize, AbiError> {
+        token.verify(&self.signing_secret)?;
+        Err(AbiError::PermissionDenied)
+    }
+}
+
 /// Helper function to verify pointer and offset alignment
 #[inline(always)]
 pub fn verify_alignment(ptr_or_offset: usize, required_alignment: usize) -> Result<(), AbiError> {

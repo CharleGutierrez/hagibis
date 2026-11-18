@@ -10,7 +10,8 @@
         "hgb_microvm_destroy",
         "hgb_file_delete",
         "hgb_network_egress",
-        "hgb_shell_exec"
+        "hgb_shell_exec",
+        "hgb_microvm_firecracker_orchestrate"
       ]
     },
     "audit_ledger": {
@@ -1659,6 +1660,188 @@
         "partition": { "type": "string", "description": "Filter by dataset partition" },
         "federate_edge": { "type": "boolean", "description": "Federate search across Cloudflare Worker edge mesh", "default": true }
       }
+    },
+    "hgb_agent_orchestrator_rig": {
+      "description": "Execute DAG workflows, dispatch multi-agent cognitive teams, and assign specialized agent roles with autonomic hardware-coupled cognitive loops from skills/agent-orchestrator-rig",
+      "parameters": {
+        "action": {
+          "type": "string",
+          "enum": ["dag_workflow", "agent_team_dispatch", "role_assignment", "status"],
+          "description": "Orchestration action to perform: execute DAG workflow, dispatch team, assign roles, or query status",
+          "default": "dag_workflow"
+        },
+        "workflow_dag": {
+          "type": "object",
+          "description": "Directed Acyclic Graph (DAG) specification of execution nodes, step dependencies, and parallel execution constraints",
+          "properties": {
+            "name": { "type": "string" },
+            "nodes": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": { "type": "string" },
+                  "role": { "type": "string" },
+                  "task": { "type": "string" },
+                  "depends_on": { "type": "array", "items": { "type": "string" } },
+                  "timeout_ms": { "type": "integer", "default": 30000 }
+                },
+                "required": ["id", "role", "task"]
+              }
+            }
+          }
+        },
+        "team_config": {
+          "type": "object",
+          "description": "Agent team dispatch configuration including team leader, subagent pool, and convergence criteria",
+          "properties": {
+            "team_name": { "type": "string" },
+            "lead_agent_role": { "type": "string" },
+            "collaborating_roles": { "type": "array", "items": { "type": "string" } },
+            "objective": { "type": "string" },
+            "max_iterations": { "type": "integer", "default": 10 }
+          }
+        },
+        "roles": {
+          "type": "array",
+          "description": "Agent role assignments specifying capabilities, tool access permissions, and reasoning models",
+          "items": {
+            "type": "object",
+            "properties": {
+              "role_name": { "type": "string" },
+              "system_prompt": { "type": "string" },
+              "allowed_tools": { "type": "array", "items": { "type": "string" } },
+              "model_provider": { "type": "string", "enum": ["ollama", "anthropic", "openai", "fallback"], "default": "ollama" },
+              "token_budget": { "type": "integer", "default": 4096 }
+            },
+            "required": ["role_name"]
+          }
+        },
+        "thermal_throttling": {
+          "type": "boolean",
+          "description": "Enable autonomic coupling to dynatune hardware sentry to throttle agent reasoning when temperature exceeds 78°C",
+          "default": true
+        }
+      },
+      "required": ["action"]
+    },
+    "hgb_vector_lancedb_manage": {
+      "description": "Manage embedded LanceDB-compatible vector tables, execute SIMD-accelerated similarity queries, and perform columnar fragment compaction and cache maintenance from skills/vector-lancedb",
+      "parameters": {
+        "operation": {
+          "type": "string",
+          "enum": ["table_operation", "similarity_query", "columnar_cache_compaction", "describe_table"],
+          "description": "Vector management operation: table DDL, similarity search, cache compaction, or schema inspection",
+          "default": "similarity_query"
+        },
+        "table_name": {
+          "type": "string",
+          "description": "Target LanceDB vector table name (e.g. codebase_symbols, compiler_remediation_memory)",
+          "default": "default_vector_table"
+        },
+        "table_action": {
+          "type": "string",
+          "enum": ["create", "drop", "list", "truncate"],
+          "description": "Table management sub-action when operation is table_operation"
+        },
+        "dimension": {
+          "type": "integer",
+          "description": "Vector dimensionality (e.g. 384, 768, 1536)",
+          "default": 768
+        },
+        "distance_metric": {
+          "type": "string",
+          "enum": ["cosine", "l2", "dot"],
+          "description": "SIMD distance metric for similarity ranking",
+          "default": "cosine"
+        },
+        "query_vector": {
+          "type": "array",
+          "items": { "type": "number" },
+          "description": "Dense floating-point query vector for similarity search"
+        },
+        "query_text": {
+          "type": "string",
+          "description": "Optional text query for BM25 hybrid search fusion"
+        },
+        "top_k": {
+          "type": "integer",
+          "description": "Number of nearest neighbor candidates to return",
+          "default": 10
+        },
+        "filter_predicate": {
+          "type": "string",
+          "description": "Columnar metadata predicate filter (e.g. partition == 'core' && score > 0.8)"
+        },
+        "compaction_options": {
+          "type": "object",
+          "description": "Columnar cache compaction and fragment defragmentation settings",
+          "properties": {
+            "clean_old_versions": { "type": "boolean", "default": true },
+            "target_fragment_size_mb": { "type": "integer", "default": 64 },
+            "reindex_ivf": { "type": "boolean", "default": true }
+          }
+        }
+      },
+      "required": ["operation", "table_name"]
+    },
+    "hgb_microvm_firecracker_orchestrate": {
+      "description": "Orchestrate hardware-isolated Firecracker microVMs with dynamic seccomp syscall filtering, cgroups v2 resource capping, and detailed execution tracing from skills/microvm-firecracker",
+      "parameters": {
+        "action": {
+          "type": "string",
+          "enum": ["provision", "execute", "apply_seccomp", "trace", "teardown"],
+          "description": "MicroVM orchestration action to perform",
+          "default": "provision"
+        },
+        "vm_id": {
+          "type": "string",
+          "description": "Unique identifier for the microVM instance or jail"
+        },
+        "vcpus": {
+          "type": "integer",
+          "description": "Number of dedicated virtual CPUs allocated to the microVM (default: 2)",
+          "default": 2
+        },
+        "mem_mib": {
+          "type": "integer",
+          "description": "Memory ceiling in MiB allocated to the microVM (default: 256)",
+          "default": 256
+        },
+        "kernel_image_path": {
+          "type": "string",
+          "description": "Filesystem path to uncompressed guest kernel image (vmlinux)"
+        },
+        "rootfs_image_path": {
+          "type": "string",
+          "description": "Filesystem path to isolated ext4 rootfs disk image"
+        },
+        "seccomp_policy": {
+          "type": "object",
+          "description": "Dynamic seccomp filtering policy specifying allowed syscalls, default action, and filter architecture",
+          "properties": {
+            "profile_name": { "type": "string", "enum": ["strict", "compute_only", "isolated_network", "custom"], "default": "strict" },
+            "default_action": { "type": "string", "enum": ["kill", "trap", "errno", "allow"], "default": "kill" },
+            "whitelist_syscalls": { "type": "array", "items": { "type": "string" } },
+            "blacklist_syscalls": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "command": {
+          "type": "string",
+          "description": "Command or script to execute inside the microVM guest environment"
+        },
+        "execution_tracing": {
+          "type": "object",
+          "description": "Execution tracing parameters for capturing stdout/stderr, cycle counters, and memory bounds",
+          "properties": {
+            "capture_output": { "type": "boolean", "default": true },
+            "trace_syscalls": { "type": "boolean", "default": true },
+            "trace_cycles": { "type": "boolean", "default": true },
+            "timeout_seconds": { "type": "integer", "default": 30 }
+          }
+        }
+      },
+      "required": ["action"]
     }
   },
   "mcpServers": {

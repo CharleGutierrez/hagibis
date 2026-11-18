@@ -2472,6 +2472,14 @@ pub use reverse_engineering_mcp_bridge::{
     ReverseEngineeringMcpBridge, SymbolKind as McpSymbolKind, VectorSearchResult,
 };
 
+// Strategic Upgrade: Dynamic Per-Task Seccomp BPF Profiler for Firecracker MicroVM
+pub mod dynamic_seccomp_profiler;
+pub use dynamic_seccomp_profiler::{
+    AgentTaskProfile, BlockedSyscallEntry, DynamicFirecrackerSeccompProfile, DynamicSeccompMetadata,
+    DynamicSeccompProfiler, SeccompDefaultAction, SeccompSyscallRule, is_lethal_syscall,
+    LETHAL_DANGEROUS_SYSCALLS,
+};
+
 
 
 

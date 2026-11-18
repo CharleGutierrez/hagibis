@@ -380,6 +380,28 @@ impl DynamicRiskScoringEngine {
                 base_risk_override: Some(0.72),
                 requires_mandatory_hitl: true,
             },
+            // Skill Standardized MCP Suite (Pillar 3 & 4 Full MCP Compliance)
+            McpToolMetadata {
+                tool_name: "hgb_agent_orchestrator_rig".to_string(),
+                op_type: OperationType::Mutation,
+                description: "DAG workflow execution, agent team dispatch, and role assignment from skills/agent-orchestrator-rig".to_string(),
+                base_risk_override: Some(0.48),
+                requires_mandatory_hitl: false,
+            },
+            McpToolMetadata {
+                tool_name: "hgb_vector_lancedb_manage".to_string(),
+                op_type: OperationType::Mutation,
+                description: "LanceDB vector index table operations, similarity queries, and columnar cache compaction from skills/vector-lancedb".to_string(),
+                base_risk_override: Some(0.38),
+                requires_mandatory_hitl: false,
+            },
+            McpToolMetadata {
+                tool_name: "hgb_microvm_firecracker_orchestrate".to_string(),
+                op_type: OperationType::Destructive,
+                description: "Firecracker microVM provisioning, dynamic seccomp filtering, and execution tracing from skills/microvm-firecracker".to_string(),
+                base_risk_override: Some(0.78),
+                requires_mandatory_hitl: true,
+            },
         ];
 
         let mut lock = self.tool_registry.write().unwrap();
@@ -1395,6 +1417,63 @@ mod tests {
                 assert!(reason.contains("absolute security ceiling"));
             }
             other => panic!("Expected absolute Denied, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_internal_skills_mcp_risk_scoring() {
+        let (gw, _) = test_gateway();
+
+        // 1. hgb_agent_orchestrator_rig
+        let req_rig = McpToolCallRequest {
+            call_id: "call-rig-01".to_string(),
+            tool_name: "hgb_agent_orchestrator_rig".to_string(),
+            arguments: serde_json::json!({
+                "action": "dag_workflow",
+                "workflow_dag": { "name": "test_pipeline" }
+            }),
+            context: AgentContext::default(),
+        };
+        let eval_rig = gw.risk_engine.evaluate_risk(&req_rig).unwrap();
+        assert_eq!(eval_rig.op_type, OperationType::Mutation);
+        assert!(!eval_rig.is_hitl_required);
+
+        // 2. hgb_vector_lancedb_manage
+        let req_lance = McpToolCallRequest {
+            call_id: "call-lance-01".to_string(),
+            tool_name: "hgb_vector_lancedb_manage".to_string(),
+            arguments: serde_json::json!({
+                "operation": "similarity_query",
+                "table_name": "codebase_symbols"
+            }),
+            context: AgentContext::default(),
+        };
+        let eval_lance = gw.risk_engine.evaluate_risk(&req_lance).unwrap();
+        assert_eq!(eval_lance.op_type, OperationType::Mutation);
+        assert!(!eval_lance.is_hitl_required);
+
+        // 3. hgb_microvm_firecracker_orchestrate (requires mandatory HITL)
+        let req_vm = McpToolCallRequest {
+            call_id: "call-fc-01".to_string(),
+            tool_name: "hgb_microvm_firecracker_orchestrate".to_string(),
+            arguments: serde_json::json!({
+                "action": "provision",
+                "vcpus": 2,
+                "mem_mib": 256
+            }),
+            context: AgentContext::default(),
+        };
+        let eval_vm = gw.risk_engine.evaluate_risk(&req_vm).unwrap();
+        assert_eq!(eval_vm.op_type, OperationType::Destructive);
+        assert!(eval_vm.is_hitl_required);
+
+        let res_vm = gw.evaluate_and_intercept(&req_vm, None);
+        match res_vm {
+            PepProxyResult::ChallengeRequired { challenge, risk_report, .. } => {
+                assert_eq!(challenge.tool_name, "hgb_microvm_firecracker_orchestrate");
+                assert!(risk_report.is_hitl_required);
+            }
+            other => panic!("Expected ChallengeRequired for destructive microvm orchestrate, got {:?}", other),
         }
     }
 }
