@@ -16,6 +16,14 @@
 use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 
+pub mod canonical_abi_shm_views;
+pub use canonical_abi_shm_views::{
+    CanonicalAbiShmView, CanonicalAbiShmViewMut, CanonicalInvocationHeader,
+    CanonicalAbiInvocationPayload, CanonicalMemoryLender, LentRegionGuard,
+    PinnedTensorDescriptor as ShmPinnedTensorDescriptor, InteropBenchmarkReport,
+    AbiError, CANONICAL_ABI_HEADER_MAGIC, CANONICAL_HEADER_SIZE, CANONICAL_ALIGNMENT_DEFAULT,
+};
+
 pub mod component_model_bridge;
 pub use component_model_bridge::{
     CanonicalAbiFunction, CanonicalValue, ComponentHeaderInfo, ComponentTrap, MemoryRegionType,

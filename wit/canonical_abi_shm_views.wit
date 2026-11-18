@@ -1,0 +1,147 @@
+package hagibis:wasm-kernel@0.1.0;
+
+/// Shared Memory and Zero-Copy Canonical ABI Definitions for Hagibis Sovereign Execution.
+/// Eliminates serde/JSON serialization latency across sandboxed WASM microkernel components
+/// and provides direct 64-byte aligned memory mappings for NPU and GPU neural routing.
+interface canonical-abi-types {
+    /// Access permissions for shared linear memory slices
+    enum memory-access-mode {
+        read-only,
+        read-write,
+        exclusive-write,
+    }
+
+    /// Primitive data types supported in zero-copy shared memory and tensor views
+    enum tensor-data-type {
+        f32,
+        f16,
+        bf16,
+        i32,
+        i16,
+        i8,
+        u32,
+        u16,
+        u8,
+        q8-0,
+        q4-0,
+    }
+
+    /// Target hardware acceleration engine for pinned tensor routing
+    enum npu-device-target {
+        cpu-simd,
+        npu-direct,
+        gpu-compute,
+        ephemeral-npu,
+    }
+
+    /// Low-level slice into WebAssembly linear memory
+    record canonical-memory-slice {
+        ptr: u64,
+        len: u64,
+        alignment: u32,
+        access-mode: memory-access-mode,
+    }
+
+    /// High-level typed shared memory descriptor for cross-component zero-copy exchange
+    record typed-shm-view-descriptor {
+        view-id: u64,
+        slice: canonical-memory-slice,
+        element-type: string,
+        element-stride: u32,
+        element-count: u64,
+        version-epoch: u64,
+        flags: u32,
+    }
+
+    /// 64-byte aligned Canonical ABI Invocation Header layout.
+    /// Exchanged across component boundaries without serialization.
+    record canonical-invocation-header {
+        magic: u64,
+        protocol-version: u32,
+        action-code: u32,
+        correlation-id: u64,
+        payload-flags: u32,
+        arg-offset: u32,
+        arg-length: u32,
+        return-offset: u32,
+        return-capacity: u32,
+        return-length: u32,
+        status-code: u32,
+        reserved-hi: u64,
+        reserved-lo: u64,
+    }
+
+    /// Pinned tensor descriptor for zero-copy DMA and NPU tensor acceleration
+    record pinned-tensor-descriptor {
+        tensor-id: u64,
+        shm-view-id: u64,
+        dtype: tensor-data-type,
+        shape: list<u64>,
+        strides: list<u64>,
+        byte-offset: u64,
+        byte-length: u64,
+        alignment: u32,
+        device-target: npu-device-target,
+        is-pinned: bool,
+    }
+
+    /// Action invocation payload bypassing serde JSON/bincode
+    record canonical-abi-invocation-payload {
+        header: canonical-invocation-header,
+        input-slice: canonical-memory-slice,
+        return-slice: canonical-memory-slice,
+        pinned-tensor: option<pinned-tensor-descriptor>,
+    }
+
+    /// Error variants encountered during zero-copy ABI view management
+    variant abi-error {
+        out-of-bounds(string),
+        alignment-fault(string),
+        borrow-conflict(string),
+        double-lend(string),
+        view-not-found(string),
+        invalid-magic(u64),
+        buffer-overflow(string),
+        npu-routing-failed(string),
+        execution-trapped(string),
+    }
+}
+
+/// Interface for linear memory lending, borrowing, and zero-copy action invocation
+interface canonical-abi-shm {
+    use canonical-abi-types.{
+        canonical-memory-slice,
+        typed-shm-view-descriptor,
+        canonical-invocation-header,
+        pinned-tensor-descriptor,
+        canonical-abi-invocation-payload,
+        abi-error,
+        tensor-data-type,
+        memory-access-mode,
+        npu-device-target,
+    };
+
+    /// Lend a region of host or guest linear memory to a sub-component with borrow safety
+    lend-memory: func(view: typed-shm-view-descriptor) -> result<u64, abi-error>;
+
+    /// Reclaim a previously lent linear memory region, restoring exclusive owner control
+    reclaim-memory: func(view-id: u64) -> result<_, abi-error>;
+
+    /// Zero-copy action dispatch bypassing JSON/bincode serialization
+    invoke-action: func(payload: canonical-abi-invocation-payload) -> result<canonical-abi-invocation-payload, abi-error>;
+
+    /// Register and pin a tensor buffer for zero-copy NPU routing
+    pin-tensor: func(desc: pinned-tensor-descriptor) -> result<u64, abi-error>;
+
+    /// Unpin a tensor buffer from NPU routing table
+    unpin-tensor: func(tensor-id: u64) -> result<_, abi-error>;
+
+    /// Query metadata and active borrow state of a shared memory view
+    query-view: func(view-id: u64) -> result<typed-shm-view-descriptor, abi-error>;
+}
+
+/// The Hagibis Canonical Interop World
+world canonical-interop {
+    import canonical-abi-shm;
+    export canonical-abi-shm;
+}

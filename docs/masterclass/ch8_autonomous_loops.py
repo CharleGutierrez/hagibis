@@ -708,6 +708,53 @@ class AutonomousDaemonLoopClient:
             "auto_apply": auto_apply
         })
 
+    def get_circuit_breaker_governor(self):
+        """Retrieve singleton AutonomicCircuitBreakerGovernor for self-healing loops."""
+        if not hasattr(self, "_cb_governor"):
+            try:
+                from skills.observability_otel.ch8_circuit_breaker_governor import AutonomicCircuitBreakerGovernor
+                self._cb_governor = AutonomicCircuitBreakerGovernor()
+            except ImportError:
+                sys_path = os.path.join(os.path.dirname(__file__), "../../skills/observability-otel")
+                if sys_path not in sys.path:
+                    sys.path.insert(0, sys_path)
+                try:
+                    from ch8_circuit_breaker_governor import AutonomicCircuitBreakerGovernor
+                    self._cb_governor = AutonomicCircuitBreakerGovernor()
+                except Exception:
+                    self._cb_governor = None
+        return self._cb_governor
+
+    def diagnose_and_heal_guarded(self, skill_id, target_file, error_context="", compiler="auto", auto_apply=True):
+        """
+        Guarded self-healing with cryptographic state hashing, exponential backoff dampening,
+        and automated 3-iteration quarantine circuit-breaking.
+        """
+        gov = self.get_circuit_breaker_governor()
+        if gov and not gov.check_can_mutate(skill_id):
+            return {
+                "status": "quarantined_rejection",
+                "skill_id": skill_id,
+                "error": "Mutating agent skill is quarantined after 3 consecutive failures.",
+                "human_intervention_required": True
+            }
+        
+        pre_hash = gov.hash_path_state(target_file) if gov else ""
+        if gov:
+            gov.apply_exponential_backoff(skill_id)
+
+        result = self.diagnose_and_heal(target_file, error_context, compiler, auto_apply)
+        success = isinstance(result, dict) and (result.get("success", False) or result.get("status") == "resolved")
+        post_hash = gov.hash_path_state(target_file) if gov else ""
+
+        if gov:
+            if success:
+                gov.record_success(skill_id, pre_hash, post_hash, target_file)
+            else:
+                gov.record_failure(skill_id, f"Heal failed: {result.get('error', 'unknown')}", pre_hash, post_hash, target_file)
+
+        return result
+
     def patch_bottleneck(self, target_file, function_name=None, strategy="auto", auto_apply=True):
         """Auto-patch performance bottlenecks in target file."""
         return self.call_mcp_tool("hgb_auto_patch_bottleneck", {

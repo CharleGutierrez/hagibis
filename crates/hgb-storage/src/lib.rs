@@ -646,6 +646,31 @@ pub use cold_vector_columnar_offloader::{
     cosine_similarity as simd_cold_cosine_similarity,
 };
 
+// ============================================================================
+// Pillar 2: Distributed Sharded Storage & Disk Offloading
+// ============================================================================
+pub mod distributed_sharded_offloader;
+pub use distributed_sharded_offloader::{
+    DEFAULT_CONSTRAINED_THRESHOLD_PCT, DEFAULT_SHARDED_STORAGE_DIR,
+    DEFAULT_TARGET_HEADROOM_MARGIN, SHARDED_MANIFEST_FILENAME,
+    MigrationPlan, MigrationResult, MountCapacityInfo, MountDiscoveryEngine,
+    MountRedirectRegistry, OffloadCandidate, OffloadCategory, OffloadConfig,
+    OffloadManifestEntry, ShardedStorageManifest, ShardedStorageOffloader,
+};
+
+// ============================================================================
+// Pillar 2: High-Throughput Pooled Multi-Reader SQLite & Embedded LSM Memtable
+// ============================================================================
+pub mod pooled_multi_reader_sqlite_lsm;
+pub use pooled_multi_reader_sqlite_lsm::{
+    cosine_similarity as lsm_cosine_similarity, EmbeddedLsmMemtable,
+    LsmMemtableStats, LsmRecord, LsmVectorMatch, MemtableConfig,
+    PoolResult, SSTableReader, SqliteMultiReaderPool, SqlitePoolConfig,
+    SqlitePoolStats, StoragePoolError, WalCheckpointMode, WalWriter, FLAG_HAS_EMBEDDING,
+    FLAG_TOMBSTONE, LSM_SST_MAGIC, LSM_WAL_MAGIC,
+};
+
+
 
 
 
