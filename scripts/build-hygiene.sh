@@ -67,6 +67,9 @@ Options:
   --clean-cache      Purge volatile /tmp build artifacts (/tmp/cargo*, /tmp/pgo*, /tmp/bolt*).
   --prune-targets    Prune build artifacts older than ${PRUNE_DAYS} days from target directories.
   --compact-lancedb  Compact LanceDB vector stores and clean stale vector index caches.
+  --setup-systemd    Install & enable systemd user service and hourly timer (~/.config/systemd/user).
+  --migrate-ext4     Migrate/clone repository to native ext4 at /home/toshiba/hagibis with cold backup remotes.
+  --verify-ext4      Verify ext4 POSIX symlinks, file locking (flock), and atomic transactions.
   --sccache-status   Detect sccache installation, verify SCCACHE_DIR and report cache stats.
   --storage-hygiene  Execute full storage hygiene audit, sccache setup, and target quota pruning.
   --prepare-scratch  Create and verify scratch space at ${LEXAR_SCRATCH_DIR}.
@@ -96,6 +99,15 @@ for arg in "$@"; do
             ;;
         --compact-lancedb)
             MODE="compact-lancedb"
+            ;;
+        --setup-systemd)
+            MODE="setup-systemd"
+            ;;
+        --migrate-ext4)
+            MODE="migrate-ext4"
+            ;;
+        --verify-ext4)
+            MODE="verify-ext4"
             ;;
         --sccache-status)
             MODE="sccache-status"
@@ -614,6 +626,219 @@ prepare_scratch_space() {
 }
 
 # ------------------------------------------------------------------------------
+# 8. Setup systemd User Service & Hourly Timer
+# ------------------------------------------------------------------------------
+setup_systemd_timer() {
+    if [ "$JSON_OUTPUT" != true ]; then
+        echo ""
+        echo -e "${BLUE}======================================================================${RESET}"
+        echo -e "${BOLD} Installing & Enabling systemd User Service and Timer${RESET}"
+        echo -e "${BLUE}======================================================================${RESET}"
+    fi
+
+    local user_systemd_dir="${HOME:-/home/toshiba}/.config/systemd/user"
+    mkdir -p "$user_systemd_dir"
+
+    local service_path="$user_systemd_dir/hgb-build-hygiene.service"
+    local timer_path="$user_systemd_dir/hgb-build-hygiene.timer"
+
+    local script_target="$WORKSPACE_ROOT/scripts/build-hygiene.sh"
+    if [ -x "/home/toshiba/hagibis/scripts/build-hygiene.sh" ]; then
+        script_target="/home/toshiba/hagibis/scripts/build-hygiene.sh"
+    fi
+
+    cat <<EOF > "$service_path"
+[Unit]
+Description=Project Hagibis Automated Storage & Build Hygiene Service
+Documentation=https://github.com/CharleGutierrez/hagibis
+After=local-fs.target
+
+[Service]
+Type=oneshot
+Environment="CARGO_TARGET_DIR=/home/toshiba/.cargo-target-hagibis"
+Environment="LIBRARY_PATH=/home/toshiba/lib"
+ExecStart=/bin/bash "$script_target" --auto-prune
+StandardOutput=journal
+StandardError=journal
+Nice=19
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=default.target
+EOF
+
+    cat <<EOF > "$timer_path"
+[Unit]
+Description=Project Hagibis Automated Storage & Build Hygiene Hourly Timer
+Documentation=https://github.com/CharleGutierrez/hagibis
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target
+EOF
+
+    # Reload systemd user daemon and enable timer
+    systemctl --user daemon-reload
+    systemctl --user enable --now hgb-build-hygiene.timer
+
+    if [ "$JSON_OUTPUT" != true ]; then
+        echo -e "${GREEN}  ✔ Systemd user service installed: ${service_path}${RESET}"
+        echo -e "${GREEN}  ✔ Systemd user timer installed:   ${timer_path}${RESET}"
+        echo -e "${GREEN}  ✔ Timer enabled and started.${RESET}"
+        echo ""
+        systemctl --user status hgb-build-hygiene.timer --no-pager || true
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# 9. Migrate Workspace to Native ext4 Filesystem & Verify POSIX Hardening
+# ------------------------------------------------------------------------------
+verify_ext4_capabilities() {
+    local target_dir="${1:-/home/toshiba/hagibis}"
+    if [ "$JSON_OUTPUT" != true ]; then
+        echo ""
+        echo -e "${BLUE}======================================================================${RESET}"
+        echo -e "${BOLD} Verifying Native ext4 POSIX Hardening at ${target_dir}${RESET}"
+        echo -e "${BLUE}======================================================================${RESET}"
+    fi
+
+    local probe_dir="$target_dir/.ext4_hardening_probe"
+    mkdir -p "$probe_dir"
+
+    # Test 1: Native POSIX Symlinks
+    local symlink_status="FAILED"
+    local target_file="$probe_dir/symlink_target.txt"
+    local link_file="$probe_dir/symlink_link.txt"
+    echo "posix_symlink_payload" > "$target_file"
+    if ln -s "$target_file" "$link_file" 2>/dev/null; then
+        if [ -L "$link_file" ] && [ "$(cat "$link_file" 2>/dev/null)" = "posix_symlink_payload" ]; then
+            symlink_status="PASSED"
+        fi
+    fi
+
+    # Test 2: Native POSIX File Locking (flock & fcntl)
+    local flock_status="FAILED"
+    local lock_file="$probe_dir/lock_test.lck"
+    touch "$lock_file"
+    if python3 -c '
+import fcntl, sys
+try:
+    with open(sys.argv[1], "w") as f:
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        # Attempt second non-blocking lock to verify conflict semantics
+        with open(sys.argv[1], "w") as f2:
+            try:
+                fcntl.flock(f2, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                sys.exit(1)
+            except BlockingIOError:
+                pass
+        fcntl.flock(f, fcntl.LOCK_UN)
+    sys.exit(0)
+except Exception:
+    sys.exit(1)
+' "$lock_file" 2>/dev/null; then
+        flock_status="PASSED"
+    fi
+
+    # Test 3: Atomic Transactions & POSIX Atomic Rename
+    local atomic_status="FAILED"
+    local tx_src="$probe_dir/atomic_stage.tmp"
+    local tx_dst="$probe_dir/atomic_active.dat"
+    echo "version_1" > "$tx_dst"
+    echo "version_2" > "$tx_src"
+    if mv -T "$tx_src" "$tx_dst" 2>/dev/null || mv "$tx_src" "$tx_dst" 2>/dev/null; then
+        if [ "$(cat "$tx_dst" 2>/dev/null)" = "version_2" ] && [ ! -e "$tx_src" ]; then
+            atomic_status="PASSED"
+        fi
+    fi
+
+    # Test 4: Filesystem Type Verification
+    local fs_type
+    fs_type=$(df -T "$target_dir" | awk 'NR==2 {print $2}')
+
+    # Cleanup probe
+    rm -rf "$probe_dir"
+
+    if [ "$JSON_OUTPUT" != true ]; then
+        echo -e " Filesystem Type:            ${BOLD}${fs_type}${RESET} (Expected: ext4)"
+        if [ "$symlink_status" = "PASSED" ]; then
+            echo -e " ${GREEN}✔ POSIX Symbolic Links:       PASSED (native symlinks supported)${RESET}"
+        else
+            echo -e " ${RED}✖ POSIX Symbolic Links:       FAILED${RESET}"
+        fi
+
+        if [ "$flock_status" = "PASSED" ]; then
+            echo -e " ${GREEN}✔ POSIX File Locking (flock):  PASSED (exclusive & conflict locks verified)${RESET}"
+        else
+            echo -e " ${RED}✖ POSIX File Locking (flock):  FAILED${RESET}"
+        fi
+
+        if [ "$atomic_status" = "PASSED" ]; then
+            echo -e " ${GREEN}✔ Atomic POSIX Transactions:  PASSED (atomic rename/replace verified)${RESET}"
+        else
+            echo -e " ${RED}✖ Atomic POSIX Transactions:  FAILED${RESET}"
+        fi
+    fi
+}
+
+migrate_to_ext4() {
+    local ext4_dest="${1:-/home/toshiba/hagibis}"
+    local source_repo="$WORKSPACE_ROOT"
+
+    if [ "$JSON_OUTPUT" != true ]; then
+        echo ""
+        echo -e "${BLUE}======================================================================${RESET}"
+        echo -e "${BOLD} Migrating Workspace to Native ext4 Filesystem${RESET}"
+        echo -e "${BLUE}======================================================================${RESET}"
+        echo -e " Source (Lexar Cold Backup): ${source_repo}"
+        echo -e " Destination (ext4 Target):   ${ext4_dest}"
+    fi
+
+    # 1. Verify destination does not already exist or update it
+    if [ -d "$ext4_dest/.git" ]; then
+        if [ "$JSON_OUTPUT" != true ]; then
+            echo -e "${YELLOW}  [INFO] Destination repository already exists at ${ext4_dest}.${RESET}"
+            echo -e "         Synchronizing git references..."
+        fi
+        (
+            cd "$ext4_dest"
+            git remote set-url cold-backup "$source_repo" 2>/dev/null || git remote add cold-backup "$source_repo"
+            git fetch cold-backup
+            git checkout main 2>/dev/null || true
+            git merge cold-backup/main -m "Merge updates from cold-backup" 2>/dev/null || true
+        )
+    else
+        if [ "$JSON_OUTPUT" != true ]; then
+            echo -e "${BLUE}  Cloning clean repository to ext4 partition...${RESET}"
+        fi
+        git clone "$source_repo" "$ext4_dest"
+        (
+            cd "$ext4_dest"
+            # Maintain Lexar as cold backup / transportable dataset
+            git remote rename origin cold-backup 2>/dev/null || git remote add cold-backup "$source_repo"
+            git remote set-url --push cold-backup "$source_repo" 2>/dev/null || true
+            if ! git remote | grep -q "^origin$"; then
+                git remote add origin git@github.com:CharleGutierrez/hagibis.git 2>/dev/null || true
+            fi
+        )
+    fi
+
+    # Configure bidirectional remote on source (Lexar) pointing to ext4
+    (
+        cd "$source_repo"
+        git remote remove ext4-workspace 2>/dev/null || true
+        git remote add ext4-workspace "$ext4_dest"
+    )
+
+    # 2. Verify ext4 capabilities (POSIX symlinks, flock locking, atomic transactions)
+    verify_ext4_capabilities "$ext4_dest"
+}
+
+# ------------------------------------------------------------------------------
 # Execution Flow
 # ------------------------------------------------------------------------------
 check_disk_usage
@@ -621,6 +846,15 @@ check_disk_usage
 case "$MODE" in
     check)
         setup_sccache
+        ;;
+    setup-systemd)
+        setup_systemd_timer
+        ;;
+    migrate-ext4)
+        migrate_to_ext4
+        ;;
+    verify-ext4)
+        verify_ext4_capabilities "${1:-/home/toshiba/hagibis}"
         ;;
     gc)
         setup_sccache
