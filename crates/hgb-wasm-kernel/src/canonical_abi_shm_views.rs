@@ -18,9 +18,9 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 // ============================================================================
 // CONSTANTS & ACTION CODES
@@ -75,7 +75,12 @@ pub enum AbiError {
     InvalidDimensions { reason: String },
     /// Typed slice transmutation type mismatch or byte alignment mismatch
     TypeMismatch { expected: &'static str, found: &'static str },
+    /// Permission denied: capability token check failed or unauthorized memory mutation attempted
+    PermissionDenied,
 }
+
+/// Type alias aligning with Canonical ABI error naming conventions
+pub type CanonicalAbiError = AbiError;
 
 impl fmt::Display for AbiError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -112,6 +117,9 @@ impl fmt::Display for AbiError {
             }
             Self::TypeMismatch { expected, found } => {
                 write!(f, "Type mismatch: expected {}, found {}", expected, found)
+            }
+            Self::PermissionDenied => {
+                write!(f, "Permission denied: read-only capability token forbids mutable access or write operation")
             }
         }
     }

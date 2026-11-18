@@ -11,6 +11,12 @@ interface canonical-abi-types {
         exclusive-write,
     }
 
+    /// Memory capability permission level
+    enum capability-permission {
+        read-only,
+        read-write,
+    }
+
     /// Primitive data types supported in zero-copy shared memory and tensor views
     enum tensor-data-type {
         f32,
@@ -34,6 +40,14 @@ interface canonical-abi-types {
         ephemeral-npu,
     }
 
+    /// Functional usage role of a linear memory in multi-memory Wasmtime components
+    enum memory-usage-role {
+        private-heap,
+        shared-shm-ring,
+        tensor-dma,
+        io-buffer,
+    }
+
     /// Low-level slice into WebAssembly linear memory
     record canonical-memory-slice {
         ptr: u64,
@@ -51,6 +65,30 @@ interface canonical-abi-types {
         element-count: u64,
         version-epoch: u64,
         flags: u32,
+    }
+
+    /// Unforgeable memory capability token for fine-grained linear memory security
+    record memory-capability-token {
+        token-id: u64,
+        memory-index: u32,
+        view-id: u64,
+        permission: capability-permission,
+        nonce: u64,
+        signature: list<u8>,
+        allowed-offset: u64,
+        allowed-len: u64,
+    }
+
+    /// Descriptor for multi-memory WebAssembly components (Wasmtime multi-memory)
+    record linear-memory-descriptor {
+        memory-index: u32,
+        name: string,
+        initial-pages: u32,
+        maximum-pages: option<u32>,
+        is-shared: bool,
+        role: memory-usage-role,
+        access-mode: memory-access-mode,
+        size-bytes: u64,
     }
 
     /// 64-byte aligned Canonical ABI Invocation Header layout.
@@ -104,6 +142,7 @@ interface canonical-abi-types {
         buffer-overflow(string),
         npu-routing-failed(string),
         execution-trapped(string),
+        permission-denied(string),
     }
 }
 
@@ -140,8 +179,24 @@ interface canonical-abi-shm {
     query-view: func(view-id: u64) -> result<typed-shm-view-descriptor, abi-error>;
 }
 
+/// Capability checker interface for validating unforgeable tokens and verifying memory permissions
+interface capability-checker {
+    use canonical-abi-types.{memory-capability-token, capability-permission, abi-error};
+
+    /// Validate that a memory capability token possesses a valid cryptographic signature
+    verify-token: func(token: memory-capability-token) -> result<bool, abi-error>;
+
+    /// Check if a capability token authorizes read-write mutation
+    can-write: func(token: memory-capability-token) -> bool;
+
+    /// Check if a capability token authorizes read-only access
+    can-read: func(token: memory-capability-token) -> bool;
+}
+
 /// The Hagibis Canonical Interop World
 world canonical-interop {
     import canonical-abi-shm;
+    import capability-checker;
     export canonical-abi-shm;
+    export capability-checker;
 }

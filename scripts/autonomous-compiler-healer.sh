@@ -31,7 +31,166 @@ TARGET_FILE=""
 REGRESSION_MODE=false
 REGRESSION_DELTA="0.0"
 BENCHMARK_NAME="pgo_workload"
-CIRCUIT_BREAKER_FILE="/tmp/hgb_healer_circuit_breaker.json"
+DEMO_MODE=false
+CIRCUIT_BREAKER_FILE="${CIRCUIT_BREAKER_FILE:-/tmp/hgb_healer_circuit_breaker.json}"
+HGB_STATE_DIR="${HGB_STATE_DIR:-${HOME}/.hagibis}"
+HGB_QUARANTINE_DIR="${HGB_QUARANTINE_DIR:-${HGB_STATE_DIR}/quarantine}"
+HGB_WEBHOOK_URL="${HGB_WEBHOOK_URL:-http://127.0.0.1:8083/api/v1/alerts}"
+HGB_OTEL_SINK="${HGB_OTEL_SINK:-/tmp/hgb_otel_events.jsonl}"
+MAX_RETRIES="${MAX_RETRIES:-3}"
+BASE_DELAY="${BASE_DELAY:-1.0}"
+MAX_BACKOFF="${MAX_BACKOFF:-30.0}"
+
+resolve_skill_or_crate() {
+    local target_path="$1"
+    if [[ "$target_path" =~ /crates/([^/]+) ]]; then
+        echo "${BASH_REMATCH[1]}"
+    elif [[ "$target_path" =~ crates/([^/]+) ]]; then
+        echo "${BASH_REMATCH[1]}"
+    elif [[ "$target_path" =~ /skills/([^/]+) ]]; then
+        echo "${BASH_REMATCH[1]}"
+    elif [[ "$target_path" =~ skills/([^/]+) ]]; then
+        echo "${BASH_REMATCH[1]}"
+    else
+        basename "$target_path" .rs
+    fi
+}
+
+calculate_exponential_backoff() {
+    local retry="$1"
+    local base="${2:-$BASE_DELAY}"
+    local max_b="${3:-$MAX_BACKOFF}"
+    python3 -c "
+import sys, random
+retry = max(0, int(sys.argv[1]))
+base_delay = float(sys.argv[2])
+max_backoff = float(sys.argv[3])
+# Formula: delay = min(max_backoff, base_delay * 2^(retry)) + jitter
+backoff = min(max_backoff, base_delay * (2.0 ** retry))
+jitter = random.uniform(0.05, 0.45)
+total_delay = backoff + jitter
+print(f'{total_delay:.3f}')
+" "$retry" "$base" "$max_b"
+}
+
+trip_circuit_breaker_and_quarantine() {
+    local file_path="$1"
+    local line_num="$2"
+    local error_code="$3"
+    local error_msg="$4"
+    local retry_count="$5"
+
+    local skill_or_crate
+    skill_or_crate=$(resolve_skill_or_crate "$file_path")
+
+    log_trip "⚡ [CIRCUIT BREAKER TRIPPED] Healing failed after ${retry_count} consecutive attempts on ${skill_or_crate}!"
+    log_err "Halting agent skill from modifying code and locking write permissions (chmod -w)..."
+
+    # 1. Lock file write permissions (prevent any agent skill from further mutation)
+    chmod a-w "$file_path" 2>/dev/null || true
+
+    # 2. Record state in $HGB_QUARANTINE_DIR/<skill_or_crate>
+    local quarantine_target="${HGB_QUARANTINE_DIR}/${skill_or_crate}"
+    local timestamp_sec
+    timestamp_sec=$(date +%s)
+    local quarantine_incident_dir="${quarantine_target}/${timestamp_sec}"
+    mkdir -p "$quarantine_incident_dir" "$(dirname "$HGB_OTEL_SINK")" "$HGB_STATE_DIR"
+
+    if [ -f "$file_path" ]; then
+        cp -p "$file_path" "${quarantine_incident_dir}/quarantined_source.rs" 2>/dev/null || true
+    fi
+
+    local now_iso
+    now_iso=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    local manifest_file="${quarantine_incident_dir}/quarantine_manifest.json"
+    cat <<EOF > "$manifest_file"
+{
+  "skill_or_crate": "$skill_or_crate",
+  "file_path": "$file_path",
+  "line": "$line_num",
+  "error_code": "$error_code",
+  "error_message": $(python3 -c "import json, sys; print(json.dumps(sys.argv[1]))" "$error_msg"),
+  "consecutive_failures": $retry_count,
+  "circuit_breaker_state": "Tripped",
+  "permissions_locked": true,
+  "quarantined_at": "$now_iso",
+  "action_required": "Human-In-The-Loop (HITL) escalation required. File write permissions revoked."
+}
+EOF
+    chmod 0444 "$manifest_file" 2>/dev/null || true
+
+    # 3. Update persistent circuit breaker registry
+    python3 -c "
+import json, os, time
+cb_file = '$CIRCUIT_BREAKER_FILE'
+data = {'state': 'Tripped', 'consecutive_failures': $retry_count, 'quarantined_skill': '$skill_or_crate', 'last_tripped': time.time()}
+try:
+    if os.path.exists(cb_file):
+        with open(cb_file, 'r') as f:
+            existing = json.load(f)
+            data['history'] = existing.get('history', [])
+except Exception:
+    pass
+with open(cb_file, 'w') as f:
+    json.dump(data, f, indent=2)
+" 2>/dev/null || true
+
+    # 4. Generate OpenTelemetry JSON alert payload
+    local trace_id span_id now_ns
+    trace_id=$(python3 -c "import secrets; print(secrets.token_hex(16))")
+    span_id=$(python3 -c "import secrets; print(secrets.token_hex(8))")
+    now_ns=$(python3 -c "import time; print(int(time.time() * 1e9))")
+
+    local otel_payload
+    otel_payload=$(python3 -c "
+import json, sys
+data = {
+    'timestamp': sys.argv[1],
+    'timestamp_nano': int(sys.argv[2]),
+    'trace_id': sys.argv[3],
+    'span_id': sys.argv[4],
+    'service': 'hgb-autonomous-compiler-healer',
+    'name': 'circuit_breaker_tripped',
+    'status': 'ERROR',
+    'attributes': {
+        'event': 'circuit_breaker_tripped',
+        'severity': 'CRITICAL',
+        'skill_or_crate': sys.argv[5],
+        'target_file': sys.argv[6],
+        'error_line': sys.argv[7],
+        'error_code': sys.argv[8],
+        'error_message': sys.argv[9],
+        'retry_count': int(sys.argv[10]),
+        'quarantine_dir': sys.argv[11],
+        'circuit_breaker_state': 'Tripped',
+        'permissions_locked': True,
+        'action_required': 'Human-In-The-Loop (HITL) escalation required. File write permissions locked.'
+    }
+}
+print(json.dumps(data))
+" "$now_iso" "$now_ns" "$trace_id" "$span_id" "$skill_or_crate" "$file_path" "$line_num" "$error_code" "$error_msg" "$retry_count" "$quarantine_incident_dir")
+
+    # 5. Log to OpenTelemetry sink ($HGB_OTEL_SINK)
+    echo "$otel_payload" >> "$HGB_OTEL_SINK"
+    log_ok "OpenTelemetry incident logged to $HGB_OTEL_SINK"
+
+    # 6. Dispatch automated JSON OpenTelemetry alert payload to $HGB_WEBHOOK_URL
+    if command -v curl >/dev/null 2>&1; then
+        local http_code
+        http_code=$(curl -s -S -o /dev/null -w "%{http_code}" -X POST \
+            -H "Content-Type: application/json" \
+            -H "X-Hagibis-Governor: autopoietic-circuit-breaker" \
+            -d "$otel_payload" \
+            --connect-timeout 2 \
+            --max-time 4 \
+            "$HGB_WEBHOOK_URL" 2>/dev/null || echo "000")
+        if [ "$http_code" = "200" ] || [ "$http_code" = "201" ] || [ "$http_code" = "202" ]; then
+            log_ok "Automated OpenTelemetry alert dispatched to $HGB_WEBHOOK_URL (HTTP $http_code)."
+        else
+            log_warn "Webhook endpoint unreachable (HTTP $http_code). Alert safely recorded in local OTel sink: $HGB_OTEL_SINK."
+        fi
+    fi
+}
 
 check_circuit_breaker() {
     if [ -f "$CIRCUIT_BREAKER_FILE" ]; then
@@ -106,16 +265,21 @@ Hagibis Autonomous Compiler & Benchmark Healer (Pillar 4)
 Usage: $(basename "$0") [OPTIONS]
 
 Options:
-  --json-log <path>     Path to cargo --message-format=json output file
-  --raw-log <path>      Path to cargo compiler stderr log file
-  --file <path>         Specific target source file to diagnose and heal
-  --regression          Trigger benchmark performance regression remediation
-  --delta <float>       Benchmark regression latency delta percentage (e.g. 8.5)
-  --benchmark <name>    Benchmark target name (default: pgo_workload)
-  --max-retries <int>   Maximum autonomous remediation iterations (default: 3)
-  --demo                Run an interactive live closed-loop error remediation demo
-  --workspace <path>    Workspace root path
-  -h, --help            Show this help message
+  --json-log <path>       Path to cargo --message-format=json output file
+  --raw-log <path>        Path to cargo compiler stderr log file
+  --file <path>           Specific target source file to diagnose and heal
+  --regression            Trigger benchmark performance regression remediation
+  --delta <float>         Benchmark regression latency delta percentage (e.g. 8.5)
+  --benchmark <name>      Benchmark target name (default: pgo_workload)
+  --max-retries <int>     Maximum autonomous remediation iterations (default: 3)
+  --base-delay <float>    Exponential backoff base delay in seconds (default: 1.0)
+  --max-backoff <float>   Exponential backoff max delay in seconds (default: 30.0)
+  --webhook-url <url>     OpenTelemetry alert webhook escalation endpoint
+  --quarantine-dir <dir>  Quarantine isolation directory
+  --otel-sink <path>      Path to local OpenTelemetry JSONL alert sink
+  --demo                  Run an interactive live closed-loop error remediation demo
+  --workspace <path>      Workspace root path
+  -h, --help              Show this help message
 EOF
 }
 
@@ -150,6 +314,26 @@ while [[ $# -gt 0 ]]; do
             MAX_RETRIES="$2"
             shift 2
             ;;
+        --base-delay)
+            BASE_DELAY="$2"
+            shift 2
+            ;;
+        --max-backoff)
+            MAX_BACKOFF="$2"
+            shift 2
+            ;;
+        --webhook-url)
+            HGB_WEBHOOK_URL="$2"
+            shift 2
+            ;;
+        --quarantine-dir)
+            HGB_QUARANTINE_DIR="$2"
+            shift 2
+            ;;
+        --otel-sink)
+            HGB_OTEL_SINK="$2"
+            shift 2
+            ;;
         --demo)
             DEMO_MODE=true
             shift
@@ -174,6 +358,7 @@ RED="\033[0;31m"
 GREEN="\033[0;32m"
 YELLOW="\033[1;33m"
 BLUE="\033[0;34m"
+MAGENTA="\033[35m"
 CYAN="\033[0;36m"
 BOLD="\033[1m"
 RESET="\033[0m"
@@ -182,6 +367,7 @@ log_info() { echo -e "${BLUE}[INFO]${RESET} $*"; }
 log_ok() { echo -e "${GREEN}[OK]${RESET} $*"; }
 log_warn() { echo -e "${YELLOW}[WARN]${RESET} $*"; }
 log_err() { echo -e "${RED}[ERROR]${RESET} $*"; }
+log_trip() { echo -e "${MAGENTA}${BOLD}⚡ [CIRCUIT-BREAKER]${RESET} $*"; }
 log_step() { echo -e "\n${BOLD}${CYAN}>> $*${RESET}"; }
 
 # ------------------------------------------------------------------------------
@@ -408,74 +594,111 @@ for i in "${!DIAGNOSTIC_FILES[@]}"; do
         continue
     fi
 
-    log_step "Healing $FILE at line $LINE (Error: $CODE - $MSG)..."
+    log_step "Diagnosing diagnostic site: $FILE at line $LINE (Error: $CODE - $MSG)..."
 
     # Backup original before modifying
     BACKUP_FILE="${FULL_PATH}.hgb_heal.bak"
     cp -f "$FULL_PATH" "$BACKUP_FILE"
 
-    # Surgical repair patterns:
-    HEALED=false
+    ISSUE_RESOLVED=false
+    FAILED_ATTEMPTS=0
 
-    # Pattern A: Expressions with '_' in invalid position: if centroids.len() < _ + 1
-    if grep -q "centroids\.len() < _ + 1" "$FULL_PATH" 2>/dev/null; then
-        log_info "Applying AST Repair: Correcting invalid expression '_' in loop range..."
-        sed -i 's/centroids\.len() < _ + 1/centroids.len() < step + 1/g' "$FULL_PATH"
-        sed -i 's/for _ in 1\.\.k {/for step in 1..k {/g' "$FULL_PATH"
-        HEALED=true
-    fi
+    # Strict retry ceiling: maximum 3 consecutive automated healing attempts per diagnostic issue
+    for ((retry=0; retry<MAX_RETRIES; retry++)); do
+        ATTEMPT=$((retry + 1))
 
-    # Pattern B: Duplicate definition collision: TensorDataType imported and defined
-    if grep -q "PinnedTensorDescriptor, TensorDataType," "$FULL_PATH" 2>/dev/null; then
-        log_info "Applying AST Repair: Resolving duplicate enum namespace collision with alias..."
-        sed -i 's/PinnedTensorDescriptor, TensorDataType,/PinnedTensorDescriptor, TensorDataType as BridgeTensorDataType,/g' "$FULL_PATH"
-        HEALED=true
-    fi
-
-    # Pattern C: Unused mutable variable warning / error
-    if [[ "$MSG" =~ "variable does not need to be mutable" ]]; then
-        log_info "Applying AST Repair: Stripping redundant mut keyword..."
-        sed -i "${LINE}s/let mut /let /" "$FULL_PATH"
-        HEALED=true
-    fi
-
-    # Pattern D: Missing .to_string() type mismatch
-    if [[ "$MSG" =~ "expected `String`, found `&str`" ]]; then
-        log_info "Applying AST Repair: Injecting .to_string() conversion..."
-        sed -i "${LINE}s/\"\(.*\)\"/\"\1\".to_string()/" "$FULL_PATH"
-        HEALED=true
-    fi
-
-    # Verify if fix achieved exit code 0
-    log_info "Running speculative verification on healed source..."
-    set +e
-    cargo check --message-format=json --manifest-path "$WORKSPACE_ROOT/Cargo.toml" > /tmp/hgb_verify.json 2>&1
-    V_EXIT=$?
-    set -e
-
-    if [ "$V_EXIT" -eq 0 ]; then
-        log_ok "✔ [FIRST-GREEN] Verification passed with exit code 0 on $FILE!"
-        rm -f "$BACKUP_FILE"
-        RESOLVED_COUNT=$((RESOLVED_COUNT + 1))
-    else
-        if [ "$HEALED" = true ]; then
-            log_warn "Partial repair applied; verifying remaining diagnostics..."
-            # Check if this specific file now compiles
-            set +e
-            cargo check --manifest-path "$WORKSPACE_ROOT/Cargo.toml" 2>&1 | grep -q "$FILE"
-            FILE_STILL_BROKEN=$?
-            set -e
-            if [ "$FILE_STILL_BROKEN" -ne 0 ]; then
-                log_ok "✔ Specific error in $FILE resolved!"
-                rm -f "$BACKUP_FILE"
-                RESOLVED_COUNT=$((RESOLVED_COUNT + 1))
-            else
-                log_warn "Error persists in $FILE. Retaining backup."
-            fi
-        else
-            log_warn "No deterministic repair rule matched for $CODE. Restoring backup."
-            mv -f "$BACKUP_FILE" "$FULL_PATH"
+        # Apply exponential backoff formula for retries:
+        # delay = min(max_backoff, base_delay * 2^(retry)) + jitter
+        if [ "$retry" -gt 0 ]; then
+            BACKOFF_SEC=$(calculate_exponential_backoff "$retry")
+            log_warn "Applying exponential backoff (${BACKOFF_SEC}s) before attempt #${ATTEMPT}/${MAX_RETRIES} on $FILE..."
+            python3 -c "import time, sys; time.sleep(float(sys.argv[1]))" "$BACKOFF_SEC"
         fi
+
+        log_info "Executing automated healing attempt #${ATTEMPT}/${MAX_RETRIES} on $FILE (Code: $CODE)..."
+
+        # Surgical repair patterns:
+        HEALED=false
+
+        # Pattern A: Expressions with '_' in invalid position: if centroids.len() < _ + 1
+        if grep -q "centroids\.len() < _ + 1" "$FULL_PATH" 2>/dev/null; then
+            log_info "Applying AST Repair: Correcting invalid expression '_' in loop range..."
+            sed -i 's/centroids\.len() < _ + 1/centroids.len() < step + 1/g' "$FULL_PATH"
+            sed -i 's/for _ in 1\.\.k {/for step in 1..k {/g' "$FULL_PATH"
+            HEALED=true
+        fi
+
+        # Pattern B: Duplicate definition collision: TensorDataType imported and defined
+        if grep -q "PinnedTensorDescriptor, TensorDataType," "$FULL_PATH" 2>/dev/null; then
+            log_info "Applying AST Repair: Resolving duplicate enum namespace collision with alias..."
+            sed -i 's/PinnedTensorDescriptor, TensorDataType,/PinnedTensorDescriptor, TensorDataType as BridgeTensorDataType,/g' "$FULL_PATH"
+            HEALED=true
+        fi
+
+        # Pattern C: Unused mutable variable warning / error
+        if [[ "$MSG" =~ "variable does not need to be mutable" ]]; then
+            log_info "Applying AST Repair: Stripping redundant mut keyword..."
+            sed -i "${LINE}s/let mut /let /" "$FULL_PATH"
+            HEALED=true
+        fi
+
+        # Pattern D: Missing .to_string() type mismatch
+        if [[ "$MSG" =~ "expected \`String\`, found \`&str\`" ]]; then
+            log_info "Applying AST Repair: Injecting .to_string() conversion..."
+            sed -i "${LINE}s/\"\(.*\)\"/\"\1\".to_string()/" "$FULL_PATH"
+            HEALED=true
+        fi
+
+        # Speculative sandboxed verification
+        log_info "Running speculative verification on healed source (attempt #${ATTEMPT})..."
+        set +e
+        cargo check --message-format=json --manifest-path "$WORKSPACE_ROOT/Cargo.toml" > /tmp/hgb_verify.json 2>&1
+        V_EXIT=$?
+        set -e
+
+        if [ "$V_EXIT" -eq 0 ]; then
+            log_ok "✔ [FIRST-GREEN] Verification passed with exit code 0 on $FILE!"
+            rm -f "$BACKUP_FILE"
+            ISSUE_RESOLVED=true
+            RESOLVED_COUNT=$((RESOLVED_COUNT + 1))
+            break
+        else
+            if [ "$HEALED" = true ]; then
+                log_warn "Partial repair applied; verifying if diagnostic on $FILE was resolved..."
+                set +e
+                cargo check --manifest-path "$WORKSPACE_ROOT/Cargo.toml" 2>&1 | grep -q "$FILE"
+                FILE_STILL_BROKEN=$?
+                set -e
+                if [ "$FILE_STILL_BROKEN" -ne 0 ]; then
+                    log_ok "✔ Specific error in $FILE resolved!"
+                    rm -f "$BACKUP_FILE"
+                    ISSUE_RESOLVED=true
+                    RESOLVED_COUNT=$((RESOLVED_COUNT + 1))
+                    break
+                else
+                    log_warn "Diagnostic persists in $FILE (attempt #${ATTEMPT}/$MAX_RETRIES)."
+                fi
+            else
+                log_warn "No deterministic repair rule matched for $CODE (attempt #${ATTEMPT}/$MAX_RETRIES)."
+            fi
+
+            FAILED_ATTEMPTS=$((FAILED_ATTEMPTS + 1))
+            # Restore original file for subsequent iteration or clean baseline
+            cp -f "$BACKUP_FILE" "$FULL_PATH"
+        fi
+    done
+
+    # If healing fails 3 times, trip the circuit breaker, halt agent skill,
+    # lock file write permissions (chmod -w), record state in quarantine,
+    # and dispatch automated JSON OpenTelemetry alert payload
+    if [ "$ISSUE_RESOLVED" = false ]; then
+        cp -f "$BACKUP_FILE" "$FULL_PATH"
+        rm -f "$BACKUP_FILE"
+
+        trip_circuit_breaker_and_quarantine "$FULL_PATH" "$LINE" "$CODE" "$MSG" "$FAILED_ATTEMPTS"
+        record_healing_result "False" ${#DIAGNOSTIC_FILES[@]} >/dev/null || true
+        log_err "❌ Healing halted: circuit breaker tripped after $FAILED_ATTEMPTS failed attempts. Human escalation engaged."
+        exit 1
     fi
 done
 
