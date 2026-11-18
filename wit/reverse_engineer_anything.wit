@@ -1,0 +1,161 @@
+package hagibis:reverse-engineer-anything@0.1.0;
+
+interface types {
+    enum binary-format {
+        elf,
+        mach-o,
+        pe,
+        wasm,
+        raw-bytecode,
+    }
+
+    enum binary-arch {
+        x86-64,
+        aarch64,
+        wasm32,
+        riscv64,
+        unknown,
+    }
+
+    enum symbol-kind {
+        function,
+        data,
+        section,
+        imported,
+        exported,
+        other,
+    }
+
+    record symbol-descriptor {
+        name: string,
+        address: u64,
+        size: u64,
+        kind: symbol-kind,
+        section: option<string>,
+        is-exported: bool,
+    }
+
+    enum branch-condition {
+        unconditional,
+        conditional-true,
+        conditional-false,
+        switch-case,
+        call,
+        return-edge,
+        indirect,
+    }
+
+    record cfg-edge {
+        source-id: u32,
+        target-id: u32,
+        condition: branch-condition,
+    }
+
+    record basic-block-node {
+        id: u32,
+        start-address: u64,
+        end-address: u64,
+        instruction-count: u32,
+        predecessors: list<u32>,
+        successors: list<u32>,
+        dominator: option<u32>,
+        calls: list<string>,
+    }
+
+    record control-flow-graph {
+        function-name: string,
+        entry-block-id: u32,
+        blocks: list<basic-block-node>,
+        edges: list<cfg-edge>,
+    }
+
+    record function-parameter {
+        name: string,
+        param-type: string,
+    }
+
+    record reconstructed-function {
+        name: string,
+        parameters: list<function-parameter>,
+        return-type: option<string>,
+        is-exported: bool,
+        is-imported: bool,
+        estimated-stack-size: u32,
+    }
+
+    record reconstructed-interface {
+        interface-name: string,
+        functions: list<reconstructed-function>,
+        imported-functions: list<reconstructed-function>,
+        types: list<string>,
+    }
+
+    record section-descriptor {
+        name: string,
+        virtual-address: u64,
+        size: u64,
+        is-executable: bool,
+        is-writable: bool,
+        entropy: f32,
+    }
+
+    record decompilation-request {
+        raw-binary: list<u8>,
+        format-hint: option<binary-format>,
+        arch-hint: option<binary-arch>,
+        extract-strings: bool,
+        build-cfg: bool,
+        synthesize-wit: bool,
+        synthesize-rust-bindings: bool,
+    }
+
+    record decompilation-result {
+        format: binary-format,
+        arch: binary-arch,
+        entry-point: option<u64>,
+        sections: list<section-descriptor>,
+        symbols: list<symbol-descriptor>,
+        functions: list<reconstructed-function>,
+        cfgs: list<control-flow-graph>,
+        reconstructed-interface: option<reconstructed-interface>,
+        wit-definition: option<string>,
+        rust-wrapper: option<string>,
+        string-literals: list<string>,
+    }
+}
+
+interface transpiler-engine {
+    use types.{
+        binary-format,
+        binary-arch,
+        symbol-descriptor,
+        basic-block-node,
+        control-flow-graph,
+        reconstructed-interface,
+        decompilation-request,
+        decompilation-result,
+    };
+
+    /// Detect container format and architecture from raw bytes
+    detect-format: func(binary: list<u8>) -> result<tuple<binary-format, binary-arch>, string>;
+
+    /// Extract symbol table and sections
+    extract-symbols: func(binary: list<u8>) -> result<list<symbol-descriptor>, string>;
+
+    /// Build Control Flow Graph for given function entry point
+    build-cfg: func(binary: list<u8>, function-name: string) -> result<control-flow-graph, string>;
+
+    /// Synthesize WebAssembly Component Model (.wit) interface definition
+    synthesize-wit: func(binary: list<u8>, package-name: string) -> result<string, string>;
+
+    /// Synthesize safe idiomatic Rust wrapper bindings for reconstructed WIT interface
+    synthesize-rust-wrapper: func(wit-content: string, crate-name: string) -> result<string, string>;
+
+    /// Full decompilation and transpilation pipeline
+    decompile: func(request: decompilation-request) -> result<decompilation-result, string>;
+}
+
+world reverse-engineer-anything {
+    import transpiler-engine;
+    export transpiler-engine;
+}

@@ -19,6 +19,90 @@
     }
   },
   "tools": {
+    "hagibis_decompile_binary": {
+      "description": "Reverse engineer and decompile binary into structured format, architecture, entry point, exported/imported symbols, basic block count, CFG complexity, and auto-generated WebAssembly Component Model WIT interface definition",
+      "parameters": {
+        "binary_path": {
+          "type": "string",
+          "description": "Filesystem path to target binary executable or library (ELF, PE, Mach-O, or WASM)"
+        },
+        "binary_bytes_base64": {
+          "type": "string",
+          "description": "Optional base64-encoded raw binary bytes for in-memory binary inspection"
+        },
+        "target_format": {
+          "type": "string",
+          "enum": ["auto", "elf", "pe", "mach-o", "wasm"],
+          "default": "auto",
+          "description": "Binary format specification or auto-detection"
+        }
+      },
+      "required": ["binary_path"]
+    },
+    "hagibis_vectorize_codebase": {
+      "description": "Chunk AST functions and structs, generate normalized dense embeddings, store into LanceDB-compatible vector table, and execute semantic cosine similarity queries against reconstructed codebases",
+      "parameters": {
+        "codebase_path": {
+          "type": "string",
+          "description": "Directory path containing source code to chunk, vectorize, and index"
+        },
+        "code_fragments": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "code": { "type": "string" },
+              "language": { "type": "string" }
+            },
+            "required": ["name", "code"]
+          }
+        },
+        "table_name": {
+          "type": "string",
+          "default": "reconstructed_codebase_memory"
+        },
+        "dimension": {
+          "type": "integer",
+          "default": 384,
+          "enum": [384, 768]
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "query": { "type": "string" },
+        "top_k": { "type": "integer", "default": 5 }
+      }
+    },
+    "hagibis_microvm_sandbox_run": {
+      "description": "Provision isolated execution environment using Firecracker MicroVM harness or WASM sandbox, capturing stdout, stderr, exit code, and execution trace safely without host risk",
+      "parameters": {
+        "binary_path": {
+          "type": "string",
+          "description": "Path to binary or executable to run inside the microVM sandbox"
+        },
+        "args": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        },
+        "max_memory_mb": {
+          "type": "integer",
+          "minimum": 128,
+          "maximum": 512,
+          "default": 256
+        },
+        "timeout_secs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 300,
+          "default": 10
+        },
+        "seccomp_profile_path": { "type": "string" }
+      },
+      "required": ["binary_path"]
+    },
     "hgb_compiler_self_heal_ast": {
       "description": "Autonomous closed-loop AST compiler error localization, surgical token slicing, deterministic patch synthesis, and speculative verification with atomic SnapshotRollbackGuard rollback guarantees",
       "parameters": {

@@ -2463,6 +2463,16 @@ pub use zero_trust_mcp_pep_gateway::{
     RiskFactorBreakdown, ZeroTrustMcpPepGateway,
 };
 
+// Strategic Upgrade: Reverse Engineering MCP Bridge, MicroVM Sandboxing & Vector Indexing
+pub mod reverse_engineering_mcp_bridge;
+pub use reverse_engineering_mcp_bridge::{
+    AstCodeChunk, BinaryArchitecture, BinaryFormat, CfgComplexityReport, CodeFragmentInput,
+    CodeSemanticEmbedder, DecompiledBinaryReport, DecompilerEngine, ExtractedSymbol,
+    LanceDbVectorEngine, MicrovmSandboxRunInput, MicrovmSandboxRunReport, MicrovmSandboxRunner,
+    ReverseEngineeringMcpBridge, SymbolKind as McpSymbolKind, VectorSearchResult,
+};
+
+
 
 
 

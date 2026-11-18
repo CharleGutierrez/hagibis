@@ -10,6 +10,7 @@ pub mod hot_trace_profiler;
 pub mod simd_vectorizer;
 pub mod native_cache;
 pub mod jit_pipeline;
+pub mod binary_decompilation_transpiler;
 
 // Re-exports
 pub use hot_trace_profiler::{
@@ -28,6 +29,13 @@ pub use native_cache::{
 pub use jit_pipeline::{
     BenchmarkItemResult, ExecutionOutcome, JitError, JitPipeline, JitPipelineConfig,
     SimdBenchmarkSuiteReport,
+};
+pub use binary_decompilation_transpiler::{
+    compute_shannon_entropy, BasicBlockNode, BinaryArch, BinaryFormat, BranchCondition, CfgBuilder,
+    CfgEdge, ControlFlowGraph, DecompilationRequest, DecompilationResult, DefaultTranspilerEngine,
+    ElfParser, FunctionParameter, MachOParser, PeParser, ReconstructedFunction,
+    ReconstructedInterface, RustWrapperGenerator, SectionDescriptor, StringLiteralExtractor,
+    SymbolDescriptor, SymbolKind, TranspilerEngine, TranspilerError, WasmParser, WitSynthesisEngine,
 };
 
 /// Returns the crate version string.

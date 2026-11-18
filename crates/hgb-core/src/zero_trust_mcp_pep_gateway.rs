@@ -358,6 +358,28 @@ impl DynamicRiskScoringEngine {
                 base_risk_override: Some(0.99),
                 requires_mandatory_hitl: true,
             },
+            // Reverse Engineering & Sandboxing Suite
+            McpToolMetadata {
+                tool_name: "hagibis_decompile_binary".to_string(),
+                op_type: OperationType::ReadOnly,
+                description: "Reverse engineer and decompile binary into AST, CFG complexity, and WebAssembly WIT interface".to_string(),
+                base_risk_override: Some(0.12),
+                requires_mandatory_hitl: false,
+            },
+            McpToolMetadata {
+                tool_name: "hagibis_vectorize_codebase".to_string(),
+                op_type: OperationType::Mutation,
+                description: "Chunk AST functions and structs, generate embeddings, and store/query LanceDB vector table".to_string(),
+                base_risk_override: Some(0.35),
+                requires_mandatory_hitl: false,
+            },
+            McpToolMetadata {
+                tool_name: "hagibis_microvm_sandbox_run".to_string(),
+                op_type: OperationType::Destructive,
+                description: "Isolated MicroVM and WASM sandbox runner for untrusted binaries".to_string(),
+                base_risk_override: Some(0.72),
+                requires_mandatory_hitl: true,
+            },
         ];
 
         let mut lock = self.tool_registry.write().unwrap();
