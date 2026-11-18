@@ -854,7 +854,7 @@ case "$MODE" in
         migrate_to_ext4
         ;;
     verify-ext4)
-        verify_ext4_capabilities "${1:-/home/toshiba/hagibis}"
+        verify_ext4_capabilities "$WORKSPACE_ROOT"
         ;;
     gc)
         setup_sccache
