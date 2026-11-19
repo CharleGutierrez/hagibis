@@ -64,6 +64,7 @@ Targets:
 
 Options:
   --ci              Headless automated CI mode (non-interactive, GitHub Actions log grouping)
+  --workload-profile Execute representative masterclass live simulations profiling pass
   --verify          Verify ELF headers, relocations, basic-block alignment & smoke tests
   --pgo-only        Execute PGO + Fat LTO compilation only, skipping BOLT passes
   --bolt-only       Execute post-link BOLT reordering only on existing release binaries
@@ -72,6 +73,7 @@ EOF
 }
 
 # Parse CLI arguments
+WORKLOAD_PROFILE=false
 for arg in "$@"; do
     case "$arg" in
         all|hgb|cli|hgbd|daemon|wasm_kernel|hgb-wasm-kernel|wasm-kernel|wasm|kernel)
@@ -79,6 +81,9 @@ for arg in "$@"; do
             ;;
         --ci|--headless|--non-interactive)
             CI_MODE=true
+            ;;
+        --workload-profile|--profile|workload-profile)
+            WORKLOAD_PROFILE=true
             ;;
         --verify)
             DO_VERIFY=true
@@ -220,14 +225,27 @@ optimize_binary() {
                 fi
                 
                 # -----------------------------------------------------------------
-                # Phase 2: Representative Training Workload
+                # Phase 2: Representative Training Workload (Masterclass Live Simulations)
                 # -----------------------------------------------------------------
                 echo "• [Phase 2/4] Executing realistic production profiling workloads..."
                 LLVM_PROFILE_FILE="$PGO_PROFDATA_DIR/profile-%p-%m.profraw"
                 export LLVM_PROFILE_FILE
+                export DYNATUNE_DIR="${DYNATUNE_DIR:-/media/toshiba/Lexar/dynatune}"
+
+                echo "  • Executing representative Masterclass live simulation suite..."
+                if [ -f "$WORKSPACE_ROOT/docs/masterclass/test_masterclass_live_simulations.py" ]; then
+                    python3 "$WORKSPACE_ROOT/docs/masterclass/test_masterclass_live_simulations.py" || true
+                fi
 
                 echo "  • Training on hgb-core benchmark kernels (pgo_workload.rs)..."
                 cargo bench -p hgb-core --bench pgo_workload --target-dir "$TARGET_DIR" -- --nocapture 2>/dev/null || true
+
+                # Masterclass chapter training
+                for ch in "$WORKSPACE_ROOT"/docs/masterclass/ch*.py; do
+                    if [ -f "$ch" ]; then
+                        python3 "$ch" --test-mode >/dev/null 2>&1 || python3 "$ch" >/dev/null 2>&1 || true
+                    fi
+                done
                 
                 if [ "$BIN_NAME" = "hgb" ]; then
                     "$INSTRUMENTED_BIN" --help >/dev/null 2>&1 || true
@@ -277,11 +295,17 @@ optimize_binary() {
     
     # -------------------------------------------------------------------------
     # Phase 4: LLVM BOLT Post-Link Layout Reordering
-    # Passes: -reorder-blocks=ext-tsp -reorder-functions=hfsort+ -split-functions -split-all-cold -dyno-stats
+    # Passes: -reorder-blocks=ext-tsp -reorder-functions=cdsort -split-functions -split-all-cold -dyno-stats
     # -------------------------------------------------------------------------
     if [ "$PGO_ONLY" != true ]; then
         echo "• [Phase 4/4] Applying LLVM BOLT layout reordering..."
-        echo "  Passes: -reorder-blocks=ext-tsp -reorder-functions=hfsort+ -split-functions -split-all-cold -dyno-stats"
+        local reorder_fn="cdsort"
+        if [ -n "$LLVM_BOLT" ] && [ -x "$LLVM_BOLT" ]; then
+            if ! "$LLVM_BOLT" --help 2>&1 | grep -q "cdsort"; then
+                reorder_fn="hfsort+"
+            fi
+        fi
+        echo "  Passes: -reorder-blocks=ext-tsp -reorder-functions=${reorder_fn} -split-functions -split-all-cold -dyno-stats"
         
         if [ -n "$LLVM_BOLT" ] && [ -x "$LLVM_BOLT" ]; then
             local PERF_DATA="$DATA_DIR/perf-$BIN_NAME.data"
@@ -311,7 +335,7 @@ optimize_binary() {
                 "$LLVM_BOLT" "$PGO_BIN"
                 -o "$BOLT_BIN"
                 -reorder-blocks=ext-tsp
-                -reorder-functions=hfsort+
+                "-reorder-functions=${reorder_fn}"
                 -split-functions
                 -split-all-cold
                 -dyno-stats

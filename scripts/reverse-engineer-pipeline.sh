@@ -895,9 +895,13 @@ cmd_pgo_tune() {
     set -e
 
     if [ "$pgo_gen_res" -eq 0 ]; then
-        log_info "2. Executing profiling workload..."
+        log_info "2. Executing profiling workload (crate tests + Masterclass live simulations)..."
         LLVM_PROFILE_FILE="$pgo_dir/profile-%p-%m.profraw" \
             cargo test --manifest-path "$target_dir/Cargo.toml" >/dev/null 2>&1 || true
+        if [ -f "$WORKSPACE_ROOT/docs/masterclass/test_masterclass_live_simulations.py" ]; then
+            LLVM_PROFILE_FILE="$pgo_dir/profile-%p-%m.profraw" \
+                python3 "$WORKSPACE_ROOT/docs/masterclass/test_masterclass_live_simulations.py" >/dev/null 2>&1 || true
+        fi
 
         # 3. Merge raw profiles if llvm-profdata is available
         local llvm_profdata

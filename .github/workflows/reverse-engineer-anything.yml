@@ -259,19 +259,30 @@ jobs:
       # ------------------------------------------------------------------------
       # Step 7: Continuous PGO + BOLT Optimization pass
       # ------------------------------------------------------------------------
-      - name: "7. Continuous PGO + BOLT Optimization pass"
+      - name: "7. Continuous PGO + BOLT Optimization pass (Workload-Driven Feedback)"
         id: step-pgo-bolt
         run: |
           echo "::group::Step 7: Continuous PGO + BOLT Optimization"
           OUTPUT_DIR="${{ github.workspace }}/reconstructed/${{ inputs.output_crate }}"
           
           if [ "${{ inputs.enable_pgo_bolt }}" = "true" ]; then
-            echo "Triggering PGO profile merging & feedback compilation..."
+            echo "• Executing canonical Masterclass Live Simulation Suite as baseline profiling workload..."
+            export DYNATUNE_DIR="${{ github.workspace }}/dynatune"
+            if [ -f "docs/masterclass/test_masterclass_live_simulations.py" ]; then
+              python3 docs/masterclass/test_masterclass_live_simulations.py
+            fi
+
+            echo "• Triggering PGO profile merging & feedback compilation for reconstructed target..."
             bash scripts/reverse-engineer-pipeline.sh pgo-tune "$OUTPUT_DIR"
             
             if [ -f "scripts/pgo-bolt-optimize.sh" ]; then
-              echo "Executing binary layout BOLT reordering pass..."
-              bash scripts/pgo-bolt-optimize.sh --ci || true
+              echo "• Executing continuous PGO + BOLT binary optimization with live workload profile..."
+              bash scripts/pgo-bolt-optimize.sh --ci --workload-profile --verify || true
+            fi
+
+            if [ -f "scripts/pgo-bolt-continuous-cron.sh" ]; then
+              echo "• Running continuous PGO governor status check..."
+              bash scripts/pgo-bolt-continuous-cron.sh --status || true
             fi
           else
             echo "Continuous PGO/BOLT optimization disabled by workflow input."

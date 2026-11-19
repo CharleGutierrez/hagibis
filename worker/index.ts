@@ -197,9 +197,12 @@ export default {
         return await handleEdgeVectorQuery(request, env);
       }
 
-      // 7. QUIC / HTTP/3 Bidirectional Multiplexed Tunnel
-      if (url.pathname === "/api/edge/quic-tunnel") {
+      // 7. QUIC / HTTP/3 Bidirectional Multiplexed Tunnel & Edge-to-Core Control Plane
+      if (url.pathname === "/api/edge/quic-tunnel" || url.pathname === "/api/v1/tunnel/handshake") {
         return await handleQuicTunnel(request, env);
+      }
+      if (url.pathname === "/api/v1/tunnel/offload" && method === "POST") {
+        return await handleMicrovmTaskDispatch(request, env);
       }
 
       // 8. Sub-Millisecond Semantic Cache

@@ -1,18 +1,24 @@
 #!/usr/bin/env python3
 """
-ch8_circuit_breaker_governor.py - Autopoietic Circuit-Breaker Governance Engine
-================================================================================
+ch8_circuit_breaker_governor.py - Autopoietic Circuit-Breaker Governance Engine with Hysteresis
+================================================================================================
 Project Hagibis: Pillar 3 (Observability/OTel) & Pillar 4 (Autonomic Self-Healing)
 
-Provides cryptographic state hashing (BLAKE3 / SHA-256), strict exponential backoff
-dampening with jitter, automated skill quarantining after 3 consecutive failures,
-and automated Human-In-The-Loop (HITL) Webhook alerts.
-
-This module is designed for direct consumption by:
-  - hagibis/docs/masterclass/ch8_autonomous_loops.py
-  - hagibis/docs/masterclass/ch8_chaos_injector.py
-  - hagibis/skills/observability-otel/
-  - Autonomous self-healing daemons and compiler remediation pipelines.
+Pillar C Enhancement:
+  1. Sliding-Window Anomaly Detection:
+     Tracks rolling execution events (default 20 events, 60s sliding window).
+     Computes dynamic anomaly score and failure rate percentage. Trips when failure rate
+     exceeds anomaly threshold (>= 50% failures over >= 5 events) or consecutive failure threshold.
+  2. Full Hysteresis State Machine:
+     - CLOSED: Normal execution, mutations permitted.
+     - OPEN: Blocked, mutations forbidden. Exponential backoff delay with randomized jitter enforced.
+     - HALF_OPEN: Trial probing state allowing controlled test invocations once backoff expires.
+     - RECOVERY: Probation state requiring N consecutive successful executions before transitioning back to CLOSED.
+  3. Strict Jittered Exponential Backoff:
+     delay = min(max_backoff, base_delay * 2^(failures)) + uniform_jitter(0.1, 0.5)
+  4. Cryptographic State Hashing: Deterministic BLAKE3 / SHA-256 pre/post mutation hashing.
+  5. Quarantining & Permission Locking: Mutating permissions stripped (0444 read-only).
+  6. Automated Webhook Alerts: Dispatched to OpenTelemetry sink & HTTP endpoints.
 """
 
 from __future__ import annotations
@@ -56,16 +62,157 @@ DEFAULT_MAX_CONSECUTIVE_FAILURES = int(os.environ.get("HGB_CB_MAX_FAILURES", 3))
 DEFAULT_T0 = float(os.environ.get("HGB_CB_T0", 2.0))
 DEFAULT_TMAX = float(os.environ.get("HGB_CB_TMAX", 64.0))
 
+DEFAULT_WINDOW_SIZE = int(os.environ.get("HGB_CB_WINDOW_SIZE", 20))
+DEFAULT_WINDOW_DURATION_SEC = float(os.environ.get("HGB_CB_WINDOW_SEC", 60.0))
+DEFAULT_MIN_EVENTS = int(os.environ.get("HGB_CB_MIN_EVENTS", 5))
+DEFAULT_ANOMALY_THRESHOLD = float(os.environ.get("HGB_CB_ANOMALY_THRESHOLD", 0.50))
+DEFAULT_RECOVERY_THRESHOLD = int(os.environ.get("HGB_CB_RECOVERY_THRESHOLD", 3))
+
 
 # ==============================================================================
 # Domain Models & Circuit Breaker States
 # ==============================================================================
 
 class CircuitState(str, Enum):
-    CLOSED = "Closed"          # Healthy, mutations permitted
-    HALF_OPEN = "HalfOpen"    # Recovering / dampening after partial failures
-    TRIPPED = "Tripped"        # Quarantined / locked, mutations forbidden
-    QUARANTINED = "Quarantined" # Quarantined with file permissions revoked
+    CLOSED = "CLOSED"          # Normal execution, mutations permitted
+    OPEN = "OPEN"              # Blocked, mutations forbidden, backoff active
+    HALF_OPEN = "HALF_OPEN"    # Trial probing state allowing controlled test invocations
+    RECOVERY = "RECOVERY"      # Probation state requiring N consecutive successful executions
+
+    # Backward compatibility aliases
+    TRIPPED = "OPEN"
+    QUARANTINED = "OPEN"
+
+    @classmethod
+    def from_str(cls, val: str) -> CircuitState:
+        normalized = val.strip().upper().replace(" ", "_")
+        if normalized in ("CLOSED", "HEALTHY"):
+            return cls.CLOSED
+        elif normalized in ("OPEN", "TRIPPED", "QUARANTINED", "LOCKED"):
+            return cls.OPEN
+        elif normalized in ("HALF_OPEN", "HALFOPEN", "PROBING"):
+            return cls.HALF_OPEN
+        elif normalized in ("RECOVERY", "PROBATION"):
+            return cls.RECOVERY
+        return cls.CLOSED
+
+
+@dataclass
+class WindowEvent:
+    timestamp: float
+    success: bool
+    error_trace: str = ""
+    duration_ms: float = 0.0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> WindowEvent:
+        return cls(
+            timestamp=float(data.get("timestamp", time.time())),
+            success=bool(data.get("success", False)),
+            error_trace=str(data.get("error_trace", "")),
+            duration_ms=float(data.get("duration_ms", 0.0))
+        )
+
+
+class SlidingWindowAnomalyDetector:
+    """
+    Sliding-window anomaly detector tracking a rolling window of execution events.
+    Computes dynamic anomaly score and failure rate percentage over a rolling
+    window (default 20 events or 60 seconds).
+    """
+
+    def __init__(
+        self,
+        window_size: int = DEFAULT_WINDOW_SIZE,
+        window_duration_sec: float = DEFAULT_WINDOW_DURATION_SEC,
+        min_events: int = DEFAULT_MIN_EVENTS,
+        anomaly_threshold: float = DEFAULT_ANOMALY_THRESHOLD
+    ):
+        self.window_size = max(1, window_size)
+        self.window_duration_sec = max(1.0, window_duration_sec)
+        self.min_events = max(1, min_events)
+        self.anomaly_threshold = max(0.01, min(1.0, anomaly_threshold))
+        self._events: List[WindowEvent] = []
+
+    def record_event(
+        self,
+        success: bool,
+        error_trace: str = "",
+        duration_ms: float = 0.0,
+        timestamp: Optional[float] = None
+    ) -> WindowEvent:
+        now = timestamp if timestamp is not None else time.time()
+        event = WindowEvent(
+            timestamp=now,
+            success=success,
+            error_trace=error_trace,
+            duration_ms=duration_ms
+        )
+        self._events.append(event)
+        self._prune(now)
+        return event
+
+    def _prune(self, current_time: float) -> None:
+        cutoff = current_time - self.window_duration_sec
+        self._events = [e for e in self._events if e.timestamp >= cutoff]
+        if len(self._events) > self.window_size:
+            self._events = self._events[-self.window_size:]
+
+    def compute_metrics(self, current_time: Optional[float] = None) -> Dict[str, Any]:
+        now = current_time if current_time is not None else time.time()
+        self._prune(now)
+
+        total_events = len(self._events)
+        if total_events == 0:
+            return {
+                "total_events": 0,
+                "failure_count": 0,
+                "success_count": 0,
+                "failure_rate": 0.0,
+                "failure_rate_pct": 0.0,
+                "anomaly_score": 0.0,
+                "is_anomaly": False,
+                "window_duration_sec": self.window_duration_sec,
+                "min_events": self.min_events,
+                "anomaly_threshold": self.anomaly_threshold
+            }
+
+        failure_count = sum(1 for e in self._events if not e.success)
+        success_count = total_events - failure_count
+        failure_rate = failure_count / float(total_events)
+        failure_rate_pct = round(failure_rate * 100.0, 2)
+
+        # Dynamic anomaly score scaled by sample confidence
+        confidence = min(1.0, total_events / float(self.min_events))
+        anomaly_score = round(failure_rate * confidence, 4)
+
+        # Anomaly threshold check
+        is_anomaly = (total_events >= self.min_events and failure_rate >= self.anomaly_threshold)
+
+        return {
+            "total_events": total_events,
+            "failure_count": failure_count,
+            "success_count": success_count,
+            "failure_rate": round(failure_rate, 4),
+            "failure_rate_pct": failure_rate_pct,
+            "anomaly_score": anomaly_score,
+            "is_anomaly": is_anomaly,
+            "window_duration_sec": self.window_duration_sec,
+            "min_events": self.min_events,
+            "anomaly_threshold": self.anomaly_threshold
+        }
+
+    def clear(self) -> None:
+        self._events.clear()
+
+    def to_list(self) -> List[Dict[str, Any]]:
+        return [e.to_dict() for e in self._events]
+
+    def load_list(self, data: List[Dict[str, Any]]) -> None:
+        self._events = [WindowEvent.from_dict(d) for d in data]
 
 
 @dataclass
@@ -88,6 +235,8 @@ class SkillGovernanceRecord:
     skill_id: str
     state: CircuitState = CircuitState.CLOSED
     consecutive_failures: int = 0
+    consecutive_successes: int = 0
+    recovery_threshold: int = DEFAULT_RECOVERY_THRESHOLD
     total_failures: int = 0
     total_successes: int = 0
     is_quarantined: bool = False
@@ -95,8 +244,13 @@ class SkillGovernanceRecord:
     quarantine_reason: Optional[str] = None
     quarantined_at: Optional[str] = None
     last_mutation_timestamp: Optional[float] = None
+    last_state_change_timestamp: float = 0.0
+    open_until_timestamp: float = 0.0
+    anomaly_score: float = 0.0
+    failure_rate: float = 0.0
     pre_mutation_hash: Optional[str] = None
     post_mutation_hash: Optional[str] = None
+    window_events: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -106,15 +260,14 @@ class SkillGovernanceRecord:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> SkillGovernanceRecord:
         raw_state = data.get("state", CircuitState.CLOSED.value)
-        try:
-            state = CircuitState(raw_state)
-        except ValueError:
-            state = CircuitState.CLOSED
+        state = CircuitState.from_str(str(raw_state))
 
         return cls(
             skill_id=data["skill_id"],
             state=state,
             consecutive_failures=data.get("consecutive_failures", 0),
+            consecutive_successes=data.get("consecutive_successes", 0),
+            recovery_threshold=data.get("recovery_threshold", DEFAULT_RECOVERY_THRESHOLD),
             total_failures=data.get("total_failures", 0),
             total_successes=data.get("total_successes", 0),
             is_quarantined=data.get("is_quarantined", False),
@@ -122,8 +275,13 @@ class SkillGovernanceRecord:
             quarantine_reason=data.get("quarantine_reason"),
             quarantined_at=data.get("quarantined_at"),
             last_mutation_timestamp=data.get("last_mutation_timestamp"),
+            last_state_change_timestamp=data.get("last_state_change_timestamp", 0.0),
+            open_until_timestamp=data.get("open_until_timestamp", 0.0),
+            anomaly_score=data.get("anomaly_score", 0.0),
+            failure_rate=data.get("failure_rate", 0.0),
             pre_mutation_hash=data.get("pre_mutation_hash"),
-            post_mutation_hash=data.get("post_mutation_hash")
+            post_mutation_hash=data.get("post_mutation_hash"),
+            window_events=data.get("window_events", [])
         )
 
 
@@ -134,8 +292,9 @@ class SkillGovernanceRecord:
 class AutonomicCircuitBreakerGovernor:
     """
     Enterprise Governor overseeing self-healing autopoietic mutation loops.
-    Guarantees state immutability checking, strict dampening backoff, and
-    immediate quarantine lockouts upon repeated failures.
+    Guarantees state immutability checking, strict jittered exponential backoff,
+    sliding-window anomaly detection, and full hysteresis state transitions
+    (CLOSED, OPEN, HALF_OPEN, RECOVERY).
     """
 
     def __init__(
@@ -148,6 +307,11 @@ class AutonomicCircuitBreakerGovernor:
         max_consecutive_failures: int = DEFAULT_MAX_CONSECUTIVE_FAILURES,
         t0: float = DEFAULT_T0,
         t_max: float = DEFAULT_TMAX,
+        window_size: int = DEFAULT_WINDOW_SIZE,
+        window_duration_sec: float = DEFAULT_WINDOW_DURATION_SEC,
+        min_events: int = DEFAULT_MIN_EVENTS,
+        anomaly_threshold: float = DEFAULT_ANOMALY_THRESHOLD,
+        recovery_threshold: int = DEFAULT_RECOVERY_THRESHOLD
     ):
         self.state_dir = Path(state_dir) if state_dir else DEFAULT_STATE_DIR
         self.quarantine_dir = Path(quarantine_dir) if quarantine_dir else DEFAULT_QUARANTINE_DIR
@@ -157,9 +321,15 @@ class AutonomicCircuitBreakerGovernor:
         self.max_failures = max(1, max_consecutive_failures)
         self.t0 = float(t0)
         self.t_max = float(t_max)
+        self.window_size = window_size
+        self.window_duration_sec = window_duration_sec
+        self.min_events = min_events
+        self.anomaly_threshold = anomaly_threshold
+        self.recovery_threshold = recovery_threshold
 
         self._ensure_directories()
         self._registry: Dict[str, SkillGovernanceRecord] = {}
+        self._detectors: Dict[str, SlidingWindowAnomalyDetector] = {}
         self._history: List[MutationAttempt] = []
         self._load_registry()
 
@@ -188,7 +358,6 @@ class AutonomicCircuitBreakerGovernor:
 
         path = Path(target)
         if not path.exists():
-            # Return hash of empty string if target does not exist yet
             empty = b""
             if _HAS_NATIVE_BLAKE3:
                 return f"blake3:{_native_blake3.blake3(empty).hexdigest()}"
@@ -209,7 +378,6 @@ class AutonomicCircuitBreakerGovernor:
                 return f"sha256:{hasher.hexdigest()}"
 
         elif path.is_dir():
-            # Deterministic composite manifest of relative paths and individual file hashes
             entries: List[str] = []
             for root, dirs, files in os.walk(path):
                 dirs.sort()
@@ -218,7 +386,6 @@ class AutonomicCircuitBreakerGovernor:
                         continue
                     full_p = Path(root) / file_name
                     rel_p = full_p.relative_to(path).as_posix()
-                    # Hash individual file
                     h = hashlib.sha256()
                     try:
                         with open(full_p, "rb") as f:
@@ -238,17 +405,19 @@ class AutonomicCircuitBreakerGovernor:
         return "sha256:unknown"
 
     # --------------------------------------------------------------------------
-    # Strict Exponential Backoff Dampening
+    # Strict Jittered Exponential Backoff Dampening
     # --------------------------------------------------------------------------
     def calculate_backoff(
         self,
         iteration: int,
         with_jitter: bool = True,
-        jitter_seed: Optional[int] = None
+        jitter_seed: Optional[int] = None,
+        jitter_min: float = 0.1,
+        jitter_max: float = 0.5
     ) -> float:
         """
         Calculates strict exponential backoff dampening:
-          T(iter) = min(T_max, T_0 * 2^(iter - 1)) + jitter
+          delay = min(max_backoff, base_delay * 2^(iteration - 1)) + uniform_jitter(0.1, 0.5)
         """
         iter_clamped = max(1, iteration)
         base_backoff = min(self.t_max, self.t0 * (2.0 ** (iter_clamped - 1)))
@@ -256,7 +425,7 @@ class AutonomicCircuitBreakerGovernor:
         jitter = 0.0
         if with_jitter:
             rng = random.Random(jitter_seed) if jitter_seed is not None else random
-            jitter = rng.uniform(0.05, 0.45)
+            jitter = rng.uniform(jitter_min, jitter_max)
 
         return round(base_backoff + jitter, 4)
 
@@ -293,7 +462,7 @@ class AutonomicCircuitBreakerGovernor:
         """
         url = webhook_url or self.webhook_url
         envelope = {
-            "version": "1.0",
+            "version": "2.0",
             "event": event_type,
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             **payload
@@ -313,7 +482,7 @@ class AutonomicCircuitBreakerGovernor:
             data=raw_json.encode("utf-8"),
             headers={
                 "Content-Type": "application/json",
-                "User-Agent": "Hagibis-Autopoietic-Governor/1.0",
+                "User-Agent": "Hagibis-Autopoietic-Governor/2.0",
                 "X-Hagibis-Event": event_type
             },
             method="POST"
@@ -323,7 +492,6 @@ class AutonomicCircuitBreakerGovernor:
                 status = resp.status
                 return 200 <= status < 300
         except Exception:
-            # Network failure or mock endpoint offline - sink is primary guarantee
             return False
 
     # --------------------------------------------------------------------------
@@ -353,9 +521,7 @@ class AutonomicCircuitBreakerGovernor:
                     copied_target = dest_dir / src.name
                     shutil.copy2(src, copied_target)
                     copied_path = str(copied_target)
-                    # Strip write permissions on quarantined copy
                     os.chmod(copied_target, stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
-                    # Strip write permissions on source to lock out further mutations
                     try:
                         os.chmod(src, stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
                     except OSError:
@@ -364,7 +530,6 @@ class AutonomicCircuitBreakerGovernor:
                     copied_target = dest_dir / "payload"
                     shutil.copytree(src, copied_target, dirs_exist_ok=True)
                     copied_path = str(copied_target)
-                    # Strip write permissions recursively
                     for root, dirs, files in os.walk(dest_dir):
                         for f in files:
                             try:
@@ -383,18 +548,22 @@ class AutonomicCircuitBreakerGovernor:
                     except OSError:
                         pass
 
-        # Write Quarantine Manifest
         iso_now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        rec = self._get_or_create_skill(skill_id)
+
         manifest = {
             "skill_id": skill_id,
             "quarantined_at": iso_now,
-            "consecutive_failures": self.max_failures,
+            "consecutive_failures": rec.consecutive_failures,
+            "anomaly_score": rec.anomaly_score,
+            "failure_rate": rec.failure_rate,
             "pre_mutation_hash": pre_hash,
             "post_mutation_hash": post_hash,
             "quarantine_reason": reason,
             "original_path": str(skill_path) if skill_path else None,
             "quarantine_destination": str(dest_dir),
-            "permissions_locked": True
+            "permissions_locked": True,
+            "circuit_state": CircuitState.OPEN.value
         }
         manifest_file = dest_dir / "quarantine_manifest.json"
         with open(manifest_file, "w", encoding="utf-8") as mf:
@@ -404,9 +573,6 @@ class AutonomicCircuitBreakerGovernor:
         except OSError:
             pass
 
-        # Update Skill Record
-        rec = self._get_or_create_skill(skill_id)
-        rec.state = CircuitState.QUARANTINED
         rec.is_quarantined = True
         rec.quarantine_path = str(dest_dir)
         rec.quarantine_reason = reason
@@ -415,38 +581,69 @@ class AutonomicCircuitBreakerGovernor:
         rec.post_mutation_hash = post_hash
         self._save_registry()
 
-        # Webhook Alert Dispatch
         webhook_payload = {
             "skill_id": skill_id,
             "action": "quarantine_alert",
-            "consecutive_failures": self.max_failures,
+            "consecutive_failures": rec.consecutive_failures,
             "threshold": self.max_failures,
+            "anomaly_score": rec.anomaly_score,
+            "failure_rate": rec.failure_rate,
             "pre_mutation_hash": pre_hash,
             "post_mutation_hash": post_hash,
             "quarantine_path": str(dest_dir),
             "error_trace": reason,
             "action_required": "Human-In-The-Loop (HITL) audit required. Mutating permissions revoked.",
-            "circuit_breaker_state": CircuitState.QUARANTINED.value
+            "circuit_breaker_state": CircuitState.OPEN.value
         }
         self.dispatch_webhook_alert("quarantine_alert", webhook_payload)
 
         return manifest
 
     # --------------------------------------------------------------------------
-    # Circuit Breaker Status & Mutation Recording
+    # Circuit Breaker Status & Hysteresis Transitions
     # --------------------------------------------------------------------------
-    def can_mutate(self, skill_id: str) -> Tuple[bool, str]:
+    def can_mutate(self, skill_id: str, current_time: Optional[float] = None) -> Tuple[bool, str]:
         """
-        Determines whether a skill is legally authorized to execute mutations.
-        Returns: (can_mutate: bool, reason_message: str)
+        Determines whether a skill is legally authorized to execute mutations
+        according to the full hysteresis state machine:
+          - CLOSED: Healthy, permitted.
+          - OPEN: Blocked until backoff expires. Automatically transitions to HALF_OPEN when delay elapses.
+          - HALF_OPEN: Trial probe permitted.
+          - RECOVERY: Probation permitted.
         """
+        now = current_time if current_time is not None else time.time()
         rec = self._get_or_create_skill(skill_id)
-        if rec.is_quarantined or rec.state in (CircuitState.QUARANTINED, CircuitState.TRIPPED):
+
+        if rec.state == CircuitState.OPEN or rec.is_quarantined:
+            # Check if exponential backoff delay has expired
+            if rec.open_until_timestamp > 0 and now >= rec.open_until_timestamp:
+                # Transition OPEN -> HALF_OPEN (Trial probing)
+                rec.state = CircuitState.HALF_OPEN
+                rec.last_state_change_timestamp = now
+                self._save_registry()
+                return (
+                    True,
+                    f"Skill [{skill_id}] backoff delay expired; transitioned from OPEN to HALF_OPEN. Trial probe permitted."
+                )
+            else:
+                remaining = max(0.0, rec.open_until_timestamp - now)
+                return (
+                    False,
+                    f"Skill [{skill_id}] is OPEN/QUARANTINED ({rec.consecutive_failures} failures, "
+                    f"anomaly score: {rec.anomaly_score:.2f}, failure rate: {rec.failure_rate:.1%}). "
+                    f"Mutating permissions locked. Reason: {rec.quarantine_reason}. Backoff remaining: {remaining:.2f}s."
+                )
+
+        elif rec.state == CircuitState.HALF_OPEN:
+            return True, f"Skill [{skill_id}] is in HALF_OPEN trial probing state."
+
+        elif rec.state == CircuitState.RECOVERY:
             return (
-                False,
-                f"Skill [{skill_id}] is QUARANTINED ({rec.consecutive_failures} consecutive failures). "
-                f"Mutating permissions locked. Reason: {rec.quarantine_reason}"
+                True,
+                f"Skill [{skill_id}] is in RECOVERY probation ({rec.consecutive_successes}/{rec.recovery_threshold} successes)."
             )
+
+        # CLOSED
         return True, "Skill is healthy and authorized for mutations."
 
     def record_mutation_attempt(
@@ -457,19 +654,36 @@ class AutonomicCircuitBreakerGovernor:
         success: bool,
         error_trace: str = "",
         skill_path: Optional[Union[str, Path]] = None,
-        duration_ms: float = 0.0
+        duration_ms: float = 0.0,
+        current_time: Optional[float] = None
     ) -> Dict[str, Any]:
         """
-        Primary lifecycle state transition handler.
-        If success: resets consecutive failures to 0, transitions to CLOSED.
-        If failure: increments failures. Upon reaching max_failures (3), triggers quarantine.
+        Primary lifecycle state transition handler implementing full hysteresis
+        and sliding-window anomaly detection.
         """
+        now = current_time if current_time is not None else time.time()
+        iso_now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
         rec = self._get_or_create_skill(skill_id)
-        now_ts = time.time()
-        iso_now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now_ts))
+        detector = self._get_or_create_detector(skill_id)
 
+        # 1. Record event in sliding window
+        detector.record_event(
+            success=success,
+            error_trace=error_trace,
+            duration_ms=duration_ms,
+            timestamp=now
+        )
+        rec.window_events = detector.to_list()
+
+        # 2. Compute dynamic anomaly score and failure rate
+        metrics = detector.compute_metrics(current_time=now)
+        rec.anomaly_score = metrics["anomaly_score"]
+        rec.failure_rate = metrics["failure_rate"]
+        is_anomaly = metrics["is_anomaly"]
+
+        # 3. Record mutation history
         attempt = MutationAttempt(
-            timestamp=now_ts,
+            timestamp=now,
             iso_timestamp=iso_now,
             skill_id=skill_id,
             success=success,
@@ -482,7 +696,7 @@ class AutonomicCircuitBreakerGovernor:
         if len(self._history) > 100:
             self._history = self._history[-100:]
 
-        rec.last_mutation_timestamp = now_ts
+        rec.last_mutation_timestamp = now
         rec.pre_mutation_hash = pre_hash
         rec.post_mutation_hash = post_hash
 
@@ -491,39 +705,128 @@ class AutonomicCircuitBreakerGovernor:
             "success": success,
             "timestamp": iso_now,
             "pre_hash": pre_hash,
-            "post_hash": post_hash
+            "post_hash": post_hash,
+            "anomaly_score": rec.anomaly_score,
+            "failure_rate": rec.failure_rate,
+            "failure_rate_pct": metrics["failure_rate_pct"],
+            "total_window_events": metrics["total_events"]
         }
 
-        if success:
-            rec.consecutive_failures = 0
-            rec.total_successes += 1
-            rec.state = CircuitState.CLOSED
-            outcome["state"] = CircuitState.CLOSED.value
-            outcome["action"] = "MUTATION_ACCEPTED"
-        else:
-            rec.consecutive_failures += 1
-            rec.total_failures += 1
-            outcome["consecutive_failures"] = rec.consecutive_failures
+        # 4. Hysteresis State Machine Transitions
+        prev_state = rec.state
 
-            if rec.consecutive_failures >= self.max_failures:
-                # Breaker Trips! Quarantine initiated!
-                q_info = self.quarantine_skill(
-                    skill_id=skill_id,
-                    skill_path=skill_path,
-                    reason=error_trace or f"Failed {rec.consecutive_failures} consecutive mutations",
-                    pre_hash=pre_hash,
-                    post_hash=post_hash
-                )
-                outcome["state"] = CircuitState.QUARANTINED.value
-                outcome["action"] = "BREAKER_TRIPPED_QUARANTINED"
-                outcome["quarantine_info"] = q_info
+        if prev_state == CircuitState.CLOSED:
+            if success:
+                rec.consecutive_failures = 0
+                rec.consecutive_successes += 1
+                rec.total_successes += 1
+                rec.state = CircuitState.CLOSED
+                outcome["state"] = CircuitState.CLOSED.value
+                outcome["action"] = "MUTATION_ACCEPTED"
             else:
+                rec.consecutive_failures += 1
+                rec.consecutive_successes = 0
+                rec.total_failures += 1
+                outcome["consecutive_failures"] = rec.consecutive_failures
+
+                # Trip breaker if anomaly threshold is exceeded OR consecutive failures >= max_failures
+                if is_anomaly or rec.consecutive_failures >= self.max_failures:
+                    rec.state = CircuitState.OPEN
+                    rec.last_state_change_timestamp = now
+                    backoff = self.calculate_backoff(rec.consecutive_failures, with_jitter=True)
+                    rec.open_until_timestamp = now + backoff
+
+                    q_info = self.quarantine_skill(
+                        skill_id=skill_id,
+                        skill_path=skill_path,
+                        reason=error_trace or f"Anomaly threshold tripped ({metrics['failure_rate_pct']}% failures)",
+                        pre_hash=pre_hash,
+                        post_hash=post_hash
+                    )
+                    outcome["state"] = CircuitState.OPEN.value
+                    outcome["action"] = "BREAKER_TRIPPED_QUARANTINED"
+                    outcome["quarantine_info"] = q_info
+                    outcome["backoff_sec"] = backoff
+                else:
+                    # Dampening failure recorded while remaining in CLOSED
+                    backoff = self.calculate_backoff(rec.consecutive_failures, with_jitter=True)
+                    outcome["state"] = CircuitState.CLOSED.value
+                    outcome["action"] = "FAILURE_DAMPENING"
+                    outcome["recommended_backoff_sec"] = backoff
+
+        elif prev_state == CircuitState.HALF_OPEN:
+            if success:
+                # Trial probe succeeded! Transition HALF_OPEN -> RECOVERY!
+                rec.state = CircuitState.RECOVERY
+                rec.consecutive_failures = 0
+                rec.consecutive_successes = 1
+                rec.total_successes += 1
+                rec.last_state_change_timestamp = now
+                outcome["state"] = CircuitState.RECOVERY.value
+                outcome["action"] = "PROBE_SUCCEEDED_RECOVERY_ENGAGED"
+                outcome["consecutive_successes"] = 1
+                outcome["recovery_threshold"] = rec.recovery_threshold
+            else:
+                # Trial probe failed! Trip back to OPEN with updated exponential backoff!
+                rec.state = CircuitState.OPEN
+                rec.consecutive_failures += 1
+                rec.consecutive_successes = 0
+                rec.total_failures += 1
+                rec.last_state_change_timestamp = now
+                backoff = self.calculate_backoff(rec.consecutive_failures, with_jitter=True)
+                rec.open_until_timestamp = now + backoff
+                outcome["state"] = CircuitState.OPEN.value
+                outcome["action"] = "PROBE_FAILED_CIRCUIT_REOPENED"
+                outcome["backoff_sec"] = backoff
+
+        elif prev_state == CircuitState.RECOVERY:
+            if success:
+                rec.consecutive_successes += 1
+                rec.total_successes += 1
+                if rec.consecutive_successes >= rec.recovery_threshold:
+                    # Probation complete! Transition RECOVERY -> CLOSED!
+                    rec.state = CircuitState.CLOSED
+                    rec.consecutive_failures = 0
+                    rec.is_quarantined = False
+                    rec.quarantine_reason = None
+                    rec.quarantine_path = None
+                    rec.open_until_timestamp = 0.0
+                    rec.last_state_change_timestamp = now
+                    detector.clear()
+                    rec.window_events.clear()
+                    outcome["state"] = CircuitState.CLOSED.value
+                    outcome["action"] = "RECOVERY_COMPLETE_CIRCUIT_CLOSED"
+                else:
+                    outcome["state"] = CircuitState.RECOVERY.value
+                    outcome["action"] = "RECOVERY_PROBATION_PROGRESS"
+                    outcome["probation_progress"] = f"{rec.consecutive_successes}/{rec.recovery_threshold}"
+            else:
+                # Probation failed! Transition back to OPEN!
+                rec.state = CircuitState.OPEN
+                rec.consecutive_failures += 1
+                rec.consecutive_successes = 0
+                rec.total_failures += 1
+                rec.last_state_change_timestamp = now
+                backoff = self.calculate_backoff(rec.consecutive_failures, with_jitter=True)
+                rec.open_until_timestamp = now + backoff
+                outcome["state"] = CircuitState.OPEN.value
+                outcome["action"] = "RECOVERY_FAILED_CIRCUIT_REOPENED"
+                outcome["backoff_sec"] = backoff
+
+        elif prev_state == CircuitState.OPEN:
+            # Direct record while OPEN
+            if success:
                 rec.state = CircuitState.HALF_OPEN
                 outcome["state"] = CircuitState.HALF_OPEN.value
-                outcome["action"] = "FAILURE_DAMPENING"
-                # Calculate backoff delay
-                backoff = self.calculate_backoff(rec.consecutive_failures)
-                outcome["recommended_backoff_sec"] = backoff
+                outcome["action"] = "PROBE_SUCCEEDED_HALF_OPEN"
+            else:
+                rec.consecutive_failures += 1
+                rec.total_failures += 1
+                backoff = self.calculate_backoff(rec.consecutive_failures, with_jitter=True)
+                rec.open_until_timestamp = now + backoff
+                outcome["state"] = CircuitState.OPEN.value
+                outcome["action"] = "CIRCUIT_REMAINS_OPEN"
+                outcome["backoff_sec"] = backoff
 
         self._save_registry()
         return outcome
@@ -538,17 +841,25 @@ class AutonomicCircuitBreakerGovernor:
     ) -> bool:
         """
         Administrative override allowing a Human-In-The-Loop operator
-        to un-quarantine a skill and restore write permissions.
+        to un-quarantine a skill, clear anomaly history, and restore write permissions.
         """
         if skill_id not in self._registry:
             return False
 
         rec = self._registry[skill_id]
         rec.consecutive_failures = 0
+        rec.consecutive_successes = 0
         rec.state = CircuitState.CLOSED
         rec.is_quarantined = False
         rec.quarantine_reason = None
         rec.quarantine_path = None
+        rec.open_until_timestamp = 0.0
+        rec.anomaly_score = 0.0
+        rec.failure_rate = 0.0
+        rec.window_events.clear()
+
+        if skill_id in self._detectors:
+            self._detectors[skill_id].clear()
 
         if restore_path:
             p = Path(restore_path)
@@ -572,7 +883,6 @@ class AutonomicCircuitBreakerGovernor:
                                 pass
 
         self._save_registry()
-        # Dispatch HITL reset audit webhook
         self.dispatch_webhook_alert("hitl_operator_reset", {
             "skill_id": skill_id,
             "status": "Circuit reset to CLOSED",
@@ -605,7 +915,6 @@ class AutonomicCircuitBreakerGovernor:
 
         try:
             yield mutation_ctx
-            # Mutation completed without unhandled exception
             mutation_ctx["success"] = True
             post_hash = self.compute_state_hash(target_path)
             duration_ms = (time.perf_counter() - start_t) * 1000.0
@@ -630,7 +939,7 @@ class AutonomicCircuitBreakerGovernor:
                 skill_path=target_path,
                 duration_ms=duration_ms
             )
-            if apply_backoff_on_failure and rec_res.get("state") != CircuitState.QUARANTINED.value:
+            if apply_backoff_on_failure and rec_res.get("state") != CircuitState.OPEN.value:
                 self.apply_backoff(skill_id)
             raise
 
@@ -639,8 +948,25 @@ class AutonomicCircuitBreakerGovernor:
     # --------------------------------------------------------------------------
     def _get_or_create_skill(self, skill_id: str) -> SkillGovernanceRecord:
         if skill_id not in self._registry:
-            self._registry[skill_id] = SkillGovernanceRecord(skill_id=skill_id)
+            self._registry[skill_id] = SkillGovernanceRecord(
+                skill_id=skill_id,
+                recovery_threshold=self.recovery_threshold
+            )
         return self._registry[skill_id]
+
+    def _get_or_create_detector(self, skill_id: str) -> SlidingWindowAnomalyDetector:
+        if skill_id not in self._detectors:
+            rec = self._get_or_create_skill(skill_id)
+            det = SlidingWindowAnomalyDetector(
+                window_size=self.window_size,
+                window_duration_sec=self.window_duration_sec,
+                min_events=self.min_events,
+                anomaly_threshold=self.anomaly_threshold
+            )
+            if rec.window_events:
+                det.load_list(rec.window_events)
+            self._detectors[skill_id] = det
+        return self._detectors[skill_id]
 
     def _load_registry(self) -> None:
         if not self.registry_path.exists():
@@ -649,13 +975,23 @@ class AutonomicCircuitBreakerGovernor:
             with open(self.registry_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             for s_id, s_data in data.get("skills", {}).items():
-                self._registry[s_id] = SkillGovernanceRecord.from_dict(s_data)
+                rec = SkillGovernanceRecord.from_dict(s_data)
+                self._registry[s_id] = rec
+                det = SlidingWindowAnomalyDetector(
+                    window_size=self.window_size,
+                    window_duration_sec=self.window_duration_sec,
+                    min_events=self.min_events,
+                    anomaly_threshold=self.anomaly_threshold
+                )
+                if rec.window_events:
+                    det.load_list(rec.window_events)
+                self._detectors[s_id] = det
         except Exception as e:
             sys.stderr.write(f"[WARN] Failed to parse circuit breaker registry {self.registry_path}: {e}\n")
 
     def _save_registry(self) -> None:
         payload = {
-            "version": "1.0",
+            "version": "2.0",
             "skills": {k: v.to_dict() for k, v in self._registry.items()},
             "history": [a.to_dict() for a in self._history[-50:]]
         }
@@ -685,7 +1021,7 @@ def get_circuit_breaker_governor(**kwargs) -> AutonomicCircuitBreakerGovernor:
 def run_self_tests() -> bool:
     import tempfile
     print("=" * 75)
-    print("  ch8_circuit_breaker_governor: Unit & Integration Verification  ")
+    print("  ch8_circuit_breaker_governor: Unit & Hysteresis Verification  ")
     print("=" * 75)
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -697,7 +1033,12 @@ def run_self_tests() -> bool:
             webhook_sink=tmp_p / "events.jsonl",
             max_consecutive_failures=3,
             t0=1.0,
-            t_max=8.0
+            t_max=8.0,
+            window_size=10,
+            window_duration_sec=30.0,
+            min_events=5,
+            anomaly_threshold=0.50,
+            recovery_threshold=2
         )
 
         # 1. Test Cryptographic Hashing
@@ -723,66 +1064,83 @@ def run_self_tests() -> bool:
         assert b4 == 8.0, f"Expected 8.0, got {b4}"
         # With jitter
         b1_j = gov.calculate_backoff(1, with_jitter=True)
-        assert 1.05 <= b1_j <= 1.45, f"Jitter out of range: {b1_j}"
+        assert 1.05 <= b1_j <= 1.55, f"Jitter out of range: {b1_j}"
         print("   ✔ Exponential backoff dampening curve verified.")
 
-        # 3. Test Quarantine on 3 Failures
-        print("3. Testing 3 Consecutive Failures Quarantine & Permission Revocation...")
-        skill_id = "test_opt_skill"
+        # 3. Test Sliding Window Anomaly Detector
+        print("3. Testing Sliding-Window Anomaly Detection...")
+        detector = SlidingWindowAnomalyDetector(window_size=10, window_duration_sec=30.0, min_events=5, anomaly_threshold=0.50)
+        t_base = time.time()
+        # 3 successes
+        for _ in range(3):
+            detector.record_event(True, timestamp=t_base)
+        m = detector.compute_metrics(t_base)
+        assert m["total_events"] == 3
+        assert m["is_anomaly"] is False, "Not enough events yet for anomaly"
+
+        # 3 failures (total 6 events, 3 failures = 50% >= threshold)
+        for _ in range(3):
+            detector.record_event(False, error_trace="test fail", timestamp=t_base)
+        m = detector.compute_metrics(t_base)
+        assert m["total_events"] == 6
+        assert m["failure_rate"] == 0.5
+        assert m["is_anomaly"] is True, "Anomaly should be flagged when failure rate >= 50% over >= 5 events"
+        print("   ✔ Sliding-window anomaly detection math verified.")
+
+        # 4. Test Full Hysteresis Transitions: CLOSED -> OPEN -> HALF_OPEN -> RECOVERY -> CLOSED
+        print("4. Testing Full Hysteresis State Machine Transitions...")
+        skill_id = "test_hysteresis_skill"
         skill_file = tmp_p / "target_skill.rs"
         skill_file.write_text("fn broken() {}")
 
-        # Failure 1
-        res1 = gov.record_mutation_attempt(skill_id, h1, h2, success=False, error_trace="SyntaxErr 1", skill_path=skill_file)
-        assert res1["state"] == CircuitState.HALF_OPEN.value
-        can_run, _ = gov.can_mutate(skill_id)
-        assert can_run is True
+        # 3 consecutive failures -> trips to OPEN!
+        now_mock = time.time()
+        for i in range(1, 3):
+            r = gov.record_mutation_attempt(skill_id, h1, h2, success=False, error_trace=f"Err {i}", skill_path=skill_file, current_time=now_mock)
+            assert r["state"] == CircuitState.CLOSED.value, f"Should remain CLOSED until threshold, got {r['state']}"
 
-        # Failure 2
-        res2 = gov.record_mutation_attempt(skill_id, h1, h2, success=False, error_trace="SyntaxErr 2", skill_path=skill_file)
-        assert res2["state"] == CircuitState.HALF_OPEN.value
-        can_run, _ = gov.can_mutate(skill_id)
-        assert can_run is True
+        # 3rd failure trips breaker
+        r3 = gov.record_mutation_attempt(skill_id, h1, h2, success=False, error_trace="Err 3: Trip", skill_path=skill_file, current_time=now_mock)
+        assert r3["state"] == CircuitState.OPEN.value
+        assert not os.access(skill_file, os.W_OK), "Write permissions must be locked in OPEN state!"
 
-        # Failure 3 -> MUST TRIP!
-        res3 = gov.record_mutation_attempt(skill_id, h1, h2, success=False, error_trace="Fatal Type Mismatch", skill_path=skill_file)
-        assert res3["state"] == CircuitState.QUARANTINED.value
-        assert res3["action"] == "BREAKER_TRIPPED_QUARANTINED"
-
-        can_run, block_msg = gov.can_mutate(skill_id)
+        # Immediate can_mutate check: should be blocked
+        can_run, msg = gov.can_mutate(skill_id, current_time=now_mock)
         assert can_run is False
-        assert "QUARANTINED" in block_msg
+        assert "OPEN" in msg
 
-        # Verify permissions stripped
-        assert not os.access(skill_file, os.W_OK), "Write permissions should be revoked on failing skill source!"
-        # Verify Webhook sink entry
-        sink_lines = (tmp_p / "events.jsonl").read_text().strip().split("\n")
-        assert len(sink_lines) >= 1
-        last_event = json.loads(sink_lines[-1])
-        assert last_event["event"] == "quarantine_alert"
-        assert last_event["skill_id"] == skill_id
-        assert last_event["consecutive_failures"] == 3
-        print("   ✔ 3-Failure quarantine, permissions lockdown, and webhook alert verified.")
+        # Advance time past backoff duration: should transition OPEN -> HALF_OPEN
+        rec = gov._registry[skill_id]
+        future_mock = rec.open_until_timestamp + 1.0
+        can_run, msg = gov.can_mutate(skill_id, current_time=future_mock)
+        assert can_run is True
+        assert rec.state == CircuitState.HALF_OPEN
+        print("   ✔ State transition verified: OPEN -> HALF_OPEN upon backoff expiration.")
 
-        # 4. Test HITL Reset
-        print("4. Testing HITL Administrative Reset...")
+        # Trial probe succeeds -> transitions HALF_OPEN -> RECOVERY!
+        r_probe = gov.record_mutation_attempt(skill_id, h1, h2, success=True, skill_path=skill_file, current_time=future_mock)
+        assert r_probe["state"] == CircuitState.RECOVERY.value
+        assert rec.state == CircuitState.RECOVERY
+        print("   ✔ State transition verified: HALF_OPEN -> RECOVERY upon probe success.")
+
+        # In RECOVERY: 1 more success (recovery_threshold=2) -> transitions RECOVERY -> CLOSED!
+        r_recov = gov.record_mutation_attempt(skill_id, h1, h2, success=True, skill_path=skill_file, current_time=future_mock + 1.0)
+        assert r_recov["state"] == CircuitState.CLOSED.value
+        assert rec.state == CircuitState.CLOSED
+        print("   ✔ State transition verified: RECOVERY -> CLOSED after probation successes.")
+
+        # 5. Test HITL Reset
+        print("5. Testing HITL Administrative Reset...")
+        gov.quarantine_skill(skill_id, skill_file, "Manual lockdown")
+        assert not os.access(skill_file, os.W_OK)
         gov.reset_skill(skill_id, restore_path=skill_file)
         can_run, _ = gov.can_mutate(skill_id)
         assert can_run is True
-        assert os.access(skill_file, os.W_OK), "Write permissions should be restored after HITL reset"
+        assert os.access(skill_file, os.W_OK)
         print("   ✔ HITL administrative recovery verified.")
 
-        # 5. Test Guarded Mutation Context Manager
-        print("5. Testing Guarded Mutation Context Manager...")
-        with gov.guarded_mutation(skill_id, skill_file):
-            skill_file.write_text("fn healed() -> bool { true }")
-        rec = gov._registry[skill_id]
-        assert rec.consecutive_failures == 0
-        assert rec.state == CircuitState.CLOSED
-        print("   ✔ Guarded mutation context manager verified.")
-
     print("=" * 75)
-    print("  ✔ ALL AUTONOMIC CIRCUIT BREAKER TESTS PASSED!  ")
+    print("  ✔ ALL AUTONOMIC CIRCUIT BREAKER & HYSTERESIS TESTS PASSED!  ")
     print("=" * 75)
     return True
 

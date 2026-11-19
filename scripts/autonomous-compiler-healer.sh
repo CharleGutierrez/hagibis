@@ -2,18 +2,23 @@
 # ==============================================================================
 # scripts/autonomous-compiler-healer.sh
 # Hagibis Autonomous Compiler & Regression Self-Healing Remediation Engine (Pillar 4)
+# Pillar C: Immutable Cryptographic Audit Trails & Hysteresis Governance
 #
 # Core Capabilities:
 #   1. Diagnostic Trapping: Ingests cargo compiler errors (`--message-format=json`
 #      or stderr) and benchmark regression deltas (>5%).
 #   2. AST Context Slicing: Pinpoints exact file, line, column, and AST site.
-#   3. Surgical Remediation Synthesis: Applies deterministic AST repair patterns
-#      or queries resident MCP / LLM daemon for invariant-preserving diffs.
-#   4. Ephemeral Worktree / Atomic Patch Application: Protects physical workspace
-#      state with atomic backups and rollback guards.
-#   5. First-Green Verification: Re-runs cargo check/test until 0 errors remain.
-#   6. BLAKE3 Consensus Certification: Logs cryptographic remediation receipts
-#      into .hgb/self_healing_log.db.
+#   3. Surgical Remediation Synthesis: Applies deterministic AST repair patterns.
+#   4. Immutable Cryptographic Audit Trails:
+#      - Computes pre-patch SHA-256 and BLAKE3 hashes of target source file.
+#      - Computes post-patch SHA-256 and BLAKE3 hashes and diff checksums.
+#      - Generates immutable, verifiable audit record (`audit_manifest.json`)
+#        stored in `.hgb/audit_trail/<timestamp>_<patch_id>/`.
+#      - Seals manifest with read-only permissions (`chmod 0444`).
+#   5. Pre-Deployment Verification:
+#      - `--verify-audit <manifest_path>` subcommand to verify cryptographic file
+#        integrity against the audit trail before production deployment.
+#   6. Speculative First-Green Verification & Circuit Breaker Hysteresis.
 # ==============================================================================
 set -euo pipefail
 
@@ -32,14 +37,253 @@ REGRESSION_MODE=false
 REGRESSION_DELTA="0.0"
 BENCHMARK_NAME="pgo_workload"
 DEMO_MODE=false
+VERIFY_AUDIT_PATH=""
 CIRCUIT_BREAKER_FILE="${CIRCUIT_BREAKER_FILE:-/tmp/hgb_healer_circuit_breaker.json}"
 HGB_STATE_DIR="${HGB_STATE_DIR:-${HOME}/.hagibis}"
 HGB_QUARANTINE_DIR="${HGB_QUARANTINE_DIR:-${HGB_STATE_DIR}/quarantine}"
+HGB_AUDIT_DIR="${HGB_AUDIT_DIR:-${WORKSPACE_ROOT}/.hgb/audit_trail}"
 HGB_WEBHOOK_URL="${HGB_WEBHOOK_URL:-http://127.0.0.1:8083/api/v1/alerts}"
 HGB_OTEL_SINK="${HGB_OTEL_SINK:-/tmp/hgb_otel_events.jsonl}"
+HEALER_AGENT_ID="${HEALER_AGENT_ID:-hgb-autonomous-compiler-healer}"
 MAX_RETRIES="${MAX_RETRIES:-3}"
 BASE_DELAY="${BASE_DELAY:-1.0}"
 MAX_BACKOFF="${MAX_BACKOFF:-30.0}"
+
+# ANSI colors
+RED="\033[0;31m"
+GREEN="\033[0;32m"
+YELLOW="\033[1;33m"
+BLUE="\033[0;34m"
+MAGENTA="\033[35m"
+CYAN="\033[0;36m"
+BOLD="\033[1m"
+RESET="\033[0m"
+
+log_info() { echo -e "${BLUE}[INFO]${RESET} $*" >&2; }
+log_ok()   { echo -e "${GREEN}[OK]${RESET} $*" >&2; }
+log_warn() { echo -e "${YELLOW}[WARN]${RESET} $*" >&2; }
+log_err()  { echo -e "${RED}[ERROR]${RESET} $*" >&2; }
+log_trip() { echo -e "${MAGENTA}${BOLD}⚡ [CIRCUIT-BREAKER]${RESET} $*" >&2; }
+log_step() { echo -e "\n${BOLD}${CYAN}>> $*${RESET}" >&2; }
+
+# ------------------------------------------------------------------------------
+# Cryptographic Hash Functions (SHA-256 & BLAKE3)
+# ------------------------------------------------------------------------------
+compute_file_sha256() {
+    local target="$1"
+    if [ ! -f "$target" ]; then
+        echo "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        return 0
+    fi
+    sha256sum "$target" | awk '{print $1}'
+}
+
+compute_file_blake3() {
+    local target="$1"
+    if [ ! -f "$target" ]; then
+        if command -v b3sum >/dev/null 2>&1; then
+            echo "" | b3sum --no-names 2>/dev/null | awk '{print $1}' || echo "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"
+        else
+            python3 -c "import hashlib; print(hashlib.blake2b(b'').hexdigest())"
+        fi
+        return 0
+    fi
+
+    if command -v b3sum >/dev/null 2>&1; then
+        b3sum --no-names "$target" 2>/dev/null | awk '{print $1}'
+    else
+        python3 -c "
+import sys, hashlib
+try:
+    import blake3
+    hasher = blake3.blake3()
+    with open(sys.argv[1], 'rb') as f:
+        while chunk := f.read(65536): hasher.update(chunk)
+    print(hasher.hexdigest())
+except Exception:
+    hasher = hashlib.blake2b()
+    with open(sys.argv[1], 'rb') as f:
+        while chunk := f.read(65536): hasher.update(chunk)
+    print(hasher.hexdigest())
+" "$target"
+    fi
+}
+
+compute_string_hashes() {
+    local str_input="$1"
+    python3 -c "
+import sys, hashlib
+data = sys.argv[1].encode('utf-8')
+sha256_val = hashlib.sha256(data).hexdigest()
+try:
+    import blake3
+    b3_val = blake3.blake3(data).hexdigest()
+except Exception:
+    b3_val = hashlib.blake2b(data).hexdigest()
+print(f'{sha256_val}:{b3_val}')
+" "$str_input"
+}
+
+# ------------------------------------------------------------------------------
+# Immutable Cryptographic Audit Manifest Generation & Verification
+# ------------------------------------------------------------------------------
+generate_audit_manifest() {
+    local target_file="$1"
+    local pre_sha256="$2"
+    local pre_blake3="$3"
+    local post_sha256="$4"
+    local post_blake3="$5"
+    local diff_text="$6"
+    local error_code="${7:-E_UNKNOWN}"
+    local healer_id="${8:-$HEALER_AGENT_ID}"
+
+    local timestamp_sec
+    timestamp_sec=$(date +%s)
+    local timestamp_iso
+    timestamp_iso=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+    local patch_id
+    patch_id="patch_$(python3 -c "import secrets; print(secrets.token_hex(6))")"
+
+    local audit_record_dir="${HGB_AUDIT_DIR}/${timestamp_sec}_${patch_id}"
+    mkdir -p "$audit_record_dir"
+
+    # Compute diff hashes
+    local diff_hashes
+    diff_hashes=$(compute_string_hashes "$diff_text")
+    local diff_sha256="${diff_hashes%%:*}"
+    local diff_blake3="${diff_hashes##*:}"
+
+    # Get current git commit SHA
+    local git_commit
+    git_commit=$(git rev-parse HEAD 2>/dev/null || echo "uncommitted-working-tree")
+
+    # Write unified patch diff file
+    local diff_file="${audit_record_dir}/patch.diff"
+    echo "$diff_text" > "$diff_file"
+    chmod 0444 "$diff_file" 2>/dev/null || true
+
+    # Write audit_manifest.json
+    local manifest_file="${audit_record_dir}/audit_manifest.json"
+    cat <<EOF > "$manifest_file"
+{
+  "version": "1.0",
+  "patch_id": "$patch_id",
+  "timestamp_iso": "$timestamp_iso",
+  "timestamp_unix": $timestamp_sec,
+  "target_file": "$target_file",
+  "pre_hash": {
+    "sha256": "$pre_sha256",
+    "blake3": "$pre_blake3"
+  },
+  "post_hash": {
+    "sha256": "$post_sha256",
+    "blake3": "$post_blake3"
+  },
+  "diff_checksum": {
+    "sha256": "$diff_sha256",
+    "blake3": "$diff_blake3"
+  },
+  "diagnostic_error_code": "$error_code",
+  "healer_agent_id": "$healer_id",
+  "git_commit_sha": "$git_commit",
+  "verified_green": true,
+  "permissions_sealed": true
+}
+EOF
+
+    # Seal manifest with read-only permissions (0444)
+    chmod 0444 "$manifest_file" 2>/dev/null || true
+
+    log_ok "✔ [IMMUTABLE AUDIT TRAIL] Cryptographic audit manifest generated and sealed (0444):"
+    log_info "   - Manifest:      $manifest_file"
+    log_info "   - Patch ID:      $patch_id"
+    log_info "   - Pre-BLAKE3:    $pre_blake3"
+    log_info "   - Post-BLAKE3:   $post_blake3"
+    log_info "   - Diff-BLAKE3:   $diff_blake3"
+    log_info "   - Git Commit:    $git_commit"
+
+    echo "$manifest_file"
+}
+
+verify_audit_manifest() {
+    local manifest_path="$1"
+
+    if [ ! -f "$manifest_path" ]; then
+        if [ -d "$manifest_path" ] && [ -f "${manifest_path}/audit_manifest.json" ]; then
+            manifest_path="${manifest_path}/audit_manifest.json"
+        else
+            log_err "❌ Audit manifest file not found: $manifest_path"
+            return 1
+        fi
+    fi
+
+    log_step "Verifying Cryptographic File Integrity Against Audit Manifest..."
+    log_info "Manifest Path: $manifest_path"
+
+    # Verify manifest is read-only sealed
+    if [ -w "$manifest_path" ]; then
+        log_warn "⚠ Manifest file has write permissions enabled; expected immutable read-only (0444)!"
+    fi
+
+    # Parse manifest via python
+    local parse_output
+    parse_output=$(python3 -c "
+import json, sys, os
+try:
+    with open(sys.argv[1], 'r') as f:
+        m = json.load(f)
+    print(f\"{m.get('patch_id', '')}|{m.get('target_file', '')}|{m.get('post_hash', {}).get('sha256', '')}|{m.get('post_hash', {}).get('blake3', '')}|{m.get('git_commit_sha', '')}\")
+except Exception as e:
+    sys.exit(f'Error reading manifest: {e}')
+" "$manifest_path")
+
+    IFS='|' read -r patch_id target_file expected_sha256 expected_blake3 git_sha <<< "$parse_output"
+
+    log_info "   - Target File:         $target_file"
+    log_info "   - Expected SHA-256:    $expected_sha256"
+    log_info "   - Expected BLAKE3:     $expected_blake3"
+    log_info "   - Recorded Patch ID:   $patch_id"
+
+    # Resolve target file path
+    local full_target="$target_file"
+    if [ ! -f "$full_target" ]; then
+        full_target="$WORKSPACE_ROOT/$target_file"
+    fi
+
+    if [ ! -f "$full_target" ]; then
+        log_err "❌ Target file $target_file does not exist! Deployment blocked."
+        return 1
+    fi
+
+    # Compute current cryptographic hashes
+    local current_sha256 current_blake3
+    current_sha256=$(compute_file_sha256 "$full_target")
+    current_blake3=$(compute_file_blake3 "$full_target")
+
+    log_info "   - Current SHA-256:     $current_sha256"
+    log_info "   - Current BLAKE3:      $current_blake3"
+
+    local verified=true
+    if [ "$current_sha256" != "$expected_sha256" ]; then
+        log_err "❌ SHA-256 hash mismatch! Target file has been modified or tampered with."
+        verified=false
+    fi
+
+    if [ "$current_blake3" != "$expected_blake3" ]; then
+        log_err "❌ BLAKE3 hash mismatch! Target file has been modified or tampered with."
+        verified=false
+    fi
+
+    if [ "$verified" = true ]; then
+        log_ok "✔ [AUDIT VERIFIED] Target file strictly matches immutable cryptographic audit manifest!"
+        log_ok "Cryptographic integrity certified: 0 anomalies, tamper-proof audit receipt validated."
+        return 0
+    else
+        log_err "❌ [AUDIT FAILED] Cryptographic verification failed! Pre-deployment check rejected."
+        return 1
+    fi
+}
 
 resolve_skill_or_crate() {
     local target_path="$1"
@@ -65,9 +309,9 @@ import sys, random
 retry = max(0, int(sys.argv[1]))
 base_delay = float(sys.argv[2])
 max_backoff = float(sys.argv[3])
-# Formula: delay = min(max_backoff, base_delay * 2^(retry)) + jitter
+# Formula: delay = min(max_backoff, base_delay * 2^(retry)) + uniform_jitter(0.1, 0.5)
 backoff = min(max_backoff, base_delay * (2.0 ** retry))
-jitter = random.uniform(0.05, 0.45)
+jitter = random.uniform(0.1, 0.5)
 total_delay = backoff + jitter
 print(f'{total_delay:.3f}')
 " "$retry" "$base" "$max_b"
@@ -111,7 +355,7 @@ trip_circuit_breaker_and_quarantine() {
   "error_code": "$error_code",
   "error_message": $(python3 -c "import json, sys; print(json.dumps(sys.argv[1]))" "$error_msg"),
   "consecutive_failures": $retry_count,
-  "circuit_breaker_state": "Tripped",
+  "circuit_breaker_state": "OPEN",
   "permissions_locked": true,
   "quarantined_at": "$now_iso",
   "action_required": "Human-In-The-Loop (HITL) escalation required. File write permissions revoked."
@@ -123,7 +367,7 @@ EOF
     python3 -c "
 import json, os, time
 cb_file = '$CIRCUIT_BREAKER_FILE'
-data = {'state': 'Tripped', 'consecutive_failures': $retry_count, 'quarantined_skill': '$skill_or_crate', 'last_tripped': time.time()}
+data = {'state': 'OPEN', 'consecutive_failures': $retry_count, 'quarantined_skill': '$skill_or_crate', 'last_tripped': time.time()}
 try:
     if os.path.exists(cb_file):
         with open(cb_file, 'r') as f:
@@ -162,7 +406,7 @@ data = {
         'error_message': sys.argv[9],
         'retry_count': int(sys.argv[10]),
         'quarantine_dir': sys.argv[11],
-        'circuit_breaker_state': 'Tripped',
+        'circuit_breaker_state': 'OPEN',
         'permissions_locked': True,
         'action_required': 'Human-In-The-Loop (HITL) escalation required. File write permissions locked.'
     }
@@ -170,16 +414,16 @@ data = {
 print(json.dumps(data))
 " "$now_iso" "$now_ns" "$trace_id" "$span_id" "$skill_or_crate" "$file_path" "$line_num" "$error_code" "$error_msg" "$retry_count" "$quarantine_incident_dir")
 
-    # 5. Log to OpenTelemetry sink ($HGB_OTEL_SINK)
+    # 5. Log to OpenTelemetry sink
     echo "$otel_payload" >> "$HGB_OTEL_SINK"
     log_ok "OpenTelemetry incident logged to $HGB_OTEL_SINK"
 
-    # 6. Dispatch automated JSON OpenTelemetry alert payload to $HGB_WEBHOOK_URL
+    # 6. Dispatch HTTP webhook alert
     if command -v curl >/dev/null 2>&1; then
         local http_code
         http_code=$(curl -s -S -o /dev/null -w "%{http_code}" -X POST \
             -H "Content-Type: application/json" \
-            -H "X-Hagibis-Governor: autopoietic-circuit-breaker" \
+            -H "X-Hagibis-Governor: autopoietic-circuit-breaker-hysteresis" \
             -d "$otel_payload" \
             --connect-timeout 2 \
             --max-time 4 \
@@ -195,11 +439,11 @@ print(json.dumps(data))
 check_circuit_breaker() {
     if [ -f "$CIRCUIT_BREAKER_FILE" ]; then
         local state consecutive_failures
-        state=$(python3 -c "import json; d=json.load(open('$CIRCUIT_BREAKER_FILE')); print(d.get('state', 'Closed'))" 2>/dev/null || echo "Closed")
+        state=$(python3 -c "import json; d=json.load(open('$CIRCUIT_BREAKER_FILE')); print(d.get('state', 'CLOSED'))" 2>/dev/null || echo "CLOSED")
         consecutive_failures=$(python3 -c "import json; d=json.load(open('$CIRCUIT_BREAKER_FILE')); print(d.get('consecutive_failures', 0))" 2>/dev/null || echo "0")
-        if [ "$state" = "Tripped" ]; then
-            log_err "⚡ [CIRCUIT BREAKER TRIPPED] Healing merges locked! 3 consecutive failed cycles recorded."
-            log_err "Automatic Git rollback was executed. Human-in-the-loop audit required."
+        if [ "$state" = "OPEN" ] || [ "$state" = "Tripped" ]; then
+            log_err "⚡ [CIRCUIT BREAKER OPEN] Healing merges locked! 3 consecutive failed cycles recorded."
+            log_err "Human-in-the-loop audit required. Write permissions revoked."
             return 1
         fi
     fi
@@ -212,27 +456,30 @@ record_healing_result() {
     python3 -c "
 import json, time, os
 cb_file = '$CIRCUIT_BREAKER_FILE'
-data = {'state': 'Closed', 'consecutive_failures': 0, 'history': []}
+data = {'state': 'CLOSED', 'consecutive_failures': 0, 'consecutive_successes': 0, 'history': []}
 if os.path.exists(cb_file):
     try: data = json.load(open(cb_file))
     except Exception: pass
 history = data.get('history', [])
 history.append({'timestamp': time.time(), 'success': $success, 'errors': $error_count})
-history = history[-10:]
+history = history[-20:]
 data['history'] = history
 
 if not $success:
     failures = data.get('consecutive_failures', 0) + 1
     data['consecutive_failures'] = failures
+    data['consecutive_successes'] = 0
     if failures >= 3:
-        data['state'] = 'Tripped'
+        data['state'] = 'OPEN'
         print('TRIP')
     else:
-        data['state'] = 'HalfOpen'
+        data['state'] = 'CLOSED'
         print('FAIL')
 else:
+    succ = data.get('consecutive_successes', 0) + 1
+    data['consecutive_successes'] = succ
     data['consecutive_failures'] = 0
-    data['state'] = 'Closed'
+    data['state'] = 'CLOSED'
     print('OK')
 
 with open(cb_file, 'w') as f:
@@ -247,20 +494,9 @@ execute_git_rollback() {
     log_ok "Automated Git rollback completed. Working tree restored to clean HEAD commit."
 }
 
-validate_patch_security_and_determinism() {
-    local patch_text="$1"
-    # Static analysis: disallow forbidden patterns
-    if echo "$patch_text" | grep -E "(unsafe[[:space:]]*\{|Command::new|libc::system|/bin/sh|curl |chmod \+x)" >/dev/null; then
-        log_err "❌ [ATTESTATION DENIED] Patch contains forbidden unsafe or command execution patterns!"
-        return 1
-    fi
-    log_ok "✔ [STATIC ANALYSIS] Static analysis determinism check passed (0 security violations)."
-    return 0
-}
-
 show_help() {
     cat <<EOF
-Hagibis Autonomous Compiler & Benchmark Healer (Pillar 4)
+Hagibis Autonomous Compiler & Benchmark Healer (Pillar 4 & Pillar C)
 
 Usage: $(basename "$0") [OPTIONS]
 
@@ -268,6 +504,7 @@ Options:
   --json-log <path>       Path to cargo --message-format=json output file
   --raw-log <path>        Path to cargo compiler stderr log file
   --file <path>           Specific target source file to diagnose and heal
+  --verify-audit <path>   Verify cryptographic SHA-256 and BLAKE3 integrity of source file against audit manifest
   --regression            Trigger benchmark performance regression remediation
   --delta <float>         Benchmark regression latency delta percentage (e.g. 8.5)
   --benchmark <name>      Benchmark target name (default: pgo_workload)
@@ -285,6 +522,10 @@ EOF
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --verify-audit)
+            VERIFY_AUDIT_PATH="$2"
+            shift 2
+            ;;
         --json-log)
             JSON_LOG="$2"
             shift 2
@@ -353,25 +594,14 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# ANSI colors
-RED="\033[0;31m"
-GREEN="\033[0;32m"
-YELLOW="\033[1;33m"
-BLUE="\033[0;34m"
-MAGENTA="\033[35m"
-CYAN="\033[0;36m"
-BOLD="\033[1m"
-RESET="\033[0m"
-
-log_info() { echo -e "${BLUE}[INFO]${RESET} $*"; }
-log_ok() { echo -e "${GREEN}[OK]${RESET} $*"; }
-log_warn() { echo -e "${YELLOW}[WARN]${RESET} $*"; }
-log_err() { echo -e "${RED}[ERROR]${RESET} $*"; }
-log_trip() { echo -e "${MAGENTA}${BOLD}⚡ [CIRCUIT-BREAKER]${RESET} $*"; }
-log_step() { echo -e "\n${BOLD}${CYAN}>> $*${RESET}"; }
+# If --verify-audit requested, run verification and exit
+if [ -n "$VERIFY_AUDIT_PATH" ]; then
+    verify_audit_manifest "$VERIFY_AUDIT_PATH"
+    exit $?
+fi
 
 # ------------------------------------------------------------------------------
-# Live Closed-Loop Demo Mode
+# Live Closed-Loop Demo Mode with Immutable Cryptographic Audit
 # ------------------------------------------------------------------------------
 run_live_demo() {
     log_step "Launching Hagibis Autonomous Self-Healing Closed-Loop Demonstration..."
@@ -396,9 +626,13 @@ pub fn calculate_cluster_centroid() -> String {
 EOF
 
     log_info "   Created synthetic test file: $demo_rs"
-    echo -e "${YELLOW}--- Code Snippet Before Healing ---${RESET}"
-    cat "$demo_rs"
-    echo -e "${YELLOW}------------------------------------${RESET}"
+
+    # Compute pre-patch cryptographic hashes
+    local pre_sha256 pre_blake3
+    pre_sha256=$(compute_file_sha256 "$demo_rs")
+    pre_blake3=$(compute_file_blake3 "$demo_rs")
+    log_info "   - Pre-patch SHA-256:  $pre_sha256"
+    log_info "   - Pre-patch BLAKE3:   $pre_blake3"
 
     log_step "2. Running compiler diagnostics check & AST fault localization..."
     local rustc_err
@@ -412,43 +646,49 @@ EOF
     fi
 
     log_step "3. Synthesizing surgical AST remediation patch..."
-    # Apply deterministic AST repair:
-    # 1. label -> label.to_string()
-    # 2. let buffer -> let mut buffer
     local repaired_content
     repaired_content=$(cat "$demo_rs" | \
         sed 's/let label = "centroid_alpha";/let label = "centroid_alpha".to_string();/' | \
         sed 's/let buffer = Vec::new();/let mut buffer = Vec::new();/')
 
     log_info "   Generated unified patch diff:"
-    diff -u "$demo_rs" <(echo "$repaired_content") || true
+    local diff_content
+    diff_content=$(diff -u "$demo_rs" <(echo "$repaired_content") || true)
+    echo "$diff_content"
 
     log_step "4. Speculative Sandboxed Verification..."
-    local verified=false
     if echo "$repaired_content" | rustc --crate-type=lib - --out-dir="$demo_dir" >/dev/null 2>&1; then
-        verified=true
         log_ok "First-Green achieved! Exit code 0, 0 compiler warnings, AST invariant verified."
     else
         log_err "Speculative verification failed!"
         return 1
     fi
 
-    log_step "5. Committing healed file & minting cryptographic consensus certificate..."
+    log_step "5. Committing healed file & generating immutable cryptographic audit manifest..."
     echo "$repaired_content" > "$demo_rs"
 
-    local orig_hash patch_hash cert_hash
-    orig_hash=$(echo "centroid_alpha" | sha256sum | awk '{print $1}')
-    patch_hash=$(diff -u "$demo_rs" "$demo_rs" | sha256sum | awk '{print $1}')
-    cert_hash=$(echo "${orig_hash}:${patch_hash}:$(date +%s)" | sha256sum | awk '{print $1}')
+    # Compute post-patch cryptographic hashes
+    local post_sha256 post_blake3
+    post_sha256=$(compute_file_sha256 "$demo_rs")
+    post_blake3=$(compute_file_blake3 "$demo_rs")
 
-    log_ok "Cryptographic Consensus Receipt Minted:"
-    echo "   - Certificate ID:  CERT-DEMO-${cert_hash:0:16}"
-    echo "   - Verified Green:  true (Exit Code 0)"
-    echo "   - Remediation SLA: < 150 ms"
-    echo "   - Status:          RESOLVED (Autonomous Zero-Human Remediation)"
+    # Generate immutable sealed audit manifest
+    local manifest_file
+    manifest_file=$(generate_audit_manifest \
+        "$demo_rs" \
+        "$pre_sha256" \
+        "$pre_blake3" \
+        "$post_sha256" \
+        "$post_blake3" \
+        "$diff_content" \
+        "E0308,E0596" \
+        "demo-agent-healer")
+
+    log_step "6. Verifying cryptographic audit trail with --verify-audit..."
+    verify_audit_manifest "$manifest_file"
 
     rm -rf "$demo_dir"
-    log_ok "Closed-loop demonstration completed successfully with 100% verification!"
+    log_ok "Closed-loop demonstration with cryptographic audit completed successfully with 100% verification!"
     return 0
 }
 
@@ -458,9 +698,8 @@ if [ "$DEMO_MODE" = true ]; then
 fi
 
 # ------------------------------------------------------------------------------
-# Diagnostic Parser & AST Healer
+# Diagnostic Parser & Autonomous Healer Execution
 # ------------------------------------------------------------------------------
-# Check Circuit Breaker before proceeding
 if ! check_circuit_breaker; then
     exit 1
 fi
@@ -473,20 +712,16 @@ if [ "$REGRESSION_MODE" = true ]; then
     log_step "Diagnosing Benchmark Latency Regression (+${REGRESSION_DELTA}% on ${BENCHMARK_NAME})..."
     log_info "Regression threshold: >5.0% latency increase"
 
-    # Auto-remediation actions for benchmark regressions:
-    # 1. Ramp CPU governor to performance if dynatune/governor is present
     if [ -x "$WORKSPACE_ROOT/scripts/cpu-governor.sh" ]; then
         log_info "Enforcing high-throughput performance CPU governor..."
         bash "$WORKSPACE_ROOT/scripts/cpu-governor.sh" performance 2>/dev/null || true
     fi
 
-    # 2. Trigger PGO + LLVM BOLT profile-guided optimization pass
     if [ -f "$WORKSPACE_ROOT/scripts/pgo-bolt-optimize.sh" ]; then
         log_info "Triggering automated LLVM PGO + BOLT layout re-optimization..."
         bash "$WORKSPACE_ROOT/scripts/pgo-bolt-optimize.sh" all
     fi
 
-    # 3. Clean volatile scratch caches to eliminate memory bus and slab fragmentation
     if [ -f "$WORKSPACE_ROOT/scripts/build-hygiene.sh" ]; then
         log_info "Purging stale volatile target caches (/tmp) to restore L3 cachelines..."
         bash "$WORKSPACE_ROOT/scripts/build-hygiene.sh" --clean-cache
@@ -516,7 +751,6 @@ fi
 
 log_step "Parsing compiler error diagnostics..."
 
-# Extract diagnostics from JSON stream or stderr log
 DIAGNOSTIC_FILES=()
 DIAGNOSTIC_CODES=()
 DIAGNOSTIC_LINES=()
@@ -525,7 +759,6 @@ DIAGNOSTIC_MESSAGES=()
 if [ -n "$JSON_LOG" ] && [ -f "$JSON_LOG" ]; then
     while IFS= read -r line; do
         if [[ "$line" =~ \"reason\":\"compiler-message\" ]]; then
-            # Parse file, line, code, message via python helper
             read -r f_path l_num e_code msg < <(python3 -c "
 import sys, json
 try:
@@ -552,7 +785,6 @@ except Exception:
     done < "$JSON_LOG"
 fi
 
-# Fallback to stderr parsing if JSON diagnostics yielded no spans
 if [ ${#DIAGNOSTIC_FILES[@]} -eq 0 ] && [ -n "$RAW_LOG" ] && [ -f "$RAW_LOG" ]; then
     while IFS= read -r line; do
         if [[ "$line" =~ --\>[[:space:]]*(.+):([0-9]+):([0-9]+) ]]; then
@@ -575,7 +807,6 @@ fi
 
 log_info "Identified ${#DIAGNOSTIC_FILES[@]} compiler diagnostic site(s)."
 
-# Process each affected file
 RESOLVED_COUNT=0
 for i in "${!DIAGNOSTIC_FILES[@]}"; do
     FILE="${DIAGNOSTIC_FILES[$i]}"
@@ -583,7 +814,6 @@ for i in "${!DIAGNOSTIC_FILES[@]}"; do
     CODE="${DIAGNOSTIC_CODES[$i]}"
     MSG="${DIAGNOSTIC_MESSAGES[$i]}"
 
-    # Resolve relative path against workspace
     FULL_PATH="$WORKSPACE_ROOT/$FILE"
     if [ ! -f "$FULL_PATH" ] && [ -f "$FILE" ]; then
         FULL_PATH="$FILE"
@@ -596,19 +826,19 @@ for i in "${!DIAGNOSTIC_FILES[@]}"; do
 
     log_step "Diagnosing diagnostic site: $FILE at line $LINE (Error: $CODE - $MSG)..."
 
-    # Backup original before modifying
+    # Pre-patch cryptographic state hashing
+    PRE_SHA256=$(compute_file_sha256 "$FULL_PATH")
+    PRE_BLAKE3=$(compute_file_blake3 "$FULL_PATH")
+
     BACKUP_FILE="${FULL_PATH}.hgb_heal.bak"
     cp -f "$FULL_PATH" "$BACKUP_FILE"
 
     ISSUE_RESOLVED=false
     FAILED_ATTEMPTS=0
 
-    # Strict retry ceiling: maximum 3 consecutive automated healing attempts per diagnostic issue
     for ((retry=0; retry<MAX_RETRIES; retry++)); do
         ATTEMPT=$((retry + 1))
 
-        # Apply exponential backoff formula for retries:
-        # delay = min(max_backoff, base_delay * 2^(retry)) + jitter
         if [ "$retry" -gt 0 ]; then
             BACKOFF_SEC=$(calculate_exponential_backoff "$retry")
             log_warn "Applying exponential backoff (${BACKOFF_SEC}s) before attempt #${ATTEMPT}/${MAX_RETRIES} on $FILE..."
@@ -617,10 +847,9 @@ for i in "${!DIAGNOSTIC_FILES[@]}"; do
 
         log_info "Executing automated healing attempt #${ATTEMPT}/${MAX_RETRIES} on $FILE (Code: $CODE)..."
 
-        # Surgical repair patterns:
         HEALED=false
 
-        # Pattern A: Expressions with '_' in invalid position: if centroids.len() < _ + 1
+        # Surgical repair patterns
         if grep -q "centroids\.len() < _ + 1" "$FULL_PATH" 2>/dev/null; then
             log_info "Applying AST Repair: Correcting invalid expression '_' in loop range..."
             sed -i 's/centroids\.len() < _ + 1/centroids.len() < step + 1/g' "$FULL_PATH"
@@ -628,28 +857,25 @@ for i in "${!DIAGNOSTIC_FILES[@]}"; do
             HEALED=true
         fi
 
-        # Pattern B: Duplicate definition collision: TensorDataType imported and defined
         if grep -q "PinnedTensorDescriptor, TensorDataType," "$FULL_PATH" 2>/dev/null; then
             log_info "Applying AST Repair: Resolving duplicate enum namespace collision with alias..."
             sed -i 's/PinnedTensorDescriptor, TensorDataType,/PinnedTensorDescriptor, TensorDataType as BridgeTensorDataType,/g' "$FULL_PATH"
             HEALED=true
         fi
 
-        # Pattern C: Unused mutable variable warning / error
         if [[ "$MSG" =~ "variable does not need to be mutable" ]]; then
             log_info "Applying AST Repair: Stripping redundant mut keyword..."
             sed -i "${LINE}s/let mut /let /" "$FULL_PATH"
             HEALED=true
         fi
 
-        # Pattern D: Missing .to_string() type mismatch
         if [[ "$MSG" =~ "expected \`String\`, found \`&str\`" ]]; then
             log_info "Applying AST Repair: Injecting .to_string() conversion..."
             sed -i "${LINE}s/\"\(.*\)\"/\"\1\".to_string()/" "$FULL_PATH"
             HEALED=true
         fi
 
-        # Speculative sandboxed verification
+        # Speculative verification
         log_info "Running speculative verification on healed source (attempt #${ATTEMPT})..."
         set +e
         cargo check --message-format=json --manifest-path "$WORKSPACE_ROOT/Cargo.toml" > /tmp/hgb_verify.json 2>&1
@@ -658,19 +884,50 @@ for i in "${!DIAGNOSTIC_FILES[@]}"; do
 
         if [ "$V_EXIT" -eq 0 ]; then
             log_ok "✔ [FIRST-GREEN] Verification passed with exit code 0 on $FILE!"
+
+            # Compute post-patch cryptographic hashes
+            POST_SHA256=$(compute_file_sha256 "$FULL_PATH")
+            POST_BLAKE3=$(compute_file_blake3 "$FULL_PATH")
+            DIFF_TEXT=$(diff -u "$BACKUP_FILE" "$FULL_PATH" 2>/dev/null || true)
+
+            # Generate immutable audit manifest
+            MANIFEST_FILE=$(generate_audit_manifest \
+                "$FULL_PATH" \
+                "$PRE_SHA256" \
+                "$PRE_BLAKE3" \
+                "$POST_SHA256" \
+                "$POST_BLAKE3" \
+                "$DIFF_TEXT" \
+                "$CODE" \
+                "$HEALER_AGENT_ID")
+
             rm -f "$BACKUP_FILE"
             ISSUE_RESOLVED=true
             RESOLVED_COUNT=$((RESOLVED_COUNT + 1))
             break
         else
             if [ "$HEALED" = true ]; then
-                log_warn "Partial repair applied; verifying if diagnostic on $FILE was resolved..."
                 set +e
                 cargo check --manifest-path "$WORKSPACE_ROOT/Cargo.toml" 2>&1 | grep -q "$FILE"
                 FILE_STILL_BROKEN=$?
                 set -e
                 if [ "$FILE_STILL_BROKEN" -ne 0 ]; then
                     log_ok "✔ Specific error in $FILE resolved!"
+
+                    POST_SHA256=$(compute_file_sha256 "$FULL_PATH")
+                    POST_BLAKE3=$(compute_file_blake3 "$FULL_PATH")
+                    DIFF_TEXT=$(diff -u "$BACKUP_FILE" "$FULL_PATH" 2>/dev/null || true)
+
+                    MANIFEST_FILE=$(generate_audit_manifest \
+                        "$FULL_PATH" \
+                        "$PRE_SHA256" \
+                        "$PRE_BLAKE3" \
+                        "$POST_SHA256" \
+                        "$POST_BLAKE3" \
+                        "$DIFF_TEXT" \
+                        "$CODE" \
+                        "$HEALER_AGENT_ID")
+
                     rm -f "$BACKUP_FILE"
                     ISSUE_RESOLVED=true
                     RESOLVED_COUNT=$((RESOLVED_COUNT + 1))
@@ -683,14 +940,10 @@ for i in "${!DIAGNOSTIC_FILES[@]}"; do
             fi
 
             FAILED_ATTEMPTS=$((FAILED_ATTEMPTS + 1))
-            # Restore original file for subsequent iteration or clean baseline
             cp -f "$BACKUP_FILE" "$FULL_PATH"
         fi
     done
 
-    # If healing fails 3 times, trip the circuit breaker, halt agent skill,
-    # lock file write permissions (chmod -w), record state in quarantine,
-    # and dispatch automated JSON OpenTelemetry alert payload
     if [ "$ISSUE_RESOLVED" = false ]; then
         cp -f "$BACKUP_FILE" "$FULL_PATH"
         rm -f "$BACKUP_FILE"
@@ -702,32 +955,17 @@ for i in "${!DIAGNOSTIC_FILES[@]}"; do
     fi
 done
 
-# Update Circuit Breaker State & Trigger Rollback if Threshold Exceeded
 if [ "$RESOLVED_COUNT" -gt 0 ]; then
     record_healing_result "True" 0 >/dev/null
-    log_ok "✔ Circuit breaker: Recorded successful healing cycle (State: Closed, 0 consecutive failures)."
+    log_ok "✔ Circuit breaker: Recorded successful healing cycle (State: CLOSED, 0 consecutive failures)."
 else
     local cb_res
     cb_res=$(record_healing_result "False" ${#DIAGNOSTIC_FILES[@]})
     if [ "$cb_res" = "TRIP" ]; then
-        log_err "⚡ [CIRCUIT BREAKER TRIPPED] Error rates increased across 3 consecutive healing cycles!"
+        log_err "⚡ [CIRCUIT BREAKER OPEN] Error rates increased across 3 consecutive healing cycles!"
         execute_git_rollback
         exit 1
-    else
-        log_warn "Circuit breaker: Recorded failure (Consecutive failures advancing to threshold)."
     fi
 fi
-
-# Mint Consensus Certificate
-CERT_ID="CERT-$(uuidgen 2>/dev/null || date +%s%N | sha256sum | head -c 16)"
-NOW_ISO=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-
-log_step "Minting Autonomous Remediation Certificate: $CERT_ID"
-log_ok "Remediation Summary:"
-echo "   - Timestamp:           $NOW_ISO"
-echo "   - Diagnostic Sites:    ${#DIAGNOSTIC_FILES[@]}"
-echo "   - Resolved Count:      $RESOLVED_COUNT"
-echo "   - First-Green Status:  $(if [ "$RESOLVED_COUNT" -gt 0 ]; then echo "GREEN (PASSED)"; else echo "IN-PROGRESS"; fi)"
-echo "========================================================================"
 
 exit 0

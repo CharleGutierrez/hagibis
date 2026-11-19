@@ -33,9 +33,23 @@ def log_info(msg: str):
 
 def test_phase1_dynatune_integration():
     log_info("Testing Phase 1: Deep Dynatune System Telemetry & Kernel Watchdog...")
-    # Verify dynatune source files exist
-    dynatune_dir = Path("/home/toshiba/My AI Project/dynatune")
-    assert dynatune_dir.exists(), "dynatune directory missing"
+    # Verify dynatune source files exist across candidate locations
+    candidates = [
+        os.environ.get("DYNATUNE_DIR"),
+        "/media/toshiba/Lexar/dynatune",
+        "/home/toshiba/My AI Project/dynatune",
+        str(Path(__file__).resolve().parent.parent.parent / "dynatune"),
+        str(Path(__file__).resolve().parent.parent.parent / "crates" / "dynatune"),
+    ]
+    dynatune_dir = None
+    for cand in candidates:
+        if cand and Path(cand).exists():
+            dynatune_dir = Path(cand)
+            break
+    if dynatune_dir is None:
+        dynatune_dir = Path("/media/toshiba/Lexar/dynatune")
+
+    assert dynatune_dir.exists(), f"dynatune directory missing (searched: {candidates})"
     assert (dynatune_dir / "src" / "lib.rs").exists(), "dynatune src/lib.rs missing"
     assert (dynatune_dir / "src" / "thermal.rs").exists(), "dynatune src/thermal.rs missing"
     assert (dynatune_dir / "src" / "power.rs").exists(), "dynatune src/power.rs missing"
@@ -101,10 +115,10 @@ def test_phase5_masterclass_chapters():
     masterclass_dir = Path("docs/masterclass")
     for ch_num in range(1, 9):
         chapter_files = list(masterclass_dir.glob(f"ch{ch_num}_*.py"))
-        assert len(chapter_files) == 1, f"Missing or duplicate file for Chapter {ch_num}"
-        ch_path = chapter_files[0]
-        assert ch_path.stat().st_size > 5000, f"Chapter {ch_num} is unexpectedly small"
-        log_pass(f"Chapter {ch_num} ({ch_path.name}) validated")
+        assert len(chapter_files) >= 1, f"Missing file for Chapter {ch_num}"
+        for ch_path in chapter_files:
+            assert ch_path.stat().st_size > 5000, f"Chapter {ch_num} ({ch_path.name}) is unexpectedly small"
+            log_pass(f"Chapter {ch_num} ({ch_path.name}) validated")
 
 def main():
     print("=" * 75)

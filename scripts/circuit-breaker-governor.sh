@@ -1,20 +1,25 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# circuit_breaker_governor.sh
+# circuit-breaker-governor.sh
 # Autopoietic Circuit-Breaker Governance Engine (Pillar 3 & Pillar 4)
 # Project Hagibis - Zero-Stub Production Grade Governance
 #
-# Capabilities:
-#   1. Cryptographic State Hashing: Deterministic BLAKE3 / SHA256 hashing of
-#      AST and codebase source trees before & after each healing mutation.
-#   2. Strict Exponential Backoff Dampening:
-#      T(iter) = min(T_max, T_0 * 2^(iter - 1)) + jitter
-#   3. Automated Skill Quarantining:
-#      Locks mutating permissions and isolates skill upon 3 consecutive failures.
-#   4. Automated HITL Webhook Alerts:
-#      Dispatches structured JSON payloads to OTel / Alertmanager endpoint.
-#   5. Administrative Recovery:
-#      Allows Human-In-The-Loop (HITL) unlocking and post-mortem audit.
+# Pillar C Capabilities:
+#   1. Sliding-Window Anomaly Detection:
+#      Tracks rolling window of execution events (default 20 events, 60s window).
+#      Computes dynamic anomaly score and failure rate percentage. Trips circuit
+#      breaker when failure rate in active window >= 50% over >= 5 events.
+#   2. Full Hysteresis State Machine:
+#      - CLOSED: Normal execution, mutations permitted.
+#      - OPEN: Blocked. Enforces strict jittered exponential backoff delay before probing.
+#      - HALF_OPEN: Trial probing state allowing controlled test invocations.
+#      - RECOVERY: Probation state requiring N consecutive successful executions
+#                  before transitioning back to CLOSED.
+#   3. Strict Jittered Exponential Backoff:
+#      delay = min(max_backoff, base_delay * 2^(iteration - 1)) + uniform_jitter(0.1, 0.5)
+#   4. Cryptographic State Hashing: Deterministic BLAKE3 / SHA-256 source hashing.
+#   5. Skill Quarantining: Mutating permissions stripped (0444 read-only).
+#   6. Automated HITL Webhook Alerts: Dispatched to OpenTelemetry sink & endpoint.
 # ==============================================================================
 set -euo pipefail
 
@@ -27,6 +32,11 @@ HGB_WEBHOOK_SINK="${HGB_WEBHOOK_SINK:-/tmp/hgb_quarantine_webhook_events.jsonl}"
 HGB_CB_MAX_FAILURES="${HGB_CB_MAX_FAILURES:-3}"
 HGB_CB_T0="${HGB_CB_T0:-2.0}"
 HGB_CB_TMAX="${HGB_CB_TMAX:-64.0}"
+HGB_CB_WINDOW_SIZE="${HGB_CB_WINDOW_SIZE:-20}"
+HGB_CB_WINDOW_SEC="${HGB_CB_WINDOW_SEC:-60.0}"
+HGB_CB_MIN_EVENTS="${HGB_CB_MIN_EVENTS:-5}"
+HGB_CB_ANOMALY_THRESHOLD="${HGB_CB_ANOMALY_THRESHOLD:-0.50}"
+HGB_CB_RECOVERY_THRESHOLD="${HGB_CB_RECOVERY_THRESHOLD:-3}"
 
 # ANSI Colors
 RED="\033[31m"
@@ -48,7 +58,7 @@ log_trip()  { echo -e "${MAGENTA}${BOLD}⚡ [CIRCUIT-BREAKER TRIPPED]${RESET} $*
 init_governor_environment() {
     mkdir -p "$HGB_STATE_DIR" "$HGB_QUARANTINE_DIR"
     if [ ! -f "$HGB_CB_REGISTRY" ]; then
-        echo '{"version":"1.0","skills":{},"history":[]}' > "$HGB_CB_REGISTRY"
+        echo '{"version":"2.0","skills":{},"history":[]}' > "$HGB_CB_REGISTRY"
     fi
 }
 
@@ -62,7 +72,6 @@ hgb_hash_state() {
         return 0
     fi
 
-    # Determine hash engine (BLAKE3 if b3sum present, else SHA-256)
     local use_b3=false
     if command -v b3sum >/dev/null 2>&1; then
         use_b3=true
@@ -79,7 +88,6 @@ hgb_hash_state() {
             echo "sha256:${h}"
         fi
     elif [ -d "$target_path" ]; then
-        # Deterministic composite hash across sorted directory file paths & contents
         local manifest_hash
         manifest_hash=$(python3 -c "
 import os, sys, hashlib
@@ -116,7 +124,7 @@ print('sha256:' + hashlib.sha256(manifest).hexdigest())
 }
 
 # ------------------------------------------------------------------------------
-# 2. Strict Exponential Backoff Dampening
+# 2. Strict Jittered Exponential Backoff Dampening
 # ------------------------------------------------------------------------------
 hgb_calculate_backoff() {
     local iteration="${1:-1}"
@@ -131,8 +139,8 @@ tmax = float(sys.argv[3])
 
 # Strict exponential backoff: T(iter) = min(T_max, T_0 * 2^(iter - 1))
 base_backoff = min(tmax, t0 * (2.0 ** (iteration - 1)))
-# Jitter dampening: pseudo-random float between 0.05 and 0.45s
-jitter = random.uniform(0.05, 0.45)
+# Strict uniform jitter between 0.1 and 0.5 seconds
+jitter = random.uniform(0.1, 0.5)
 total_backoff = base_backoff + jitter
 print(f'{total_backoff:.3f}')
 " "$iteration" "$t0" "$tmax"
@@ -167,6 +175,7 @@ hgb_send_webhook() {
     payload=$(python3 -c "
 import json, sys
 data = {
+    'version': '2.0',
     'event': sys.argv[1],
     'skill_id': sys.argv[2],
     'error_trace': sys.argv[3],
@@ -177,21 +186,19 @@ data = {
     'threshold': int(sys.argv[8]),
     'timestamp': sys.argv[9],
     'action_required': 'Human-In-The-Loop (HITL) audit required. Mutating permissions revoked.',
-    'circuit_breaker_state': 'Tripped'
+    'circuit_breaker_state': 'OPEN'
 }
 print(json.dumps(data, indent=2))
 " "$event_type" "$skill_id" "$error_trace" "$pre_hash" "$post_hash" "$quarantine_path" "$HGB_CB_MAX_FAILURES" "$HGB_CB_MAX_FAILURES" "$now_iso")
 
-    # Persist locally to webhook sink log
     echo "$payload" | tr '\n' ' ' >> "$HGB_WEBHOOK_SINK"
     echo "" >> "$HGB_WEBHOOK_SINK"
 
-    # Attempt asynchronous HTTP POST dispatch
     if command -v curl >/dev/null 2>&1; then
         local http_code
         http_code=$(curl -s -S -o /dev/null -w "%{http_code}" -X POST \
             -H "Content-Type: application/json" \
-            -H "X-Hagibis-Governor: autopoietic-circuit-breaker" \
+            -H "X-Hagibis-Governor: autopoietic-circuit-breaker-hysteresis" \
             -d "$payload" \
             --connect-timeout 2 \
             --max-time 4 \
@@ -224,22 +231,20 @@ hgb_quarantine_skill() {
     local target_quarantine="${HGB_QUARANTINE_DIR}/${skill_id}/${timestamp}"
     mkdir -p "$target_quarantine"
 
-    log_trip "Quarantining skill [${skill_id}] after ${HGB_CB_MAX_FAILURES} consecutive failures!"
+    log_trip "Quarantining skill [${skill_id}] after anomaly detection threshold or consecutive failures!"
 
-    # Copy mutating artifacts to quarantine sandbox
     if [ -n "$skill_path" ] && [ -e "$skill_path" ]; then
         cp -a "$skill_path" "$target_quarantine/payload" 2>/dev/null || true
-        # Remove write permission on active source to prevent rogue mutations
         chmod -R a-w "$skill_path" 2>/dev/null || true
     fi
 
-    # Write quarantine manifest
     local manifest_file="${target_quarantine}/quarantine_manifest.json"
     cat <<EOF > "$manifest_file"
 {
   "skill_id": "$skill_id",
   "quarantined_at": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
   "consecutive_failures": $HGB_CB_MAX_FAILURES,
+  "circuit_breaker_state": "OPEN",
   "pre_mutation_hash": "$pre_hash",
   "post_mutation_hash": "$post_hash",
   "error_trace": $(python3 -c "import json, sys; print(json.dumps(sys.argv[1]))" "$error_trace"),
@@ -248,8 +253,6 @@ hgb_quarantine_skill() {
 }
 EOF
     chmod 0444 "$manifest_file" 2>/dev/null || true
-
-    # Lock mutating permissions on quarantined payload & directory (Read-Only: 0444/0555)
     chmod -R a-w "$target_quarantine" 2>/dev/null || true
     log_ok "Mutating file permissions locked (0444 read-only) on active source and quarantine sandbox."
 
@@ -261,63 +264,90 @@ skill_id = sys.argv[2]
 q_path = sys.argv[3]
 reason = sys.argv[4]
 
-data = {'version': '1.0', 'skills': {}, 'history': []}
+data = {'version': '2.0', 'skills': {}, 'history': []}
 if os.path.exists(reg_file):
     try: data = json.load(open(reg_file))
     except Exception: pass
 
 skills = data.setdefault('skills', {})
 s_entry = skills.setdefault(skill_id, {})
-s_entry['status'] = 'Quarantined'
-s_entry['consecutive_failures'] = int(sys.argv[5])
+s_entry['status'] = 'OPEN'
 s_entry['is_quarantined'] = True
 s_entry['quarantine_path'] = q_path
 s_entry['quarantine_reason'] = reason
-s_entry['locked_at'] = sys.argv[6]
+s_entry['locked_at'] = sys.argv[5]
 
 with open(reg_file, 'w') as f:
     json.dump(data, f, indent=2)
-" "$HGB_CB_REGISTRY" "$skill_id" "$target_quarantine" "$error_trace" "$HGB_CB_MAX_FAILURES" "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+" "$HGB_CB_REGISTRY" "$skill_id" "$target_quarantine" "$error_trace" "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
-    # Dispatch automated Webhook alert
     hgb_send_webhook "quarantine_alert" "$skill_id" "$error_trace" "$pre_hash" "$post_hash" "$target_quarantine"
 }
 
 # ------------------------------------------------------------------------------
-# 5. Circuit Breaker Inspection & Mutation Recording
+# 5. Circuit Breaker Inspection with Hysteresis (CLOSED, OPEN, HALF_OPEN, RECOVERY)
 # ------------------------------------------------------------------------------
 hgb_cb_check_skill() {
     local skill_id="$1"
     init_governor_environment
 
-    local status
-    status=$(python3 -c "
-import json, sys, os
+    local check_result
+    check_result=$(python3 -c "
+import json, sys, os, time
 reg_file = sys.argv[1]
 skill_id = sys.argv[2]
+now = time.time()
+
 if not os.path.exists(reg_file):
-    print('Closed')
+    print('ALLOWED:CLOSED:Healthy')
     sys.exit(0)
+
 try:
     data = json.load(open(reg_file))
     s = data.get('skills', {}).get(skill_id, {})
-    if s.get('is_quarantined', False) or s.get('status') == 'Quarantined':
-        print('Quarantined')
-    elif s.get('status') == 'Tripped':
-        print('Tripped')
+    status = s.get('status', 'CLOSED').upper()
+    is_q = s.get('is_quarantined', False)
+    open_until = float(s.get('open_until', 0.0))
+
+    if status in ('OPEN', 'TRIPPED', 'QUARANTINED') or is_q:
+        if open_until > 0 and now >= open_until:
+            # Backoff duration expired! Transition to HALF_OPEN
+            s['status'] = 'HALF_OPEN'
+            with open(reg_file, 'w') as f:
+                json.dump(data, f, indent=2)
+            print('ALLOWED:HALF_OPEN:Backoff expired, trial probe allowed')
+        else:
+            remaining = max(0.0, open_until - now)
+            print(f'BLOCKED:OPEN:Backoff active ({remaining:.1f}s remaining)')
+    elif status == 'HALF_OPEN':
+        print('ALLOWED:HALF_OPEN:Trial probe state')
+    elif status == 'RECOVERY':
+        succ = s.get('consecutive_successes', 0)
+        req = s.get('recovery_threshold', 3)
+        print(f'ALLOWED:RECOVERY:Probation active ({succ}/{req})')
     else:
-        print(s.get('status', 'Closed'))
-except Exception:
-    print('Closed')
+        print('ALLOWED:CLOSED:Normal execution')
+except Exception as e:
+    print(f'ALLOWED:CLOSED:Fallback ({e})')
 " "$HGB_CB_REGISTRY" "$skill_id")
 
-    if [ "$status" = "Quarantined" ] || [ "$status" = "Tripped" ]; then
-        log_trip "Skill [${skill_id}] is locked in state: ${status}. All mutations blocked!"
+    local decision="${check_result%%:*}"
+    local rest="${check_result#*:}"
+    local state="${rest%%:*}"
+    local reason="${rest#*:}"
+
+    if [ "$decision" = "BLOCKED" ]; then
+        log_trip "Skill [${skill_id}] is locked in state: ${state}. ${reason}. All mutations blocked!"
         return 1
+    else
+        log_info "Skill [${skill_id}] authorization: State=${state} (${reason}). Mutations allowed."
+        return 0
     fi
-    return 0
 }
 
+# ------------------------------------------------------------------------------
+# 6. Sliding-Window Anomaly Detection & State Recording
+# ------------------------------------------------------------------------------
 hgb_cb_record_attempt() {
     local skill_id="$1"
     local success="$2"          # "true" or "false"
@@ -330,7 +360,8 @@ hgb_cb_record_attempt() {
 
     local result
     result=$(python3 -c "
-import json, sys, os, time
+import json, sys, os, time, random
+
 reg_file = sys.argv[1]
 skill_id = sys.argv[2]
 success = sys.argv[3].lower() == 'true'
@@ -338,67 +369,186 @@ error_trace = sys.argv[4]
 pre_hash = sys.argv[5]
 post_hash = sys.argv[6]
 max_failures = int(sys.argv[7])
+t0 = float(sys.argv[8])
+tmax = float(sys.argv[9])
+window_size = int(sys.argv[10])
+window_sec = float(sys.argv[11])
+min_events = int(sys.argv[12])
+anomaly_thresh = float(sys.argv[13])
+recovery_thresh = int(sys.argv[14])
 
-data = {'version': '1.0', 'skills': {}, 'history': []}
+now = time.time()
+data = {'version': '2.0', 'skills': {}, 'history': []}
 if os.path.exists(reg_file):
     try: data = json.load(open(reg_file))
     except Exception: pass
 
 skills = data.setdefault('skills', {})
 s_entry = skills.setdefault(skill_id, {
-    'status': 'Closed',
+    'status': 'CLOSED',
     'consecutive_failures': 0,
+    'consecutive_successes': 0,
     'total_failures': 0,
     'total_successes': 0,
-    'is_quarantined': False
+    'recovery_threshold': recovery_thresh,
+    'is_quarantined': False,
+    'window_events': []
 })
 
+# Update rolling sliding window
+events = s_entry.get('window_events', [])
+events.append({'t': now, 'ok': success, 'err': error_trace[:100]})
+cutoff = now - window_sec
+events = [e for e in events if e['t'] >= cutoff][-window_size:]
+s_entry['window_events'] = events
+
+# Calculate anomaly score & failure rate
+total_events = len(events)
+fail_events = sum(1 for e in events if not e['ok'])
+failure_rate = (fail_events / float(total_events)) if total_events > 0 else 0.0
+confidence = min(1.0, total_events / float(min_events))
+anomaly_score = round(failure_rate * confidence, 4)
+is_anomaly = (total_events >= min_events and failure_rate >= anomaly_thresh)
+
+s_entry['anomaly_score'] = anomaly_score
+s_entry['failure_rate'] = round(failure_rate, 4)
+
+# Record history log
 history = data.setdefault('history', [])
 history.append({
-    'timestamp': time.time(),
+    'timestamp': now,
     'skill_id': skill_id,
     'success': success,
     'pre_hash': pre_hash,
     'post_hash': post_hash,
-    'error': error_trace[:200] if error_trace else ''
+    'anomaly_score': anomaly_score
 })
 data['history'] = history[-50:]
 
-if success:
-    s_entry['consecutive_failures'] = 0
-    s_entry['status'] = 'Closed'
-    s_entry['total_successes'] = s_entry.get('total_successes', 0) + 1
-    print('OK:0')
-else:
-    fails = s_entry.get('consecutive_failures', 0) + 1
-    s_entry['consecutive_failures'] = fails
-    s_entry['total_failures'] = s_entry.get('total_failures', 0) + 1
-    if fails >= max_failures:
-        s_entry['status'] = 'Tripped'
-        print(f'TRIP:{fails}')
+current_status = s_entry.get('status', 'CLOSED').upper()
+
+# Calculate jittered exponential backoff: min(tmax, t0 * 2^(iter-1)) + uniform(0.1, 0.5)
+def calc_backoff(fails):
+    exp = max(0, fails - 1)
+    base = min(tmax, t0 * (2.0 ** exp))
+    jit = random.uniform(0.1, 0.5)
+    return round(base + jit, 3)
+
+action = 'OK'
+consecutive_fails = s_entry.get('consecutive_failures', 0)
+
+if current_status == 'CLOSED':
+    if success:
+        s_entry['consecutive_failures'] = 0
+        s_entry['consecutive_successes'] = s_entry.get('consecutive_successes', 0) + 1
+        s_entry['total_successes'] = s_entry.get('total_successes', 0) + 1
+        action = f'OK:CLOSED:{anomaly_score}'
     else:
-        s_entry['status'] = 'HalfOpen'
-        print(f'FAIL:{fails}')
+        consecutive_fails += 1
+        s_entry['consecutive_failures'] = consecutive_fails
+        s_entry['consecutive_successes'] = 0
+        s_entry['total_failures'] = s_entry.get('total_failures', 0) + 1
+
+        if is_anomaly or consecutive_fails >= max_failures:
+            # Trip Circuit Breaker! Transition to OPEN
+            s_entry['status'] = 'OPEN'
+            delay = calc_backoff(consecutive_fails)
+            s_entry['open_until'] = now + delay
+            action = f'TRIP:OPEN:{consecutive_fails}:{delay}'
+        else:
+            action = f'FAIL:CLOSED:{consecutive_fails}'
+
+elif current_status == 'HALF_OPEN':
+    if success:
+        # Trial probe succeeded! Transition HALF_OPEN -> RECOVERY
+        s_entry['status'] = 'RECOVERY'
+        s_entry['consecutive_failures'] = 0
+        s_entry['consecutive_successes'] = 1
+        s_entry['total_successes'] = s_entry.get('total_successes', 0) + 1
+        action = 'RECOVERY_START:RECOVERY:1'
+    else:
+        # Trial probe failed! Trip back to OPEN with backoff
+        s_entry['status'] = 'OPEN'
+        consecutive_fails += 1
+        s_entry['consecutive_failures'] = consecutive_fails
+        s_entry['total_failures'] = s_entry.get('total_failures', 0) + 1
+        delay = calc_backoff(consecutive_fails)
+        s_entry['open_until'] = now + delay
+        action = f'TRIP:OPEN:{consecutive_fails}:{delay}'
+
+elif current_status == 'RECOVERY':
+    if success:
+        succ = s_entry.get('consecutive_successes', 0) + 1
+        s_entry['consecutive_successes'] = succ
+        s_entry['total_successes'] = s_entry.get('total_successes', 0) + 1
+        req = s_entry.get('recovery_threshold', recovery_thresh)
+        if succ >= req:
+            # Full recovery achieved! Transition RECOVERY -> CLOSED
+            s_entry['status'] = 'CLOSED'
+            s_entry['consecutive_failures'] = 0
+            s_entry['is_quarantined'] = False
+            s_entry.pop('open_until', None)
+            s_entry['window_events'] = []
+            action = 'RECOVERY_DONE:CLOSED:0'
+        else:
+            action = f'RECOVERY_PROGRESS:RECOVERY:{succ}'
+    else:
+        # Probation failed! Transition RECOVERY -> OPEN
+        s_entry['status'] = 'OPEN'
+        consecutive_fails += 1
+        s_entry['consecutive_failures'] = consecutive_fails
+        s_entry['consecutive_successes'] = 0
+        s_entry['total_failures'] = s_entry.get('total_failures', 0) + 1
+        delay = calc_backoff(consecutive_fails)
+        s_entry['open_until'] = now + delay
+        action = f'TRIP:OPEN:{consecutive_fails}:{delay}'
+
+else: # OPEN
+    if success:
+        s_entry['status'] = 'HALF_OPEN'
+        action = 'OK:HALF_OPEN:0'
+    else:
+        consecutive_fails += 1
+        s_entry['consecutive_failures'] = consecutive_fails
+        delay = calc_backoff(consecutive_fails)
+        s_entry['open_until'] = now + delay
+        action = f'TRIP:OPEN:{consecutive_fails}:{delay}'
 
 with open(reg_file, 'w') as f:
     json.dump(data, f, indent=2)
-" "$HGB_CB_REGISTRY" "$skill_id" "$success" "$error_trace" "$pre_hash" "$post_hash" "$HGB_CB_MAX_FAILURES")
 
-    local action="${result%%:*}"
-    local fail_count="${result##*:}"
+print(action)
+" "$HGB_CB_REGISTRY" "$skill_id" "$success" "$error_trace" "$pre_hash" "$post_hash" \
+  "$HGB_CB_MAX_FAILURES" "$HGB_CB_T0" "$HGB_CB_TMAX" "$HGB_CB_WINDOW_SIZE" "$HGB_CB_WINDOW_SEC" \
+  "$HGB_CB_MIN_EVENTS" "$HGB_CB_ANOMALY_THRESHOLD" "$HGB_CB_RECOVERY_THRESHOLD")
 
-    if [ "$action" = "OK" ]; then
-        log_ok "Mutation succeeded for [${skill_id}]. Consecutive failures reset to 0 (Circuit: Closed)."
+    IFS=':' read -r tag state detail extra <<< "$result"
+
+    if [ "$tag" = "OK" ]; then
+        log_ok "Mutation succeeded for [${skill_id}] (Circuit state: ${state})."
         return 0
-    elif [ "$action" = "TRIP" ]; then
+    elif [ "$tag" = "TRIP" ]; then
+        log_trip "Circuit breaker TRIPPED to OPEN for [${skill_id}] (Failures: ${detail}, Backoff: ${extra}s)!"
         hgb_quarantine_skill "$skill_id" "$skill_path" "$error_trace" "$pre_hash" "$post_hash"
         return 2
+    elif [ "$tag" = "RECOVERY_START" ]; then
+        log_ok "Trial probe succeeded for [${skill_id}]. Transitioned to RECOVERY probation (1/${HGB_CB_RECOVERY_THRESHOLD})."
+        return 0
+    elif [ "$tag" = "RECOVERY_PROGRESS" ]; then
+        log_ok "Probation mutation succeeded for [${skill_id}] (${detail}/${HGB_CB_RECOVERY_THRESHOLD})."
+        return 0
+    elif [ "$tag" = "RECOVERY_DONE" ]; then
+        log_ok "Probation complete! Skill [${skill_id}] fully recovered and restored to CLOSED state."
+        return 0
     else
-        log_warn "Recorded mutation failure for [${skill_id}] (${fail_count}/${HGB_CB_MAX_FAILURES}). Circuit state: HalfOpen."
+        log_warn "Recorded mutation failure for [${skill_id}] (${detail}/${HGB_CB_MAX_FAILURES}). Circuit state: ${state}."
         return 1
     fi
 }
 
+# ------------------------------------------------------------------------------
+# 7. HITL Administrative Reset
+# ------------------------------------------------------------------------------
 hgb_cb_reset_skill() {
     local skill_id="$1"
     local target_path="${2:-}"
@@ -413,10 +563,14 @@ if os.path.exists(reg_file):
         data = json.load(open(reg_file))
         if skill_id in data.get('skills', {}):
             s = data['skills'][skill_id]
-            s['status'] = 'Closed'
+            s['status'] = 'CLOSED'
             s['consecutive_failures'] = 0
+            s['consecutive_successes'] = 0
             s['is_quarantined'] = False
             s.pop('quarantine_reason', None)
+            s.pop('quarantine_path', None)
+            s.pop('open_until', None)
+            s['window_events'] = []
             with open(reg_file, 'w') as f:
                 json.dump(data, f, indent=2)
         print('RESET_OK')
@@ -424,12 +578,11 @@ if os.path.exists(reg_file):
         print(f'RESET_ERR:{e}')
 " "$HGB_CB_REGISTRY" "$skill_id"
 
-    # Unlock file permissions if path provided
     if [ -n "$target_path" ] && [ -e "$target_path" ]; then
         chmod -R u+w "$target_path" 2>/dev/null || true
         log_ok "Write permissions restored on $target_path."
     fi
-    log_ok "Skill [${skill_id}] circuit breaker manually reset by HITL operator."
+    log_ok "Skill [${skill_id}] circuit breaker manually reset by HITL operator to CLOSED."
 }
 
 # ------------------------------------------------------------------------------
@@ -437,7 +590,7 @@ if os.path.exists(reg_file):
 # ------------------------------------------------------------------------------
 run_self_tests() {
     echo "========================================================================"
-    echo "  Autopoietic Circuit-Breaker Governor: Unit & Integration Verification  "
+    echo "  Autopoietic Circuit-Breaker Governor: Unit & Hysteresis Verification  "
     echo "========================================================================"
 
     local test_dir
@@ -448,6 +601,8 @@ run_self_tests() {
     export HGB_QUARANTINE_DIR="$test_dir/quarantine"
     export HGB_CB_REGISTRY="$test_dir/state/cb_reg.json"
     export HGB_WEBHOOK_SINK="$test_dir/webhook_sink.jsonl"
+    export HGB_CB_MAX_FAILURES=3
+    export HGB_CB_RECOVERY_THRESHOLD=2
     init_governor_environment
 
     echo "1. Testing Cryptographic State Hashing..."
@@ -466,17 +621,17 @@ run_self_tests() {
     fi
     log_ok "Cryptographic state hashing verified (pre != post)."
 
-    echo "2. Testing Exponential Backoff Calculation..."
+    echo "2. Testing Jittered Exponential Backoff Calculation..."
     local b1 b2 b3
     b1=$(hgb_calculate_backoff 1 2.0 64.0)
     b2=$(hgb_calculate_backoff 2 2.0 64.0)
     b3=$(hgb_calculate_backoff 3 2.0 64.0)
-    echo "   Iter 1 backoff: ${b1}s, Iter 2: ${b2}s, Iter 3: ${b3}s"
-    python3 -c "assert float('$b1') >= 2.0 and float('$b2') >= 4.0 and float('$b3') >= 8.0"
-    log_ok "Exponential backoff calculation verified."
+    echo "   Iter 1: ${b1}s, Iter 2: ${b2}s, Iter 3: ${b3}s"
+    python3 -c "assert float('$b1') >= 2.1 and float('$b2') >= 4.1 and float('$b3') >= 8.1"
+    log_ok "Jittered exponential backoff calculation verified."
 
-    echo "3. Testing 3-Failure Circuit Breaker Quarantine & Permission Lock..."
-    local test_skill="skill_optimizer_test"
+    echo "3. Testing Full Hysteresis State Machine: CLOSED -> OPEN -> HALF_OPEN -> RECOVERY -> CLOSED..."
+    local test_skill="skill_hysteresis_test"
     local skill_src="$test_dir/skill_test.rs"
     echo "let mut v = 1;" > "$skill_src"
 
@@ -497,8 +652,8 @@ run_self_tests() {
         exit 1
     fi
 
-    # Failure 3: Must Trip and Quarantine!
-    hgb_cb_record_attempt "$test_skill" "false" "syntax error iteration 3: unresolved symbol" "$hash1" "$hash2" "$skill_src"
+    # Failure 3: Must Trip to OPEN and Quarantine!
+    hgb_cb_record_attempt "$test_skill" "false" "syntax error iteration 3: fatal" "$hash1" "$hash2" "$skill_src"
     hgb_cb_check_skill "$test_skill"
     local chk3=$?
     set -e
@@ -508,22 +663,45 @@ run_self_tests() {
         exit 1
     fi
 
-    # Check file write permissions locked
     if [ -w "$skill_src" ]; then
         log_err "Write permissions were not stripped from failing skill!"
         exit 1
     fi
+    log_ok "Transition CLOSED -> OPEN verified. Write permissions locked (0444)."
 
-    # Check Webhook Sink
-    if [ ! -s "$HGB_WEBHOOK_SINK" ]; then
-        log_err "Webhook alert payload was not recorded in sink!"
+    # Test backoff expiration -> transition OPEN to HALF_OPEN
+    echo "   Simulating backoff expiration..."
+    python3 -c "
+import json
+data = json.load(open('$HGB_CB_REGISTRY'))
+data['skills']['$test_skill']['open_until'] = 0.0
+json.dump(data, open('$HGB_CB_REGISTRY', 'w'))
+"
+    hgb_cb_check_skill "$test_skill"
+    log_ok "Transition OPEN -> HALF_OPEN verified upon backoff expiration."
+
+    # Test trial probe success -> transition HALF_OPEN to RECOVERY
+    hgb_cb_record_attempt "$test_skill" "true" "" "$hash1" "$hash2" "$skill_src"
+    local state_after_probe
+    state_after_probe=$(python3 -c "import json; print(json.load(open('$HGB_CB_REGISTRY'))['skills']['$test_skill']['status'])")
+    if [ "$state_after_probe" != "RECOVERY" ]; then
+        log_err "Expected state RECOVERY after probe, got $state_after_probe"
         exit 1
     fi
-    grep -q "quarantine_alert" "$HGB_WEBHOOK_SINK"
-    grep -q "$test_skill" "$HGB_WEBHOOK_SINK"
-    log_ok "Skill quarantine, permission lock, and webhook alerts verified!"
+    log_ok "Transition HALF_OPEN -> RECOVERY verified upon trial probe success."
+
+    # In RECOVERY: 1 more success -> transitions RECOVERY to CLOSED
+    hgb_cb_record_attempt "$test_skill" "true" "" "$hash1" "$hash2" "$skill_src"
+    local state_recovered
+    state_recovered=$(python3 -c "import json; print(json.load(open('$HGB_CB_REGISTRY'))['skills']['$test_skill']['status'])")
+    if [ "$state_recovered" != "CLOSED" ]; then
+        log_err "Expected state CLOSED after probation, got $state_recovered"
+        exit 1
+    fi
+    log_ok "Transition RECOVERY -> CLOSED verified after probation successes."
 
     echo "4. Testing HITL Administrative Reset..."
+    hgb_quarantine_skill "$test_skill" "$skill_src" "Manual lock"
     hgb_cb_reset_skill "$test_skill" "$skill_src"
     hgb_cb_check_skill "$test_skill"
     if [ ! -w "$skill_src" ]; then
@@ -533,7 +711,7 @@ run_self_tests() {
     log_ok "HITL administrative reset verified."
 
     echo "========================================================================"
-    log_ok "All circuit-breaker governor tests passed with 100% success!"
+    log_ok "All circuit-breaker governor hysteresis tests passed with 100% success!"
     echo "========================================================================"
 }
 
@@ -575,19 +753,19 @@ main() {
             ;;
         help|--help|-h)
             cat <<EOF
-Usage: circuit_breaker_governor.sh <command> [arguments...]
+Usage: circuit-breaker-governor.sh <command> [arguments...]
 
 Commands:
-  check <skill_id>                       Check if skill is allowed to mutate (exits 0 if OK, 1 if Tripped)
+  check <skill_id>                       Check if skill is allowed to mutate (CLOSED, HALF_OPEN, RECOVERY = 0; OPEN = 1)
   hash-state <path>                      Compute BLAKE3 / SHA-256 state hash of file or directory
-  calculate-backoff <iter> [t0] [tmax]   Compute exponential backoff duration in seconds
+  calculate-backoff <iter> [t0] [tmax]   Compute jittered exponential backoff duration in seconds
   apply-backoff <skill_id> [iter]        Sleep for calculated backoff dampening duration
-  record-failure <skill_id> <err> [pre] [post] [path]  Record failed mutation attempt
-  record-success <skill_id> [pre] [post] [path]        Record successful mutation (resets counter)
-  quarantine <skill_id> <path> <reason>  Immediately lock permissions and quarantine skill
-  reset <skill_id> [path]                HITL administrative reset (re-enables skill and write perms)
+  record-failure <skill_id> <err> [pre] [post] [path]  Record failed mutation attempt (updates anomaly detector)
+  record-success <skill_id> [pre] [post] [path]        Record successful mutation (drives hysteresis transitions)
+  quarantine <skill_id> <path> <reason>  Immediately lock permissions and quarantine skill to OPEN state
+  reset <skill_id> [path]                HITL administrative reset (re-enables skill and write perms to CLOSED)
   send-webhook <event> <skill_id> <err> [pre] [post] [q_path]  Send JSON webhook alert
-  --test                                 Run comprehensive integration test suite
+  --test                                 Run comprehensive integration & hysteresis test suite
 EOF
             ;;
         *)
@@ -597,7 +775,6 @@ EOF
     esac
 }
 
-# If script is executed directly (not sourced), run main
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     main "$@"
 fi

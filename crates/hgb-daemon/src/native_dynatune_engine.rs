@@ -74,6 +74,25 @@ pub struct NativeDynatuneCoordinator {
     last_profile: Arc<Mutex<String>>,
 }
 
+/// Sibling Dynatune telemetry bridge integration.
+pub mod dynatune {
+    /// Read thermal summary: (cpu_pkg_temp_c, max_temp_c, is_throttled)
+    pub fn read_thermal_summary() -> (f64, f64, bool) {
+        let bridge = hgb_core::dynatune_bridge::DynatuneBridge::new();
+        (
+            bridge.read_cpu_pkg_temp_c(),
+            bridge.read_max_temp_c(),
+            bridge.is_thermal_throttled(),
+        )
+    }
+
+    /// Read memory telemetry: (total_mb, available_mb, used_mb, available_pct)
+    pub fn read_mem_info() -> (u64, u64, u64, f64) {
+        let bridge = hgb_core::dynatune_bridge::DynatuneBridge::new();
+        bridge.read_system_memory()
+    }
+}
+
 impl Default for NativeDynatuneCoordinator {
     fn default() -> Self {
         Self::new()
@@ -92,9 +111,7 @@ impl NativeDynatuneCoordinator {
     /// Capture real-time hardware telemetry directly using the host dynatune bridge.
     pub fn capture_snapshot(&self) -> DynatuneSystemSnapshot {
         let bridge = hgb_core::dynatune_bridge::DynatuneBridge::new();
-        let cpu_temp_c = bridge.read_cpu_pkg_temp_c();
-        let max_temp_c = bridge.read_max_temp_c();
-        let is_thermal_critical = bridge.is_thermal_throttled();
+        let (cpu_temp_c, max_temp_c, is_thermal_critical) = dynatune::read_thermal_summary();
         let thermal_status = if is_thermal_critical {
             "CRITICAL".to_string()
         } else if max_temp_c > 70.0 {
@@ -104,7 +121,7 @@ impl NativeDynatuneCoordinator {
         };
 
         // Query memory and PSI pressure
-        let (total_ram, avail_ram, _, avail_pct) = bridge.read_system_memory();
+        let (total_ram, avail_ram, _, avail_pct) = dynatune::read_mem_info();
         let psi_pressure = bridge.read_memory_pressure_psi();
         let psi_avg10 = psi_pressure.some.avg10;
 

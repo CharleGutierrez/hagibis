@@ -13,11 +13,17 @@
 //!   leases, preventing double-lending, and enforcing Rust-equivalent `&` / `&mut` borrowing rules.
 //! - **`PinnedTensorDescriptor`**: Multi-dimensional tensor descriptors with 64-byte alignment
 //!   for direct DMA NPU/GPU neural accelerator routing.
+//! - **`LockFreeShmRingBuffer`**: Wait-free zero-copy producer-consumer ring buffer with
+//!   64-byte cacheline-padded `AtomicU64` head/tail pointers, acquire-release memory ordering,
+//!   and direct host/WASM linear memory page mapping.
+//! - **`ShmRingDescriptor` & `ShmRingElementHeader`**: WIT flat-buffer binary layouts matching
+//!   `hagibis:wasm-kernel/canonical-abi-types`.
 //! - **`InteropBenchmarkReport` / `benchmark_interop_latency`**: Real-time cycle and nanosecond
 //!   latency measurement comparing zero-copy shared memory views against serde JSON.
 
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -32,8 +38,17 @@ pub const CANONICAL_ABI_HEADER_MAGIC: u64 = 0x4847424142493031;
 /// Exact byte size of the 64-byte aligned Canonical ABI Invocation Header
 pub const CANONICAL_HEADER_SIZE: usize = 64;
 
-/// Required alignment for NPU DMA transfers and Canonical ABI headers
+/// Required alignment for NPU DMA transfers, Canonical ABI headers, and Ring buffers
 pub const CANONICAL_ALIGNMENT_DEFAULT: usize = 64;
+
+/// Magic signature for Shared Memory Ring Buffer: ASCII "HGBSHMRG" (0x48474253484D5247)
+pub const SHM_RING_MAGIC: u64 = 0x48474253484D5247;
+
+/// Header control block size in bytes
+pub const SHM_RING_CONTROL_HEADER_SIZE: usize = 64;
+
+/// Fixed 24-byte element header size
+pub const SHM_RING_ELEMENT_HEADER_SIZE: usize = 24;
 
 /// Current Canonical ABI Protocol Version
 pub const PROTOCOL_VERSION_1: u32 = 1;
@@ -77,6 +92,12 @@ pub enum AbiError {
     TypeMismatch { expected: &'static str, found: &'static str },
     /// Permission denied: capability token check failed or unauthorized memory mutation attempted
     PermissionDenied,
+    /// Ring buffer is full (backpressure condition)
+    RingFull { capacity: usize },
+    /// Ring buffer is empty (no elements available to pop)
+    RingEmpty,
+    /// Ring buffer capacity is invalid (must be a non-zero power of two)
+    InvalidCapacity { capacity: usize, reason: String },
 }
 
 /// Type alias aligning with Canonical ABI error naming conventions
@@ -119,7 +140,16 @@ impl fmt::Display for AbiError {
                 write!(f, "Type mismatch: expected {}, found {}", expected, found)
             }
             Self::PermissionDenied => {
-                write!(f, "Permission denied: read-only capability token forbids mutable access or write operation")
+                write!(f, "Permission denied: capability token check failed or unauthorized memory mutation attempted")
+            }
+            Self::RingFull { capacity } => {
+                write!(f, "Lock-free SHM ring buffer is full: capacity {} reached (backpressure)", capacity)
+            }
+            Self::RingEmpty => {
+                write!(f, "Lock-free SHM ring buffer is empty: no elements available to pop")
+            }
+            Self::InvalidCapacity { capacity, reason } => {
+                write!(f, "Invalid ring buffer capacity {}: {}", capacity, reason)
             }
         }
     }
@@ -132,10 +162,6 @@ impl std::error::Error for AbiError {}
 // ============================================================================
 
 /// Marker trait representing Plain Old Data types safe for zero-copy memory transmutation.
-///
-/// # Safety
-/// Types implementing this trait must have no internal padding invariants that can be violated
-/// by arbitrary bit patterns, and must be valid for `Copy` and `'static`.
 pub unsafe trait PodCopy: Copy + 'static {}
 
 unsafe impl PodCopy for u8 {}
@@ -148,6 +174,41 @@ unsafe impl PodCopy for i32 {}
 unsafe impl PodCopy for i64 {}
 unsafe impl PodCopy for f32 {}
 unsafe impl PodCopy for f64 {}
+
+// ============================================================================
+// CACHELINE PADDING (64-BYTE ALIGNED ATOMIC WRAPPER)
+// ============================================================================
+
+/// 64-byte cacheline-padded wrapper to isolate atomic variables and prevent false sharing
+#[repr(align(64))]
+#[derive(Debug)]
+pub struct CachePadded<T> {
+    pub value: T,
+}
+
+impl<T> CachePadded<T> {
+    pub const fn new(value: T) -> Self {
+        Self { value }
+    }
+}
+
+impl<T> std::ops::Deref for CachePadded<T> {
+    type Target = T;
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        &self.value
+    }
+}
+
+impl<T> std::ops::DerefMut for CachePadded<T> {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.value
+    }
+}
+
+const _: () = assert!(std::mem::align_of::<CachePadded<AtomicU64>>() == 64);
+const _: () = assert!(std::mem::size_of::<CachePadded<AtomicU64>>() == 64);
 
 // ============================================================================
 // ENUMS & COMMON WIT-COMPLIANT DATA STRUCTURES
@@ -225,6 +286,554 @@ pub struct TypedShmViewDescriptor {
 }
 
 // ============================================================================
+// ZERO-COPY SHM RING BUFFER WIT FLAT-BUFFER DESCRIPTORS
+// ============================================================================
+
+/// Fixed 24-byte zero-copy ring element header matching WIT `shm-ring-element-header`
+#[repr(C, align(8))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShmRingElementHeader {
+    pub sequence_number: u64,
+    pub payload_length: u32,
+    pub flags: u32,
+    pub timestamp_ns: u64,
+}
+
+unsafe impl PodCopy for ShmRingElementHeader {}
+
+impl ShmRingElementHeader {
+    pub const SIZE: usize = SHM_RING_ELEMENT_HEADER_SIZE;
+
+    pub fn new(sequence_number: u64, payload_length: u32, flags: u32, timestamp_ns: u64) -> Self {
+        Self {
+            sequence_number,
+            payload_length,
+            flags,
+            timestamp_ns,
+        }
+    }
+
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        let mut buf = [0u8; Self::SIZE];
+        buf[0..8].copy_from_slice(&self.sequence_number.to_le_bytes());
+        buf[8..12].copy_from_slice(&self.payload_length.to_le_bytes());
+        buf[12..16].copy_from_slice(&self.flags.to_le_bytes());
+        buf[16..24].copy_from_slice(&self.timestamp_ns.to_le_bytes());
+        buf
+    }
+
+    pub fn from_bytes(slice: &[u8]) -> Result<Self, AbiError> {
+        if slice.len() < Self::SIZE {
+            return Err(AbiError::OutOfBounds {
+                offset: 0,
+                len: Self::SIZE,
+                capacity: slice.len(),
+            });
+        }
+        let sequence_number = u64::from_le_bytes(slice[0..8].try_into().unwrap());
+        let payload_length = u32::from_le_bytes(slice[8..12].try_into().unwrap());
+        let flags = u32::from_le_bytes(slice[12..16].try_into().unwrap());
+        let timestamp_ns = u64::from_le_bytes(slice[16..24].try_into().unwrap());
+        Ok(Self {
+            sequence_number,
+            payload_length,
+            flags,
+            timestamp_ns,
+        })
+    }
+}
+
+const _: () = assert!(std::mem::size_of::<ShmRingElementHeader>() == 24);
+const _: () = assert!(std::mem::align_of::<ShmRingElementHeader>() == 8);
+
+/// Zero-copy lock-free ring buffer descriptor matching WIT `shm-ring-buffer-descriptor`
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShmRingDescriptor {
+    pub view_id: u64,
+    pub ring_capacity: u32,
+    pub element_size: u32,
+    pub head_offset: u32,
+    pub tail_offset: u32,
+    pub buffer_offset: u32,
+    pub mask: u32,
+}
+
+impl ShmRingDescriptor {
+    pub fn new(view_id: u64, ring_capacity: u32, element_size: u32) -> Result<Self, AbiError> {
+        if ring_capacity == 0 || (ring_capacity & (ring_capacity - 1)) != 0 {
+            return Err(AbiError::InvalidCapacity {
+                capacity: ring_capacity as usize,
+                reason: "Ring capacity must be a non-zero power of two".to_string(),
+            });
+        }
+        if element_size == 0 {
+            return Err(AbiError::TypeMismatch {
+                expected: "non-zero element size",
+                found: "zero element size",
+            });
+        }
+
+        let head_offset = 64u32;
+        let tail_offset = 128u32;
+        let buffer_offset = 256u32;
+        let mask = ring_capacity - 1;
+
+        Ok(Self {
+            view_id,
+            ring_capacity,
+            element_size,
+            head_offset,
+            tail_offset,
+            buffer_offset,
+            mask,
+        })
+    }
+
+    /// 64-byte aligned slot stride in bytes
+    #[inline(always)]
+    pub fn slot_stride(&self) -> usize {
+        let raw = ShmRingElementHeader::SIZE + (self.element_size as usize);
+        (raw + 63) & !63
+    }
+
+    /// Total required linear memory buffer size in bytes
+    pub fn required_buffer_size(&self) -> usize {
+        (self.buffer_offset as usize) + (self.ring_capacity as usize) * self.slot_stride()
+    }
+
+    /// Byte offset into memory for a specific slot index
+    #[inline(always)]
+    pub fn slot_offset(&self, slot_idx: usize) -> usize {
+        (self.buffer_offset as usize) + (slot_idx & (self.mask as usize)) * self.slot_stride()
+    }
+}
+
+/// Zero-copy pop result matching WIT `shm-ring-pop-result`
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShmRingPopResult {
+    pub header: ShmRingElementHeader,
+    pub payload_slice: CanonicalMemorySlice,
+    pub sequence_number: u64,
+}
+
+// ============================================================================
+// LOCK-FREE SHM RING BUFFER CONDUIT
+// ============================================================================
+
+enum RingStorage {
+    Owned(Vec<u8>),
+    Mapped {
+        ptr: *mut u8,
+        len: usize,
+    },
+}
+
+unsafe impl Send for RingStorage {}
+unsafe impl Sync for RingStorage {}
+
+/// Lock-free, zero-copy producer-consumer ring buffer conduit.
+/// Maps host memory pages into WASM linear memory with acquire-release synchronization.
+pub struct LockFreeShmRingBuffer {
+    descriptor: ShmRingDescriptor,
+    head: CachePadded<AtomicU64>,
+    tail: CachePadded<AtomicU64>,
+    storage: RingStorage,
+    base_ptr: *mut u8,
+}
+
+unsafe impl Send for LockFreeShmRingBuffer {}
+unsafe impl Sync for LockFreeShmRingBuffer {}
+
+impl LockFreeShmRingBuffer {
+    /// Initialize a new lock-free ring buffer with owned backing memory
+    pub fn new(capacity: u32, element_size: u32, view_id: u64) -> Result<Self, AbiError> {
+        let descriptor = ShmRingDescriptor::new(view_id, capacity, element_size)?;
+        let total_size = descriptor.required_buffer_size();
+
+        // Ensure 64-byte alignment
+        let aligned_alloc_size = total_size + 64;
+        let mut buffer = vec![0u8; aligned_alloc_size];
+
+        let raw_addr = buffer.as_mut_ptr() as usize;
+        let align_offset = if raw_addr % 64 == 0 {
+            0
+        } else {
+            64 - (raw_addr % 64)
+        };
+
+        let base_ptr = unsafe { buffer.as_mut_ptr().add(align_offset) };
+
+        let ring = Self {
+            descriptor,
+            head: CachePadded::new(AtomicU64::new(0)),
+            tail: CachePadded::new(AtomicU64::new(0)),
+            storage: RingStorage::Owned(buffer),
+            base_ptr,
+        };
+
+        unsafe {
+            ring.init_control_block();
+        }
+
+        Ok(ring)
+    }
+
+    /// Map a lock-free ring buffer directly over an existing WASM linear memory slice or host memory pages
+    pub fn from_linear_memory(
+        memory: &mut [u8],
+        offset: usize,
+        capacity: u32,
+        element_size: u32,
+        view_id: u64,
+    ) -> Result<Self, AbiError> {
+        verify_alignment(offset, CANONICAL_ALIGNMENT_DEFAULT)?;
+        let descriptor = ShmRingDescriptor::new(view_id, capacity, element_size)?;
+        let required = descriptor.required_buffer_size();
+
+        let end = offset.checked_add(required).ok_or_else(|| AbiError::OutOfBounds {
+            offset,
+            len: required,
+            capacity: memory.len(),
+        })?;
+
+        if end > memory.len() {
+            return Err(AbiError::OutOfBounds {
+                offset,
+                len: required,
+                capacity: memory.len(),
+            });
+        }
+
+        let base_ptr = unsafe { memory.as_mut_ptr().add(offset) };
+        verify_alignment(base_ptr as usize, CANONICAL_ALIGNMENT_DEFAULT)?;
+
+        let ring = Self {
+            descriptor,
+            head: CachePadded::new(AtomicU64::new(0)),
+            tail: CachePadded::new(AtomicU64::new(0)),
+            storage: RingStorage::Mapped {
+                ptr: base_ptr,
+                len: required,
+            },
+            base_ptr,
+        };
+
+        unsafe {
+            ring.init_control_block();
+        }
+
+        Ok(ring)
+    }
+
+    /// Format control block at base_ptr
+    unsafe fn init_control_block(&self) {
+        let ptr = self.base_ptr;
+        // 0..8: Magic
+        std::ptr::copy_nonoverlapping(&SHM_RING_MAGIC.to_le_bytes()[0], ptr, 8);
+        // 8..12: Capacity
+        std::ptr::copy_nonoverlapping(&self.descriptor.ring_capacity.to_le_bytes()[0], ptr.add(8), 4);
+        // 12..16: Element size
+        std::ptr::copy_nonoverlapping(&self.descriptor.element_size.to_le_bytes()[0], ptr.add(12), 4);
+        // 16..20: Mask
+        std::ptr::copy_nonoverlapping(&self.descriptor.mask.to_le_bytes()[0], ptr.add(16), 4);
+        // 20..24: Buffer offset
+        std::ptr::copy_nonoverlapping(&self.descriptor.buffer_offset.to_le_bytes()[0], ptr.add(20), 4);
+        // 24..32: View ID
+        std::ptr::copy_nonoverlapping(&self.descriptor.view_id.to_le_bytes()[0], ptr.add(24), 8);
+        // 64..72: Head pointer
+        std::ptr::copy_nonoverlapping(&0u64.to_le_bytes()[0], ptr.add(self.descriptor.head_offset as usize), 8);
+        // 128..136: Tail pointer
+        std::ptr::copy_nonoverlapping(&0u64.to_le_bytes()[0], ptr.add(self.descriptor.tail_offset as usize), 8);
+    }
+
+    unsafe fn write_slot(&self, slot_offset: usize, header: &ShmRingElementHeader, payload: &[u8]) {
+        let header_ptr = self.base_ptr.add(slot_offset);
+        let header_bytes = header.to_bytes();
+        std::ptr::copy_nonoverlapping(header_bytes.as_ptr(), header_ptr, ShmRingElementHeader::SIZE);
+
+        let payload_ptr = header_ptr.add(ShmRingElementHeader::SIZE);
+        std::ptr::copy_nonoverlapping(payload.as_ptr(), payload_ptr, payload.len());
+    }
+
+    unsafe fn read_slot(&self, slot_offset: usize) -> Result<(ShmRingElementHeader, Vec<u8>), AbiError> {
+        let header_ptr = self.base_ptr.add(slot_offset);
+        let mut header_buf = [0u8; ShmRingElementHeader::SIZE];
+        std::ptr::copy_nonoverlapping(header_ptr, header_buf.as_mut_ptr(), ShmRingElementHeader::SIZE);
+        let header = ShmRingElementHeader::from_bytes(&header_buf)?;
+
+        let payload_len = header.payload_length as usize;
+        if payload_len > self.descriptor.element_size as usize {
+            return Err(AbiError::BufferOverflow {
+                needed: payload_len,
+                capacity: self.descriptor.element_size as usize,
+            });
+        }
+
+        let payload_ptr = header_ptr.add(ShmRingElementHeader::SIZE);
+        let mut payload = vec![0u8; payload_len];
+        std::ptr::copy_nonoverlapping(payload_ptr, payload.as_mut_ptr(), payload_len);
+
+        Ok((header, payload))
+    }
+
+    #[inline(always)]
+    fn sync_head_to_memory(&self, head: u64) {
+        unsafe {
+            let ptr = self.base_ptr.add(self.descriptor.head_offset as usize) as *mut u64;
+            std::ptr::write_volatile(ptr, head);
+        }
+    }
+
+    #[inline(always)]
+    fn sync_tail_to_memory(&self, tail: u64) {
+        unsafe {
+            let ptr = self.base_ptr.add(self.descriptor.tail_offset as usize) as *mut u64;
+            std::ptr::write_volatile(ptr, tail);
+        }
+    }
+
+    /// Enqueue an element into the ring buffer with acquire/release ordering.
+    pub fn try_push(&self, mut header: ShmRingElementHeader, payload: &[u8]) -> Result<u64, AbiError> {
+        if payload.len() > self.descriptor.element_size as usize {
+            return Err(AbiError::BufferOverflow {
+                needed: payload.len(),
+                capacity: self.descriptor.element_size as usize,
+            });
+        }
+
+        let head = self.head.load(Ordering::Relaxed);
+        let tail = self.tail.load(Ordering::Acquire);
+
+        // Check if ring is full: (head - tail) >= capacity
+        if head.wrapping_sub(tail) >= self.descriptor.ring_capacity as u64 {
+            return Err(AbiError::RingFull {
+                capacity: self.descriptor.ring_capacity as usize,
+            });
+        }
+
+        let slot_idx = (head & (self.descriptor.mask as u64)) as usize;
+        let slot_offset = self.descriptor.slot_offset(slot_idx);
+
+        header.sequence_number = head;
+        header.payload_length = payload.len() as u32;
+
+        unsafe {
+            self.write_slot(slot_offset, &header, payload);
+        }
+
+        let next_head = head.wrapping_add(1);
+        self.head.store(next_head, Ordering::Release);
+        self.sync_head_to_memory(next_head);
+
+        Ok(head)
+    }
+
+    /// Dequeue an element from the ring buffer with acquire/release ordering.
+    pub fn try_pop(&self) -> Result<(ShmRingElementHeader, Vec<u8>), AbiError> {
+        let tail = self.tail.load(Ordering::Relaxed);
+        let head = self.head.load(Ordering::Acquire);
+
+        // Check if ring is empty: head == tail
+        if head == tail {
+            return Err(AbiError::RingEmpty);
+        }
+
+        let slot_idx = (tail & (self.descriptor.mask as u64)) as usize;
+        let slot_offset = self.descriptor.slot_offset(slot_idx);
+
+        let (header, payload) = unsafe {
+            self.read_slot(slot_offset)?
+        };
+
+        let next_tail = tail.wrapping_add(1);
+        self.tail.store(next_tail, Ordering::Release);
+        self.sync_tail_to_memory(next_tail);
+
+        Ok((header, payload))
+    }
+
+    /// True zero-copy pop returning a CanonicalMemorySlice into linear memory without allocations
+    pub fn pop_zero_copy(&self) -> Result<ShmRingPopResult, AbiError> {
+        let tail = self.tail.load(Ordering::Relaxed);
+        let head = self.head.load(Ordering::Acquire);
+
+        if head == tail {
+            return Err(AbiError::RingEmpty);
+        }
+
+        let slot_idx = (tail & (self.descriptor.mask as u64)) as usize;
+        let slot_offset = self.descriptor.slot_offset(slot_idx);
+
+        let header_ptr = unsafe { self.base_ptr.add(slot_offset) };
+        let mut header_buf = [0u8; ShmRingElementHeader::SIZE];
+        unsafe {
+            std::ptr::copy_nonoverlapping(header_ptr, header_buf.as_mut_ptr(), ShmRingElementHeader::SIZE);
+        }
+        let header = ShmRingElementHeader::from_bytes(&header_buf)?;
+
+        let payload_ptr = unsafe { header_ptr.add(ShmRingElementHeader::SIZE) } as u64;
+        let slice = CanonicalMemorySlice {
+            ptr: payload_ptr,
+            len: header.payload_length as u64,
+            alignment: 8,
+            access_mode: MemoryAccessMode::ReadOnly,
+        };
+
+        let next_tail = tail.wrapping_add(1);
+        self.tail.store(next_tail, Ordering::Release);
+        self.sync_tail_to_memory(next_tail);
+
+        Ok(ShmRingPopResult {
+            header,
+            payload_slice: slice,
+            sequence_number: tail,
+        })
+    }
+
+    /// In-place slice inspection without heap allocation
+    pub fn pop_slice_with<F, R>(&self, f: F) -> Result<(ShmRingElementHeader, R), AbiError>
+    where
+        F: FnOnce(&[u8]) -> R,
+    {
+        let tail = self.tail.load(Ordering::Relaxed);
+        let head = self.head.load(Ordering::Acquire);
+
+        if head == tail {
+            return Err(AbiError::RingEmpty);
+        }
+
+        let slot_idx = (tail & (self.descriptor.mask as u64)) as usize;
+        let slot_offset = self.descriptor.slot_offset(slot_idx);
+
+        let header_ptr = unsafe { self.base_ptr.add(slot_offset) };
+        let mut header_buf = [0u8; ShmRingElementHeader::SIZE];
+        unsafe {
+            std::ptr::copy_nonoverlapping(header_ptr, header_buf.as_mut_ptr(), ShmRingElementHeader::SIZE);
+        }
+        let header = ShmRingElementHeader::from_bytes(&header_buf)?;
+
+        let payload_len = header.payload_length as usize;
+        let payload_ptr = unsafe { header_ptr.add(ShmRingElementHeader::SIZE) };
+        let raw_slice = unsafe { std::slice::from_raw_parts(payload_ptr, payload_len) };
+
+        let result = f(raw_slice);
+
+        let next_tail = tail.wrapping_add(1);
+        self.tail.store(next_tail, Ordering::Release);
+        self.sync_tail_to_memory(next_tail);
+
+        Ok((header, result))
+    }
+
+    /// Current head sequence counter
+    #[inline(always)]
+    pub fn ring_head(&self) -> u64 {
+        self.head.load(Ordering::Acquire)
+    }
+
+    /// Current tail sequence counter
+    #[inline(always)]
+    pub fn ring_tail(&self) -> u64 {
+        self.tail.load(Ordering::Acquire)
+    }
+
+    /// Number of elements available for popping
+    #[inline(always)]
+    pub fn ring_available(&self) -> u32 {
+        let head = self.head.load(Ordering::Acquire);
+        let tail = self.tail.load(Ordering::Acquire);
+        head.wrapping_sub(tail) as u32
+    }
+
+    /// Remaining write capacity before backpressure triggers
+    #[inline(always)]
+    pub fn ring_remaining_capacity(&self) -> u32 {
+        let cap = self.descriptor.ring_capacity;
+        cap.saturating_sub(self.ring_available())
+    }
+
+    /// Check if ring buffer is empty
+    #[inline(always)]
+    pub fn is_empty(&self) -> bool {
+        self.ring_available() == 0
+    }
+
+    /// Check if ring buffer is full
+    #[inline(always)]
+    pub fn is_full(&self) -> bool {
+        self.ring_available() >= self.descriptor.ring_capacity
+    }
+
+    /// Associated descriptor
+    #[inline(always)]
+    pub fn descriptor(&self) -> &ShmRingDescriptor {
+        &self.descriptor
+    }
+
+    /// Push into ring buffer presenting a MemoryCapabilityToken.
+    /// Strictly rejects ReadOnlyCapabilityToken with AbiError::PermissionDenied!
+    pub fn push_with_token(
+        &self,
+        token: &MemoryCapabilityToken,
+        secret: &[u8],
+        header: ShmRingElementHeader,
+        payload: &[u8],
+    ) -> Result<u64, AbiError> {
+        token.verify(secret)?;
+        if !token.can_write() {
+            return Err(AbiError::PermissionDenied);
+        }
+        self.try_push(header, payload)
+    }
+
+    /// Push into ring buffer presenting a ReadWriteCapabilityToken
+    pub fn push_with_rw_token(
+        &self,
+        token: &ReadWriteCapabilityToken,
+        secret: &[u8],
+        header: ShmRingElementHeader,
+        payload: &[u8],
+    ) -> Result<u64, AbiError> {
+        token.verify(secret)?;
+        self.try_push(header, payload)
+    }
+
+    /// Push into ring buffer presenting a ReadOnlyCapabilityToken.
+    /// STRICTLY FORBIDDEN: Always returns Err(AbiError::PermissionDenied).
+    pub fn push_with_ro_token(
+        &self,
+        token: &ReadOnlyCapabilityToken,
+        secret: &[u8],
+        _header: ShmRingElementHeader,
+        _payload: &[u8],
+    ) -> Result<u64, AbiError> {
+        token.verify(secret)?;
+        Err(AbiError::PermissionDenied)
+    }
+
+    /// Pop from ring buffer presenting a MemoryCapabilityToken
+    pub fn pop_with_token(
+        &self,
+        token: &MemoryCapabilityToken,
+        secret: &[u8],
+    ) -> Result<(ShmRingElementHeader, Vec<u8>), AbiError> {
+        token.verify(secret)?;
+        self.try_pop()
+    }
+
+    /// Pop from ring buffer presenting a ReadOnlyCapabilityToken (reading is permitted!)
+    pub fn pop_with_ro_token(
+        &self,
+        token: &ReadOnlyCapabilityToken,
+        secret: &[u8],
+    ) -> Result<(ShmRingElementHeader, Vec<u8>), AbiError> {
+        token.verify(secret)?;
+        self.try_pop()
+    }
+}
+
+// ============================================================================
 // MULTI-MEMORY CAPABILITY SECURITY & READ-ONLY TOKENS
 // ============================================================================
 
@@ -250,9 +859,6 @@ pub enum MemoryUsageRole {
 pub const WASM_PAGE_SIZE_BYTES: usize = 65536;
 
 /// Unforgeable cryptographically signed read-only capability token.
-/// Uses keyed SHA-256 with nonce and parameter binding to guarantee non-repudiation
-/// and tamper evidence. Enforces that plugins presenting this token are strictly
-/// forbidden from acquiring mutable views or writing to shared memory.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReadOnlyCapabilityToken {
     pub token_id: u64,
@@ -265,7 +871,6 @@ pub struct ReadOnlyCapabilityToken {
 }
 
 impl ReadOnlyCapabilityToken {
-    /// Compute unforgeable SHA-256 signature over capability token attributes
     pub fn compute_signature(
         secret: &[u8],
         token_id: u64,
@@ -290,7 +895,6 @@ impl ReadOnlyCapabilityToken {
         sig
     }
 
-    /// Issue a new cryptographically signed ReadOnlyCapabilityToken
     pub fn issue(
         secret: &[u8],
         token_id: u64,
@@ -320,7 +924,6 @@ impl ReadOnlyCapabilityToken {
         }
     }
 
-    /// Verify token signature against authority secret
     pub fn verify(&self, secret: &[u8]) -> Result<(), AbiError> {
         let expected = Self::compute_signature(
             secret,
@@ -337,12 +940,10 @@ impl ReadOnlyCapabilityToken {
         Ok(())
     }
 
-    /// Fast boolean check whether token signature matches secret
     pub fn is_valid(&self, secret: &[u8]) -> bool {
         self.verify(secret).is_ok()
     }
 
-    /// Verify whether requested offset and len fall within token bounds
     pub fn allows_range(&self, offset: usize, len: usize) -> bool {
         let req_end = match offset.checked_add(len) {
             Some(end) => end,
@@ -355,22 +956,18 @@ impl ReadOnlyCapabilityToken {
         offset >= self.allowed_offset && req_end <= token_end
     }
 
-    /// Permission level is strictly ReadOnly
     pub fn permission(&self) -> CapabilityPermission {
         CapabilityPermission::ReadOnly
     }
 
-    /// Always false for read-only capability token
     pub fn can_write(&self) -> bool {
         false
     }
 
-    /// Always true for valid read-only capability token
     pub fn can_read(&self) -> bool {
         true
     }
 
-    /// Strict rejection of any mutation attempt
     pub fn reject_mutation(&self) -> Result<(), AbiError> {
         Err(AbiError::PermissionDenied)
     }
@@ -389,7 +986,6 @@ pub struct ReadWriteCapabilityToken {
 }
 
 impl ReadWriteCapabilityToken {
-    /// Compute unforgeable SHA-256 signature over read-write capability token attributes
     pub fn compute_signature(
         secret: &[u8],
         token_id: u64,
@@ -414,7 +1010,6 @@ impl ReadWriteCapabilityToken {
         sig
     }
 
-    /// Issue a new cryptographically signed ReadWriteCapabilityToken
     pub fn issue(
         secret: &[u8],
         token_id: u64,
@@ -444,7 +1039,6 @@ impl ReadWriteCapabilityToken {
         }
     }
 
-    /// Verify token signature against authority secret
     pub fn verify(&self, secret: &[u8]) -> Result<(), AbiError> {
         let expected = Self::compute_signature(
             secret,
@@ -461,12 +1055,10 @@ impl ReadWriteCapabilityToken {
         Ok(())
     }
 
-    /// Fast boolean check whether token signature matches secret
     pub fn is_valid(&self, secret: &[u8]) -> bool {
         self.verify(secret).is_ok()
     }
 
-    /// Verify whether requested offset and len fall within token bounds
     pub fn allows_range(&self, offset: usize, len: usize) -> bool {
         let req_end = match offset.checked_add(len) {
             Some(end) => end,
@@ -479,7 +1071,6 @@ impl ReadWriteCapabilityToken {
         offset >= self.allowed_offset && req_end <= token_end
     }
 
-    /// Permission level is ReadWrite
     pub fn permission(&self) -> CapabilityPermission {
         CapabilityPermission::ReadWrite
     }
@@ -546,7 +1137,6 @@ impl MemoryCapabilityToken {
 }
 
 /// Linear memory descriptor supporting Wasmtime multi-memory configurations.
-/// Models multiple discrete linear memories within a single WebAssembly component instance.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LinearMemoryDescriptor {
     pub memory_index: u32,
@@ -582,7 +1172,6 @@ impl LinearMemoryDescriptor {
         }
     }
 
-    /// Private heap configuration (typically Memory 0 in multi-memory components)
     pub fn new_private_heap(memory_index: u32, initial_pages: u32, maximum_pages: Option<u32>) -> Self {
         Self::new(
             memory_index,
@@ -595,7 +1184,6 @@ impl LinearMemoryDescriptor {
         )
     }
 
-    /// Shared zero-copy read-only ring buffer (typically Memory 1 in multi-memory components)
     pub fn new_shared_readonly_ring(memory_index: u32, pages: u32) -> Self {
         Self::new(
             memory_index,
@@ -608,7 +1196,6 @@ impl LinearMemoryDescriptor {
         )
     }
 
-    /// Shared zero-copy read-write buffer
     pub fn new_shared_readwrite(memory_index: u32, pages: u32, role: MemoryUsageRole) -> Self {
         Self::new(
             memory_index,
@@ -627,8 +1214,6 @@ impl LinearMemoryDescriptor {
 }
 
 /// Multi-memory component runtime manager supporting Wasmtime multi-memory isolation.
-/// Manages distinct linear memories (e.g., Memory 0: private heap, Memory 1: shared zero-copy read-only ring)
-/// and strictly enforces capability token authorization boundaries.
 #[derive(Debug)]
 pub struct MultiMemoryComponentRuntime {
     descriptors: HashMap<u32, LinearMemoryDescriptor>,
@@ -637,7 +1222,6 @@ pub struct MultiMemoryComponentRuntime {
 }
 
 impl MultiMemoryComponentRuntime {
-    /// Initialize runtime with explicit multi-memory descriptors and security secret
     pub fn new(descriptors: Vec<LinearMemoryDescriptor>, signing_secret: impl Into<Vec<u8>>) -> Result<Self, AbiError> {
         let mut desc_map = HashMap::new();
         let mut buf_map = HashMap::new();
@@ -655,17 +1239,14 @@ impl MultiMemoryComponentRuntime {
         })
     }
 
-    /// Lookup descriptor by memory index
     pub fn descriptor(&self, memory_index: u32) -> Option<&LinearMemoryDescriptor> {
         self.descriptors.get(&memory_index)
     }
 
-    /// Total number of configured linear memories
     pub fn memory_count(&self) -> usize {
         self.descriptors.len()
     }
 
-    /// Directly borrow linear memory buffer slice
     pub fn get_memory(&self, memory_index: u32) -> Result<&[u8], AbiError> {
         self.buffers
             .get(&memory_index)
@@ -673,7 +1254,6 @@ impl MultiMemoryComponentRuntime {
             .ok_or_else(|| AbiError::ViewNotFound { view_id: memory_index as u64 })
     }
 
-    /// Directly borrow mutable linear memory buffer slice
     pub fn get_memory_mut(&mut self, memory_index: u32) -> Result<&mut [u8], AbiError> {
         self.buffers
             .get_mut(&memory_index)
@@ -681,7 +1261,6 @@ impl MultiMemoryComponentRuntime {
             .ok_or_else(|| AbiError::ViewNotFound { view_id: memory_index as u64 })
     }
 
-    /// Create a zero-copy read-only view on a specific linear memory
     pub fn create_view(
         &self,
         memory_index: u32,
@@ -695,7 +1274,6 @@ impl MultiMemoryComponentRuntime {
         CanonicalAbiShmView::new(memory_index as u64, buf, offset, len, alignment, desc.access_mode)
     }
 
-    /// Create a zero-copy mutable view on a specific linear memory
     pub fn create_view_mut(
         &mut self,
         memory_index: u32,
@@ -712,7 +1290,6 @@ impl MultiMemoryComponentRuntime {
         CanonicalAbiShmViewMut::new(memory_index as u64, buf, offset, len, alignment, desc.access_mode)
     }
 
-    /// Acquire a zero-copy read-only view presenting a valid `ReadOnlyCapabilityToken`
     pub fn acquire_view_with_ro_token<'a>(
         &'a self,
         token: &ReadOnlyCapabilityToken,
@@ -736,22 +1313,15 @@ impl MultiMemoryComponentRuntime {
         )
     }
 
-    /// Attempt to acquire a mutable view presenting a `ReadOnlyCapabilityToken`.
-    /// STRICTLY FORBIDDEN: Always returns Err(CanonicalAbiError::PermissionDenied).
     pub fn acquire_view_mut_with_ro_token<'a>(
         &'a mut self,
         token: &ReadOnlyCapabilityToken,
         _alignment: usize,
     ) -> Result<CanonicalAbiShmViewMut<'a>, AbiError> {
-        // Cryptographically verify token first (tampered tokens fail immediately)
         token.verify(&self.signing_secret)?;
-
-        // Enforce strict read-only boundary: mutation is completely forbidden
         Err(AbiError::PermissionDenied)
     }
 
-    /// Attempt to write to shared memory presenting a `ReadOnlyCapabilityToken`.
-    /// STRICTLY FORBIDDEN: Always returns Err(CanonicalAbiError::PermissionDenied).
     pub fn write_with_ro_token(
         &mut self,
         token: &ReadOnlyCapabilityToken,
@@ -797,7 +1367,6 @@ pub struct CanonicalAbiShmView<'a> {
 }
 
 impl<'a> CanonicalAbiShmView<'a> {
-    /// Construct a new zero-copy read-only view over a linear memory buffer
     pub fn new(
         view_id: u64,
         memory: &'a [u8],
@@ -820,10 +1389,7 @@ impl<'a> CanonicalAbiShmView<'a> {
             });
         }
 
-        // Verify logical offset alignment
         verify_alignment(offset, alignment)?;
-
-        // Verify host virtual memory pointer alignment
         let raw_ptr = memory[offset..].as_ptr() as usize;
         verify_alignment(raw_ptr, alignment)?;
 
@@ -837,49 +1403,41 @@ impl<'a> CanonicalAbiShmView<'a> {
         })
     }
 
-    /// View unique identifier
     #[inline(always)]
     pub fn view_id(&self) -> u64 {
         self.view_id
     }
 
-    /// Offset into linear memory
     #[inline(always)]
     pub fn offset(&self) -> usize {
         self.offset
     }
 
-    /// Length in bytes
     #[inline(always)]
     pub fn len(&self) -> usize {
         self.len
     }
 
-    /// Is the view empty?
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
 
-    /// Alignment requirement in bytes
     #[inline(always)]
     pub fn alignment(&self) -> usize {
         self.alignment
     }
 
-    /// Memory access permissions
     #[inline(always)]
     pub fn access_mode(&self) -> MemoryAccessMode {
         self.access_mode
     }
 
-    /// Borrow the underlying byte slice
     #[inline(always)]
     pub fn as_slice(&self) -> &'a [u8] {
         self.slice
     }
 
-    /// Zero-copy transmute view into a typed slice of type `T: PodCopy`
     pub fn as_typed_slice<T: PodCopy>(&self) -> Result<&'a [T], AbiError> {
         let t_size = std::mem::size_of::<T>();
         let t_align = std::mem::align_of::<T>();
@@ -909,31 +1467,26 @@ impl<'a> CanonicalAbiShmView<'a> {
         Ok(typed_slice)
     }
 
-    /// Direct zero-copy accessor for IEEE 754 f32 slices
     #[inline(always)]
     pub fn as_f32_slice(&self) -> Result<&'a [f32], AbiError> {
         self.as_typed_slice::<f32>()
     }
 
-    /// Direct zero-copy accessor for u32 slices
     #[inline(always)]
     pub fn as_u32_slice(&self) -> Result<&'a [u32], AbiError> {
         self.as_typed_slice::<u32>()
     }
 
-    /// Direct zero-copy accessor for u64 slices
     #[inline(always)]
     pub fn as_u64_slice(&self) -> Result<&'a [u64], AbiError> {
         self.as_typed_slice::<u64>()
     }
 
-    /// Direct zero-copy accessor for i32 slices
     #[inline(always)]
     pub fn as_i32_slice(&self) -> Result<&'a [i32], AbiError> {
         self.as_typed_slice::<i32>()
     }
 
-    /// Create a zero-copy subview window within this view
     pub fn subview(&self, sub_offset: usize, sub_len: usize, new_alignment: usize) -> Result<Self, AbiError> {
         let end = sub_offset.checked_add(sub_len).ok_or_else(|| AbiError::OutOfBounds {
             offset: sub_offset,
@@ -978,7 +1531,6 @@ pub struct CanonicalAbiShmViewMut<'a> {
 }
 
 impl<'a> CanonicalAbiShmViewMut<'a> {
-    /// Construct a new zero-copy mutable view over a linear memory buffer
     pub fn new(
         view_id: u64,
         memory: &'a mut [u8],
@@ -1015,43 +1567,36 @@ impl<'a> CanonicalAbiShmViewMut<'a> {
         })
     }
 
-    /// View unique identifier
     #[inline(always)]
     pub fn view_id(&self) -> u64 {
         self.view_id
     }
 
-    /// Offset into linear memory
     #[inline(always)]
     pub fn offset(&self) -> usize {
         self.offset
     }
 
-    /// Length in bytes
     #[inline(always)]
     pub fn len(&self) -> usize {
         self.len
     }
 
-    /// Is the view empty?
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
 
-    /// Borrow the underlying byte slice
     #[inline(always)]
     pub fn as_slice(&self) -> &[u8] {
         self.slice
     }
 
-    /// Mutably borrow the underlying byte slice
     #[inline(always)]
     pub fn as_slice_mut(&mut self) -> &mut [u8] {
         self.slice
     }
 
-    /// Zero-copy transmute view into a mutable typed slice of type `T: PodCopy`
     pub fn as_typed_slice_mut<T: PodCopy>(&mut self) -> Result<&mut [T], AbiError> {
         let t_size = std::mem::size_of::<T>();
         let t_align = std::mem::align_of::<T>();
@@ -1081,19 +1626,16 @@ impl<'a> CanonicalAbiShmViewMut<'a> {
         Ok(typed_slice)
     }
 
-    /// Direct zero-copy mutable accessor for IEEE 754 f32 slices
     #[inline(always)]
     pub fn as_f32_slice_mut(&mut self) -> Result<&mut [f32], AbiError> {
         self.as_typed_slice_mut::<f32>()
     }
 
-    /// Direct zero-copy mutable accessor for u32 slices
     #[inline(always)]
     pub fn as_u32_slice_mut(&mut self) -> Result<&mut [u32], AbiError> {
         self.as_typed_slice_mut::<u32>()
     }
 
-    /// Write bytes into this mutable view
     pub fn write_bytes(&mut self, src: &[u8]) -> Result<usize, AbiError> {
         if src.len() > self.len {
             return Err(AbiError::BufferOverflow {
@@ -1111,33 +1653,20 @@ impl<'a> CanonicalAbiShmViewMut<'a> {
 // ============================================================================
 
 /// 64-byte aligned Canonical ABI Invocation Header layout.
-/// Exchanged across component boundaries without serialization overhead.
 #[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CanonicalInvocationHeader {
-    /// Magic signature: 0x4847424142493031 ("HGBABI01")
     pub magic: u64,
-    /// Protocol version: 1
     pub protocol_version: u32,
-    /// Invocation action code (e.g. ACTION_TOOL_INVOKE, ACTION_VECTOR_COMPUTE)
     pub action_code: u32,
-    /// Request correlation ID
     pub correlation_id: u64,
-    /// Bitflags modifying payload interpretation
     pub payload_flags: u32,
-    /// Byte offset where argument payload begins in linear memory
     pub arg_offset: u32,
-    /// Length of argument payload in bytes
     pub arg_length: u32,
-    /// Byte offset where return buffer begins in linear memory
     pub return_offset: u32,
-    /// Maximum capacity allocated for return buffer
     pub return_capacity: u32,
-    /// Actual length of return data written by guest (0 on entry)
     pub return_length: u32,
-    /// Status code (0 = success, non-zero = error code)
     pub status_code: u32,
-    /// Reserved padding to enforce exact 64-byte header size
     pub reserved: [u8; 12],
 }
 
@@ -1161,7 +1690,6 @@ impl Default for CanonicalInvocationHeader {
 }
 
 impl CanonicalInvocationHeader {
-    /// Create a new invocation header with designated arguments and return buffer ranges
     pub fn new(
         action_code: u32,
         correlation_id: u64,
@@ -1186,7 +1714,6 @@ impl CanonicalInvocationHeader {
         }
     }
 
-    /// Serialize header to a fixed 64-byte array in little-endian byte order
     pub fn to_bytes(&self) -> [u8; CANONICAL_HEADER_SIZE] {
         let mut buf = [0u8; CANONICAL_HEADER_SIZE];
         buf[0..8].copy_from_slice(&self.magic.to_le_bytes());
@@ -1204,7 +1731,6 @@ impl CanonicalInvocationHeader {
         buf
     }
 
-    /// Parse header from a byte slice, validating 64-byte length and magic signature
     pub fn from_bytes(slice: &[u8]) -> Result<Self, AbiError> {
         if slice.len() < CANONICAL_HEADER_SIZE {
             return Err(AbiError::OutOfBounds {
@@ -1252,7 +1778,6 @@ impl CanonicalInvocationHeader {
         })
     }
 
-    /// Write header in-place into memory slice
     pub fn write_to_slice(&self, dest: &mut [u8]) -> Result<(), AbiError> {
         if dest.len() < CANONICAL_HEADER_SIZE {
             return Err(AbiError::BufferOverflow {
@@ -1265,7 +1790,6 @@ impl CanonicalInvocationHeader {
     }
 }
 
-// Compile-time assertion that CanonicalInvocationHeader size is exactly 64 bytes
 const _: () = assert!(std::mem::size_of::<CanonicalInvocationHeader>() == 64);
 const _: () = assert!(std::mem::align_of::<CanonicalInvocationHeader>() == 64);
 
@@ -1276,14 +1800,11 @@ const _: () = assert!(std::mem::align_of::<CanonicalInvocationHeader>() == 64);
 /// Action invocation payload bypassing serde JSON/bincode
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CanonicalAbiInvocationPayload {
-    /// 64-byte invocation header
     pub header: CanonicalInvocationHeader,
-    /// Optional attached pinned tensor descriptor for zero-copy NPU routing
     pub pinned_tensor: Option<PinnedTensorDescriptor>,
 }
 
 impl CanonicalAbiInvocationPayload {
-    /// Create new invocation payload
     pub fn new(
         action_code: u32,
         correlation_id: u64,
@@ -1305,13 +1826,11 @@ impl CanonicalAbiInvocationPayload {
         }
     }
 
-    /// Attach a pinned tensor descriptor for zero-copy NPU routing
     pub fn with_pinned_tensor(mut self, tensor: PinnedTensorDescriptor) -> Self {
         self.pinned_tensor = Some(tensor);
         self
     }
 
-    /// Read argument byte slice directly from linear memory without heap copying
     pub fn read_arg_slice<'a>(&self, memory: &'a [u8]) -> Result<&'a [u8], AbiError> {
         let start = self.header.arg_offset as usize;
         let len = self.header.arg_length as usize;
@@ -1332,7 +1851,6 @@ impl CanonicalAbiInvocationPayload {
         Ok(&memory[start..end])
     }
 
-    /// Read argument slice directly as typed `&[T]` without heap copying
     pub fn read_arg_typed<'a, T: PodCopy>(&self, memory: &'a [u8]) -> Result<&'a [T], AbiError> {
         let raw_bytes = self.read_arg_slice(memory)?;
         let t_size = std::mem::size_of::<T>();
@@ -1355,7 +1873,6 @@ impl CanonicalAbiInvocationPayload {
         Ok(typed_slice)
     }
 
-    /// Write return bytes directly into linear memory without heap copying
     pub fn write_return_slice(&mut self, memory: &mut [u8], data: &[u8]) -> Result<usize, AbiError> {
         let start = self.header.return_offset as usize;
         let capacity = self.header.return_capacity as usize;
@@ -1387,7 +1904,6 @@ impl CanonicalAbiInvocationPayload {
         Ok(data.len())
     }
 
-    /// Write typed items directly into return buffer
     pub fn write_return_typed<T: PodCopy>(&mut self, memory: &mut [u8], items: &[T]) -> Result<usize, AbiError> {
         let byte_len = items.len().checked_mul(std::mem::size_of::<T>()).ok_or_else(|| {
             AbiError::BufferOverflow {
@@ -1402,7 +1918,6 @@ impl CanonicalAbiInvocationPayload {
         self.write_return_slice(memory, byte_slice)
     }
 
-    /// Encode payload header directly into memory at a 64-byte aligned offset
     pub fn encode_to_memory(&self, memory: &mut [u8], header_offset: usize) -> Result<(), AbiError> {
         verify_alignment(header_offset, CANONICAL_ALIGNMENT_DEFAULT)?;
         let end = header_offset.checked_add(CANONICAL_HEADER_SIZE).ok_or_else(|| {
@@ -1424,7 +1939,6 @@ impl CanonicalAbiInvocationPayload {
         self.header.write_to_slice(&mut memory[header_offset..end])
     }
 
-    /// Decode payload header directly from memory at a 64-byte aligned offset
     pub fn decode_from_memory(memory: &[u8], header_offset: usize) -> Result<Self, AbiError> {
         verify_alignment(header_offset, CANONICAL_ALIGNMENT_DEFAULT)?;
         let end = header_offset.checked_add(CANONICAL_HEADER_SIZE).ok_or_else(|| {
@@ -1468,7 +1982,6 @@ pub struct ActiveBorrowRecord {
 }
 
 /// Lifecycle manager tracking active borrows over linear memory.
-/// Prevents aliasing, double-lending, and dangling views.
 #[derive(Debug)]
 pub struct CanonicalMemoryLender {
     capacity: usize,
@@ -1478,7 +1991,6 @@ pub struct CanonicalMemoryLender {
 }
 
 impl CanonicalMemoryLender {
-    /// Construct a new memory lender governing a linear memory buffer of `capacity` bytes
     pub fn new(capacity: usize) -> Self {
         Self {
             capacity,
@@ -1488,22 +2000,18 @@ impl CanonicalMemoryLender {
         }
     }
 
-    /// Linear memory capacity governed by this lender
     pub fn capacity(&self) -> usize {
         self.capacity
     }
 
-    /// Number of actively lent memory views
     pub fn active_borrows_count(&self) -> usize {
         self.active_borrows.len()
     }
 
-    /// Check if a view ID is currently actively lent
     pub fn is_lent(&self, view_id: u64) -> bool {
         self.active_borrows.contains_key(&view_id)
     }
 
-    /// Validate whether a candidate region can be lent without conflicts
     pub fn check_conflicts(&self, offset: usize, len: usize, mode: MemoryAccessMode) -> Result<(), AbiError> {
         let req_end = offset.checked_add(len).ok_or_else(|| AbiError::OutOfBounds {
             offset,
@@ -1521,12 +2029,9 @@ impl CanonicalMemoryLender {
 
         for (view_id, active) in &self.active_borrows {
             let active_end = active.offset + active.len;
-
-            // Check if intervals [offset..req_end] and [active.offset..active_end] intersect
             let intersects = offset < active_end && req_end > active.offset;
 
             if intersects {
-                // If either lease is mutable (ReadWrite or ExclusiveWrite), conflict!
                 let is_exclusive = mode != MemoryAccessMode::ReadOnly
                     || active.access_mode != MemoryAccessMode::ReadOnly;
 
@@ -1547,7 +2052,6 @@ impl CanonicalMemoryLender {
         Ok(())
     }
 
-    /// Lend a region of linear memory, creating a validated `TypedShmViewDescriptor`
     pub fn lend(
         &mut self,
         offset: usize,
@@ -1593,7 +2097,6 @@ impl CanonicalMemoryLender {
         Ok(desc)
     }
 
-    /// Reclaim a previously lent shared memory view
     pub fn reclaim(&mut self, view_id: u64) -> Result<(), AbiError> {
         if self.active_borrows.remove(&view_id).is_none() {
             return Err(AbiError::ViewNotFound { view_id });
@@ -1602,7 +2105,6 @@ impl CanonicalMemoryLender {
         Ok(())
     }
 
-    /// Lend with an RAII guard that automatically reclaims the view when dropped
     pub fn lend_guard<'a>(
         &'a mut self,
         offset: usize,
@@ -1628,12 +2130,10 @@ pub struct LentRegionGuard<'a> {
 }
 
 impl<'a> LentRegionGuard<'a> {
-    /// Active view ID
     pub fn view_id(&self) -> u64 {
         self.view_id
     }
 
-    /// Attached typed view descriptor
     pub fn descriptor(&self) -> &TypedShmViewDescriptor {
         &self.descriptor
     }
@@ -1665,7 +2165,6 @@ pub struct PinnedTensorDescriptor {
 }
 
 impl PinnedTensorDescriptor {
-    /// Create and validate a new contiguous row-major pinned tensor descriptor
     pub fn new_contiguous(
         tensor_id: u64,
         shm_view_id: u64,
@@ -1700,13 +2199,11 @@ impl PinnedTensorDescriptor {
             }
         })?;
 
-        // Calculate standard contiguous row-major strides
         let mut strides = vec![1; shape.len()];
         for i in (0..shape.len() - 1).rev() {
             strides[i] = strides[i + 1] * shape[i + 1];
         }
 
-        // For NPU DMA acceleration, enforce 64-byte alignment
         let required_alignment = if device_target == NpuDeviceTarget::NpuDirect {
             CANONICAL_ALIGNMENT_DEFAULT
         } else {
@@ -1729,12 +2226,10 @@ impl PinnedTensorDescriptor {
         })
     }
 
-    /// Total number of elements in tensor
     pub fn element_count(&self) -> usize {
         self.shape.iter().product()
     }
 
-    /// Validate that tensor byte range fits within parent shared memory view
     pub fn validate_against_view(&self, view: &TypedShmViewDescriptor) -> Result<(), AbiError> {
         let view_offset = view.slice.ptr as usize;
         let view_len = view.slice.len as usize;
@@ -1763,7 +2258,6 @@ impl PinnedTensorDescriptor {
         Ok(())
     }
 
-    /// Calculate the flattened 1D index given multi-dimensional coordinates
     pub fn linear_index(&self, coords: &[usize]) -> Result<usize, AbiError> {
         if coords.len() != self.shape.len() {
             return Err(AbiError::InvalidDimensions {
@@ -1793,27 +2287,16 @@ impl PinnedTensorDescriptor {
 /// Benchmark execution report comparing zero-copy Canonical ABI against serde JSON
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InteropBenchmarkReport {
-    /// Number of iteration passes executed
     pub iterations: usize,
-    /// Number of float elements in vector payload
     pub payload_floats: usize,
-    /// Raw payload bytes transferred
     pub payload_bytes: usize,
-    /// Total duration for serde JSON serialization/deserialization (nanoseconds)
     pub serde_json_duration_nanos: u64,
-    /// Total duration for Canonical ABI zero-copy views (nanoseconds)
     pub zero_copy_duration_nanos: u64,
-    /// Measured latency reduction ratio (serde_json_duration / zero_copy_duration)
     pub speedup_ratio: f64,
-    /// Estimated CPU cycles consumed by serde JSON
     pub estimated_cycles_serde: u64,
-    /// Estimated CPU cycles consumed by Canonical ABI
     pub estimated_cycles_zero_copy: u64,
-    /// Estimated CPU cycles saved per invocation
     pub cycles_saved: u64,
-    /// Heap allocations incurred by serde JSON (bytes)
     pub serde_heap_allocations_bytes: usize,
-    /// Heap allocations incurred by Canonical ABI (0 bytes!)
     pub zero_copy_heap_allocations_bytes: usize,
 }
 
@@ -1824,20 +2307,14 @@ struct JsonPayloadDummy {
     tensor: Vec<f32>,
 }
 
-/// Execute a realistic latency comparison benchmark comparing zero-copy shared memory
-/// view extraction against standard serde JSON serialization and parsing.
 pub fn benchmark_interop_latency(payload_floats: usize, iterations: usize) -> InteropBenchmarkReport {
     let payload_bytes = payload_floats * 4;
 
-    // Prepare synthetic embedding vector
     let mut float_vec = Vec::with_capacity(payload_floats);
     for i in 0..payload_floats {
         float_vec.push((i as f32) * 0.001);
     }
 
-    // ------------------------------------------------------------------------
-    // Benchmark 1: Serde JSON
-    // ------------------------------------------------------------------------
     let dummy = JsonPayloadDummy {
         action: ACTION_VECTOR_COMPUTE,
         correlation_id: 42,
@@ -1854,10 +2331,6 @@ pub fn benchmark_interop_latency(payload_floats: usize, iterations: usize) -> In
     }
     let serde_duration = serde_start.elapsed().as_nanos() as u64;
 
-    // ------------------------------------------------------------------------
-    // Benchmark 2: Canonical ABI Zero-Copy Shared Memory View
-    // ------------------------------------------------------------------------
-    // Allocate 64-byte aligned linear memory buffer
     let total_buf_size = 64 + payload_bytes + 64;
     let mut memory_buffer = vec![0u8; total_buf_size];
 
@@ -1872,7 +2345,6 @@ pub fn benchmark_interop_latency(payload_floats: usize, iterations: usize) -> In
         0,
     );
 
-    // Populate argument bytes in linear memory once
     let float_bytes = unsafe {
         std::slice::from_raw_parts(float_vec.as_ptr() as *const u8, payload_bytes)
     };
@@ -1896,7 +2368,6 @@ pub fn benchmark_interop_latency(payload_floats: usize, iterations: usize) -> In
         serde_duration as f64
     };
 
-    // Conservative cycle estimation assuming ~3.0 GHz CPU frequency (3 cycles per nanosecond)
     let cycles_per_nano = 3;
     let est_cycles_serde = serde_duration * cycles_per_nano;
     let est_cycles_zero_copy = zero_copy_duration * cycles_per_nano;
@@ -1924,6 +2395,8 @@ pub fn benchmark_interop_latency(payload_floats: usize, iterations: usize) -> In
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+    use std::thread;
 
     #[repr(align(64))]
     struct AlignedMem<const N: usize>([u8; N]);
@@ -1933,14 +2406,12 @@ mod tests {
         let memory = AlignedMem([0u8; 1024]);
         let mem_slice = &memory.0[..];
 
-        // Valid view
         let view = CanonicalAbiShmView::new(1, mem_slice, 0, 512, 64, MemoryAccessMode::ReadOnly)
             .expect("valid view");
         assert_eq!(view.len(), 512);
         assert_eq!(view.offset(), 0);
         assert_eq!(view.view_id(), 1);
 
-        // Out of bounds view
         let err = CanonicalAbiShmView::new(2, mem_slice, 600, 500, 4, MemoryAccessMode::ReadOnly);
         match err {
             Err(AbiError::OutOfBounds { offset, len, capacity }) => {
@@ -1957,14 +2428,11 @@ mod tests {
         let memory = AlignedMem([0u8; 256]);
         let mem_slice = &memory.0[..];
 
-        // 64-byte alignment at offset 0
         assert!(CanonicalAbiShmView::new(1, mem_slice, 0, 64, 64, MemoryAccessMode::ReadOnly).is_ok());
 
-        // Misaligned offset 3 for 4-byte alignment
         let err = CanonicalAbiShmView::new(2, mem_slice, 3, 64, 4, MemoryAccessMode::ReadOnly);
         assert!(matches!(err, Err(AbiError::AlignmentFault { .. })));
 
-        // Non-power-of-two alignment
         let err_bad_align = verify_alignment(64, 15);
         assert!(matches!(err_bad_align, Err(AbiError::AlignmentFault { .. })));
     }
@@ -1973,7 +2441,6 @@ mod tests {
     fn test_typed_slice_zero_copy_f32_u32() {
         let mut memory = vec![0u8; 512];
 
-        // Write known f32 floats into memory
         let floats = [1.25f32, 2.5f32, 3.75f32, 5.0f32];
         let bytes = unsafe {
             std::slice::from_raw_parts(floats.as_ptr() as *const u8, 16)
@@ -1986,7 +2453,6 @@ mod tests {
         assert_eq!(typed.len(), 4);
         assert_eq!(typed, &[1.25, 2.5, 3.75, 5.0]);
 
-        // Write with mutable view
         let mut view_mut = CanonicalAbiShmViewMut::new(2, &mut memory, 128, 16, 4, MemoryAccessMode::ReadWrite)
             .expect("view_mut");
         let out_slice = view_mut.as_f32_slice_mut().expect("as_f32_slice_mut");
@@ -2001,20 +2467,16 @@ mod tests {
     fn test_borrow_conflict_exclusive_overlap_denied() {
         let mut lender = CanonicalMemoryLender::new(4096);
 
-        // Lend ReadWrite region [0..1024]
         let view1 = lender.lend(0, 1024, 64, MemoryAccessMode::ReadWrite, "tensor_a")
             .expect("lend view 1");
         assert_eq!(view1.view_id, 1);
 
-        // Attempt overlapping borrow [512..1536] (ReadWrite) -> must fail
         let conflict1 = lender.lend(512, 1024, 64, MemoryAccessMode::ReadWrite, "tensor_b");
         assert!(matches!(conflict1, Err(AbiError::BorrowConflict { .. })));
 
-        // Attempt overlapping borrow [512..1536] (ReadOnly) -> must fail because view1 is ReadWrite
         let conflict2 = lender.lend(512, 1024, 64, MemoryAccessMode::ReadOnly, "tensor_c");
         assert!(matches!(conflict2, Err(AbiError::BorrowConflict { .. })));
 
-        // Non-overlapping borrow [1024..2048] -> must succeed
         let view2 = lender.lend(1024, 1024, 64, MemoryAccessMode::ReadWrite, "tensor_d");
         assert!(view2.is_ok());
     }
@@ -2023,17 +2485,14 @@ mod tests {
     fn test_borrow_shared_readonly_overlap_allowed() {
         let mut lender = CanonicalMemoryLender::new(4096);
 
-        // Lend ReadOnly region [0..1024]
         let view1 = lender.lend(0, 1024, 64, MemoryAccessMode::ReadOnly, "shared_a")
             .expect("lend readonly 1");
         assert_eq!(view1.view_id, 1);
 
-        // Overlapping ReadOnly region [512..1536] -> permitted
         let view2 = lender.lend(512, 1024, 64, MemoryAccessMode::ReadOnly, "shared_b")
             .expect("lend readonly 2");
         assert_eq!(view2.view_id, 2);
 
-        // Overlapping ReadWrite -> denied
         let conflict = lender.lend(512, 1024, 64, MemoryAccessMode::ReadWrite, "writer");
         assert!(matches!(conflict, Err(AbiError::BorrowConflict { .. })));
     }
@@ -2046,15 +2505,12 @@ mod tests {
             .expect("lend view 1");
         assert_eq!(lender.active_borrows_count(), 1);
 
-        // Reclaim view 1
         lender.reclaim(view1.view_id).expect("reclaim");
         assert_eq!(lender.active_borrows_count(), 0);
 
-        // Reclaiming already reclaimed view must error
         let err = lender.reclaim(view1.view_id);
         assert!(matches!(err, Err(AbiError::ViewNotFound { .. })));
 
-        // Re-lending same region now succeeds
         let view2 = lender.lend(0, 1024, 64, MemoryAccessMode::ExclusiveWrite, "lease_2");
         assert!(view2.is_ok());
     }
@@ -2067,12 +2523,9 @@ mod tests {
             let guard = lender.lend_guard(0, 512, 64, MemoryAccessMode::ReadWrite, "guard_scope")
                 .expect("lend guard");
             assert_eq!(guard.view_id(), 1);
-            // While guard is alive, lender has 1 borrow
         }
-        // Guard was dropped: view should be automatically reclaimed
         assert_eq!(lender.active_borrows_count(), 0);
 
-        // Can now lend same region immediately
         let relend = lender.lend(0, 512, 64, MemoryAccessMode::ReadWrite, "relend_after_drop");
         assert!(relend.is_ok());
     }
@@ -2101,7 +2554,6 @@ mod tests {
         assert_eq!(decoded.return_offset, 256);
         assert_eq!(decoded.return_capacity, 512);
 
-        // Corrupt magic
         let mut corrupt = bytes;
         corrupt[0] = 0xff;
         let err = CanonicalInvocationHeader::from_bytes(&corrupt);
@@ -2110,12 +2562,11 @@ mod tests {
 
     #[test]
     fn test_pinned_tensor_npu_descriptor_validation() {
-        // 64-byte aligned offset for NPU Direct
         let desc = PinnedTensorDescriptor::new_contiguous(
             10,
             1,
             TensorDataType::F32,
-            vec![2, 3, 4], // 24 elements * 4 = 96 bytes
+            vec![2, 3, 4],
             64,
             NpuDeviceTarget::NpuDirect,
         ).expect("create pinned tensor");
@@ -2124,10 +2575,8 @@ mod tests {
         assert_eq!(desc.byte_length, 96);
         assert_eq!(desc.strides, vec![12, 4, 1]);
 
-        // Multi-dim linear index check: [1, 2, 3] -> 1*12 + 2*4 + 3*1 = 23
         assert_eq!(desc.linear_index(&[1, 2, 3]).unwrap(), 23);
 
-        // Misaligned offset for NPU Direct (offset 16 != 0 mod 64)
         let misaligned = PinnedTensorDescriptor::new_contiguous(
             11,
             1,
@@ -2146,12 +2595,10 @@ mod tests {
         let parent = CanonicalAbiShmView::new(1, mem_slice, 0, 512, 64, MemoryAccessMode::ReadOnly)
             .expect("parent view");
 
-        // Subview at offset 64 with len 128, aligned to 64
         let sub = parent.subview(64, 128, 64).expect("subview");
         assert_eq!(sub.offset(), 64);
         assert_eq!(sub.len(), 128);
 
-        // Out-of-bounds subview
         let oob = parent.subview(400, 200, 4);
         assert!(matches!(oob, Err(AbiError::OutOfBounds { .. })));
     }
@@ -2164,5 +2611,277 @@ mod tests {
         assert_eq!(report.payload_bytes, 512);
         assert_eq!(report.zero_copy_heap_allocations_bytes, 0);
         assert!(report.speedup_ratio > 0.0);
+    }
+
+    // ========================================================================
+    // PILLAR B LOCK-FREE SHM RING BUFFER TESTS
+    // ========================================================================
+
+    #[test]
+    fn test_shm_ring_descriptor_and_power_of_two() {
+        // Valid power of two capacities
+        for &cap in &[2u32, 4, 8, 16, 64, 1024] {
+            let desc = ShmRingDescriptor::new(100, cap, 64).expect("power of two descriptor");
+            assert_eq!(desc.ring_capacity, cap);
+            assert_eq!(desc.mask, cap - 1);
+            assert_eq!(desc.head_offset, 64);
+            assert_eq!(desc.tail_offset, 128);
+            assert_eq!(desc.buffer_offset, 256);
+            assert_eq!(desc.slot_stride() % 64, 0); // 64-byte aligned slot stride
+        }
+
+        // Invalid non-power-of-two capacities must fail
+        for &bad_cap in &[0u32, 3, 5, 7, 10, 100, 1000] {
+            let err = ShmRingDescriptor::new(100, bad_cap, 64);
+            assert!(matches!(err, Err(AbiError::InvalidCapacity { .. })));
+        }
+
+        // Zero element size must fail
+        let err_elem = ShmRingDescriptor::new(100, 8, 0);
+        assert!(matches!(err_elem, Err(AbiError::TypeMismatch { .. })));
+    }
+
+    #[test]
+    fn test_lock_free_ring_push_pop_zero_copy() {
+        let ring = LockFreeShmRingBuffer::new(8, 64, 1).expect("create ring");
+        assert_eq!(ring.ring_available(), 0);
+        assert!(ring.is_empty());
+        assert!(!ring.is_full());
+
+        let payload_1 = b"zero_copy_payload_alpha";
+        let header_1 = ShmRingElementHeader::new(0, payload_1.len() as u32, 0x1, 123456789);
+        let seq_1 = ring.try_push(header_1, payload_1).expect("push 1");
+        assert_eq!(seq_1, 0);
+        assert_eq!(ring.ring_available(), 1);
+        assert_eq!(ring.ring_head(), 1);
+        assert_eq!(ring.ring_tail(), 0);
+
+        let payload_2 = b"zero_copy_payload_beta";
+        let header_2 = ShmRingElementHeader::new(0, payload_2.len() as u32, 0x2, 123456799);
+        let seq_2 = ring.try_push(header_2, payload_2).expect("push 2");
+        assert_eq!(seq_2, 1);
+        assert_eq!(ring.ring_available(), 2);
+        assert_eq!(ring.ring_head(), 2);
+
+        // Pop zero copy with CanonicalMemorySlice
+        let pop_res_1 = ring.pop_zero_copy().expect("pop zero copy 1");
+        assert_eq!(pop_res_1.sequence_number, 0);
+        assert_eq!(pop_res_1.header.flags, 0x1);
+        assert_eq!(pop_res_1.header.payload_length, payload_1.len() as u32);
+        assert_eq!(pop_res_1.payload_slice.len, payload_1.len() as u64);
+        assert_eq!(ring.ring_available(), 1);
+        assert_eq!(ring.ring_tail(), 1);
+
+        // Pop with in-place inspection closure
+        let (hdr_2, matched) = ring.pop_slice_with(|data| {
+            assert_eq!(data, payload_2);
+            true
+        }).expect("pop slice with 2");
+        assert!(matched);
+        assert_eq!(hdr_2.flags, 0x2);
+        assert_eq!(ring.ring_available(), 0);
+        assert!(ring.is_empty());
+    }
+
+    #[test]
+    fn test_ring_wraparound_and_backpressure() {
+        let capacity = 4u32;
+        let ring = LockFreeShmRingBuffer::new(capacity, 32, 2).expect("create small ring");
+
+        // Fill ring to capacity
+        for i in 0..capacity {
+            let data = format!("msg_{}", i);
+            let hdr = ShmRingElementHeader::new(0, data.len() as u32, i, 1000 + (i as u64));
+            let seq = ring.try_push(hdr, data.as_bytes()).expect("push item");
+            assert_eq!(seq, i as u64);
+        }
+
+        assert_eq!(ring.ring_available(), 4);
+        assert!(ring.is_full());
+        assert_eq!(ring.ring_remaining_capacity(), 0);
+
+        // 5th push must be rejected due to backpressure (ring full)
+        let overflow_data = b"overflow_attempt";
+        let overflow_hdr = ShmRingElementHeader::new(0, overflow_data.len() as u32, 999, 9999);
+        let err = ring.try_push(overflow_hdr, overflow_data);
+        assert!(matches!(err, Err(AbiError::RingFull { capacity: 4 })));
+
+        // Pop 2 items to relieve backpressure
+        let (h0, p0) = ring.try_pop().expect("pop 0");
+        assert_eq!(h0.sequence_number, 0);
+        assert_eq!(p0, b"msg_0");
+
+        let (h1, p1) = ring.try_pop().expect("pop 1");
+        assert_eq!(h1.sequence_number, 1);
+        assert_eq!(p1, b"msg_1");
+
+        assert_eq!(ring.ring_available(), 2);
+        assert!(!ring.is_full());
+
+        // Push 2 new items (head advances to 4 and 5, wrapping slots 0 and 1!)
+        for i in 4..6 {
+            let data = format!("wrapped_msg_{}", i);
+            let hdr = ShmRingElementHeader::new(0, data.len() as u32, i, 2000 + (i as u64));
+            let seq = ring.try_push(hdr, data.as_bytes()).expect("push wrapped item");
+            assert_eq!(seq, i as u64);
+        }
+
+        assert_eq!(ring.ring_available(), 4);
+        assert!(ring.is_full());
+
+        // Drain all items in exact monotonic order
+        for expected_seq in 2..6 {
+            let (hdr, payload) = ring.try_pop().expect("drain item");
+            assert_eq!(hdr.sequence_number, expected_seq);
+            let expected_prefix = if expected_seq < 4 { "msg_" } else { "wrapped_msg_" };
+            let expected_str = format!("{}{}", expected_prefix, expected_seq);
+            assert_eq!(payload, expected_str.as_bytes());
+        }
+
+        assert_eq!(ring.ring_available(), 0);
+        assert!(ring.is_empty());
+
+        // Popping empty ring returns RingEmpty
+        let empty_err = ring.try_pop();
+        assert!(matches!(empty_err, Err(AbiError::RingEmpty)));
+    }
+
+    #[test]
+    fn test_ring_linear_memory_mapping() {
+        let mut linear_memory = AlignedMem([0u8; 8192]);
+        let offset = 64; // 64-byte aligned offset
+
+        let ring = LockFreeShmRingBuffer::from_linear_memory(
+            &mut linear_memory.0,
+            offset,
+            8,
+            64,
+            777,
+        ).expect("map ring from linear memory");
+
+        // Verify control block written directly into linear memory
+        let magic_bytes = &linear_memory.0[offset..offset + 8];
+        let magic = u64::from_le_bytes(magic_bytes.try_into().unwrap());
+        assert_eq!(magic, SHM_RING_MAGIC);
+
+        let cap_bytes = &linear_memory.0[offset + 8..offset + 12];
+        let cap = u32::from_le_bytes(cap_bytes.try_into().unwrap());
+        assert_eq!(cap, 8);
+
+        // Push and verify in-memory head update
+        let hdr = ShmRingElementHeader::new(0, 5, 0xabc, 42);
+        ring.try_push(hdr, b"hello").expect("push into mapped ring");
+
+        let head_bytes = &linear_memory.0[offset + 64..offset + 72];
+        let mem_head = u64::from_le_bytes(head_bytes.try_into().unwrap());
+        assert_eq!(mem_head, 1);
+
+        // Pop and verify in-memory tail update
+        let (pop_hdr, pop_data) = ring.try_pop().expect("pop from mapped ring");
+        assert_eq!(pop_hdr.sequence_number, 0);
+        assert_eq!(pop_data, b"hello");
+
+        let tail_bytes = &linear_memory.0[offset + 128..offset + 136];
+        let mem_tail = u64::from_le_bytes(tail_bytes.try_into().unwrap());
+        assert_eq!(mem_tail, 1);
+    }
+
+    #[test]
+    fn test_ring_capability_token_borrow_safety() {
+        let secret = b"hagibis_microkernel_super_secret_key_2026";
+        let ring = LockFreeShmRingBuffer::new(8, 64, 42).expect("create ring");
+
+        let ro_token = ReadOnlyCapabilityToken::issue(
+            secret,
+            1,
+            1,
+            42,
+            1001,
+            0,
+            ring.descriptor().required_buffer_size(),
+        );
+
+        let rw_token = ReadWriteCapabilityToken::issue(
+            secret,
+            2,
+            1,
+            42,
+            1002,
+            0,
+            ring.descriptor().required_buffer_size(),
+        );
+
+        // 1. Push with ReadOnlyCapabilityToken MUST BE REJECTED!
+        let hdr = ShmRingElementHeader::new(0, 4, 0, 0);
+        let ro_push_err = ring.push_with_ro_token(&ro_token, secret, hdr, b"test");
+        assert!(matches!(ro_push_err, Err(AbiError::PermissionDenied)));
+
+        let generic_ro = MemoryCapabilityToken::ReadOnly(ro_token.clone());
+        let generic_ro_err = ring.push_with_token(&generic_ro, secret, hdr, b"test");
+        assert!(matches!(generic_ro_err, Err(AbiError::PermissionDenied)));
+
+        // 2. Push with ReadWriteCapabilityToken succeeds
+        let rw_push = ring.push_with_rw_token(&rw_token, secret, hdr, b"data");
+        assert!(rw_push.is_ok());
+
+        // 3. Pop with ReadOnlyCapabilityToken is permitted (read access)
+        let pop_res = ring.pop_with_ro_token(&ro_token, secret);
+        assert!(pop_res.is_ok());
+        let (_, data) = pop_res.unwrap();
+        assert_eq!(data, b"data");
+
+        // 4. Tampered token signature fails verification
+        let mut tampered_ro = ro_token;
+        tampered_ro.nonce = 999999; // corrupt nonce
+        let tampered_err = ring.pop_with_ro_token(&tampered_ro, secret);
+        assert!(matches!(tampered_err, Err(AbiError::PermissionDenied)));
+    }
+
+    #[test]
+    fn test_multithreaded_concurrency_stress() {
+        let capacity = 64u32;
+        let ring = Arc::new(LockFreeShmRingBuffer::new(capacity, 16, 99).expect("create ring"));
+        let iterations = 2000u64;
+
+        let producer_ring = Arc::clone(&ring);
+        let producer_thread = thread::spawn(move || {
+            for i in 0..iterations {
+                let payload = i.to_le_bytes();
+                let hdr = ShmRingElementHeader::new(0, 8, 0, i);
+                loop {
+                    match producer_ring.try_push(hdr, &payload) {
+                        Ok(_) => break,
+                        Err(AbiError::RingFull { .. }) => thread::yield_now(),
+                        Err(e) => panic!("Producer error: {:?}", e),
+                    }
+                }
+            }
+        });
+
+        let consumer_ring = Arc::clone(&ring);
+        let consumer_thread = thread::spawn(move || {
+            let mut received = Vec::with_capacity(iterations as usize);
+            while (received.len() as u64) < iterations {
+                match consumer_ring.try_pop() {
+                    Ok((hdr, data)) => {
+                        let val = u64::from_le_bytes(data[0..8].try_into().unwrap());
+                        assert_eq!(hdr.timestamp_ns, val);
+                        received.push(val);
+                    }
+                    Err(AbiError::RingEmpty) => thread::yield_now(),
+                    Err(e) => panic!("Consumer error: {:?}", e),
+                }
+            }
+            received
+        });
+
+        producer_thread.join().expect("producer join");
+        let received = consumer_thread.join().expect("consumer join");
+
+        assert_eq!(received.len(), iterations as usize);
+        for i in 0..iterations {
+            assert_eq!(received[i as usize], i);
+        }
+        assert!(ring.is_empty());
     }
 }

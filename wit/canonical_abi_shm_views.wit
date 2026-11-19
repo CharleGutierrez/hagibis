@@ -131,6 +131,25 @@ interface canonical-abi-types {
         pinned-tensor: option<pinned-tensor-descriptor>,
     }
 
+    /// Zero-copy lock-free ring buffer descriptor for host-WASM memory conduit
+    record shm-ring-buffer-descriptor {
+        view-id: u64,
+        ring-capacity: u32,
+        element-size: u32,
+        head-offset: u32,
+        tail-offset: u32,
+        buffer-offset: u32,
+        mask: u32,
+    }
+
+    /// Fixed 24-byte zero-copy ring element header
+    record shm-ring-element-header {
+        sequence-number: u64,
+        payload-length: u32,
+        flags: u32,
+        timestamp-ns: u64,
+    }
+
     /// Error variants encountered during zero-copy ABI view management
     variant abi-error {
         out-of-bounds(string),
@@ -143,6 +162,9 @@ interface canonical-abi-types {
         npu-routing-failed(string),
         execution-trapped(string),
         permission-denied(string),
+        ring-full(string),
+        ring-empty(string),
+        invalid-capacity(string),
     }
 }
 
@@ -179,6 +201,42 @@ interface canonical-abi-shm {
     query-view: func(view-id: u64) -> result<typed-shm-view-descriptor, abi-error>;
 }
 
+/// Lock-free, zero-copy producer-consumer ring buffer conduit interface.
+/// Directly maps host memory pages into WASM linear memory with acquire-release semantics.
+interface shm-ring-conduit {
+    use canonical-abi-types.{
+        canonical-memory-slice,
+        shm-ring-buffer-descriptor,
+        shm-ring-element-header,
+        abi-error,
+    };
+
+    /// Result of popping an element from the zero-copy ring conduit
+    record shm-ring-pop-result {
+        header: shm-ring-element-header,
+        payload-slice: canonical-memory-slice,
+        sequence-number: u64,
+    }
+
+    /// Initialize a zero-copy lock-free ring buffer descriptor in linear memory
+    create-ring: func(view-id: u64, ring-capacity: u32, element-size: u32) -> result<shm-ring-buffer-descriptor, abi-error>;
+
+    /// Zero-copy enqueue operation into lock-free shared ring buffer
+    push-zero-copy: func(ring-id: u64, header: shm-ring-element-header, payload: canonical-memory-slice) -> result<u64, abi-error>;
+
+    /// Zero-copy dequeue operation from lock-free shared ring buffer
+    pop-zero-copy: func(ring-id: u64) -> result<shm-ring-pop-result, abi-error>;
+
+    /// Read current atomic head position
+    ring-head: func(ring-id: u64) -> result<u64, abi-error>;
+
+    /// Read current atomic tail position
+    ring-tail: func(ring-id: u64) -> result<u64, abi-error>;
+
+    /// Query available space or elements remaining in ring buffer
+    ring-available: func(ring-id: u64) -> result<u32, abi-error>;
+}
+
 /// Capability checker interface for validating unforgeable tokens and verifying memory permissions
 interface capability-checker {
     use canonical-abi-types.{memory-capability-token, capability-permission, abi-error};
@@ -197,6 +255,8 @@ interface capability-checker {
 world canonical-interop {
     import canonical-abi-shm;
     import capability-checker;
+    import shm-ring-conduit;
     export canonical-abi-shm;
     export capability-checker;
+    export shm-ring-conduit;
 }
