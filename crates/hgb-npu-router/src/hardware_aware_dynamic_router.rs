@@ -12,6 +12,7 @@
 //! - ThermalMemoryBreachMonitor: Active detection of 85°C thermal or 90% memory utilization breach.
 //! - CloudEdgeFailoverClient: Seamless automated failover to Cloudflare Edge Worker (/api/masterclass/run).
 //! - Dynamic sharding for 768-D LanceDB vector embeddings.
+//! - Native NPU Direct Memory Access (DMA) Pass-Through: Zero-copy vector search over page-aligned pinned buffers.
 //! - HMAC-SHA256 authenticated execution receipts for auditability and zero data loss.
 
 use std::sync::Arc;
@@ -23,6 +24,9 @@ use sha2::{Digest, Sha256};
 use tokio::sync::RwLock;
 
 use crate::error::{NpuRouterError, Result};
+use crate::npu_dma_engine::{
+    DmaBufferAllocator, DmaPageAlignment, DmaTensorDispatcher, DmaTransferReceipt,
+};
 
 /// LanceDB standard vector embedding dimensionality (768-D)
 pub const LANCEDB_EMBEDDING_DIM: usize = 768;
@@ -475,6 +479,91 @@ impl HardwareAwareDynamicRouter {
         Ok((all_results, receipt))
     }
 
+    /// Dispatches vector cosine similarity search with guaranteed Native NPU Direct Memory Access (DMA)
+    /// pass-through, allocating pinned host physical pages and bypassing serde serialization.
+    pub async fn dispatch_vector_search_dma(
+        &self,
+        query_vector: &[f32],
+        dataset: &[f32],
+        dimension: usize,
+        top_k: usize,
+        sla: LatencySla,
+    ) -> Result<(Vec<VectorSearchResult>, DynamicOffloadReceipt)> {
+        if dimension == 0 {
+            return Err(NpuRouterError::DimensionMismatch {
+                expected: LANCEDB_EMBEDDING_DIM,
+                actual: 0,
+            });
+        }
+        if query_vector.len() != dimension {
+            return Err(NpuRouterError::DimensionMismatch {
+                expected: dimension,
+                actual: query_vector.len(),
+            });
+        }
+        if dataset.is_empty() || dataset.len() % dimension != 0 {
+            return Err(NpuRouterError::InvalidPayload(
+                "Dataset byte length must be non-empty and a multiple of dimension".to_string(),
+            ));
+        }
+
+        let start = Instant::now();
+        let candidate_count = dataset.len() / dimension;
+        let dispatcher = DmaTensorDispatcher::new(0);
+
+        let (scored, _dma_receipt) = dispatcher
+            .dispatch_similarity_search_dma(query_vector, dataset, dimension, top_k)?;
+
+        let mut results: Vec<VectorSearchResult> = scored
+            .into_iter()
+            .map(|(index, score)| VectorSearchResult {
+                index,
+                score,
+                target: DynamicRouteTarget::LocalNpu,
+            })
+            .collect();
+
+        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.truncate(top_k);
+
+        let duration_us = start.elapsed().as_micros() as u64;
+
+        let mut hasher = Sha256::new();
+        for res in &results {
+            hasher.update((res.index as u64).to_le_bytes());
+            hasher.update(res.score.to_le_bytes());
+        }
+        let payload_hash = hex::encode(hasher.finalize());
+
+        let receipt_id = format!("dma-rcpt-{}", uuid::Uuid::new_v4());
+        let hmac_sig = compute_receipt_hmac(
+            &receipt_id,
+            &DynamicRouteTarget::LocalNpu,
+            &payload_hash,
+            duration_us,
+            &self.secret_key,
+        );
+
+        let receipt = DynamicOffloadReceipt {
+            receipt_id,
+            target: DynamicRouteTarget::LocalNpu,
+            sla,
+            vectors_processed: candidate_count,
+            dimension,
+            execution_duration_us: duration_us,
+            sha256_payload_hash: payload_hash,
+            hmac_signature: hmac_sig,
+            timestamp_ms: current_epoch_ms(),
+        };
+
+        {
+            let mut hist = self.receipt_log.write().await;
+            hist.push(receipt.clone());
+        }
+
+        Ok((results, receipt))
+    }
+
     /// Total receipts recorded
     pub async fn receipt_count(&self) -> usize {
         self.receipt_log.read().await.len()
@@ -520,10 +609,24 @@ fn execute_npu_cosine(
     dim: usize,
     base_idx: usize,
 ) -> Vec<VectorSearchResult> {
-    // Hardware NPU tensor matrix multiply
+    // Hardware NPU tensor matrix multiply via DMA Pass-Through
     let count = dataset.len() / dim;
-    let query_norm = dot_product_simd(query, query).sqrt();
+    let dispatcher = DmaTensorDispatcher::new(0);
 
+    // Fast-path: execute via pinned DMA buffer transfer
+    if let Ok((scored, _receipt)) = dispatcher.dispatch_similarity_search_dma(query, dataset, dim, count) {
+        return scored
+            .into_iter()
+            .map(|(local_idx, score)| VectorSearchResult {
+                index: base_idx + local_idx,
+                score,
+                target: DynamicRouteTarget::LocalNpu,
+            })
+            .collect();
+    }
+
+    // Direct SIMD fallback if DMA allocation was restricted by sandbox
+    let query_norm = dot_product_simd(query, query).sqrt();
     (0..count)
         .into_par_iter()
         .map(|i| {
@@ -1156,5 +1259,34 @@ mod tests {
         assert!(receipt.verify(secret), "Cryptographic receipt signature must verify");
         assert!(!receipt.verify(b"wrong-key"), "Wrong key must fail verification");
         assert_eq!(router.receipt_count().await, 1);
+    }
+
+    #[tokio::test]
+    async fn test_dma_pass_through_vector_dispatch() {
+        let secret = b"super-secure-production-secret-dma!";
+        let router = HardwareAwareDynamicRouter::new(secret);
+
+        let dim = LANCEDB_EMBEDDING_DIM; // 768
+        let candidate_count = 16;
+
+        let query = vec![0.33f32; dim];
+        let mut dataset = vec![0.0f32; candidate_count * dim];
+        // Target match index 7
+        for k in 0..dim {
+            dataset[7 * dim + k] = 0.33f32;
+        }
+
+        let (hits, receipt) = router
+            .dispatch_vector_search_dma(&query, &dataset, dim, 3, LatencySla::SubMillisecond)
+            .await
+            .expect("DMA vector search execution must succeed");
+
+        assert_eq!(hits.len(), 3);
+        assert_eq!(hits[0].index, 7);
+        assert!((hits[0].score - 1.0).abs() < 1e-4);
+        assert_eq!(hits[0].target, DynamicRouteTarget::LocalNpu);
+        assert_eq!(receipt.target, DynamicRouteTarget::LocalNpu);
+        assert_eq!(receipt.dimension, 768);
+        assert!(receipt.verify(secret));
     }
 }

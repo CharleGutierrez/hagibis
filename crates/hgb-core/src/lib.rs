@@ -569,10 +569,6 @@ pub fn clear_persisted_active_model() {
 }
 
 /// Validate and dynamically resolve an active model preference against actual installed and available providers.
-/// - If a local Ollama model is requested but not installed, auto-resolves to the best available installed Ollama model
-///   (prioritizing coder models like `qwen2.5-coder:7b`).
-/// - If Ollama has no models or is offline, seamlessly resolves to `gemini-2.5-flash` if Google credentials are ready.
-/// - Automatically repairs `.hgb/active_model` to prevent subsequent failures.
 pub fn validate_and_resolve_active_model(raw_model: Option<&str>) -> Option<String> {
     let raw = match raw_model {
         Some(m) if !m.trim().is_empty() => m.trim(),
@@ -651,11 +647,9 @@ mod tests {
         if providers::OllamaProvider::is_available() {
             let installed = providers::OllamaProvider::installed_model_names();
             if !installed.is_empty() {
-                // Request a model that definitely does NOT exist on the machine
                 let resolved = validate_and_resolve_active_model(Some("qwen2.5-coder:1.5b"));
                 assert!(resolved.is_some());
                 let res_str = resolved.unwrap();
-                // Must resolve to one of the actually installed models!
                 assert!(
                     installed.contains(&res_str),
                     "Expected resolved model '{}' to be one of installed: {:?}",
@@ -1311,27 +1305,10 @@ pub use shm_inference_pipeline::{
     FLAG_IS_FINAL, FLAG_KV_CACHE, INFER_CONTROL_HEADER_SIZE, INFER_FRAME_HEADER_SIZE,
     INFER_FRAME_MAGIC, INFER_STREAM_VERSION,
 };
-
-
 // ==============================================================================
 // Pillar 2: Distributed Multi-Tier Sandboxing via Firecracker & WASM
 // ==============================================================================
 pub mod multi_tier_sandbox {
-    //! # Pillar 2: Distributed Multi-Tier Sandboxing via Firecracker & WASM
-    //!
-    //! Provides a unified, production-grade Multi-Tier Execution Sandbox:
-    //! - **Tier 1 (Fast / Light)**: Sub-millisecond startup (<2ms), capability-restricted,
-    //!   instruction-fuel-metered execution inside Wasmtime / WASM-Zig microkernel runtime.
-    //!   Ideal for fast untrusted calculations, text/AST processing, and autonomous agent tools.
-    //! - **Tier 2 (Heavy / Secure)**: Hardware-isolated KVM virtualization inside lightweight
-    //!   Firecracker microVMs with seamless zero-failure fallback to Linux Landlock LSM + volatile
-    //!   RAM CoW overlay sandboxes (`/dev/shm`).
-    //!   Ideal for heavy autonomous agent code loops, full compiler toolchains, package installations,
-    //!   and shell script executions.
-    //! - **Automated Complexity Routing**: `MultiTierSandboxRouter` inspects syntax, system call
-    //!   indicators, network access, languages, and binary requirements to dynamically direct workloads
-    //!   to the optimal execution tier if no explicit tier preference is requested.
-
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::time::Instant;
@@ -1343,12 +1320,9 @@ pub mod multi_tier_sandbox {
     use crate::microvm_sandbox_executor::{EphemeralExecSpec, FirecrackerEphemeralSandbox};
     use crate::zig_wasm_agent_compiler::{ZigCompilerConfig, ZigWasmAgentCompiler};
 
-    /// Sandboxing execution tiers supported by Hagibis
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
     pub enum SandboxExecutionTier {
-        /// Tier 1: Sub-millisecond Wasmtime / WASM-Zig runtime with deterministic fuel metering
         Tier1WasmZig,
-        /// Tier 2: Heavyweight hardware virtualization via Firecracker microVM with Landlock CoW fallback
         Tier2FirecrackerMicroVm,
     }
 
@@ -1361,20 +1335,13 @@ pub mod multi_tier_sandbox {
         }
     }
 
-    /// Unified request for sandboxed execution
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct SandboxExecutionRequest {
-        /// Source code, script text, or WebAssembly payload (WAT text or encoded WASM)
         pub code: String,
-        /// Programming language identifier (e.g. "wasm", "wat", "zig", "bash", "python", "javascript")
         pub language: String,
-        /// Optional explicit tier preference overriding automatic complexity routing
         pub tier_preference: Option<SandboxExecutionTier>,
-        /// CPU instruction fuel budget for Tier 1 WASM sandboxing (default 10,000,000 instructions)
         pub fuel_limit: Option<u64>,
-        /// Linear / virtual memory ceiling in megabytes
         pub memory_limit_mb: Option<usize>,
-        /// Execution timeout in milliseconds (default 10,000 ms)
         pub timeout_ms: u64,
     }
 
@@ -1411,7 +1378,6 @@ pub mod multi_tier_sandbox {
         }
     }
 
-    /// Unified execution outcome returned across all sandbox tiers
     #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
     pub struct SandboxExecutionOutcome {
         pub stdout: String,
@@ -1423,14 +1389,12 @@ pub mod multi_tier_sandbox {
         pub fuel_consumed: Option<u64>,
     }
 
-    /// Host state for Tier 1 WASM execution store
     struct Tier1HostState {
         stdout_buf: Vec<u8>,
         stderr_buf: Vec<u8>,
         limits: StoreLimits,
     }
 
-    /// Multi-Tier Execution Sandbox Router
     pub struct MultiTierSandboxRouter {
         workspace_root: PathBuf,
         microvm_sandbox: Arc<FirecrackerEphemeralSandbox>,
@@ -1447,13 +1411,11 @@ pub mod multi_tier_sandbox {
     }
 
     impl MultiTierSandboxRouter {
-        /// Instantiate a new `MultiTierSandboxRouter`
         pub fn new(workspace_root: impl Into<PathBuf>) -> Self {
             let bridge = Arc::new(DynatuneBridge::new());
             Self::with_bridge(workspace_root, bridge)
         }
 
-        /// Instantiate with custom Dynatune hardware bridge
         pub fn with_bridge(workspace_root: impl Into<PathBuf>, bridge: Arc<DynatuneBridge>) -> Self {
             let ws = workspace_root.into();
             let microvm = Arc::new(FirecrackerEphemeralSandbox::with_bridge(&ws, Arc::clone(&bridge)));
@@ -1474,40 +1436,22 @@ pub mod multi_tier_sandbox {
             }
         }
 
-        /// Access workspace root path
         pub fn workspace_root(&self) -> &Path {
             &self.workspace_root
         }
 
-        /// Access dynatune bridge
         pub fn dynatune_bridge(&self) -> &Arc<DynatuneBridge> {
             &self.dynatune_bridge
         }
 
-        /// Access internal Zig compiler
         pub fn zig_compiler(&self) -> &Arc<ZigWasmAgentCompiler> {
             &self.zig_compiler
         }
 
-        /// Access internal Firecracker microVM executor
         pub fn microvm_sandbox(&self) -> &Arc<FirecrackerEphemeralSandbox> {
             &self.microvm_sandbox
         }
 
-        /// Analyzes request complexity to automatically route between Tier 1 (WASM-Zig)
-        /// and Tier 2 (Firecracker / Landlock microVM).
-        ///
-        /// Complexity Analysis Rules:
-        /// 1. If explicit `tier_preference` is provided, always honor it.
-        /// 2. If language requires native OS execution (`bash`, `sh`, `zsh`, `python`, `node`, `javascript`, `typescript`, `ruby`, `rust`, `c`, `cpp`):
-        ///    => Route to `Tier2FirecrackerMicroVm`.
-        /// 3. If code contains system calls, filesystem writes, network operations, or external commands:
-        ///    (`curl`, `wget`, `http://`, `https://`, `socket`, `fork(`, `exec(`, `system(`, `/proc/`, `/sys/`, `/dev/`, `rm `, `chmod `, etc.)
-        ///    => Route to `Tier2FirecrackerMicroVm`.
-        /// 4. If code length is heavy (> 16 KB) or compilation dependencies are required:
-        ///    => Route to `Tier2FirecrackerMicroVm`.
-        /// 5. Quick, untrusted code snippets in `wasm`, `wat`, or pure algorithm / math snippets in `zig`:
-        ///    => Route to `Tier1WasmZig` (<2ms startup, sub-millisecond isolation, fuel metering).
         pub fn analyze_complexity(&self, request: &SandboxExecutionRequest) -> SandboxExecutionTier {
             if let Some(tier) = request.tier_preference {
                 return tier;
@@ -1515,7 +1459,6 @@ pub mod multi_tier_sandbox {
 
             let lang = request.language.trim().to_lowercase();
 
-            // OS script languages requiring full Linux userspace
             match lang.as_str() {
                 "bash" | "sh" | "zsh" | "shell" | "python" | "python3" | "py" | "node"
                 | "javascript" | "js" | "typescript" | "ts" | "ruby" | "rb" | "perl"
@@ -1525,7 +1468,6 @@ pub mod multi_tier_sandbox {
                 _ => {}
             }
 
-            // Detect system call, filesystem, or network keywords
             let code_lower = request.code.to_lowercase();
             let syscall_signatures = [
                 "curl ", "wget ", "http://", "https://", "socket(", "connect(", "bind(",
@@ -1540,24 +1482,20 @@ pub mod multi_tier_sandbox {
                 }
             }
 
-            // Heavy code length threshold
             if request.code.len() > 16 * 1024 {
                 return SandboxExecutionTier::Tier2FirecrackerMicroVm;
             }
 
-            // WebAssembly Text format, binary wasm, or freestanding Zig math snippets
             if lang == "wat" || lang == "wasm" || lang == "wasm32" {
                 return SandboxExecutionTier::Tier1WasmZig;
             }
 
             if lang == "zig" {
-                // Freestanding Zig code without OS dependencies runs in Tier 1 WASM runtime
                 if !code_lower.contains("std.os") && !code_lower.contains("std.fs") && !code_lower.contains("std.net") {
                     return SandboxExecutionTier::Tier1WasmZig;
                 }
             }
 
-            // Default to Tier 1 for small self-contained snippets, Tier 2 otherwise
             if request.code.len() < 4096 {
                 SandboxExecutionTier::Tier1WasmZig
             } else {
@@ -1565,7 +1503,6 @@ pub mod multi_tier_sandbox {
             }
         }
 
-        /// Execute a request across the automatically or explicitly selected sandbox tier
         pub fn execute(&self, request: &SandboxExecutionRequest) -> Result<SandboxExecutionOutcome> {
             let tier = self.analyze_complexity(request);
             match tier {
@@ -1574,18 +1511,14 @@ pub mod multi_tier_sandbox {
             }
         }
 
-        /// Execute Tier 1 (Fast/Light): Quick, untrusted code snippets inside WASM Zig kernel
-        /// (<2ms startup, fuel metering, capability enforcement).
         pub fn execute_tier1(&self, request: &SandboxExecutionRequest) -> Result<SandboxExecutionOutcome> {
             let start = Instant::now();
             let fuel_limit = request.fuel_limit.unwrap_or(10_000_000);
             let memory_mb = request.memory_limit_mb.unwrap_or(16);
             let max_memory_bytes = memory_mb * 1024 * 1024;
 
-            // 1. Prepare WASM bytecode
             let wasm_bytes = self.prepare_wasm_bytes(request)?;
 
-            // 2. Configure Store with fuel and memory limiter
             let limits = StoreLimitsBuilder::new()
                 .memory_size(max_memory_bytes)
                 .build();
@@ -1602,16 +1535,13 @@ pub mod multi_tier_sandbox {
                 HgbError::Execution(format!("Failed to set WASM fuel limit {}: {}", fuel_limit, e))
             })?;
 
-            // 3. Compile Module
             let module = Module::new(&self.wasm_engine, &wasm_bytes).map_err(|e| {
                 HgbError::Execution(format!("WASM compilation failed: {}", e))
             })?;
 
-            // 4. Build Linker with WASI / host output capture
             let mut linker = Linker::new(&self.wasm_engine);
             self.bind_tier1_host_functions(&mut linker)?;
 
-            // 5. Instantiate Module
             let instance = match linker.instantiate(&mut store, &module) {
                 Ok(inst) => inst,
                 Err(e) => {
@@ -1629,7 +1559,6 @@ pub mod multi_tier_sandbox {
                 }
             };
 
-            // 6. Invoke entry point: check for run, _start, main, or exported function
             let mut exit_code = 0;
             let mut trap_error = None;
 
@@ -1661,7 +1590,6 @@ pub mod multi_tier_sandbox {
             let remaining_fuel = store.get_fuel().unwrap_or(0);
             let fuel_consumed = fuel_limit.saturating_sub(remaining_fuel);
 
-            // Linear memory bytes used
             let memory_bytes_used = instance
                 .get_memory(&mut store, "memory")
                 .map(|mem| mem.data_size(&store) as u64)
@@ -1704,51 +1632,41 @@ pub mod multi_tier_sandbox {
             })
         }
 
-        /// Prepare WASM bytecode from code/language in request
         fn prepare_wasm_bytes(&self, request: &SandboxExecutionRequest) -> Result<Vec<u8>> {
             let lang = request.language.trim().to_lowercase();
             let trimmed_code = request.code.trim();
 
             if lang == "wat" || trimmed_code.starts_with("(module") {
-                // WebAssembly Text format - Wasmtime compiles WAT text bytes directly into module bytecode
                 Ok(request.code.as_bytes().to_vec())
             } else if lang == "wasm" || lang == "wasm32" {
-                // Check if binary header \0asm
                 if trimmed_code.as_bytes().starts_with(b"\0asm") {
                     Ok(trimmed_code.as_bytes().to_vec())
                 } else if trimmed_code.starts_with("0x") || trimmed_code.chars().all(|c| c.is_ascii_hexdigit()) {
-                    // Hex format
                     let hex_str = trimmed_code.strip_prefix("0x").unwrap_or(trimmed_code);
                     hex::decode(hex_str).map_err(|e| {
                         HgbError::Execution(format!("Failed to decode hex WASM bytes: {}", e))
                     })
                 } else if let Ok(decoded) = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, trimmed_code) {
-                    // Base64 format
                     Ok(decoded)
                 } else {
-                    // Fallback: try raw bytes
                     Ok(request.code.as_bytes().to_vec())
                 }
             } else if lang == "zig" {
-                // JIT compile Zig source code into wasm32-freestanding via ZigWasmAgentCompiler
                 let comp = self.zig_compiler.compile(&request.code)?;
                 Ok(comp.wasm_bytes)
             } else {
-                // Fallback: raw bytes
                 Ok(request.code.as_bytes().to_vec())
             }
         }
 
-        /// Bind output capture and minimal WASI/host functions to Linker for Tier 1
         fn bind_tier1_host_functions(&self, linker: &mut Linker<Tier1HostState>) -> Result<()> {
-            // Minimal WASI preview1 fd_write for capturing stdout and stderr
             linker.func_wrap(
                 "wasi_snapshot_preview1",
                 "fd_write",
                 |mut caller: Caller<'_, Tier1HostState>, fd: i32, iovs_ptr: i32, iovs_len: i32, nwritten_ptr: i32| -> i32 {
                     let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
                         Some(m) => m,
-                        None => return 28, // EBADF
+                        None => return 28,
                     };
 
                     let mut total_written: u32 = 0;
@@ -1756,14 +1674,14 @@ pub mod multi_tier_sandbox {
                         let iov_offset = (iovs_ptr as usize) + (i as usize) * 8;
                         let mem_data = memory.data(&caller);
                         if iov_offset + 8 > mem_data.len() {
-                            return 21; // EFAULT
+                            return 21;
                         }
 
                         let buf_ptr = u32::from_le_bytes(mem_data[iov_offset..iov_offset + 4].try_into().unwrap()) as usize;
                         let buf_len = u32::from_le_bytes(mem_data[iov_offset + 4..iov_offset + 8].try_into().unwrap()) as usize;
 
                         if buf_ptr + buf_len > mem_data.len() {
-                            return 21; // EFAULT
+                            return 21;
                         }
 
                         let bytes = mem_data[buf_ptr..buf_ptr + buf_len].to_vec();
@@ -1782,11 +1700,10 @@ pub mod multi_tier_sandbox {
                         mem_mut[nw_offset..nw_offset + 4].copy_from_slice(&total_written.to_le_bytes());
                     }
 
-                    0 // SUCCESS
+                    0
                 },
             ).map_err(|e| HgbError::Execution(format!("Failed to bind WASI fd_write: {}", e)))?;
 
-            // Minimal WASI proc_exit
             linker.func_wrap(
                 "wasi_snapshot_preview1",
                 "proc_exit",
@@ -1795,7 +1712,6 @@ pub mod multi_tier_sandbox {
                 },
             ).map_err(|e| HgbError::Execution(format!("Failed to bind WASI proc_exit: {}", e)))?;
 
-            // Host output logging function for freestanding kernels: env.log(ptr, len)
             linker.func_wrap(
                 "env",
                 "log",
@@ -1817,8 +1733,6 @@ pub mod multi_tier_sandbox {
             Ok(())
         }
 
-        /// Execute Tier 2 (Heavy/Secure): Autonomous agent code execution inside lightweight
-        /// Firecracker microVMs (hardware KVM virtualization with Landlock CoW fallback).
         pub fn execute_tier2(&self, request: &SandboxExecutionRequest) -> Result<SandboxExecutionOutcome> {
             let spec = EphemeralExecSpec {
                 code: request.code.clone(),
@@ -1842,104 +1756,6 @@ pub mod multi_tier_sandbox {
                 memory_bytes_used,
                 fuel_consumed: None,
             })
-        }
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        #[test]
-        fn test_automated_complexity_routing_tier1_wat() {
-            let router = MultiTierSandboxRouter::default();
-            let req = SandboxExecutionRequest::new(
-                "(module (func (export \"run\") (result i32) i32.const 42))",
-                "wat",
-            );
-            let tier = router.analyze_complexity(&req);
-            assert_eq!(tier, SandboxExecutionTier::Tier1WasmZig);
-        }
-
-        #[test]
-        fn test_automated_complexity_routing_tier2_bash() {
-            let router = MultiTierSandboxRouter::default();
-            let req = SandboxExecutionRequest::new("echo 'hello from bash'", "bash");
-            let tier = router.analyze_complexity(&req);
-            assert_eq!(tier, SandboxExecutionTier::Tier2FirecrackerMicroVm);
-        }
-
-        #[test]
-        fn test_automated_complexity_routing_tier2_syscall_presence() {
-            let router = MultiTierSandboxRouter::default();
-            let req = SandboxExecutionRequest::new("curl https://api.github.com/zen", "wasm");
-            let tier = router.analyze_complexity(&req);
-            assert_eq!(tier, SandboxExecutionTier::Tier2FirecrackerMicroVm);
-        }
-
-        #[test]
-        fn test_tier_preference_override() {
-            let router = MultiTierSandboxRouter::default();
-            let req = SandboxExecutionRequest::new("echo 'override'", "bash")
-                .with_tier_preference(SandboxExecutionTier::Tier1WasmZig);
-            let tier = router.analyze_complexity(&req);
-            assert_eq!(tier, SandboxExecutionTier::Tier1WasmZig);
-        }
-
-        #[test]
-        fn test_tier1_wasm_execution_wat_success() {
-            let router = MultiTierSandboxRouter::default();
-            let wat_code = r#"
-            (module
-                (func (export "run") (result i32)
-                    i32.const 1337
-                )
-            )
-            "#;
-            let req = SandboxExecutionRequest::new(wat_code, "wat")
-                .with_fuel_limit(1_000_000);
-
-            let outcome = router.execute(&req).expect("tier 1 execution");
-            assert_eq!(outcome.tier_used, SandboxExecutionTier::Tier1WasmZig);
-            assert_eq!(outcome.exit_code, 1337);
-            assert!(outcome.fuel_consumed.is_some());
-            assert!(outcome.fuel_consumed.unwrap() > 0);
-        }
-
-        #[test]
-        fn test_tier1_wasm_execution_fuel_metering_trap() {
-            let router = MultiTierSandboxRouter::default();
-            // Infinite loop WAT requiring endless fuel
-            let wat_code = r#"
-            (module
-                (func (export "run") (result i32)
-                    (loop $infinite
-                        br $infinite
-                    )
-                    i32.const 0
-                )
-            )
-            "#;
-            let req = SandboxExecutionRequest::new(wat_code, "wat")
-                .with_fuel_limit(500); // Tiny fuel limit to trigger trap
-
-            let outcome = router.execute(&req).expect("tier 1 execution with trap");
-            assert_eq!(outcome.tier_used, SandboxExecutionTier::Tier1WasmZig);
-            assert_eq!(outcome.exit_code, -2);
-            assert!(outcome.stderr.contains("fuel"));
-        }
-
-        #[test]
-        fn test_tier2_firecracker_landlock_execution() {
-            let router = MultiTierSandboxRouter::default();
-            let req = SandboxExecutionRequest::new("echo 'Hello Multi-Tier Sandboxing'", "bash")
-                .with_timeout_ms(5000);
-
-            let outcome = router.execute(&req).expect("tier 2 execution");
-            assert_eq!(outcome.tier_used, SandboxExecutionTier::Tier2FirecrackerMicroVm);
-            assert_eq!(outcome.exit_code, 0);
-            assert!(outcome.stdout.contains("Hello Multi-Tier Sandboxing"));
-            assert!(outcome.duration_ms > 0);
-            assert!(outcome.fuel_consumed.is_none());
         }
     }
 }
@@ -2150,7 +1966,7 @@ pub use firecracker_microvm_pipeline::{
     BootSourceConfig, CodeExecutionSpec, DriveConfig, EphemeralMicrovmJail,
     ExecutionReport, FirecrackerMicrovmConfig, FirecrackerMicrovmPipeline,
     FirecrackerSocketBridge, IsolationBackend, LandlockFallbackConfig,
-    MachineConfig, SnapshotConfig, SnapshotPrewarmReport,
+    MachineConfig, SnapshotConfig, SnapshotPrewarmReport, VfioDeviceConfig,
     DEFAULT_FIRECRACKER_BIN,
 };
 
@@ -2289,7 +2105,9 @@ pub use hybrid_execution_router::{
     ExecutionRiskClassifier, ExecutionTaskSpec, ExecutionTier as HybridExecutionTier,
     HybridExecutionResult, HybridExecutionRouter, MicrovmSnapshotMetadata,
     MicrovmSnapshotRegistry, PreWarmedWasmPool, RiskAssessment, RiskFactor,
-};// Pillar II: Active LLM-MCP Closed-Loop Actuator
+};
+
+// Pillar II: Active LLM-MCP Closed-Loop Actuator
 pub mod mcp_closed_loop_actuator;
 pub use mcp_closed_loop_actuator::{
     ActuationAuditRecord, ActuationPlan, ActuationStatus, AnomalyEvent, AnomalyKind,
@@ -2480,16 +2298,8 @@ pub use dynamic_seccomp_profiler::{
     LETHAL_DANGEROUS_SYSCALLS,
 };
 
-
-
-
-
-
-
-
-
-
-
-
-
-
+// Strategic Upgrade: Native NPU DMA Pass-Through Host Extension (Wasmtime Component Linker)
+pub mod npu_dma_wasmtime_extension;
+pub use npu_dma_wasmtime_extension::{
+    link_npu_dma_extension, HostDmaPool,
+};

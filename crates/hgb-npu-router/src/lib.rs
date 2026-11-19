@@ -16,8 +16,14 @@ pub mod hardware_aware_dynamic_router;
 pub mod realtime_telemetry_load_balancer;
 pub mod npu_lancedb_embedding_router;
 pub mod perf_dynatune_kernel_autotuner;
+pub mod npu_dma_engine;
 
 pub use error::{NpuRouterError, Result};
+pub use npu_dma_engine::{
+    DmaBufferAllocator, DmaBufferDescriptor, DmaPageAlignment, DmaPinnedBuffer,
+    DmaTensorDispatcher, DmaTransferReceipt, VfioBarRegion, VfioIrqType,
+    VfioPassThroughConfig, CACHE_LINE_SIZE, PAGE_SIZE_4K, PAGE_SIZE_64K,
+};
 pub use perf_dynatune_kernel_autotuner::{
     CpuInstructionSet, HardwareMicroBenchmarker, HostHardwareProfile, KernelTuningParameters,
     SpecializedWasmKernel, TensorAcceleratorKind, TensorAcceleratorProfile,
@@ -150,5 +156,49 @@ mod integration_tests {
         assert_eq!(hits.len(), 3);
         assert_eq!(receipt.dimension, 768);
         assert!(receipt.verify(b"production-test-key-32b-secret!"));
+    }
+
+    #[tokio::test]
+    async fn test_dma_pass_through_vector_search_integration() {
+        let router = HardwareAwareDynamicRouter::new(b"production-test-key-32b-secret!");
+        let dim = 768;
+        let query = vec![0.5f32; dim];
+        let mut candidates = vec![0.1f32; 8 * dim];
+        // Match index 3 with query
+        for k in 0..dim {
+            candidates[3 * dim + k] = 0.5f32;
+        }
+
+        let (hits, receipt) = router
+            .dispatch_vector_search_dma(&query, &candidates, dim, 3, LatencySla::SubMillisecond)
+            .await
+            .unwrap();
+
+        assert_eq!(hits.len(), 3);
+        assert_eq!(hits[0].index, 3);
+        assert!((hits[0].score - 1.0).abs() < 1e-4);
+        assert_eq!(receipt.dimension, 768);
+        assert!(receipt.verify(b"production-test-key-32b-secret!"));
+    }
+
+    #[test]
+    fn test_dma_lancedb_embedding_router_integration() {
+        let router = NpuLanceDbRouter::in_memory(b"secret-test-key-32b-production!!").unwrap();
+
+        let pattern = CompilerFailurePattern::new(
+            "test-pattern-dma-001",
+            "E0308",
+            "let x: u32 = \"str\";",
+            "mismatched types: expected u32, found &str",
+            "let x: &str = \"str\";",
+            0.95,
+        );
+        router.insert_pattern(pattern).unwrap();
+
+        let (matches, receipt) = router.query_patches_dma("E0308", "let x: u32", 3);
+        assert!(!matches.is_empty());
+        assert_eq!(matches[0].pattern.error_code, "E0308");
+        assert!(receipt.duration_ns > 0);
+        assert!(receipt.bytes_transferred > 0);
     }
 }

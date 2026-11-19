@@ -4,15 +4,17 @@
 //! for untrusted code execution (Python, Rust, Bash, Zig, MCP dynamic tools):
 //! - Seamlessly interfaces with Firecracker v1.17.0 (`/home/toshiba/.local/bin/firecracker`).
 //! - Ephemeral configuration synthesis: parses `firecracker.toml` or generates runtime machine,
-//!   boot source, drive, and snapshot configurations.
+//!   boot source, drive, snapshot, and VFIO pass-through device configurations.
 //! - Unix Domain Socket bridge: drives Firecracker REST socket API (`/boot-source`, `/drives`,
-//!   `/actions` InstanceStart, `/snapshot/load`, `/machine-config`).
+//!   `/actions` InstanceStart, `/snapshot/load`, `/machine-config`, `/devices`).
 //! - High-fidelity execution capture: captures stdout, stderr, execution duration, and exit status.
 //! - Sub-millisecond snapshot resume target & Landlock + RAM CoW Overlay fallback:
 //!   If `/dev/kvm` is unavailable, unprivileged, or kernel/rootfs images are pending,
 //!   gracefully falls back to Linux Landlock LSM + volatile RAM Copy-on-Write overlay in `/dev/shm`.
 //! - Clean lifecycle management: ephemeral directory creation in `/dev/shm/hgb_firecracker_XXXX`,
 //!   graceful termination (SIGTERM -> SIGKILL), socket cleanup, and zombie process reaping.
+//! - Native NPU / TPU DMA Direct Pass-Through: supports VFIO device nodes (`/dev/vfio/*`)
+//!   for Intel IVPU (0x8086:0x7d1d), Hailo-8 M.2 (0x1e60:0x2864), and Google Coral TPU (0x1ac1:0x089a).
 
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
@@ -159,6 +161,96 @@ impl Default for LandlockFallbackConfig {
     }
 }
 
+/// VFIO Device Pass-Through configuration for MicroVM hardware acceleration (NPU, TPU, GPU)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VfioDeviceConfig {
+    /// Identifier for this VFIO device
+    pub device_id: String,
+    /// Host PCI Bus:Device.Function address (e.g. "0000:00:0b.0")
+    pub host_pci_bdf: String,
+    /// Path to host VFIO device node (e.g. "/dev/vfio/24" or "/dev/vfio/devices/0000:00:0b.0")
+    pub vfio_device_path: String,
+    /// Assigned guest PCI Bus:Device.Function address (e.g. "0000:00:05.0"), if configurable
+    pub guest_pci_bdf: Option<String>,
+    /// IOMMU group number
+    pub iommu_group: u32,
+    /// Device type description (e.g. "Intel NPU 3720 (IVPU)", "Hailo-8 M.2", "Google Coral Edge TPU")
+    pub device_type: String,
+    /// Whether MMIO write-combining is enabled for DMA mailbox registers
+    pub write_combining: bool,
+}
+
+impl VfioDeviceConfig {
+    /// Create a generic VFIO device pass-through configuration
+    pub fn new(
+        device_id: impl Into<String>,
+        host_pci_bdf: impl Into<String>,
+        iommu_group: u32,
+    ) -> Self {
+        let bdf = host_pci_bdf.into();
+        Self {
+            device_id: device_id.into(),
+            vfio_device_path: format!("/dev/vfio/{}", iommu_group),
+            guest_pci_bdf: None,
+            iommu_group,
+            host_pci_bdf: bdf,
+            device_type: "generic-vfio".to_string(),
+            write_combining: true,
+        }
+    }
+
+    /// Factory for Intel Meteor Lake / Arrow Lake NPU (IVPU)
+    pub fn intel_ivpu_npu(host_pci_bdf: impl Into<String>, iommu_group: u32) -> Self {
+        Self {
+            device_id: "intel-npu-0".to_string(),
+            host_pci_bdf: host_pci_bdf.into(),
+            vfio_device_path: format!("/dev/vfio/{}", iommu_group),
+            guest_pci_bdf: Some("0000:00:06.0".to_string()),
+            iommu_group,
+            device_type: "Intel NPU 3720 (IVPU)".to_string(),
+            write_combining: true,
+        }
+    }
+
+    /// Factory for Hailo-8 M.2 AI Acceleration Module
+    pub fn hailo8_npu(host_pci_bdf: impl Into<String>, iommu_group: u32) -> Self {
+        Self {
+            device_id: "hailo8-npu-0".to_string(),
+            host_pci_bdf: host_pci_bdf.into(),
+            vfio_device_path: format!("/dev/vfio/{}", iommu_group),
+            guest_pci_bdf: Some("0000:00:07.0".to_string()),
+            iommu_group,
+            device_type: "Hailo-8 M.2 NPU".to_string(),
+            write_combining: true,
+        }
+    }
+
+    /// Factory for Google Coral Edge TPU (PCIe)
+    pub fn coral_edge_tpu(host_pci_bdf: impl Into<String>, iommu_group: u32) -> Self {
+        Self {
+            device_id: "coral-tpu-0".to_string(),
+            host_pci_bdf: host_pci_bdf.into(),
+            vfio_device_path: format!("/dev/vfio/{}", iommu_group),
+            guest_pci_bdf: Some("0000:00:08.0".to_string()),
+            iommu_group,
+            device_type: "Google Coral Edge TPU (PCIe)".to_string(),
+            write_combining: false,
+        }
+    }
+
+    /// Synthesize Firecracker / Cloud-Hypervisor VFIO device map representation
+    pub fn to_device_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "path": self.vfio_device_path,
+            "host_bdf": self.host_pci_bdf,
+            "guest_bdf": self.guest_pci_bdf,
+            "iommu_group": self.iommu_group,
+            "type": self.device_type,
+            "write_combining": self.write_combining,
+        })
+    }
+}
+
 /// Complete configuration for Firecracker MicroVM pipeline
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct FirecrackerMicrovmConfig {
@@ -167,6 +259,7 @@ pub struct FirecrackerMicrovmConfig {
     pub drives: Vec<DriveConfig>,
     pub snapshot: SnapshotConfig,
     pub landlock_fallback: LandlockFallbackConfig,
+    pub vfio_devices: Vec<VfioDeviceConfig>,
     pub timeout_secs: u64,
 }
 
@@ -289,7 +382,36 @@ impl FirecrackerMicrovmConfig {
             }
         }
 
+        // Parse [vfio] device table
+        if let Some(v) = kv_map.get("vfio") {
+            let host_bdf = v.get("host_pci_bdf").cloned().unwrap_or_else(|| "0000:00:0b.0".to_string());
+            let iommu_grp: u32 = v.get("iommu_group").and_then(|g| g.parse().ok()).unwrap_or(1);
+            let dev_id = v.get("device_id").cloned().unwrap_or_else(|| "npu0".to_string());
+            let dev_type = v.get("device_type").cloned().unwrap_or_else(|| "Intel NPU 3720 (IVPU)".to_string());
+            let mut dev = VfioDeviceConfig::new(dev_id, host_bdf, iommu_grp);
+            dev.device_type = dev_type;
+            if let Some(g) = v.get("guest_pci_bdf") {
+                dev.guest_pci_bdf = Some(g.clone());
+            }
+            if let Some(wc) = v.get("write_combining") {
+                dev.write_combining = wc == "true";
+            }
+            config.vfio_devices.push(dev);
+        }
+
         Ok(config)
+    }
+
+    /// Builder method to attach a VFIO device
+    pub fn with_vfio_device(mut self, vfio: VfioDeviceConfig) -> Self {
+        self.vfio_devices.push(vfio);
+        self
+    }
+
+    /// Builder helper to attach Intel IVPU NPU pass-through
+    pub fn with_npu_passthrough(mut self, host_pci_bdf: &str, iommu_group: u32) -> Self {
+        self.vfio_devices.push(VfioDeviceConfig::intel_ivpu_npu(host_pci_bdf, iommu_group));
+        self
     }
 
     /// Synthesize standard Firecracker v1.17 JSON configuration suitable for `--config-file`
@@ -322,6 +444,14 @@ impl FirecrackerMicrovmConfig {
 
         if !drives_json.is_empty() {
             root["drives"] = serde_json::Value::Array(drives_json);
+        }
+
+        let vfio_json: Vec<serde_json::Value> = self.vfio_devices.iter().map(|v| {
+            v.to_device_json()
+        }).collect();
+
+        if !vfio_json.is_empty() {
+            root["devices"] = serde_json::Value::Array(vfio_json);
         }
 
         root
@@ -660,6 +790,21 @@ impl FirecrackerSocketBridge {
         } else {
             Err(HgbError::Execution(format!(
                 "Firecracker PUT {} failed with status {}: {:?}",
+                url, status, body
+            )))
+        }
+    }
+
+    /// Configure VFIO device pass-through via `/devices` endpoint
+    pub fn put_vfio_device(&self, vfio: &VfioDeviceConfig) -> Result<()> {
+        let payload = vfio.to_device_json();
+        let url = format!("/devices/{}", vfio.device_id);
+        let (status, body) = self.send_request("PUT", &url, Some(&payload))?;
+        if status == 204 || status == 200 {
+            Ok(())
+        } else {
+            Err(HgbError::Execution(format!(
+                "Firecracker / Cloud-Hypervisor PUT {} failed with status {}: {:?}",
                 url, status, body
             )))
         }
@@ -1587,6 +1732,64 @@ isolation_level = "strict"
     }
 
     #[test]
+    fn test_vfio_passthrough_config_and_json_synthesis() {
+        let npu = VfioDeviceConfig::intel_ivpu_npu("0000:00:0b.0", 24);
+        assert_eq!(npu.device_id, "intel-npu-0");
+        assert_eq!(npu.host_pci_bdf, "0000:00:0b.0");
+        assert_eq!(npu.vfio_device_path, "/dev/vfio/24");
+        assert_eq!(npu.guest_pci_bdf.as_deref(), Some("0000:00:06.0"));
+
+        let cfg = FirecrackerMicrovmConfig::default()
+            .with_vfio_device(npu)
+            .with_vfio_device(VfioDeviceConfig::hailo8_npu("0000:02:00.0", 25));
+
+        assert_eq!(cfg.vfio_devices.len(), 2);
+        let json = cfg.to_firecracker_json();
+        assert!(json["devices"].is_array());
+        let devices = json["devices"].as_array().unwrap();
+        assert_eq!(devices.len(), 2);
+        assert_eq!(devices[0]["host_bdf"], "0000:00:0b.0");
+        assert_eq!(devices[0]["type"], "Intel NPU 3720 (IVPU)");
+        assert_eq!(devices[1]["host_bdf"], "0000:02:00.0");
+        assert_eq!(devices[1]["type"], "Hailo-8 M.2 NPU");
+    }
+
+    #[test]
+    fn test_vfio_toml_parsing() {
+        let toml_content = r#"
+[machine]
+vcpu_count = 2
+mem_size_mib = 1024
+
+[vfio]
+device_id = "intel-ivpu-0"
+host_pci_bdf = "0000:00:0b.0"
+iommu_group = 12
+device_type = "Intel NPU 3720 (IVPU)"
+guest_pci_bdf = "0000:00:06.0"
+write_combining = true
+"#;
+        let cfg = FirecrackerMicrovmConfig::from_toml(toml_content).expect("parse vfio toml");
+        assert_eq!(cfg.vfio_devices.len(), 1);
+        let dev = &cfg.vfio_devices[0];
+        assert_eq!(dev.device_id, "intel-ivpu-0");
+        assert_eq!(dev.host_pci_bdf, "0000:00:0b.0");
+        assert_eq!(dev.iommu_group, 12);
+        assert_eq!(dev.vfio_device_path, "/dev/vfio/12");
+        assert_eq!(dev.guest_pci_bdf.as_deref(), Some("0000:00:06.0"));
+        assert!(dev.write_combining);
+    }
+
+    #[test]
+    fn test_microvm_npu_passthrough_builder() {
+        let cfg = FirecrackerMicrovmConfig::default()
+            .with_npu_passthrough("0000:00:0b.0", 3);
+        assert_eq!(cfg.vfio_devices.len(), 1);
+        assert_eq!(cfg.vfio_devices[0].device_id, "intel-npu-0");
+        assert_eq!(cfg.vfio_devices[0].vfio_device_path, "/dev/vfio/3");
+    }
+
+    #[test]
     fn test_ephemeral_jail_creation_and_teardown() {
         let mut jail = EphemeralMicrovmJail::new(IsolationBackend::LandlockRamCow).expect("create jail");
         assert!(jail.dir.exists(), "Jail directory must be created in /dev/shm or tempdir");
@@ -1747,4 +1950,3 @@ fn main() {
         assert!(report.stdout.contains("SNAPSHOT_RESUME_OK") || report.stdout.contains("snapshot state restored"));
     }
 }
-

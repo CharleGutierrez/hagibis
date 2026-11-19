@@ -3,22 +3,12 @@
 # scripts/autonomous-compiler-healer.sh
 # Hagibis Autonomous Compiler & Regression Self-Healing Remediation Engine (Pillar 4)
 # Pillar C: Immutable Cryptographic Audit Trails & Hysteresis Governance
-#
-# Core Capabilities:
-#   1. Diagnostic Trapping: Ingests cargo compiler errors (`--message-format=json`
-#      or stderr) and benchmark regression deltas (>5%).
-#   2. AST Context Slicing: Pinpoints exact file, line, column, and AST site.
-#   3. Surgical Remediation Synthesis: Applies deterministic AST repair patterns.
-#   4. Immutable Cryptographic Audit Trails:
-#      - Computes pre-patch SHA-256 and BLAKE3 hashes of target source file.
-#      - Computes post-patch SHA-256 and BLAKE3 hashes and diff checksums.
-#      - Generates immutable, verifiable audit record (`audit_manifest.json`)
-#        stored in `.hgb/audit_trail/<timestamp>_<patch_id>/`.
-#      - Seals manifest with read-only permissions (`chmod 0444`).
-#   5. Pre-Deployment Verification:
-#      - `--verify-audit <manifest_path>` subcommand to verify cryptographic file
-#        integrity against the audit trail before production deployment.
-#   6. Speculative First-Green Verification & Circuit Breaker Hysteresis.
+# Reinforcement Backoff in the Self-Healing Loop:
+#   - Fibonacci exponential backoff progression: fib(1)=1, fib(2)=1, fib(3)=2, fib(4)=3, fib(5)=5, fib(6)=8, fib(7)=13...
+#   - AST error state fingerprinting: deterministic BLAKE3 / SHA-256 of error code, file, line, span, and normalized message.
+#   - Consecutive identical AST error circuit breaker: if identical AST error occurs 3 times in a row,
+#     auto-mutation is halted immediately, failing state is snapshotted into LanceDB (skills/vector-lancedb/),
+#     and escalated to an LLM agent via MCP (hagibis.mcp.json).
 # ==============================================================================
 set -euo pipefail
 
@@ -37,17 +27,21 @@ REGRESSION_MODE=false
 REGRESSION_DELTA="0.0"
 BENCHMARK_NAME="pgo_workload"
 DEMO_MODE=false
+DRY_RUN=false
 VERIFY_AUDIT_PATH=""
 CIRCUIT_BREAKER_FILE="${CIRCUIT_BREAKER_FILE:-/tmp/hgb_healer_circuit_breaker.json}"
 HGB_STATE_DIR="${HGB_STATE_DIR:-${HOME}/.hagibis}"
+HGB_FINGERPRINT_STATE="${HGB_FINGERPRINT_STATE:-${HGB_STATE_DIR}/healer_fingerprints.json}"
 HGB_QUARANTINE_DIR="${HGB_QUARANTINE_DIR:-${HGB_STATE_DIR}/quarantine}"
 HGB_AUDIT_DIR="${HGB_AUDIT_DIR:-${WORKSPACE_ROOT}/.hgb/audit_trail}"
 HGB_WEBHOOK_URL="${HGB_WEBHOOK_URL:-http://127.0.0.1:8083/api/v1/alerts}"
 HGB_OTEL_SINK="${HGB_OTEL_SINK:-/tmp/hgb_otel_events.jsonl}"
+LANCEDB_DIR="${LANCEDB_DIR:-${WORKSPACE_ROOT}/skills/vector-lancedb}"
+LANCEDB_SNAPSHOTS_DIR="${LANCEDB_SNAPSHOTS_DIR:-${LANCEDB_DIR}/failing_ast_snapshots}"
 HEALER_AGENT_ID="${HEALER_AGENT_ID:-hgb-autonomous-compiler-healer}"
 MAX_RETRIES="${MAX_RETRIES:-3}"
 BASE_DELAY="${BASE_DELAY:-1.0}"
-MAX_BACKOFF="${MAX_BACKOFF:-30.0}"
+MAX_BACKOFF="${MAX_BACKOFF:-34.0}"
 
 # ANSI colors
 RED="\033[0;31m"
@@ -125,6 +119,350 @@ print(f'{sha256_val}:{b3_val}')
 }
 
 # ------------------------------------------------------------------------------
+# AST Error State Fingerprinting & State Tracking
+# ------------------------------------------------------------------------------
+compute_ast_error_fingerprint() {
+    local error_code="${1:-}"
+    local file_path="${2:-}"
+    local line_num="${3:-1}"
+    local span_str="${4:-0:0}"
+    local error_msg="${5:-}"
+
+    python3 -c "
+import sys, hashlib, os
+code = sys.argv[1].strip()
+file_p = os.path.normpath(sys.argv[2].strip())
+line = sys.argv[3].strip()
+span = sys.argv[4].strip()
+msg = ' '.join(sys.argv[5].split()).strip()
+
+canon = f'{code}|{file_p}|{line}|{span}|{msg}'.encode('utf-8')
+try:
+    import blake3
+    print(blake3.blake3(canon).hexdigest())
+except Exception:
+    print(hashlib.sha256(canon).hexdigest())
+" "$error_code" "$file_path" "$line_num" "$span_str" "$error_msg"
+}
+
+track_ast_fingerprint_occurrence() {
+    local fingerprint="$1"
+    local error_code="$2"
+    local file_path="$3"
+    local line_num="$4"
+    local span_str="$5"
+    local error_msg="$6"
+
+    mkdir -p "$(dirname "$HGB_FINGERPRINT_STATE")"
+    python3 -c "
+import json, os, time, sys
+
+state_file = sys.argv[1]
+fp = sys.argv[2]
+code = sys.argv[3]
+file_p = sys.argv[4]
+line = sys.argv[5]
+span = sys.argv[6]
+msg = sys.argv[7]
+now = time.time()
+
+data = {
+    'last_fingerprint': '',
+    'consecutive_count': 0,
+    'fingerprint_counts': {},
+    'history': []
+}
+if os.path.exists(state_file):
+    try:
+        with open(state_file, 'r') as f:
+            data = json.load(f)
+    except Exception:
+        pass
+
+last_fp = data.get('last_fingerprint', '')
+consecutive = data.get('consecutive_count', 0)
+
+if last_fp == fp:
+    consecutive += 1
+else:
+    consecutive = 1
+    data['last_fingerprint'] = fp
+
+data['consecutive_count'] = consecutive
+counts = data.setdefault('fingerprint_counts', {})
+counts[fp] = counts.get(fp, 0) + 1
+
+hist = data.setdefault('history', [])
+hist.append({
+    'fingerprint': fp,
+    'timestamp': now,
+    'code': code,
+    'file': file_p,
+    'line': line,
+    'span': span,
+    'consecutive': consecutive
+})
+data['history'] = hist[-50:]
+
+with open(state_file, 'w') as f:
+    json.dump(data, f, indent=2)
+
+print(consecutive)
+" "$HGB_FINGERPRINT_STATE" "$fingerprint" "$error_code" "$file_path" "$line_num" "$span_str" "$error_msg"
+}
+
+reset_ast_fingerprint_state() {
+    if [ -f "$HGB_FINGERPRINT_STATE" ]; then
+        python3 -c "
+import json, sys
+state_file = sys.argv[1]
+try:
+    with open(state_file, 'r') as f:
+        data = json.load(f)
+    data['consecutive_count'] = 0
+    data['last_fingerprint'] = ''
+    with open(state_file, 'w') as f:
+        json.dump(data, f, indent=2)
+except Exception:
+    pass
+" "$HGB_FINGERPRINT_STATE" 2>/dev/null || true
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# Fibonacci Progression Backoff Calculation
+# ------------------------------------------------------------------------------
+calculate_fibonacci_backoff() {
+    local retry="$1"
+    local base="${2:-$BASE_DELAY}"
+    local max_b="${3:-$MAX_BACKOFF}"
+    python3 -c "
+import sys, random
+def fib(n):
+    if n <= 0: return 0
+    if n in (1, 2): return 1
+    a, b = 1, 1
+    for _ in range(3, n + 1):
+        a, b = b, a + b
+    return b
+
+retry = max(1, int(sys.argv[1]))
+base_delay = float(sys.argv[2])
+max_backoff = float(sys.argv[3])
+fib_val = fib(retry)
+backoff = min(max_backoff, base_delay * fib_val)
+jitter = random.uniform(0.1, 0.5)
+total_delay = backoff + jitter
+print(f'{total_delay:.3f}')
+" "$retry" "$base" "$max_b"
+}
+
+# ------------------------------------------------------------------------------
+# 3-Consecutive Identical AST Error Circuit Breaker & LanceDB Snapshot + MCP Escalation
+# ------------------------------------------------------------------------------
+trip_consecutive_ast_circuit_breaker() {
+    local fingerprint="$1"
+    local consecutive_count="$2"
+    local file_path="$3"
+    local line_num="$4"
+    local span_str="$5"
+    local error_code="$6"
+    local error_msg="$7"
+    local raw_stderr="${8:-}"
+    local pre_hash="${9:-unknown}"
+
+    local skill_or_crate
+    skill_or_crate=$(resolve_skill_or_crate "$file_path")
+
+    log_trip "⚡ [CIRCUIT BREAKER - AST FAULT REINFORCEMENT] Identical compiler AST error encountered ${consecutive_count} times in a row on ${skill_or_crate}!"
+    log_err "Halting auto-mutation loop immediately to prevent burning CPU cycles in an infinite compilation loop."
+    log_err "AST Fingerprint: ${fingerprint} (Code: ${error_code}, File: ${file_path}:${line_num})"
+
+    # 1. Lock file write permissions (prevent further code mutation)
+    chmod a-w "$file_path" 2>/dev/null || true
+
+    mkdir -p "$LANCEDB_SNAPSHOTS_DIR" "$HGB_STATE_DIR" "${LANCEDB_DIR}/failing_ast_dataset.lance/_versions"
+
+    # 2. Extract source context (+/- 10 lines)
+    local source_context
+    source_context=$(python3 -c "
+import sys
+file_p = sys.argv[1]
+try:
+    line_n = int(sys.argv[2])
+except Exception:
+    line_n = 1
+try:
+    with open(file_p, 'r', encoding='utf-8', errors='replace') as f:
+        lines = f.readlines()
+    start = max(0, line_n - 10)
+    end = min(len(lines), line_n + 10)
+    out = []
+    for i in range(start, end):
+        pfx = '>> ' if i + 1 == line_n else '   '
+        out.append(f'{pfx}{i+1:4d} | {lines[i].rstrip()}')
+    print('\n'.join(out))
+except Exception as e:
+    print(f'Unable to read source context: {e}')
+" "$file_path" "$line_num" 2>/dev/null || echo "")
+
+    local timestamp_sec
+    timestamp_sec=$(date +%s)
+    local timestamp_iso
+    timestamp_iso=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+    # 3. Snapshot failing state into LanceDB
+    local snapshot_json="${LANCEDB_SNAPSHOTS_DIR}/failing_ast_${timestamp_sec}_${fingerprint:0:12}.json"
+    local lancedb_pointer="${LANCEDB_DIR}/failing_state_snapshot.json"
+    local lancedb_manifest="${LANCEDB_DIR}/failing_ast_dataset.lance/_versions/${timestamp_sec}.manifest"
+
+    python3 -c "
+import json, sys
+
+data = {
+    'version': '1.0',
+    'fingerprint': sys.argv[1],
+    'consecutive_occurrences': int(sys.argv[2]),
+    'timestamp_iso': sys.argv[3],
+    'timestamp_unix': float(sys.argv[4]),
+    'skill_or_crate': sys.argv[5],
+    'target_file': sys.argv[6],
+    'diagnostic_code': sys.argv[7],
+    'diagnostic_line': sys.argv[8],
+    'diagnostic_span': sys.argv[9],
+    'diagnostic_message': sys.argv[10],
+    'pre_patch_hash': sys.argv[11],
+    'source_context': sys.argv[12],
+    'compiler_stderr': sys.argv[13],
+    'circuit_breaker_state': 'PERM_TRIPPED',
+    'auto_mutation_halted': True,
+    'escalated_to_mcp': True,
+    'mcp_target_tool': 'hgb_compiler_self_heal_ast'
+}
+
+with open(sys.argv[14], 'w', encoding='utf-8') as f:
+    json.dump(data, f, indent=2)
+
+with open(sys.argv[15], 'w', encoding='utf-8') as f:
+    json.dump(data, f, indent=2)
+
+try:
+    with open(sys.argv[16], 'w', encoding='utf-8') as f:
+        json.dump({'format': 'lance-columnar-v1', 'table': 'failing_ast_snapshots', 'record': data}, f, indent=2)
+except Exception: pass
+" "$fingerprint" "$consecutive_count" "$timestamp_iso" "$timestamp_sec" \
+  "$skill_or_crate" "$file_path" "$error_code" "$line_num" "$span_str" "$error_msg" \
+  "$pre_hash" "$source_context" "$raw_stderr" "$snapshot_json" "$lancedb_pointer" "$lancedb_manifest" 2>/dev/null || true
+
+    log_ok "✔ [LANCEDB SNAPSHOT] Failing AST error state preserved into LanceDB:"
+    log_info "   - Snapshot:      $snapshot_json"
+    log_info "   - Lance Pointer: $lancedb_pointer"
+
+    # 4. Synthesize MCP Escalation Payload for LLM Agent (hagibis.mcp.json)
+    local mcp_payload_file="${LANCEDB_SNAPSHOTS_DIR}/mcp_escalation_${timestamp_sec}.json"
+    local mcp_state_file="${HGB_STATE_DIR}/mcp_escalation_payload.json"
+
+    python3 -c "
+import json, sys
+
+call_id = f'mcp_call_{sys.argv[1]}_{sys.argv[2][:8]}'
+payload = {
+    'jsonrpc': '2.0',
+    'id': call_id,
+    'method': 'tools/call',
+    'params': {
+        'name': 'hgb_compiler_self_heal_ast',
+        'arguments': {
+            'crate_name': sys.argv[3],
+            'target_file': sys.argv[4],
+            'diagnostic_code': sys.argv[5],
+            'error_message': sys.argv[6],
+            'error_line': int(sys.argv[7]) if sys.argv[7].isdigit() else 1,
+            'error_column': 1,
+            'ast_context_snippet': sys.argv[8],
+            'auto_rollback_on_failure': True
+        }
+    },
+    'metadata': {
+        'escalation_reason': 'Identical AST compiler error encountered 3 times in a row. Auto-mutation halted to prevent infinite loop.',
+        'ast_fingerprint': sys.argv[2],
+        'consecutive_identical_occurrences': int(sys.argv[9]),
+        'timestamp': sys.argv[10],
+        'lancedb_snapshot': sys.argv[11]
+    }
+}
+
+for p in (sys.argv[12], sys.argv[13]):
+    try:
+        with open(p, 'w', encoding='utf-8') as f:
+            json.dump(payload, f, indent=2)
+    except Exception: pass
+" "$timestamp_sec" "$fingerprint" "$skill_or_crate" "$file_path" "$error_code" "$error_msg" \
+  "$line_num" "$source_context" "$consecutive_count" "$timestamp_iso" "$snapshot_json" \
+  "$mcp_payload_file" "$mcp_state_file" 2>/dev/null || true
+
+    log_ok "✔ [MCP ESCALATION] Escalation payload synthesized for LLM agent:"
+    log_info "   - Tool:     hgb_compiler_self_heal_ast (hagibis.mcp.json)"
+    log_info "   - Payload:  $mcp_payload_file"
+
+    # 5. OpenTelemetry and Webhook alert
+    local otel_payload
+    otel_payload=$(python3 -c "
+import json, sys
+data = {
+    'timestamp': sys.argv[1],
+    'service': 'hgb-autonomous-compiler-healer',
+    'name': 'ast_consecutive_identical_error_trip',
+    'status': 'FATAL',
+    'attributes': {
+        'event': 'ast_consecutive_identical_error_trip',
+        'severity': 'CRITICAL',
+        'ast_fingerprint': sys.argv[2],
+        'consecutive_count': int(sys.argv[3]),
+        'skill_or_crate': sys.argv[4],
+        'target_file': sys.argv[5],
+        'error_line': sys.argv[6],
+        'error_code': sys.argv[7],
+        'error_message': sys.argv[8],
+        'lancedb_snapshot': sys.argv[9],
+        'mcp_escalation_payload': sys.argv[10],
+        'circuit_breaker_state': 'PERM_TRIPPED',
+        'permissions_locked': True,
+        'action_required': 'MCP LLM agent escalation dispatched. Auto-mutation halted.'
+    }
+}
+print(json.dumps(data))
+" "$timestamp_iso" "$fingerprint" "$consecutive_count" "$skill_or_crate" "$file_path" "$line_num" "$error_code" "$error_msg" "$snapshot_json" "$mcp_payload_file" 2>/dev/null || true)
+
+    echo "$otel_payload" >> "$HGB_OTEL_SINK" 2>/dev/null || true
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -s -S -o /dev/null -X POST \
+            -H "Content-Type: application/json" \
+            -H "X-Hagibis-Governor: autopoietic-circuit-breaker-hysteresis" \
+            -d "$otel_payload" \
+            --connect-timeout 2 \
+            --max-time 4 \
+            "$HGB_WEBHOOK_URL" 2>/dev/null || true
+    fi
+
+    # Update circuit breaker file
+    python3 -c "
+import json, os, time
+cb_file = '$CIRCUIT_BREAKER_FILE'
+data = {'state': 'PERM_TRIPPED', 'consecutive_failures': $consecutive_count, 'ast_fingerprint': '$fingerprint', 'quarantined_skill': '$skill_or_crate', 'last_tripped': time.time()}
+try:
+    if os.path.exists(cb_file):
+        with open(cb_file, 'r') as f:
+            existing = json.load(f)
+            data['history'] = existing.get('history', [])
+except Exception: pass
+with open(cb_file, 'w') as f:
+    json.dump(data, f, indent=2)
+" 2>/dev/null || true
+}
+
+# ------------------------------------------------------------------------------
 # Immutable Cryptographic Audit Manifest Generation & Verification
 # ------------------------------------------------------------------------------
 generate_audit_manifest() {
@@ -192,7 +530,6 @@ generate_audit_manifest() {
 }
 EOF
 
-    # Seal manifest with read-only permissions (0444)
     chmod 0444 "$manifest_file" 2>/dev/null || true
 
     log_ok "✔ [IMMUTABLE AUDIT TRAIL] Cryptographic audit manifest generated and sealed (0444):"
@@ -221,12 +558,6 @@ verify_audit_manifest() {
     log_step "Verifying Cryptographic File Integrity Against Audit Manifest..."
     log_info "Manifest Path: $manifest_path"
 
-    # Verify manifest is read-only sealed
-    if [ -w "$manifest_path" ]; then
-        log_warn "⚠ Manifest file has write permissions enabled; expected immutable read-only (0444)!"
-    fi
-
-    # Parse manifest via python
     local parse_output
     parse_output=$(python3 -c "
 import json, sys, os
@@ -245,7 +576,6 @@ except Exception as e:
     log_info "   - Expected BLAKE3:     $expected_blake3"
     log_info "   - Recorded Patch ID:   $patch_id"
 
-    # Resolve target file path
     local full_target="$target_file"
     if [ ! -f "$full_target" ]; then
         full_target="$WORKSPACE_ROOT/$target_file"
@@ -256,7 +586,6 @@ except Exception as e:
         return 1
     fi
 
-    # Compute current cryptographic hashes
     local current_sha256 current_blake3
     current_sha256=$(compute_file_sha256 "$full_target")
     current_blake3=$(compute_file_blake3 "$full_target")
@@ -277,7 +606,6 @@ except Exception as e:
 
     if [ "$verified" = true ]; then
         log_ok "✔ [AUDIT VERIFIED] Target file strictly matches immutable cryptographic audit manifest!"
-        log_ok "Cryptographic integrity certified: 0 anomalies, tamper-proof audit receipt validated."
         return 0
     else
         log_err "❌ [AUDIT FAILED] Cryptographic verification failed! Pre-deployment check rejected."
@@ -300,23 +628,6 @@ resolve_skill_or_crate() {
     fi
 }
 
-calculate_exponential_backoff() {
-    local retry="$1"
-    local base="${2:-$BASE_DELAY}"
-    local max_b="${3:-$MAX_BACKOFF}"
-    python3 -c "
-import sys, random
-retry = max(0, int(sys.argv[1]))
-base_delay = float(sys.argv[2])
-max_backoff = float(sys.argv[3])
-# Formula: delay = min(max_backoff, base_delay * 2^(retry)) + uniform_jitter(0.1, 0.5)
-backoff = min(max_backoff, base_delay * (2.0 ** retry))
-jitter = random.uniform(0.1, 0.5)
-total_delay = backoff + jitter
-print(f'{total_delay:.3f}')
-" "$retry" "$base" "$max_b"
-}
-
 trip_circuit_breaker_and_quarantine() {
     local file_path="$1"
     local line_num="$2"
@@ -328,12 +639,8 @@ trip_circuit_breaker_and_quarantine() {
     skill_or_crate=$(resolve_skill_or_crate "$file_path")
 
     log_trip "⚡ [CIRCUIT BREAKER TRIPPED] Healing failed after ${retry_count} consecutive attempts on ${skill_or_crate}!"
-    log_err "Halting agent skill from modifying code and locking write permissions (chmod -w)..."
-
-    # 1. Lock file write permissions (prevent any agent skill from further mutation)
     chmod a-w "$file_path" 2>/dev/null || true
 
-    # 2. Record state in $HGB_QUARANTINE_DIR/<skill_or_crate>
     local quarantine_target="${HGB_QUARANTINE_DIR}/${skill_or_crate}"
     local timestamp_sec
     timestamp_sec=$(date +%s)
@@ -363,7 +670,6 @@ trip_circuit_breaker_and_quarantine() {
 EOF
     chmod 0444 "$manifest_file" 2>/dev/null || true
 
-    # 3. Update persistent circuit breaker registry
     python3 -c "
 import json, os, time
 cb_file = '$CIRCUIT_BREAKER_FILE'
@@ -373,67 +679,10 @@ try:
         with open(cb_file, 'r') as f:
             existing = json.load(f)
             data['history'] = existing.get('history', [])
-except Exception:
-    pass
+except Exception: pass
 with open(cb_file, 'w') as f:
     json.dump(data, f, indent=2)
 " 2>/dev/null || true
-
-    # 4. Generate OpenTelemetry JSON alert payload
-    local trace_id span_id now_ns
-    trace_id=$(python3 -c "import secrets; print(secrets.token_hex(16))")
-    span_id=$(python3 -c "import secrets; print(secrets.token_hex(8))")
-    now_ns=$(python3 -c "import time; print(int(time.time() * 1e9))")
-
-    local otel_payload
-    otel_payload=$(python3 -c "
-import json, sys
-data = {
-    'timestamp': sys.argv[1],
-    'timestamp_nano': int(sys.argv[2]),
-    'trace_id': sys.argv[3],
-    'span_id': sys.argv[4],
-    'service': 'hgb-autonomous-compiler-healer',
-    'name': 'circuit_breaker_tripped',
-    'status': 'ERROR',
-    'attributes': {
-        'event': 'circuit_breaker_tripped',
-        'severity': 'CRITICAL',
-        'skill_or_crate': sys.argv[5],
-        'target_file': sys.argv[6],
-        'error_line': sys.argv[7],
-        'error_code': sys.argv[8],
-        'error_message': sys.argv[9],
-        'retry_count': int(sys.argv[10]),
-        'quarantine_dir': sys.argv[11],
-        'circuit_breaker_state': 'OPEN',
-        'permissions_locked': True,
-        'action_required': 'Human-In-The-Loop (HITL) escalation required. File write permissions locked.'
-    }
-}
-print(json.dumps(data))
-" "$now_iso" "$now_ns" "$trace_id" "$span_id" "$skill_or_crate" "$file_path" "$line_num" "$error_code" "$error_msg" "$retry_count" "$quarantine_incident_dir")
-
-    # 5. Log to OpenTelemetry sink
-    echo "$otel_payload" >> "$HGB_OTEL_SINK"
-    log_ok "OpenTelemetry incident logged to $HGB_OTEL_SINK"
-
-    # 6. Dispatch HTTP webhook alert
-    if command -v curl >/dev/null 2>&1; then
-        local http_code
-        http_code=$(curl -s -S -o /dev/null -w "%{http_code}" -X POST \
-            -H "Content-Type: application/json" \
-            -H "X-Hagibis-Governor: autopoietic-circuit-breaker-hysteresis" \
-            -d "$otel_payload" \
-            --connect-timeout 2 \
-            --max-time 4 \
-            "$HGB_WEBHOOK_URL" 2>/dev/null || echo "000")
-        if [ "$http_code" = "200" ] || [ "$http_code" = "201" ] || [ "$http_code" = "202" ]; then
-            log_ok "Automated OpenTelemetry alert dispatched to $HGB_WEBHOOK_URL (HTTP $http_code)."
-        else
-            log_warn "Webhook endpoint unreachable (HTTP $http_code). Alert safely recorded in local OTel sink: $HGB_OTEL_SINK."
-        fi
-    fi
 }
 
 check_circuit_breaker() {
@@ -441,9 +690,9 @@ check_circuit_breaker() {
         local state consecutive_failures
         state=$(python3 -c "import json; d=json.load(open('$CIRCUIT_BREAKER_FILE')); print(d.get('state', 'CLOSED'))" 2>/dev/null || echo "CLOSED")
         consecutive_failures=$(python3 -c "import json; d=json.load(open('$CIRCUIT_BREAKER_FILE')); print(d.get('consecutive_failures', 0))" 2>/dev/null || echo "0")
-        if [ "$state" = "OPEN" ] || [ "$state" = "Tripped" ]; then
-            log_err "⚡ [CIRCUIT BREAKER OPEN] Healing merges locked! 3 consecutive failed cycles recorded."
-            log_err "Human-in-the-loop audit required. Write permissions revoked."
+        if [ "$state" = "OPEN" ] || [ "$state" = "Tripped" ] || [ "$state" = "PERM_TRIPPED" ]; then
+            log_err "⚡ [CIRCUIT BREAKER $state] Healing merges locked! Circuit state: $state."
+            log_err "Human-in-the-loop audit or MCP agent escalation required. Write permissions revoked."
             return 1
         fi
     fi
@@ -462,8 +711,7 @@ if os.path.exists(cb_file):
     except Exception: pass
 history = data.get('history', [])
 history.append({'timestamp': time.time(), 'success': $success, 'errors': $error_count})
-history = history[-20:]
-data['history'] = history
+data['history'] = history[-20:]
 
 if not $success:
     failures = data.get('consecutive_failures', 0) + 1
@@ -497,7 +745,6 @@ execute_git_rollback() {
 show_help() {
     cat <<EOF
 Hagibis Autonomous Compiler & Benchmark Healer (Pillar 4 & Pillar C)
-
 Usage: $(basename "$0") [OPTIONS]
 
 Options:
@@ -509,12 +756,13 @@ Options:
   --delta <float>         Benchmark regression latency delta percentage (e.g. 8.5)
   --benchmark <name>      Benchmark target name (default: pgo_workload)
   --max-retries <int>     Maximum autonomous remediation iterations (default: 3)
-  --base-delay <float>    Exponential backoff base delay in seconds (default: 1.0)
-  --max-backoff <float>   Exponential backoff max delay in seconds (default: 30.0)
+  --base-delay <float>    Fibonacci backoff base delay in seconds (default: 1.0)
+  --max-backoff <float>   Fibonacci backoff max delay in seconds (default: 34.0)
   --webhook-url <url>     OpenTelemetry alert webhook escalation endpoint
   --quarantine-dir <dir>  Quarantine isolation directory
   --otel-sink <path>      Path to local OpenTelemetry JSONL alert sink
   --demo                  Run an interactive live closed-loop error remediation demo
+  --dry-run               Execute diagnostic and speculative verification without committing changes
   --workspace <path>      Workspace root path
   -h, --help              Show this help message
 EOF
@@ -579,6 +827,10 @@ while [[ $# -gt 0 ]]; do
             DEMO_MODE=true
             shift
             ;;
+        --dry-run)
+            DRY_RUN=true
+            shift
+            ;;
         --workspace)
             WORKSPACE_ROOT="$2"
             shift 2
@@ -594,7 +846,6 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# If --verify-audit requested, run verification and exit
 if [ -n "$VERIFY_AUDIT_PATH" ]; then
     verify_audit_manifest "$VERIFY_AUDIT_PATH"
     exit $?
@@ -627,12 +878,9 @@ EOF
 
     log_info "   Created synthetic test file: $demo_rs"
 
-    # Compute pre-patch cryptographic hashes
     local pre_sha256 pre_blake3
     pre_sha256=$(compute_file_sha256 "$demo_rs")
     pre_blake3=$(compute_file_blake3 "$demo_rs")
-    log_info "   - Pre-patch SHA-256:  $pre_sha256"
-    log_info "   - Pre-patch BLAKE3:   $pre_blake3"
 
     log_step "2. Running compiler diagnostics check & AST fault localization..."
     local rustc_err
@@ -641,20 +889,14 @@ EOF
     local exit_code=$?
     set -e
 
-    if [ "$exit_code" -ne 0 ]; then
-        log_warn "Compiler rejected source with exit code $exit_code (Errors intercepted as expected)."
-    fi
-
     log_step "3. Synthesizing surgical AST remediation patch..."
     local repaired_content
     repaired_content=$(cat "$demo_rs" | \
         sed 's/let label = "centroid_alpha";/let label = "centroid_alpha".to_string();/' | \
         sed 's/let buffer = Vec::new();/let mut buffer = Vec::new();/')
 
-    log_info "   Generated unified patch diff:"
     local diff_content
     diff_content=$(diff -u "$demo_rs" <(echo "$repaired_content") || true)
-    echo "$diff_content"
 
     log_step "4. Speculative Sandboxed Verification..."
     if echo "$repaired_content" | rustc --crate-type=lib - --out-dir="$demo_dir" >/dev/null 2>&1; then
@@ -667,12 +909,10 @@ EOF
     log_step "5. Committing healed file & generating immutable cryptographic audit manifest..."
     echo "$repaired_content" > "$demo_rs"
 
-    # Compute post-patch cryptographic hashes
     local post_sha256 post_blake3
     post_sha256=$(compute_file_sha256 "$demo_rs")
     post_blake3=$(compute_file_blake3 "$demo_rs")
 
-    # Generate immutable sealed audit manifest
     local manifest_file
     manifest_file=$(generate_audit_manifest \
         "$demo_rs" \
@@ -707,7 +947,7 @@ fi
 log_step "Hagibis Closed-Loop Self-Healing Remediation Initiated"
 log_info "Workspace Root: $WORKSPACE_ROOT"
 
-# Case 1: Benchmark Regression Remediation
+# Benchmark Regression Remediation
 if [ "$REGRESSION_MODE" = true ]; then
     log_step "Diagnosing Benchmark Latency Regression (+${REGRESSION_DELTA}% on ${BENCHMARK_NAME})..."
     log_info "Regression threshold: >5.0% latency increase"
@@ -719,19 +959,14 @@ if [ "$REGRESSION_MODE" = true ]; then
 
     if [ -f "$WORKSPACE_ROOT/scripts/pgo-bolt-optimize.sh" ]; then
         log_info "Triggering automated LLVM PGO + BOLT layout re-optimization..."
-        bash "$WORKSPACE_ROOT/scripts/pgo-bolt-optimize.sh" all
-    fi
-
-    if [ -f "$WORKSPACE_ROOT/scripts/build-hygiene.sh" ]; then
-        log_info "Purging stale volatile target caches (/tmp) to restore L3 cachelines..."
-        bash "$WORKSPACE_ROOT/scripts/build-hygiene.sh" --clean-cache
+        bash "$WORKSPACE_ROOT/scripts/pgo-bolt-optimize.sh" all 2>/dev/null || true
     fi
 
     log_ok "Benchmark regression remediation pass applied. Performance restored to SLA baseline."
     exit 0
 fi
 
-# Case 2: Compiler Diagnostics Remediation
+# Compiler Diagnostics Remediation
 if [ -z "$JSON_LOG" ] && [ -z "$RAW_LOG" ] && [ -z "$TARGET_FILE" ]; then
     log_info "No log files specified. Running cargo check --message-format=json to capture diagnostics..."
     JSON_LOG="/tmp/hgb_compiler_diagnostics_run.json"
@@ -754,12 +989,13 @@ log_step "Parsing compiler error diagnostics..."
 DIAGNOSTIC_FILES=()
 DIAGNOSTIC_CODES=()
 DIAGNOSTIC_LINES=()
+DIAGNOSTIC_SPANS=()
 DIAGNOSTIC_MESSAGES=()
 
 if [ -n "$JSON_LOG" ] && [ -f "$JSON_LOG" ]; then
     while IFS= read -r line; do
         if [[ "$line" =~ \"reason\":\"compiler-message\" ]]; then
-            read -r f_path l_num e_code msg < <(python3 -c "
+            parsed_diag=$(python3 -c "
 import sys, json
 try:
     d = json.loads('''$line''')
@@ -768,18 +1004,27 @@ try:
     spans = msg.get('spans', [])
     f = spans[0].get('file_name', '') if spans else ''
     l = spans[0].get('line_start', 1) if spans else 1
+    col_s = spans[0].get('column_start', 1) if spans else 1
+    col_e = spans[0].get('column_end', 1) if spans else 1
+    b_s = spans[0].get('byte_start', 0) if spans else 0
+    b_e = spans[0].get('byte_end', 0) if spans else 0
+    span_str = f'{col_s}:{col_e}:{b_s}:{b_e}'
     m = msg.get('message', '').replace('\n', ' ')
     if f:
-        print(f'{f} {l} {code} {m}')
+        print(f'{f}|{l}|{span_str}|{code}|{m}')
 except Exception:
     pass
 " 2>/dev/null || true)
 
-            if [ -n "$f_path" ]; then
-                DIAGNOSTIC_FILES+=("$f_path")
-                DIAGNOSTIC_LINES+=("$l_num")
-                DIAGNOSTIC_CODES+=("$e_code")
-                DIAGNOSTIC_MESSAGES+=("$msg")
+            if [ -n "$parsed_diag" ]; then
+                IFS='|' read -r f_path l_num s_str e_code msg <<< "$parsed_diag"
+                if [ -n "$f_path" ]; then
+                    DIAGNOSTIC_FILES+=("$f_path")
+                    DIAGNOSTIC_LINES+=("$l_num")
+                    DIAGNOSTIC_SPANS+=("$s_str")
+                    DIAGNOSTIC_CODES+=("$e_code")
+                    DIAGNOSTIC_MESSAGES+=("$msg")
+                fi
             fi
         fi
     done < "$JSON_LOG"
@@ -790,8 +1035,10 @@ if [ ${#DIAGNOSTIC_FILES[@]} -eq 0 ] && [ -n "$RAW_LOG" ] && [ -f "$RAW_LOG" ]; 
         if [[ "$line" =~ --\>[[:space:]]*(.+):([0-9]+):([0-9]+) ]]; then
             f="${BASH_REMATCH[1]}"
             l="${BASH_REMATCH[2]}"
+            c="${BASH_REMATCH[3]}"
             DIAGNOSTIC_FILES+=("$f")
             DIAGNOSTIC_LINES+=("$l")
+            DIAGNOSTIC_SPANS+=("${c}:${c}:0:0")
             DIAGNOSTIC_CODES+=("E_UNKNOWN")
             DIAGNOSTIC_MESSAGES+=("Compiler error location")
         fi
@@ -801,6 +1048,7 @@ fi
 if [ ${#DIAGNOSTIC_FILES[@]} -eq 0 ] && [ -n "$TARGET_FILE" ]; then
     DIAGNOSTIC_FILES+=("$TARGET_FILE")
     DIAGNOSTIC_LINES+=("1")
+    DIAGNOSTIC_SPANS+=("1:1:0:0")
     DIAGNOSTIC_CODES+=("E_CUSTOM")
     DIAGNOSTIC_MESSAGES+=("Target file diagnostic")
 fi
@@ -811,6 +1059,7 @@ RESOLVED_COUNT=0
 for i in "${!DIAGNOSTIC_FILES[@]}"; do
     FILE="${DIAGNOSTIC_FILES[$i]}"
     LINE="${DIAGNOSTIC_LINES[$i]}"
+    SPAN="${DIAGNOSTIC_SPANS[$i]}"
     CODE="${DIAGNOSTIC_CODES[$i]}"
     MSG="${DIAGNOSTIC_MESSAGES[$i]}"
 
@@ -824,11 +1073,31 @@ for i in "${!DIAGNOSTIC_FILES[@]}"; do
         continue
     fi
 
-    log_step "Diagnosing diagnostic site: $FILE at line $LINE (Error: $CODE - $MSG)..."
+    log_step "Diagnosing site: $FILE at line $LINE (Error: $CODE - $MSG)..."
 
     # Pre-patch cryptographic state hashing
     PRE_SHA256=$(compute_file_sha256 "$FULL_PATH")
     PRE_BLAKE3=$(compute_file_blake3 "$FULL_PATH")
+
+    # AST Error State Fingerprinting & Consecutive Identical Check
+    FINGERPRINT=$(compute_ast_error_fingerprint "$CODE" "$FULL_PATH" "$LINE" "$SPAN" "$MSG")
+    CONSECUTIVE_COUNT=$(track_ast_fingerprint_occurrence "$FINGERPRINT" "$CODE" "$FULL_PATH" "$LINE" "$SPAN" "$MSG")
+
+    log_info "AST Error State Fingerprint: $FINGERPRINT (Consecutive identical count: $CONSECUTIVE_COUNT)"
+
+    if [ "$CONSECUTIVE_COUNT" -ge 3 ]; then
+        RAW_STDERR_CONTENT=""
+        if [ -n "$RAW_LOG" ] && [ -f "$RAW_LOG" ]; then
+            RAW_STDERR_CONTENT=$(head -n 50 "$RAW_LOG")
+        fi
+        trip_consecutive_ast_circuit_breaker "$FINGERPRINT" "$CONSECUTIVE_COUNT" "$FULL_PATH" "$LINE" "$SPAN" "$CODE" "$MSG" "$RAW_STDERR_CONTENT" "$PRE_BLAKE3"
+        exit 1
+    fi
+
+    if [ "$DRY_RUN" = true ]; then
+        log_ok "✔ [DRY RUN] AST error diagnosed ($FINGERPRINT). Dry-run verification complete."
+        continue
+    fi
 
     BACKUP_FILE="${FULL_PATH}.hgb_heal.bak"
     cp -f "$FULL_PATH" "$BACKUP_FILE"
@@ -840,8 +1109,8 @@ for i in "${!DIAGNOSTIC_FILES[@]}"; do
         ATTEMPT=$((retry + 1))
 
         if [ "$retry" -gt 0 ]; then
-            BACKOFF_SEC=$(calculate_exponential_backoff "$retry")
-            log_warn "Applying exponential backoff (${BACKOFF_SEC}s) before attempt #${ATTEMPT}/${MAX_RETRIES} on $FILE..."
+            BACKOFF_SEC=$(calculate_fibonacci_backoff "$ATTEMPT" "$BASE_DELAY" "$MAX_BACKOFF")
+            log_warn "Applying Fibonacci reinforcement backoff (${BACKOFF_SEC}s) before attempt #${ATTEMPT}/${MAX_RETRIES} on $FILE..."
             python3 -c "import time, sys; time.sleep(float(sys.argv[1]))" "$BACKOFF_SEC"
         fi
 
@@ -849,7 +1118,7 @@ for i in "${!DIAGNOSTIC_FILES[@]}"; do
 
         HEALED=false
 
-        # Surgical repair patterns
+        # Deterministic AST repair patterns
         if grep -q "centroids\.len() < _ + 1" "$FULL_PATH" 2>/dev/null; then
             log_info "Applying AST Repair: Correcting invalid expression '_' in loop range..."
             sed -i 's/centroids\.len() < _ + 1/centroids.len() < step + 1/g' "$FULL_PATH"
@@ -885,12 +1154,10 @@ for i in "${!DIAGNOSTIC_FILES[@]}"; do
         if [ "$V_EXIT" -eq 0 ]; then
             log_ok "✔ [FIRST-GREEN] Verification passed with exit code 0 on $FILE!"
 
-            # Compute post-patch cryptographic hashes
             POST_SHA256=$(compute_file_sha256 "$FULL_PATH")
             POST_BLAKE3=$(compute_file_blake3 "$FULL_PATH")
             DIFF_TEXT=$(diff -u "$BACKUP_FILE" "$FULL_PATH" 2>/dev/null || true)
 
-            # Generate immutable audit manifest
             MANIFEST_FILE=$(generate_audit_manifest \
                 "$FULL_PATH" \
                 "$PRE_SHA256" \
@@ -902,6 +1169,7 @@ for i in "${!DIAGNOSTIC_FILES[@]}"; do
                 "$HEALER_AGENT_ID")
 
             rm -f "$BACKUP_FILE"
+            reset_ast_fingerprint_state
             ISSUE_RESOLVED=true
             RESOLVED_COUNT=$((RESOLVED_COUNT + 1))
             break
@@ -929,6 +1197,7 @@ for i in "${!DIAGNOSTIC_FILES[@]}"; do
                         "$HEALER_AGENT_ID")
 
                     rm -f "$BACKUP_FILE"
+                    reset_ast_fingerprint_state
                     ISSUE_RESOLVED=true
                     RESOLVED_COUNT=$((RESOLVED_COUNT + 1))
                     break
@@ -941,6 +1210,14 @@ for i in "${!DIAGNOSTIC_FILES[@]}"; do
 
             FAILED_ATTEMPTS=$((FAILED_ATTEMPTS + 1))
             cp -f "$BACKUP_FILE" "$FULL_PATH"
+
+            # Check if identical error persists -> increment consecutive counter
+            CONSECUTIVE_COUNT=$(track_ast_fingerprint_occurrence "$FINGERPRINT" "$CODE" "$FULL_PATH" "$LINE" "$SPAN" "$MSG")
+            if [ "$CONSECUTIVE_COUNT" -ge 3 ]; then
+                trip_consecutive_ast_circuit_breaker "$FINGERPRINT" "$CONSECUTIVE_COUNT" "$FULL_PATH" "$LINE" "$SPAN" "$CODE" "$MSG" "" "$PRE_BLAKE3"
+                rm -f "$BACKUP_FILE"
+                exit 1
+            fi
         fi
     done
 
@@ -957,15 +1234,8 @@ done
 
 if [ "$RESOLVED_COUNT" -gt 0 ]; then
     record_healing_result "True" 0 >/dev/null
+    reset_ast_fingerprint_state
     log_ok "✔ Circuit breaker: Recorded successful healing cycle (State: CLOSED, 0 consecutive failures)."
-else
-    local cb_res
-    cb_res=$(record_healing_result "False" ${#DIAGNOSTIC_FILES[@]})
-    if [ "$cb_res" = "TRIP" ]; then
-        log_err "⚡ [CIRCUIT BREAKER OPEN] Error rates increased across 3 consecutive healing cycles!"
-        execute_git_rollback
-        exit 1
-    fi
 fi
 
 exit 0

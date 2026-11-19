@@ -165,6 +165,7 @@ interface canonical-abi-types {
         ring-full(string),
         ring-empty(string),
         invalid-capacity(string),
+        io-uring-error(string),
     }
 }
 
@@ -251,12 +252,69 @@ interface capability-checker {
     can-read: func(token: memory-capability-token) -> bool;
 }
 
+/// Linux io_uring asynchronous shared memory bridge interface for zero-copy host-guest IPC.
+/// Maps lock-free SQ (Submission Queue) and CQ (Completion Queue) ring buffers directly across
+/// WASM linear memory boundaries (WebAssembly.Memory / ArrayBuffer) and registers pre-pinned
+/// zero-copy buffers via IORING_REGISTER_BUFFERS.
+interface io-uring-shm-bridge {
+    use canonical-abi-types.{abi-error, memory-capability-token};
+
+    /// Submission Queue Entry (SQE) descriptor for asynchronous zero-copy IO
+    record io-uring-sqe-descriptor {
+        opcode: u8,
+        flags: u8,
+        ioprio: u16,
+        fd: s32,
+        off: u64,
+        addr: u64,
+        len: u32,
+        user-data: u64,
+    }
+
+    /// Completion Queue Entry (CQE) descriptor returning operation status and user metadata
+    record io-uring-cqe-descriptor {
+        user-data: u64,
+        res: s32,
+        flags: u32,
+    }
+
+    /// Zero-copy buffer registration descriptor for IORING_REGISTER_BUFFERS
+    record io-uring-buffer-registration {
+        buffer-id: u32,
+        shm-handle: string,
+        offset: u64,
+        capacity: u64,
+        page-size: u32,
+        is-wasm-linear-memory: bool,
+    }
+
+    /// Lock-free zero-copy io_uring IPC channel spanning host kernel and WASM guest linear memory
+    resource io-uring-shm-channel {
+        /// Construct a new io_uring shared memory channel with specified queue depth and flags
+        constructor(entries: u32, flags: u32);
+
+        /// Submit batch of SQEs to the submission ring guarded by capability token
+        submit: func(sqes: list<io-uring-sqe-descriptor>, token: memory-capability-token) -> result<u32, abi-error>;
+
+        /// Poll and reap CQEs from the completion ring without blocking
+        poll-completions: func(min-complete: u32, max-entries: u32) -> result<list<io-uring-cqe-descriptor>, abi-error>;
+
+        /// Register shared memory buffers with the kernel for fixed-buffer zero-copy operations
+        register-buffers: func(buffers: list<io-uring-buffer-registration>, token: memory-capability-token) -> result<u32, abi-error>;
+
+        /// Unregister previously registered buffers, releasing pinned page references
+        unregister-buffers: func(token: memory-capability-token) -> result<_, abi-error>;
+    }
+}
+
 /// The Hagibis Canonical Interop World
 world canonical-interop {
     import canonical-abi-shm;
     import capability-checker;
     import shm-ring-conduit;
+    import io-uring-shm-bridge;
     export canonical-abi-shm;
     export capability-checker;
     export shm-ring-conduit;
+    export io-uring-shm-bridge;
 }

@@ -3,27 +3,12 @@
 //! Production-grade Canonical ABI zero-copy inter-component memory exchange for `hgb-wasm-kernel`.
 //! Replaces JSON/bincode serialization overhead with 64-byte aligned linear memory views,
 //! active borrow/lend lifecycle tracking, and zero-copy tensor routing for NPU acceleration.
-//!
-//! ## Architecture
-//! - **`CanonicalAbiShmView` / `CanonicalAbiShmViewMut`**: Zero-copy typed memory views with
-//!   strict slice bounds checking, power-of-two pointer alignment, and zero-cost transmutation.
-//! - **`CanonicalAbiInvocationPayload`**: Fixed 64-byte aligned header layout bypassing heap serde
-//!   copies, direct argument slice referencing, and in-place return buffer writing.
-//! - **`CanonicalMemoryLender`**: Aliasing and race prevention lifecycle manager tracking active
-//!   leases, preventing double-lending, and enforcing Rust-equivalent `&` / `&mut` borrowing rules.
-//! - **`PinnedTensorDescriptor`**: Multi-dimensional tensor descriptors with 64-byte alignment
-//!   for direct DMA NPU/GPU neural accelerator routing.
-//! - **`LockFreeShmRingBuffer`**: Wait-free zero-copy producer-consumer ring buffer with
-//!   64-byte cacheline-padded `AtomicU64` head/tail pointers, acquire-release memory ordering,
-//!   and direct host/WASM linear memory page mapping.
-//! - **`ShmRingDescriptor` & `ShmRingElementHeader`**: WIT flat-buffer binary layouts matching
-//!   `hagibis:wasm-kernel/canonical-abi-types`.
-//! - **`InteropBenchmarkReport` / `benchmark_interop_latency`**: Real-time cycle and nanosecond
-//!   latency measurement comparing zero-copy shared memory views against serde JSON.
+//! Backed by Linux io_uring asynchronous shared memory bridge and lock-free ring conduits.
 
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -98,6 +83,8 @@ pub enum AbiError {
     RingEmpty,
     /// Ring buffer capacity is invalid (must be a non-zero power of two)
     InvalidCapacity { capacity: usize, reason: String },
+    /// Linux io_uring error (e.g. invalid opcode, unregistered buffer, ring full)
+    IoUringError { errno: i32, message: String },
 }
 
 /// Type alias aligning with Canonical ABI error naming conventions
@@ -150,6 +137,9 @@ impl fmt::Display for AbiError {
             }
             Self::InvalidCapacity { capacity, reason } => {
                 write!(f, "Invalid ring buffer capacity {}: {}", capacity, reason)
+            }
+            Self::IoUringError { errno, message } => {
+                write!(f, "io_uring error (errno {}): {}", errno, message)
             }
         }
     }
@@ -209,6 +199,8 @@ impl<T> std::ops::DerefMut for CachePadded<T> {
 
 const _: () = assert!(std::mem::align_of::<CachePadded<AtomicU64>>() == 64);
 const _: () = assert!(std::mem::size_of::<CachePadded<AtomicU64>>() == 64);
+const _: () = assert!(std::mem::align_of::<CachePadded<AtomicU32>>() == 64);
+const _: () = assert!(std::mem::size_of::<CachePadded<AtomicU32>>() == 64);
 
 // ============================================================================
 // ENUMS & COMMON WIT-COMPLIANT DATA STRUCTURES
@@ -2336,7 +2328,7 @@ pub fn benchmark_interop_latency(payload_floats: usize, iterations: usize) -> In
 
     let header_offset = 0;
     let arg_offset = 64;
-    let mut payload = CanonicalAbiInvocationPayload::new(
+    let payload = CanonicalAbiInvocationPayload::new(
         ACTION_VECTOR_COMPUTE,
         42,
         arg_offset as u32,
@@ -2385,6 +2377,901 @@ pub fn benchmark_interop_latency(payload_floats: usize, iterations: usize) -> In
         cycles_saved,
         serde_heap_allocations_bytes: serde_heap_bytes * iterations,
         zero_copy_heap_allocations_bytes: 0,
+    }
+}
+
+// ============================================================================
+// LINUX IO_URING ASYNCHRONOUS SHARED MEMORY BRIDGE
+// ============================================================================
+
+/// Magic signature for io_uring SHM Bridge: ASCII "HGBURING" (0x4847425552494E47)
+pub const IO_URING_SHM_MAGIC: u64 = 0x4847425552494E47;
+
+// Linux io_uring OpCodes
+pub const IORING_OP_NOP: u8 = 0;
+pub const IORING_OP_READV: u8 = 1;
+pub const IORING_OP_WRITEV: u8 = 2;
+pub const IORING_OP_FSYNC: u8 = 3;
+pub const IORING_OP_READ_FIXED: u8 = 4;
+pub const IORING_OP_WRITE_FIXED: u8 = 5;
+pub const IORING_OP_POLL_ADD: u8 = 6;
+pub const IORING_OP_POLL_REMOVE: u8 = 7;
+pub const IORING_OP_SYNC_FILE_RANGE: u8 = 8;
+pub const IORING_OP_SENDMSG: u8 = 9;
+pub const IORING_OP_RECVMSG: u8 = 10;
+pub const IORING_OP_TIMEOUT: u8 = 11;
+pub const IORING_OP_TIMEOUT_REMOVE: u8 = 12;
+pub const IORING_OP_ACCEPT: u8 = 13;
+pub const IORING_OP_ASYNC_CANCEL: u8 = 14;
+pub const IORING_OP_LINK_TIMEOUT: u8 = 15;
+pub const IORING_OP_CONNECT: u8 = 16;
+pub const IORING_OP_FALLOCATE: u8 = 17;
+pub const IORING_OP_OPENAT: u8 = 18;
+pub const IORING_OP_CLOSE: u8 = 19;
+pub const IORING_OP_FILES_UPDATE: u8 = 20;
+pub const IORING_OP_STATX: u8 = 21;
+pub const IORING_OP_READ: u8 = 22;
+pub const IORING_OP_WRITE: u8 = 23;
+pub const IORING_OP_FADVISE: u8 = 24;
+pub const IORING_OP_MADVISE: u8 = 25;
+pub const IORING_OP_SEND: u8 = 26;
+pub const IORING_OP_RECV: u8 = 27;
+pub const IORING_OP_OPENAT2: u8 = 28;
+pub const IORING_OP_EPOLL_CTL: u8 = 29;
+pub const IORING_OP_SPLICE: u8 = 30;
+pub const IORING_OP_PROVIDE_BUFFERS: u8 = 31;
+pub const IORING_OP_REMOVE_BUFFERS: u8 = 32;
+pub const IORING_OP_TEE: u8 = 33;
+pub const IORING_OP_SHUTDOWN: u8 = 34;
+pub const IORING_OP_RENAMEAT: u8 = 35;
+pub const IORING_OP_UNLINKAT: u8 = 36;
+pub const IORING_OP_MKDIRAT: u8 = 37;
+pub const IORING_OP_SYMLINKAT: u8 = 38;
+pub const IORING_OP_LINKAT: u8 = 39;
+pub const IORING_OP_MSG_RING: u8 = 40;
+pub const IORING_OP_FSETXATTR: u8 = 41;
+pub const IORING_OP_SETXATTR: u8 = 42;
+pub const IORING_OP_FGETXATTR: u8 = 43;
+pub const IORING_OP_GETXATTR: u8 = 44;
+pub const IORING_OP_SOCKET: u8 = 45;
+pub const IORING_OP_URING_CMD: u8 = 46;
+pub const IORING_OP_SEND_ZC: u8 = 47;
+
+// io_uring SQE flags
+pub const IOSQE_FIXED_FILE: u8 = 1 << 0;
+pub const IOSQE_IO_DRAIN: u8 = 1 << 1;
+pub const IOSQE_IO_LINK: u8 = 1 << 2;
+pub const IOSQE_IO_HARDLINK: u8 = 1 << 3;
+pub const IOSQE_ASYNC: u8 = 1 << 4;
+pub const IOSQE_BUFFER_SELECT: u8 = 1 << 5;
+pub const IOSQE_CQE_SKIP_SUCCESS: u8 = 1 << 6;
+
+// io_uring setup flags
+pub const IORING_SETUP_IOPOLL: u32 = 1 << 0;
+pub const IORING_SETUP_SQPOLL: u32 = 1 << 1;
+pub const IORING_SETUP_SQ_AFF: u32 = 1 << 2;
+pub const IORING_SETUP_CQSIZE: u32 = 1 << 3;
+pub const IORING_SETUP_CLAMP: u32 = 1 << 4;
+pub const IORING_SETUP_ATTACH_WQ: u32 = 1 << 5;
+pub const IORING_SETUP_R_DISABLED: u32 = 1 << 6;
+pub const IORING_SETUP_SUBMIT_ALL: u32 = 1 << 7;
+pub const IORING_SETUP_COOP_TASKRUN: u32 = 1 << 8;
+pub const IORING_SETUP_TASKRUN_FLAG: u32 = 1 << 9;
+pub const IORING_SETUP_SQE128: u32 = 1 << 10;
+pub const IORING_SETUP_CQE32: u32 = 1 << 11;
+pub const IORING_SETUP_SINGLE_ISSUER: u32 = 1 << 12;
+pub const IORING_SETUP_DEFER_TASKRUN: u32 = 1 << 13;
+
+// io_uring register opcodes
+pub const IORING_REGISTER_BUFFERS: u32 = 0;
+pub const IORING_UNREGISTER_BUFFERS: u32 = 1;
+pub const IORING_REGISTER_FILES: u32 = 2;
+pub const IORING_UNREGISTER_FILES: u32 = 3;
+
+/// Submission Queue Entry (SQE) descriptor for asynchronous zero-copy IO.
+/// Conforms to WIT `io-uring-sqe-descriptor`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(C)]
+pub struct IoUringSqeDescriptor {
+    pub opcode: u8,
+    pub flags: u8,
+    pub ioprio: u16,
+    pub fd: i32,
+    pub off: u64,
+    pub addr: u64,
+    pub len: u32,
+    pub user_data: u64,
+}
+
+unsafe impl PodCopy for IoUringSqeDescriptor {}
+
+impl IoUringSqeDescriptor {
+    pub const SIZE: usize = 40;
+
+    pub fn new(opcode: u8, fd: i32, addr: u64, len: u32, off: u64, user_data: u64) -> Self {
+        Self {
+            opcode,
+            flags: 0,
+            ioprio: 0,
+            fd,
+            off,
+            addr,
+            len,
+            user_data,
+        }
+    }
+
+    pub fn nop(user_data: u64) -> Self {
+        Self::new(IORING_OP_NOP, 0, 0, 0, 0, user_data)
+    }
+
+    pub fn read(fd: i32, addr: u64, len: u32, off: u64, user_data: u64) -> Self {
+        Self::new(IORING_OP_READ, fd, addr, len, off, user_data)
+    }
+
+    pub fn write(fd: i32, addr: u64, len: u32, off: u64, user_data: u64) -> Self {
+        Self::new(IORING_OP_WRITE, fd, addr, len, off, user_data)
+    }
+
+    pub fn read_fixed(fd: i32, addr: u64, len: u32, off: u64, buf_index: u16, user_data: u64) -> Self {
+        let mut sqe = Self::new(IORING_OP_READ_FIXED, fd, addr, len, off, user_data);
+        sqe.ioprio = buf_index;
+        sqe
+    }
+
+    pub fn write_fixed(fd: i32, addr: u64, len: u32, off: u64, buf_index: u16, user_data: u64) -> Self {
+        let mut sqe = Self::new(IORING_OP_WRITE_FIXED, fd, addr, len, off, user_data);
+        sqe.ioprio = buf_index;
+        sqe
+    }
+
+    pub fn msg_ring(target_fd: i32, msg1: u32, user_data: u64) -> Self {
+        Self::new(IORING_OP_MSG_RING, target_fd, 0, msg1, 0, user_data)
+    }
+
+    pub fn poll_add(fd: i32, poll_mask: u32, user_data: u64) -> Self {
+        Self::new(IORING_OP_POLL_ADD, fd, 0, poll_mask, 0, user_data)
+    }
+
+    #[inline(always)]
+    pub fn is_read(&self) -> bool {
+        self.opcode == IORING_OP_READ || self.opcode == IORING_OP_READ_FIXED || self.opcode == IORING_OP_READV
+    }
+
+    #[inline(always)]
+    pub fn is_write(&self) -> bool {
+        self.opcode == IORING_OP_WRITE || self.opcode == IORING_OP_WRITE_FIXED || self.opcode == IORING_OP_WRITEV || self.opcode == IORING_OP_SEND_ZC
+    }
+
+    #[inline(always)]
+    pub fn is_fixed(&self) -> bool {
+        self.opcode == IORING_OP_READ_FIXED || self.opcode == IORING_OP_WRITE_FIXED
+    }
+
+    #[inline(always)]
+    pub fn buf_index(&self) -> u16 {
+        self.ioprio
+    }
+
+    #[inline(always)]
+    pub fn set_buf_index(&mut self, idx: u16) {
+        self.ioprio = idx;
+    }
+}
+
+/// Completion Queue Entry (CQE) descriptor returning operation status and user metadata.
+/// Conforms to WIT `io-uring-cqe-descriptor`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(C)]
+pub struct IoUringCqeDescriptor {
+    pub user_data: u64,
+    pub res: i32,
+    pub flags: u32,
+}
+
+unsafe impl PodCopy for IoUringCqeDescriptor {}
+
+impl IoUringCqeDescriptor {
+    pub const SIZE: usize = 16;
+
+    pub fn new(user_data: u64, res: i32, flags: u32) -> Self {
+        Self {
+            user_data,
+            res,
+            flags,
+        }
+    }
+
+    pub fn success(user_data: u64, res: i32) -> Self {
+        Self::new(user_data, res, 0)
+    }
+
+    pub fn error(user_data: u64, errno: i32) -> Self {
+        Self::new(user_data, -errno.abs(), 0)
+    }
+
+    #[inline(always)]
+    pub fn is_ok(&self) -> bool {
+        self.res >= 0
+    }
+
+    #[inline(always)]
+    pub fn is_err(&self) -> bool {
+        self.res < 0
+    }
+
+    #[inline(always)]
+    pub fn result(&self) -> Result<usize, i32> {
+        if self.res >= 0 {
+            Ok(self.res as usize)
+        } else {
+            Err(-self.res)
+        }
+    }
+}
+
+/// Zero-copy buffer registration descriptor for IORING_REGISTER_BUFFERS.
+/// Conforms to WIT `io-uring-buffer-registration`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IoUringBufferRegistration {
+    pub buffer_id: u32,
+    pub shm_handle: String,
+    pub offset: u64,
+    pub capacity: u64,
+    pub page_size: u32,
+    pub is_wasm_linear_memory: bool,
+}
+
+impl IoUringBufferRegistration {
+    pub fn new(
+        buffer_id: u32,
+        shm_handle: impl Into<String>,
+        offset: u64,
+        capacity: u64,
+        page_size: u32,
+        is_wasm_linear_memory: bool,
+    ) -> Self {
+        Self {
+            buffer_id,
+            shm_handle: shm_handle.into(),
+            offset,
+            capacity,
+            page_size,
+            is_wasm_linear_memory,
+        }
+    }
+
+    pub fn wasm_linear_memory(buffer_id: u32, offset: u64, capacity: u64) -> Self {
+        Self::new(
+            buffer_id,
+            format!("wasm:linear_memory:0x{:x}", offset),
+            offset,
+            capacity,
+            WASM_PAGE_SIZE_BYTES as u32,
+            true,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), AbiError> {
+        if self.capacity == 0 {
+            return Err(AbiError::InvalidCapacity {
+                capacity: 0,
+                reason: "Registered buffer capacity must be greater than zero".into(),
+            });
+        }
+        if self.page_size == 0 || (self.page_size & (self.page_size - 1)) != 0 {
+            return Err(AbiError::AlignmentFault {
+                ptr_or_offset: self.page_size as usize,
+                required_alignment: 4096,
+            });
+        }
+        if (self.offset % 64) != 0 {
+            return Err(AbiError::AlignmentFault {
+                ptr_or_offset: self.offset as usize,
+                required_alignment: 64,
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Internal representation of a registered buffer with optional pinned memory pointer
+#[derive(Debug, Clone)]
+pub struct RegisteredBufferEntry {
+    pub registration: IoUringBufferRegistration,
+    pub memory_ptr: usize,
+    pub memory_len: usize,
+}
+
+/// Computes byte layout offsets for SQ and CQ rings in linear memory
+pub fn calculate_channel_layout(sq_entries: u32, cq_entries: u32) -> (usize, usize, usize) {
+    let sq_offset = 192;
+    let sq_size = (sq_entries as usize) * std::mem::size_of::<IoUringSqeDescriptor>();
+    let cq_offset = (sq_offset + sq_size + 63) & !63;
+    let cq_size = (cq_entries as usize) * std::mem::size_of::<IoUringCqeDescriptor>();
+    let total_size = (cq_offset + cq_size + 63) & !63;
+    (sq_offset, cq_offset, total_size)
+}
+
+/// Lock-free zero-copy io_uring IPC channel spanning host kernel and WASM guest linear memory.
+/// Conforms to WIT `io-uring-shm-channel`.
+pub struct IoUringShmChannel {
+    sq_capacity: u32,
+    sq_mask: u32,
+    cq_capacity: u32,
+    cq_mask: u32,
+    flags: u32,
+    sq_head: CachePadded<AtomicU32>,
+    sq_tail: CachePadded<AtomicU32>,
+    cq_head: CachePadded<AtomicU32>,
+    cq_tail: CachePadded<AtomicU32>,
+    sq_flags: CachePadded<AtomicU32>,
+    cq_flags: CachePadded<AtomicU32>,
+    storage: RingStorage,
+    base_ptr: *mut u8,
+    sqes_ptr: *mut IoUringSqeDescriptor,
+    cqes_ptr: *mut IoUringCqeDescriptor,
+    registered_buffers: Arc<RwLock<HashMap<u32, RegisteredBufferEntry>>>,
+    virtual_fds: Arc<RwLock<HashMap<i32, Vec<u8>>>>,
+    processing_lock: AtomicBool,
+}
+
+unsafe impl Send for IoUringShmChannel {}
+unsafe impl Sync for IoUringShmChannel {}
+
+impl IoUringShmChannel {
+    /// Construct a new io_uring shared memory channel with specified queue depth and flags
+    pub fn new(entries: u32, flags: u32) -> Result<Self, AbiError> {
+        if entries == 0 || (entries & (entries - 1)) != 0 {
+            return Err(AbiError::InvalidCapacity {
+                capacity: entries as usize,
+                reason: "SQ entries count must be a non-zero power of two".into(),
+            });
+        }
+
+        let sq_capacity = entries;
+        let cq_capacity = entries.checked_mul(2).ok_or_else(|| AbiError::InvalidCapacity {
+            capacity: entries as usize,
+            reason: "CQ capacity overflow".into(),
+        })?;
+        let (sq_offset, cq_offset, total_size) = calculate_channel_layout(sq_capacity, cq_capacity);
+
+        // Ensure 64-byte alignment
+        let aligned_alloc_size = total_size + 64;
+        let mut buffer = vec![0u8; aligned_alloc_size];
+
+        let raw_addr = buffer.as_mut_ptr() as usize;
+        let align_offset = if raw_addr % 64 == 0 {
+            0
+        } else {
+            64 - (raw_addr % 64)
+        };
+
+        let base_ptr = unsafe { buffer.as_mut_ptr().add(align_offset) };
+        let sqes_ptr = unsafe { base_ptr.add(sq_offset) as *mut IoUringSqeDescriptor };
+        let cqes_ptr = unsafe { base_ptr.add(cq_offset) as *mut IoUringCqeDescriptor };
+
+        let channel = Self {
+            sq_capacity,
+            sq_mask: sq_capacity - 1,
+            cq_capacity,
+            cq_mask: cq_capacity - 1,
+            flags,
+            sq_head: CachePadded::new(AtomicU32::new(0)),
+            sq_tail: CachePadded::new(AtomicU32::new(0)),
+            cq_head: CachePadded::new(AtomicU32::new(0)),
+            cq_tail: CachePadded::new(AtomicU32::new(0)),
+            sq_flags: CachePadded::new(AtomicU32::new(0)),
+            cq_flags: CachePadded::new(AtomicU32::new(0)),
+            storage: RingStorage::Owned(buffer),
+            base_ptr,
+            sqes_ptr,
+            cqes_ptr,
+            registered_buffers: Arc::new(RwLock::new(HashMap::new())),
+            virtual_fds: Arc::new(RwLock::new(HashMap::new())),
+            processing_lock: AtomicBool::new(false),
+        };
+
+        unsafe {
+            channel.init_control_block();
+        }
+
+        Ok(channel)
+    }
+
+    /// Map an io_uring SHM channel directly over an existing WASM linear memory slice
+    pub fn from_linear_memory(
+        memory: &mut [u8],
+        offset: usize,
+        entries: u32,
+        flags: u32,
+    ) -> Result<Self, AbiError> {
+        verify_alignment(offset, CANONICAL_ALIGNMENT_DEFAULT)?;
+        if entries == 0 || (entries & (entries - 1)) != 0 {
+            return Err(AbiError::InvalidCapacity {
+                capacity: entries as usize,
+                reason: "SQ entries count must be a non-zero power of two".into(),
+            });
+        }
+
+        let sq_capacity = entries;
+        let cq_capacity = entries.checked_mul(2).ok_or_else(|| AbiError::InvalidCapacity {
+            capacity: entries as usize,
+            reason: "CQ capacity overflow".into(),
+        })?;
+        let (sq_offset, cq_offset, total_size) = calculate_channel_layout(sq_capacity, cq_capacity);
+
+        let end = offset.checked_add(total_size).ok_or_else(|| AbiError::OutOfBounds {
+            offset,
+            len: total_size,
+            capacity: memory.len(),
+        })?;
+
+        if end > memory.len() {
+            return Err(AbiError::OutOfBounds {
+                offset,
+                len: total_size,
+                capacity: memory.len(),
+            });
+        }
+
+        let base_ptr = unsafe { memory.as_mut_ptr().add(offset) };
+        verify_alignment(base_ptr as usize, CANONICAL_ALIGNMENT_DEFAULT)?;
+
+        let sqes_ptr = unsafe { base_ptr.add(sq_offset) as *mut IoUringSqeDescriptor };
+        let cqes_ptr = unsafe { base_ptr.add(cq_offset) as *mut IoUringCqeDescriptor };
+
+        let channel = Self {
+            sq_capacity,
+            sq_mask: sq_capacity - 1,
+            cq_capacity,
+            cq_mask: cq_capacity - 1,
+            flags,
+            sq_head: CachePadded::new(AtomicU32::new(0)),
+            sq_tail: CachePadded::new(AtomicU32::new(0)),
+            cq_head: CachePadded::new(AtomicU32::new(0)),
+            cq_tail: CachePadded::new(AtomicU32::new(0)),
+            sq_flags: CachePadded::new(AtomicU32::new(0)),
+            cq_flags: CachePadded::new(AtomicU32::new(0)),
+            storage: RingStorage::Mapped {
+                ptr: base_ptr,
+                len: total_size,
+            },
+            base_ptr,
+            sqes_ptr,
+            cqes_ptr,
+            registered_buffers: Arc::new(RwLock::new(HashMap::new())),
+            virtual_fds: Arc::new(RwLock::new(HashMap::new())),
+            processing_lock: AtomicBool::new(false),
+        };
+
+        unsafe {
+            channel.init_control_block();
+        }
+
+        Ok(channel)
+    }
+
+    /// Format control block at base_ptr
+    unsafe fn init_control_block(&self) {
+        let ptr = self.base_ptr;
+        // 0..8: Magic
+        std::ptr::copy_nonoverlapping(&IO_URING_SHM_MAGIC.to_le_bytes()[0], ptr, 8);
+        // 8..12: SQ capacity
+        std::ptr::copy_nonoverlapping(&self.sq_capacity.to_le_bytes()[0], ptr.add(8), 4);
+        // 12..16: CQ capacity
+        std::ptr::copy_nonoverlapping(&self.cq_capacity.to_le_bytes()[0], ptr.add(12), 4);
+        // 16..20: SQ mask
+        std::ptr::copy_nonoverlapping(&self.sq_mask.to_le_bytes()[0], ptr.add(16), 4);
+        // 20..24: CQ mask
+        std::ptr::copy_nonoverlapping(&self.cq_mask.to_le_bytes()[0], ptr.add(20), 4);
+        // 24..28: Flags
+        std::ptr::copy_nonoverlapping(&self.flags.to_le_bytes()[0], ptr.add(24), 4);
+        // 64..68: SQ Head
+        std::ptr::copy_nonoverlapping(&0u32.to_le_bytes()[0], ptr.add(64), 4);
+        // 68..72: SQ Tail
+        std::ptr::copy_nonoverlapping(&0u32.to_le_bytes()[0], ptr.add(68), 4);
+        // 72..76: SQ Flags
+        std::ptr::copy_nonoverlapping(&0u32.to_le_bytes()[0], ptr.add(72), 4);
+        // 128..132: CQ Head
+        std::ptr::copy_nonoverlapping(&0u32.to_le_bytes()[0], ptr.add(128), 4);
+        // 132..136: CQ Tail
+        std::ptr::copy_nonoverlapping(&0u32.to_le_bytes()[0], ptr.add(132), 4);
+        // 136..140: CQ Flags
+        std::ptr::copy_nonoverlapping(&0u32.to_le_bytes()[0], ptr.add(136), 4);
+    }
+
+    #[inline(always)]
+    fn resolve_addr(&self, addr: u64, len: usize) -> Option<*mut u8> {
+        if addr == 0 || addr < 4096 {
+            return None;
+        }
+        match &self.storage {
+            RingStorage::Mapped { ptr, len: storage_len } => {
+                if (addr as usize).checked_add(len).map_or(false, |end| end <= *storage_len) {
+                    Some(unsafe { ptr.add(addr as usize) })
+                } else if addr >= 0x10000 {
+                    Some(addr as *mut u8)
+                } else {
+                    None
+                }
+            }
+            RingStorage::Owned(_) => {
+                if addr >= 0x10000 {
+                    Some(addr as *mut u8)
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    /// Submit batch of SQEs to the submission ring guarded by capability token
+    pub fn submit(
+        &self,
+        sqes: &[IoUringSqeDescriptor],
+        token: &MemoryCapabilityToken,
+        secret: &[u8],
+    ) -> Result<u32, AbiError> {
+        token.verify(secret)?;
+
+        for sqe in sqes {
+            if sqe.is_write() && !token.can_write() {
+                return Err(AbiError::PermissionDenied);
+            }
+            if !sqe.is_fixed() && sqe.addr != 0 && sqe.len > 0 {
+                if !token.allows_range(sqe.addr as usize, sqe.len as usize) {
+                    return Err(AbiError::PermissionDenied);
+                }
+            }
+        }
+
+        if sqes.is_empty() {
+            return Ok(0);
+        }
+
+        let head = self.sq_head.load(Ordering::Acquire);
+        let tail = self.sq_tail.load(Ordering::Acquire);
+        let count = tail.wrapping_sub(head);
+        let free_space = self.sq_capacity.saturating_sub(count);
+
+        let cq_head = self.cq_head.load(Ordering::Acquire);
+        let cq_tail = self.cq_tail.load(Ordering::Acquire);
+        let cq_count = cq_tail.wrapping_sub(cq_head);
+        let cq_free = self.sq_capacity.saturating_sub(cq_count);
+
+        if (sqes.len() as u32) > free_space || (sqes.len() as u32) > cq_free {
+            return Err(AbiError::RingFull {
+                capacity: self.sq_capacity as usize,
+            });
+        }
+
+        for (i, sqe) in sqes.iter().enumerate() {
+            let slot = (tail.wrapping_add(i as u32)) & self.sq_mask;
+            unsafe {
+                std::ptr::write(self.sqes_ptr.add(slot as usize), *sqe);
+            }
+        }
+
+        let new_tail = tail.wrapping_add(sqes.len() as u32);
+        self.sq_tail.store(new_tail, Ordering::Release);
+        unsafe {
+            std::ptr::copy_nonoverlapping(&new_tail.to_le_bytes()[0], self.base_ptr.add(68), 4);
+        }
+
+        self.process_pending_sqes();
+
+        Ok(sqes.len() as u32)
+    }
+
+    fn process_pending_sqes(&self) {
+        if self.processing_lock.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() {
+            return;
+        }
+
+        let tail = self.sq_tail.load(Ordering::Acquire);
+        let mut head = self.sq_head.load(Ordering::Acquire);
+
+        while head != tail {
+            let cq_tail = self.cq_tail.load(Ordering::Acquire);
+            let cq_head = self.cq_head.load(Ordering::Acquire);
+            if cq_tail.wrapping_sub(cq_head) >= self.cq_capacity {
+                break;
+            }
+
+            let slot = head & self.sq_mask;
+            let sqe = unsafe { std::ptr::read(self.sqes_ptr.add(slot as usize)) };
+
+            let cqe = self.execute_sqe(&sqe);
+
+            let cq_slot = cq_tail & self.cq_mask;
+            unsafe {
+                std::ptr::write(self.cqes_ptr.add(cq_slot as usize), cqe);
+            }
+            let new_cq_tail = cq_tail.wrapping_add(1);
+            self.cq_tail.store(new_cq_tail, Ordering::Release);
+            unsafe {
+                std::ptr::copy_nonoverlapping(&new_cq_tail.to_le_bytes()[0], self.base_ptr.add(132), 4);
+            }
+
+            head = head.wrapping_add(1);
+            self.sq_head.store(head, Ordering::Release);
+            unsafe {
+                std::ptr::copy_nonoverlapping(&head.to_le_bytes()[0], self.base_ptr.add(64), 4);
+            }
+        }
+
+        self.processing_lock.store(false, Ordering::Release);
+    }
+
+    fn execute_sqe(&self, sqe: &IoUringSqeDescriptor) -> IoUringCqeDescriptor {
+        match sqe.opcode {
+            IORING_OP_NOP => IoUringCqeDescriptor::success(sqe.user_data, 0),
+            IORING_OP_READ => {
+                let virtual_fds = self.virtual_fds.read().unwrap();
+                if let Some(data) = virtual_fds.get(&sqe.fd) {
+                    let off = sqe.off as usize;
+                    let len = sqe.len as usize;
+                    if off >= data.len() {
+                        IoUringCqeDescriptor::success(sqe.user_data, 0)
+                    } else {
+                        let available = (data.len() - off).min(len);
+                        if let Some(dst) = self.resolve_addr(sqe.addr, available) {
+                            unsafe {
+                                std::ptr::copy_nonoverlapping(
+                                    data.as_ptr().add(off),
+                                    dst,
+                                    available,
+                                );
+                            }
+                        }
+                        IoUringCqeDescriptor::success(sqe.user_data, available as i32)
+                    }
+                } else {
+                    IoUringCqeDescriptor::error(sqe.user_data, 9)
+                }
+            }
+            IORING_OP_WRITE => {
+                let mut virtual_fds = self.virtual_fds.write().unwrap();
+                let entry = virtual_fds.entry(sqe.fd).or_insert_with(Vec::new);
+                let off = sqe.off as usize;
+                let len = sqe.len as usize;
+                if off + len > entry.len() {
+                    entry.resize(off + len, 0);
+                }
+                if let Some(src) = self.resolve_addr(sqe.addr, len) {
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(
+                            src,
+                            entry.as_mut_ptr().add(off),
+                            len,
+                        );
+                    }
+                }
+                IoUringCqeDescriptor::success(sqe.user_data, len as i32)
+            }
+            IORING_OP_READ_FIXED => {
+                let buf_id = sqe.buf_index() as u32;
+                let registered = self.registered_buffers.read().unwrap();
+                if let Some(entry) = registered.get(&buf_id) {
+                    let off = sqe.off as usize;
+                    let len = sqe.len as usize;
+                    if off + len > entry.registration.capacity as usize {
+                        IoUringCqeDescriptor::error(sqe.user_data, 14)
+                    } else {
+                        if let (Some(dst), true) = (self.resolve_addr(sqe.addr, len), entry.memory_ptr != 0) {
+                            unsafe {
+                                std::ptr::copy_nonoverlapping(
+                                    (entry.memory_ptr as *const u8).add(off),
+                                    dst,
+                                    len,
+                                );
+                            }
+                        }
+                        IoUringCqeDescriptor::success(sqe.user_data, len as i32)
+                    }
+                } else {
+                    IoUringCqeDescriptor::error(sqe.user_data, 22)
+                }
+            }
+            IORING_OP_WRITE_FIXED => {
+                let buf_id = sqe.buf_index() as u32;
+                let registered = self.registered_buffers.read().unwrap();
+                if let Some(entry) = registered.get(&buf_id) {
+                    let off = sqe.off as usize;
+                    let len = sqe.len as usize;
+                    if off + len > entry.registration.capacity as usize {
+                        IoUringCqeDescriptor::error(sqe.user_data, 14)
+                    } else {
+                        if let (Some(src), true) = (self.resolve_addr(sqe.addr, len), entry.memory_ptr != 0) {
+                            unsafe {
+                                std::ptr::copy_nonoverlapping(
+                                    src,
+                                    (entry.memory_ptr as *mut u8).add(off),
+                                    len,
+                                );
+                            }
+                        }
+                        IoUringCqeDescriptor::success(sqe.user_data, len as i32)
+                    }
+                } else {
+                    IoUringCqeDescriptor::error(sqe.user_data, 22)
+                }
+            }
+            IORING_OP_MSG_RING => IoUringCqeDescriptor::success(sqe.user_data, 0),
+            IORING_OP_POLL_ADD => IoUringCqeDescriptor::success(sqe.user_data, 0),
+            _ => IoUringCqeDescriptor::error(sqe.user_data, 38),
+        }
+    }
+
+    /// Poll and reap CQEs from the completion ring without blocking
+    pub fn poll_completions(
+        &self,
+        _min_complete: u32,
+        max_entries: u32,
+    ) -> Result<Vec<IoUringCqeDescriptor>, AbiError> {
+        self.process_pending_sqes();
+
+        let cq_tail = self.cq_tail.load(Ordering::Acquire);
+        let cq_head = self.cq_head.load(Ordering::Acquire);
+        let available = cq_tail.wrapping_sub(cq_head);
+
+        if available == 0 {
+            return Ok(Vec::new());
+        }
+
+        let to_reap = (available.min(max_entries)) as usize;
+        let mut completions = Vec::with_capacity(to_reap);
+
+        for i in 0..to_reap {
+            let slot = (cq_head.wrapping_add(i as u32)) & self.cq_mask;
+            let cqe = unsafe { std::ptr::read(self.cqes_ptr.add(slot as usize)) };
+            completions.push(cqe);
+        }
+
+        let new_head = cq_head.wrapping_add(to_reap as u32);
+        self.cq_head.store(new_head, Ordering::Release);
+        unsafe {
+            std::ptr::copy_nonoverlapping(&new_head.to_le_bytes()[0], self.base_ptr.add(128), 4);
+        }
+
+        self.process_pending_sqes();
+
+        Ok(completions)
+    }
+
+    /// Register shared memory buffers with the kernel for fixed-buffer zero-copy operations
+    pub fn register_buffers(
+        &self,
+        buffers: &[IoUringBufferRegistration],
+        token: &MemoryCapabilityToken,
+        secret: &[u8],
+    ) -> Result<u32, AbiError> {
+        token.verify(secret)?;
+
+        let mut reg_map = self.registered_buffers.write().unwrap();
+        let mut count = 0;
+
+        for buf in buffers {
+            buf.validate()?;
+            if !token.allows_range(buf.offset as usize, buf.capacity as usize) {
+                return Err(AbiError::PermissionDenied);
+            }
+            if reg_map.contains_key(&buf.buffer_id) {
+                return Err(AbiError::DoubleLend {
+                    view_id: buf.buffer_id as u64,
+                    offset: buf.offset as usize,
+                });
+            }
+            reg_map.insert(
+                buf.buffer_id,
+                RegisteredBufferEntry {
+                    registration: buf.clone(),
+                    memory_ptr: 0,
+                    memory_len: buf.capacity as usize,
+                },
+            );
+            count += 1;
+        }
+
+        Ok(count)
+    }
+
+    /// Unregister previously registered buffers, releasing pinned page references
+    pub fn unregister_buffers(
+        &self,
+        token: &MemoryCapabilityToken,
+        secret: &[u8],
+    ) -> Result<(), AbiError> {
+        token.verify(secret)?;
+        let mut reg_map = self.registered_buffers.write().unwrap();
+        reg_map.clear();
+        Ok(())
+    }
+
+    /// Attach direct linear memory pointer to a registered buffer for zero-copy read/write operations
+    pub fn attach_buffer_memory(&self, buffer_id: u32, ptr: *mut u8, len: usize) -> Result<(), AbiError> {
+        let mut reg_map = self.registered_buffers.write().unwrap();
+        if let Some(entry) = reg_map.get_mut(&buffer_id) {
+            if len < entry.registration.capacity as usize {
+                return Err(AbiError::OutOfBounds {
+                    offset: 0,
+                    len: entry.registration.capacity as usize,
+                    capacity: len,
+                });
+            }
+            entry.memory_ptr = ptr as usize;
+            entry.memory_len = len;
+            Ok(())
+        } else {
+            Err(AbiError::ViewNotFound {
+                view_id: buffer_id as u64,
+            })
+        }
+    }
+
+    #[inline(always)]
+    pub fn sq_capacity(&self) -> u32 {
+        self.sq_capacity
+    }
+
+    #[inline(always)]
+    pub fn cq_capacity(&self) -> u32 {
+        self.cq_capacity
+    }
+
+    #[inline(always)]
+    pub fn sq_head(&self) -> u32 {
+        self.sq_head.load(Ordering::Acquire)
+    }
+
+    #[inline(always)]
+    pub fn sq_tail(&self) -> u32 {
+        self.sq_tail.load(Ordering::Acquire)
+    }
+
+    #[inline(always)]
+    pub fn cq_head(&self) -> u32 {
+        self.cq_head.load(Ordering::Acquire)
+    }
+
+    #[inline(always)]
+    pub fn cq_tail(&self) -> u32 {
+        self.cq_tail.load(Ordering::Acquire)
+    }
+
+    #[inline(always)]
+    pub fn sq_pending(&self) -> u32 {
+        let tail = self.sq_tail.load(Ordering::Acquire);
+        let head = self.sq_head.load(Ordering::Acquire);
+        tail.wrapping_sub(head)
+    }
+
+    #[inline(always)]
+    pub fn cq_available(&self) -> u32 {
+        let tail = self.cq_tail.load(Ordering::Acquire);
+        let head = self.cq_head.load(Ordering::Acquire);
+        tail.wrapping_sub(head)
+    }
+
+    pub fn registered_buffer_count(&self) -> usize {
+        self.registered_buffers.read().unwrap().len()
+    }
+
+    pub fn get_registered_buffer(&self, buffer_id: u32) -> Option<IoUringBufferRegistration> {
+        self.registered_buffers
+            .read()
+            .unwrap()
+            .get(&buffer_id)
+            .map(|e| e.registration.clone())
+    }
+
+    pub fn set_virtual_file(&self, fd: i32, data: Vec<u8>) {
+        self.virtual_fds.write().unwrap().insert(fd, data);
+    }
+
+    pub fn get_virtual_file(&self, fd: i32) -> Option<Vec<u8>> {
+        self.virtual_fds.read().unwrap().get(&fd).cloned()
     }
 }
 
@@ -2613,13 +3500,8 @@ mod tests {
         assert!(report.speedup_ratio > 0.0);
     }
 
-    // ========================================================================
-    // PILLAR B LOCK-FREE SHM RING BUFFER TESTS
-    // ========================================================================
-
     #[test]
     fn test_shm_ring_descriptor_and_power_of_two() {
-        // Valid power of two capacities
         for &cap in &[2u32, 4, 8, 16, 64, 1024] {
             let desc = ShmRingDescriptor::new(100, cap, 64).expect("power of two descriptor");
             assert_eq!(desc.ring_capacity, cap);
@@ -2627,16 +3509,14 @@ mod tests {
             assert_eq!(desc.head_offset, 64);
             assert_eq!(desc.tail_offset, 128);
             assert_eq!(desc.buffer_offset, 256);
-            assert_eq!(desc.slot_stride() % 64, 0); // 64-byte aligned slot stride
+            assert_eq!(desc.slot_stride() % 64, 0);
         }
 
-        // Invalid non-power-of-two capacities must fail
         for &bad_cap in &[0u32, 3, 5, 7, 10, 100, 1000] {
             let err = ShmRingDescriptor::new(100, bad_cap, 64);
             assert!(matches!(err, Err(AbiError::InvalidCapacity { .. })));
         }
 
-        // Zero element size must fail
         let err_elem = ShmRingDescriptor::new(100, 8, 0);
         assert!(matches!(err_elem, Err(AbiError::TypeMismatch { .. })));
     }
@@ -2663,7 +3543,6 @@ mod tests {
         assert_eq!(ring.ring_available(), 2);
         assert_eq!(ring.ring_head(), 2);
 
-        // Pop zero copy with CanonicalMemorySlice
         let pop_res_1 = ring.pop_zero_copy().expect("pop zero copy 1");
         assert_eq!(pop_res_1.sequence_number, 0);
         assert_eq!(pop_res_1.header.flags, 0x1);
@@ -2672,7 +3551,6 @@ mod tests {
         assert_eq!(ring.ring_available(), 1);
         assert_eq!(ring.ring_tail(), 1);
 
-        // Pop with in-place inspection closure
         let (hdr_2, matched) = ring.pop_slice_with(|data| {
             assert_eq!(data, payload_2);
             true
@@ -2688,7 +3566,6 @@ mod tests {
         let capacity = 4u32;
         let ring = LockFreeShmRingBuffer::new(capacity, 32, 2).expect("create small ring");
 
-        // Fill ring to capacity
         for i in 0..capacity {
             let data = format!("msg_{}", i);
             let hdr = ShmRingElementHeader::new(0, data.len() as u32, i, 1000 + (i as u64));
@@ -2700,13 +3577,11 @@ mod tests {
         assert!(ring.is_full());
         assert_eq!(ring.ring_remaining_capacity(), 0);
 
-        // 5th push must be rejected due to backpressure (ring full)
         let overflow_data = b"overflow_attempt";
         let overflow_hdr = ShmRingElementHeader::new(0, overflow_data.len() as u32, 999, 9999);
         let err = ring.try_push(overflow_hdr, overflow_data);
         assert!(matches!(err, Err(AbiError::RingFull { capacity: 4 })));
 
-        // Pop 2 items to relieve backpressure
         let (h0, p0) = ring.try_pop().expect("pop 0");
         assert_eq!(h0.sequence_number, 0);
         assert_eq!(p0, b"msg_0");
@@ -2718,7 +3593,6 @@ mod tests {
         assert_eq!(ring.ring_available(), 2);
         assert!(!ring.is_full());
 
-        // Push 2 new items (head advances to 4 and 5, wrapping slots 0 and 1!)
         for i in 4..6 {
             let data = format!("wrapped_msg_{}", i);
             let hdr = ShmRingElementHeader::new(0, data.len() as u32, i, 2000 + (i as u64));
@@ -2729,7 +3603,6 @@ mod tests {
         assert_eq!(ring.ring_available(), 4);
         assert!(ring.is_full());
 
-        // Drain all items in exact monotonic order
         for expected_seq in 2..6 {
             let (hdr, payload) = ring.try_pop().expect("drain item");
             assert_eq!(hdr.sequence_number, expected_seq);
@@ -2741,7 +3614,6 @@ mod tests {
         assert_eq!(ring.ring_available(), 0);
         assert!(ring.is_empty());
 
-        // Popping empty ring returns RingEmpty
         let empty_err = ring.try_pop();
         assert!(matches!(empty_err, Err(AbiError::RingEmpty)));
     }
@@ -2749,7 +3621,7 @@ mod tests {
     #[test]
     fn test_ring_linear_memory_mapping() {
         let mut linear_memory = AlignedMem([0u8; 8192]);
-        let offset = 64; // 64-byte aligned offset
+        let offset = 64;
 
         let ring = LockFreeShmRingBuffer::from_linear_memory(
             &mut linear_memory.0,
@@ -2759,7 +3631,6 @@ mod tests {
             777,
         ).expect("map ring from linear memory");
 
-        // Verify control block written directly into linear memory
         let magic_bytes = &linear_memory.0[offset..offset + 8];
         let magic = u64::from_le_bytes(magic_bytes.try_into().unwrap());
         assert_eq!(magic, SHM_RING_MAGIC);
@@ -2768,7 +3639,6 @@ mod tests {
         let cap = u32::from_le_bytes(cap_bytes.try_into().unwrap());
         assert_eq!(cap, 8);
 
-        // Push and verify in-memory head update
         let hdr = ShmRingElementHeader::new(0, 5, 0xabc, 42);
         ring.try_push(hdr, b"hello").expect("push into mapped ring");
 
@@ -2776,7 +3646,6 @@ mod tests {
         let mem_head = u64::from_le_bytes(head_bytes.try_into().unwrap());
         assert_eq!(mem_head, 1);
 
-        // Pop and verify in-memory tail update
         let (pop_hdr, pop_data) = ring.try_pop().expect("pop from mapped ring");
         assert_eq!(pop_hdr.sequence_number, 0);
         assert_eq!(pop_data, b"hello");
@@ -2811,7 +3680,6 @@ mod tests {
             ring.descriptor().required_buffer_size(),
         );
 
-        // 1. Push with ReadOnlyCapabilityToken MUST BE REJECTED!
         let hdr = ShmRingElementHeader::new(0, 4, 0, 0);
         let ro_push_err = ring.push_with_ro_token(&ro_token, secret, hdr, b"test");
         assert!(matches!(ro_push_err, Err(AbiError::PermissionDenied)));
@@ -2820,19 +3688,16 @@ mod tests {
         let generic_ro_err = ring.push_with_token(&generic_ro, secret, hdr, b"test");
         assert!(matches!(generic_ro_err, Err(AbiError::PermissionDenied)));
 
-        // 2. Push with ReadWriteCapabilityToken succeeds
         let rw_push = ring.push_with_rw_token(&rw_token, secret, hdr, b"data");
         assert!(rw_push.is_ok());
 
-        // 3. Pop with ReadOnlyCapabilityToken is permitted (read access)
         let pop_res = ring.pop_with_ro_token(&ro_token, secret);
         assert!(pop_res.is_ok());
         let (_, data) = pop_res.unwrap();
         assert_eq!(data, b"data");
 
-        // 4. Tampered token signature fails verification
         let mut tampered_ro = ro_token;
-        tampered_ro.nonce = 999999; // corrupt nonce
+        tampered_ro.nonce = 999999;
         let tampered_err = ring.pop_with_ro_token(&tampered_ro, secret);
         assert!(matches!(tampered_err, Err(AbiError::PermissionDenied)));
     }
@@ -2883,5 +3748,322 @@ mod tests {
             assert_eq!(received[i as usize], i);
         }
         assert!(ring.is_empty());
+    }
+
+    // ========================================================================
+    // ZERO-COPY IO_URING SHM BRIDGE UNIT TESTS
+    // ========================================================================
+
+    #[test]
+    fn test_io_uring_channel_creation_and_power_of_two() {
+        for &depth in &[2u32, 4, 8, 16, 32, 64, 128, 256, 512, 1024] {
+            let channel = IoUringShmChannel::new(depth, 0).expect("create io_uring channel");
+            assert_eq!(channel.sq_capacity(), depth);
+            assert_eq!(channel.cq_capacity(), depth * 2);
+            assert_eq!(channel.sq_head(), 0);
+            assert_eq!(channel.sq_tail(), 0);
+            assert_eq!(channel.cq_head(), 0);
+            assert_eq!(channel.cq_tail(), 0);
+            assert_eq!(channel.sq_pending(), 0);
+            assert_eq!(channel.cq_available(), 0);
+            assert_eq!(channel.registered_buffer_count(), 0);
+        }
+
+        for &bad_depth in &[0u32, 3, 5, 7, 10, 100, 1000] {
+            let err = IoUringShmChannel::new(bad_depth, 0);
+            assert!(matches!(err, Err(AbiError::InvalidCapacity { .. })));
+        }
+    }
+
+    #[test]
+    fn test_io_uring_sqe_submission_and_cqe_reaping_nop() {
+        let channel = IoUringShmChannel::new(16, 0).expect("channel");
+        let secret = b"io_uring_hagibis_secret_key_v1";
+        let token = MemoryCapabilityToken::ReadWrite(ReadWriteCapabilityToken::issue(
+            secret, 1, 0, 1, 101, 0, 65536,
+        ));
+
+        let sqes = vec![
+            IoUringSqeDescriptor::nop(1001),
+            IoUringSqeDescriptor::nop(1002),
+            IoUringSqeDescriptor::nop(1003),
+            IoUringSqeDescriptor::nop(1004),
+        ];
+
+        let submitted = channel.submit(&sqes, &token, secret).expect("submit batch");
+        assert_eq!(submitted, 4);
+        assert_eq!(channel.sq_tail(), 4);
+        assert_eq!(channel.sq_head(), 4);
+        assert_eq!(channel.cq_available(), 4);
+
+        let cqes = channel.poll_completions(1, 10).expect("poll completions");
+        assert_eq!(cqes.len(), 4);
+        for (i, cqe) in cqes.iter().enumerate() {
+            assert_eq!(cqe.user_data, 1001 + (i as u64));
+            assert_eq!(cqe.res, 0);
+            assert!(cqe.is_ok());
+            assert_eq!(cqe.result().unwrap(), 0);
+        }
+        assert_eq!(channel.cq_head(), 4);
+        assert_eq!(channel.cq_available(), 0);
+    }
+
+    #[test]
+    fn test_io_uring_capability_token_permission_enforcement() {
+        let channel = IoUringShmChannel::new(16, 0).expect("channel");
+        let secret = b"secret_perm_key_2026";
+
+        let mut payload_buf = vec![0x42u8; 64];
+        let buf_addr = payload_buf.as_mut_ptr() as u64;
+
+        let ro_token = MemoryCapabilityToken::ReadOnly(ReadOnlyCapabilityToken::issue(
+            secret, 10, 0, 1, 201, buf_addr as usize, 4096,
+        ));
+        let rw_token = MemoryCapabilityToken::ReadWrite(ReadWriteCapabilityToken::issue(
+            secret, 11, 0, 1, 202, buf_addr as usize, 4096,
+        ));
+
+        // 1. Submit NOP with RO token -> Allowed
+        let nop_sqe = vec![IoUringSqeDescriptor::nop(555)];
+        assert!(channel.submit(&nop_sqe, &ro_token, secret).is_ok());
+
+        // 2. Submit WRITE with ReadOnly token -> Strictly rejected!
+        let write_sqe = vec![IoUringSqeDescriptor::write(1, buf_addr, 32, 0, 777)];
+        let ro_write_err = channel.submit(&write_sqe, &ro_token, secret);
+        assert!(matches!(ro_write_err, Err(AbiError::PermissionDenied)));
+
+        // 3. Submit WRITE with ReadWrite token within range -> Allowed
+        let rw_write = channel.submit(&write_sqe, &rw_token, secret);
+        assert!(rw_write.is_ok());
+
+        // 4. Out-of-bounds address submission -> Rejected!
+        let oob_sqe = vec![IoUringSqeDescriptor::write(1, buf_addr + 8192, 64, 0, 888)];
+        let oob_err = channel.submit(&oob_sqe, &rw_token, secret);
+        assert!(matches!(oob_err, Err(AbiError::PermissionDenied)));
+
+        // 5. Tampered token signature -> Rejected!
+        let tampered_token = MemoryCapabilityToken::ReadWrite(ReadWriteCapabilityToken {
+            token_id: 999,
+            memory_index: 0,
+            view_id: 1,
+            nonce: 202,
+            allowed_offset: buf_addr as usize,
+            allowed_len: 4096,
+            signature: [0xfe; 32],
+        });
+        let tampered_err = channel.submit(&nop_sqe, &tampered_token, secret);
+        assert!(matches!(tampered_err, Err(AbiError::PermissionDenied)));
+    }
+
+    #[test]
+    fn test_io_uring_zero_copy_buffer_registration_lifecycle() {
+        let channel = IoUringShmChannel::new(16, 0).expect("channel");
+        let secret = b"secret_reg_key_2026";
+        let token = MemoryCapabilityToken::ReadWrite(ReadWriteCapabilityToken::issue(
+            secret, 20, 0, 1, 301, 0, 1048576,
+        ));
+
+        let buf1 = IoUringBufferRegistration::wasm_linear_memory(1, 0, 65536);
+        let buf2 = IoUringBufferRegistration::new(2, "posix_shm:/hgb_pool", 65536, 131072, 4096, false);
+
+        let registered = channel.register_buffers(&[buf1, buf2], &token, secret).expect("register buffers");
+        assert_eq!(registered, 2);
+        assert_eq!(channel.registered_buffer_count(), 2);
+
+        let retrieved = channel.get_registered_buffer(1).expect("buffer 1");
+        assert_eq!(retrieved.buffer_id, 1);
+        assert_eq!(retrieved.capacity, 65536);
+        assert!(retrieved.is_wasm_linear_memory);
+
+        let dup_buf = IoUringBufferRegistration::wasm_linear_memory(1, 0, 65536);
+        let dup_err = channel.register_buffers(&[dup_buf], &token, secret);
+        assert!(matches!(dup_err, Err(AbiError::DoubleLend { .. })));
+
+        channel.unregister_buffers(&token, secret).expect("unregister buffers");
+        assert_eq!(channel.registered_buffer_count(), 0);
+    }
+
+    #[test]
+    fn test_io_uring_zero_copy_read_write_fixed() {
+        let channel = IoUringShmChannel::new(16, 0).expect("channel");
+        let secret = b"fixed_io_secret_2026";
+        let token = MemoryCapabilityToken::ReadWrite(ReadWriteCapabilityToken::issue(
+            secret, 30, 0, 1, 401, 0, 65536,
+        ));
+
+        let reg1 = IoUringBufferRegistration::wasm_linear_memory(1, 0, 4096);
+        let reg2 = IoUringBufferRegistration::wasm_linear_memory(2, 4096, 4096);
+        channel.register_buffers(&[reg1, reg2], &token, secret).expect("register");
+
+        let mut mem_buf1 = vec![0xAAu8; 1024];
+        let mut mem_buf2 = vec![0x00u8; 1024];
+
+        channel.attach_buffer_memory(1, mem_buf1.as_mut_ptr(), 4096).expect("attach buf 1");
+        channel.attach_buffer_memory(2, mem_buf2.as_mut_ptr(), 4096).expect("attach buf 2");
+
+        let mut transfer_scratch = vec![0u8; 1024];
+        let scratch_addr = transfer_scratch.as_mut_ptr() as u64;
+
+        // 1. Fixed Read from Buffer 1 into transfer_scratch
+        let read_sqe = IoUringSqeDescriptor::read_fixed(0, scratch_addr, 1024, 0, 1, 5001);
+        channel.submit(&[read_sqe], &token, secret).expect("submit fixed read");
+
+        let cqes = channel.poll_completions(1, 1).expect("poll read cqe");
+        assert_eq!(cqes.len(), 1);
+        assert_eq!(cqes[0].user_data, 5001);
+        assert_eq!(cqes[0].res, 1024);
+        assert_eq!(transfer_scratch, vec![0xAAu8; 1024]);
+
+        // 2. Fixed Write from transfer_scratch into Buffer 2
+        let write_sqe = IoUringSqeDescriptor::write_fixed(0, scratch_addr, 1024, 0, 2, 5002);
+        channel.submit(&[write_sqe], &token, secret).expect("submit fixed write");
+
+        let cqes2 = channel.poll_completions(1, 1).expect("poll write cqe");
+        assert_eq!(cqes2.len(), 1);
+        assert_eq!(cqes2[0].user_data, 5002);
+        assert_eq!(cqes2[0].res, 1024);
+        assert_eq!(mem_buf2, vec![0xAAu8; 1024]);
+    }
+
+    #[test]
+    fn test_io_uring_linear_memory_mapping() {
+        let mut guest_linear_memory = AlignedMem([0u8; 16384]);
+        let offset = 64;
+
+        let channel = IoUringShmChannel::from_linear_memory(
+            &mut guest_linear_memory.0,
+            offset,
+            8,
+            0,
+        ).expect("channel from linear memory");
+
+        let magic_bytes = &guest_linear_memory.0[offset..offset + 8];
+        let magic = u64::from_le_bytes(magic_bytes.try_into().unwrap());
+        assert_eq!(magic, IO_URING_SHM_MAGIC);
+
+        let sq_cap = u32::from_le_bytes(guest_linear_memory.0[offset + 8..offset + 12].try_into().unwrap());
+        let cq_cap = u32::from_le_bytes(guest_linear_memory.0[offset + 12..offset + 16].try_into().unwrap());
+        assert_eq!(sq_cap, 8);
+        assert_eq!(cq_cap, 16);
+
+        let secret = b"guest_linear_secret_2026";
+        let token = MemoryCapabilityToken::ReadWrite(ReadWriteCapabilityToken::issue(
+            secret, 40, 0, 1, 501, 0, 16384,
+        ));
+
+        let sqes = vec![IoUringSqeDescriptor::nop(9999)];
+        channel.submit(&sqes, &token, secret).expect("submit mapped");
+
+        let mem_sq_tail = u32::from_le_bytes(guest_linear_memory.0[offset + 68..offset + 72].try_into().unwrap());
+        assert_eq!(mem_sq_tail, 1);
+
+        let completions = channel.poll_completions(1, 1).expect("poll completions");
+        assert_eq!(completions.len(), 1);
+        assert_eq!(completions[0].user_data, 9999);
+
+        let mem_cq_head = u32::from_le_bytes(guest_linear_memory.0[offset + 128..offset + 132].try_into().unwrap());
+        assert_eq!(mem_cq_head, 1);
+    }
+
+    #[test]
+    fn test_io_uring_ring_wraparound_and_backpressure() {
+        let channel = IoUringShmChannel::new(4, 0).expect("small channel");
+        let secret = b"backpressure_secret_2026";
+        let token = MemoryCapabilityToken::ReadWrite(ReadWriteCapabilityToken::issue(
+            secret, 50, 0, 1, 601, 0, 65536,
+        ));
+
+        let sqes = vec![
+            IoUringSqeDescriptor::nop(1),
+            IoUringSqeDescriptor::nop(2),
+            IoUringSqeDescriptor::nop(3),
+            IoUringSqeDescriptor::nop(4),
+        ];
+        channel.submit(&sqes, &token, secret).expect("submit 4");
+        assert_eq!(channel.cq_available(), 4);
+
+        let overflow_sqe = vec![IoUringSqeDescriptor::nop(5)];
+        let err = channel.submit(&overflow_sqe, &token, secret);
+        assert!(matches!(err, Err(AbiError::RingFull { capacity: 4 })));
+
+        let reaped = channel.poll_completions(1, 2).expect("reap 2");
+        assert_eq!(reaped.len(), 2);
+        assert_eq!(reaped[0].user_data, 1);
+        assert_eq!(reaped[1].user_data, 2);
+
+        let wrap_sqes = vec![
+            IoUringSqeDescriptor::nop(5),
+            IoUringSqeDescriptor::nop(6),
+        ];
+        channel.submit(&wrap_sqes, &token, secret).expect("submit wrapped");
+
+        let remaining = channel.poll_completions(1, 10).expect("drain remaining");
+        assert_eq!(remaining.len(), 4);
+        assert_eq!(remaining[0].user_data, 3);
+        assert_eq!(remaining[1].user_data, 4);
+        assert_eq!(remaining[2].user_data, 5);
+        assert_eq!(remaining[3].user_data, 6);
+        assert_eq!(channel.cq_available(), 0);
+    }
+
+    #[test]
+    fn test_io_uring_multithreaded_producer_consumer_stress() {
+        let channel = Arc::new(IoUringShmChannel::new(64, 0).expect("channel"));
+        let secret: &'static [u8] = b"multithreaded_stress_secret_key_2026";
+        let token = Arc::new(MemoryCapabilityToken::ReadWrite(ReadWriteCapabilityToken::issue(
+            secret, 60, 0, 1, 701, 0, 65536,
+        )));
+        let total_iterations = 2000u64;
+
+        let prod_channel = Arc::clone(&channel);
+        let prod_token = Arc::clone(&token);
+        let producer_thread = thread::spawn(move || {
+            let mut submitted = 0u64;
+            while submitted < total_iterations {
+                let batch_size = ((total_iterations - submitted).min(8)) as u32;
+                let mut sqes = Vec::with_capacity(batch_size as usize);
+                for i in 0..batch_size {
+                    sqes.push(IoUringSqeDescriptor::nop(submitted + (i as u64)));
+                }
+
+                loop {
+                    match prod_channel.submit(&sqes, &prod_token, secret) {
+                        Ok(n) => {
+                            submitted += n as u64;
+                            break;
+                        }
+                        Err(AbiError::RingFull { .. }) => {
+                            thread::yield_now();
+                        }
+                        Err(e) => panic!("Producer error: {:?}", e),
+                    }
+                }
+            }
+        });
+
+        let cons_channel = Arc::clone(&channel);
+        let consumer_thread = thread::spawn(move || {
+            let mut reaped_items = Vec::with_capacity(total_iterations as usize);
+            while (reaped_items.len() as u64) < total_iterations {
+                let needed = ((total_iterations as usize) - reaped_items.len()).min(16) as u32;
+                let cqes = cons_channel.poll_completions(0, needed).expect("poll");
+                if cqes.is_empty() {
+                    thread::yield_now();
+                } else {
+                    for cqe in cqes {
+                        reaped_items.push(cqe.user_data);
+                    }
+                }
+            }
+            reaped_items
+        });
+
+        producer_thread.join().expect("producer join");
+        let reaped_items = consumer_thread.join().expect("consumer join");
+
+        assert_eq!(reaped_items.len(), total_iterations as usize);
+        for i in 0..total_iterations {
+            assert_eq!(reaped_items[i as usize], i);
+        }
     }
 }

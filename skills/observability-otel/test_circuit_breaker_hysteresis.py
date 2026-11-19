@@ -2,11 +2,17 @@
 """
 test_circuit_breaker_hysteresis.py
 ================================================================================
-Comprehensive Unit & Integration Test Suite for Pillar C:
+Comprehensive Unit & Integration Test Suite for Pillar C & Reinforcement Backoff:
   - Sliding-Window Anomaly Detection (dynamic anomaly score, rolling window, min events, thresholds)
-  - Full Hysteresis State Machine (CLOSED -> OPEN -> HALF_OPEN -> RECOVERY -> CLOSED)
-  - Strict Jittered Exponential Backoff:
-      delay = min(max_backoff, base_delay * 2^(failures)) + uniform_jitter(0.1, 0.5)
+  - Full Hysteresis State Machine (CLOSED -> OPEN -> HALF_OPEN -> RECOVERY -> CLOSED, PERM_TRIPPED)
+  - Strict Fibonacci Progression Reinforcement Backoff:
+      fib(1)=1, fib(2)=1, fib(3)=2, fib(4)=3, fib(5)=5, fib(6)=8, fib(7)=13...
+      delay = min(max_backoff, base_delay * fib(iteration)) + uniform_jitter(0.1, 0.5)
+  - AST Error State Fingerprinting Determinism (normalized SHA-256 / BLAKE3)
+  - 3-Consecutive-Identical-Error Tripping:
+      Immediately halts auto-mutation, trips to PERM_TRIPPED, snapshots failing state
+      into LanceDB (skills/vector-lancedb/), and escalates to LLM agent via MCP
+      (hagibis.mcp.json hgb_compiler_self_heal_ast)
   - Skill Quarantining & File Write Permission Locking (0444 read-only)
   - Immutable Cryptographic Audit Manifest Generation & Verification (--verify-audit)
   - Tamper Detection: rejects files altered after manifest sealing
@@ -244,32 +250,273 @@ class TestHysteresisStateMachine(unittest.TestCase):
 
 
 # ==============================================================================
-# 3. Test Strict Jittered Exponential Backoff
+# 3. Test Fibonacci Progression Reinforcement Backoff
 # ==============================================================================
 
-class TestJitteredExponentialBackoff(unittest.TestCase):
-    """Verifies strict exponential backoff dampening and uniform jitter bounds."""
+class TestFibonacciBackoffProgression(unittest.TestCase):
+    """
+    Verifies Fibonacci reinforcement backoff dampening curve:
+      fib(1)=1, fib(2)=1, fib(3)=2, fib(4)=3, fib(5)=5, fib(6)=8, fib(7)=13, fib(8)=21, fib(9)=34...
+      delay = min(t_max, base_delay * fib(iteration)) + uniform_jitter(0.1, 0.5)
+    """
 
     def setUp(self):
-        self.gov = AutonomicCircuitBreakerGovernor(t0=2.0, t_max=64.0)
+        self.gov = AutonomicCircuitBreakerGovernor(t0=1.0, t_max=64.0)
 
-    def test_backoff_monotonicity(self):
-        expected_bases = [2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 64.0]
-        for idx, base in enumerate(expected_bases, start=1):
-            calculated = self.gov.calculate_backoff(idx, with_jitter=False)
-            self.assertEqual(calculated, base)
+    def test_fibonacci_sequence_computation(self):
+        """Validates canonical Fibonacci numbers: fib(1)=1, fib(2)=1, fib(3)=2, fib(4)=3, fib(5)=5, etc."""
+        expected = [1, 1, 2, 3, 5, 8, 13, 21, 34, 55]
+        for idx, exp_val in enumerate(expected, start=1):
+            calculated = self.gov.fibonacci(idx)
+            self.assertEqual(calculated, exp_val, f"fib({idx}) expected {exp_val}, got {calculated}")
+
+    def test_fibonacci_delay_progression_t0_1(self):
+        """Validates delay progression for t0=1.0: 1, 1, 2, 3, 5, 8, 13, 21, 34."""
+        expected_bases = [1.0, 1.0, 2.0, 3.0, 5.0, 8.0, 13.0, 21.0, 34.0]
+        for idx, exp_delay in enumerate(expected_bases, start=1):
+            calculated = self.gov.calculate_fibonacci_backoff(idx, with_jitter=False)
+            self.assertEqual(calculated, exp_delay, f"Iteration {idx}: expected {exp_delay}, got {calculated}")
+
+    def test_fibonacci_delay_progression_t0_2(self):
+        """Validates delay progression for t0=2.0: 2, 2, 4, 6, 10, 16, 26, 42, 64 (capped at t_max=64)."""
+        gov_t2 = AutonomicCircuitBreakerGovernor(t0=2.0, t_max=64.0)
+        expected_bases = [2.0, 2.0, 4.0, 6.0, 10.0, 16.0, 26.0, 42.0, 64.0]
+        for idx, exp_delay in enumerate(expected_bases, start=1):
+            calculated = gov_t2.calculate_fibonacci_backoff(idx, with_jitter=False)
+            self.assertEqual(calculated, exp_delay, f"Iteration {idx}: expected {exp_delay}, got {calculated}")
+
+    def test_fibonacci_capping_at_tmax(self):
+        """Validates that backoff strictly clamps to t_max."""
+        gov_clamp = AutonomicCircuitBreakerGovernor(t0=1.0, t_max=10.0)
+        # fib(7) = 13, should cap at 10.0
+        val = gov_clamp.calculate_fibonacci_backoff(7, with_jitter=False)
+        self.assertEqual(val, 10.0)
 
     def test_jitter_within_specified_uniform_range(self):
         """Validates uniform jitter is strictly within [0.1, 0.5]."""
         for _ in range(100):
-            val = self.gov.calculate_backoff(1, with_jitter=True)
-            # Base is 2.0, jitter in [0.1, 0.5], so total in [2.10, 2.50]
-            self.assertGreaterEqual(val, 2.10)
-            self.assertLessEqual(val, 2.50)
+            val = self.gov.calculate_fibonacci_backoff(1, with_jitter=True)
+            # Base is 1.0, jitter in [0.1, 0.5], so total in [1.10, 1.50]
+            self.assertGreaterEqual(val, 1.10)
+            self.assertLessEqual(val, 1.50)
 
 
 # ==============================================================================
-# 4. Test Immutable Cryptographic Audit Manifest & Verification
+# 4. Test AST Error State Fingerprinting Determinism
+# ==============================================================================
+
+class TestASTErrorFingerprintingDeterminism(unittest.TestCase):
+    """
+    Verifies deterministic SHA-256 / BLAKE3 AST error diagnostic fingerprinting.
+    Fingerprints must uniquely identify diagnostic faults and normalize whitespace.
+    """
+
+    def setUp(self):
+        self.gov = AutonomicCircuitBreakerGovernor()
+
+    def test_identical_diagnostics_produce_identical_fingerprint(self):
+        fp1 = self.gov.compute_ast_error_fingerprint("E0308", "crates/hgb-core/src/lib.rs", 42, "10:25:100:150", "mismatched types")
+        fp2 = self.gov.compute_ast_error_fingerprint("E0308", "crates/hgb-core/src/lib.rs", 42, "10:25:100:150", "mismatched types")
+        self.assertEqual(fp1, fp2)
+        self.assertEqual(len(fp1), 64, "Fingerprint should be a 64-char hexadecimal digest")
+
+    def test_whitespace_normalization_in_error_message(self):
+        """Diagnostic error messages with irregular whitespace or newlines must produce identical fingerprint."""
+        fp_clean = self.gov.compute_ast_error_fingerprint("E0308", "src/lib.rs", 10, "0:0", "mismatched types: expected usize, found &str")
+        fp_spaces = self.gov.compute_ast_error_fingerprint("E0308", "src/lib.rs", 10, "0:0", "mismatched   types:  expected usize,   found &str\n")
+        self.assertEqual(fp_clean, fp_spaces)
+
+    def test_distinct_error_codes_produce_distinct_fingerprints(self):
+        fp_e0308 = self.gov.compute_ast_error_fingerprint("E0308", "src/lib.rs", 10, "0:0", "type error")
+        fp_e0596 = self.gov.compute_ast_error_fingerprint("E0596", "src/lib.rs", 10, "0:0", "type error")
+        self.assertNotEqual(fp_e0308, fp_e0596)
+
+    def test_distinct_lines_produce_distinct_fingerprints(self):
+        fp_line10 = self.gov.compute_ast_error_fingerprint("E0308", "src/lib.rs", 10, "0:0", "type error")
+        fp_line20 = self.gov.compute_ast_error_fingerprint("E0308", "src/lib.rs", 20, "0:0", "type error")
+        self.assertNotEqual(fp_line10, fp_line20)
+
+    def test_distinct_files_produce_distinct_fingerprints(self):
+        fp_file_a = self.gov.compute_ast_error_fingerprint("E0308", "src/a.rs", 10, "0:0", "type error")
+        fp_file_b = self.gov.compute_ast_error_fingerprint("E0308", "src/b.rs", 10, "0:0", "type error")
+        self.assertNotEqual(fp_file_a, fp_file_b)
+
+
+# ==============================================================================
+# 5. Test 3-Consecutive Identical Error Tripping & LanceDB Snapshot + MCP Escalation
+# ==============================================================================
+
+class TestConsecutiveIdenticalASTErrorTripping(unittest.TestCase):
+    """
+    Verifies that encountering the exact same AST error 3 times in a row:
+      1. Halts auto-mutation and trips breaker directly to PERM_TRIPPED
+      2. Snapshots failing state into LanceDB (skills/vector-lancedb/failing_ast_snapshots/)
+      3. Synthesizes MCP escalation payload for hgb_compiler_self_heal_ast (hagibis.mcp.json)
+      4. Locks file permissions (0444 read-only)
+      5. Guarantees can_mutate remains False without auto-recovery
+      6. Verifies HITL administrative reset restores circuit to CLOSED
+    """
+
+    def setUp(self):
+        self.test_dir = tempfile.mkdtemp(prefix="hgb_ast_trip_test_")
+        self.root_p = Path(self.test_dir)
+        self.lancedb_p = self.root_p / "skills" / "vector-lancedb"
+        self.lancedb_p.mkdir(parents=True)
+
+        self.gov = AutonomicCircuitBreakerGovernor(
+            state_dir=self.root_p / "state",
+            quarantine_dir=self.root_p / "quarantine",
+            registry_path=self.root_p / "state" / "reg.json",
+            webhook_sink=self.root_p / "events.jsonl",
+            lancedb_dir=self.lancedb_p,
+            max_consecutive_failures=5,  # Anomaly/consecutive failure threshold set higher to ensure AST fingerprint trips it
+            t0=1.0,
+            t_max=30.0
+        )
+        self.skill_id = "crate_hgb_kernel"
+        self.source_file = self.root_p / "broken_algo.rs"
+        self.source_file.write_text(
+            "pub fn calculate() -> usize {\n"
+            "    let count = 42;\n"
+            "    // Broken type mismatch: expected usize, found &str\n"
+            "    \"centroid_alpha\"\n"
+            "}\n"
+        )
+
+    def tearDown(self):
+        shutil.rmtree(self.test_dir, ignore_errors=True)
+
+    def test_three_consecutive_identical_ast_errors_trip_and_escalate(self):
+        h_pre = self.gov.compute_state_hash(self.source_file)
+        now = time.time()
+
+        diag_code = "E0308"
+        diag_line = 4
+        diag_msg = "mismatched types: expected usize, found &str"
+        diag_span = "4:5:75:92"
+
+        # 1. First encounter with AST error
+        r1 = self.gov.record_mutation_attempt(
+            skill_id=self.skill_id,
+            pre_hash=h_pre,
+            post_hash=h_pre,
+            success=False,
+            error_trace="rustc compile failure E0308",
+            skill_path=self.source_file,
+            diagnostic_code=diag_code,
+            diagnostic_line=diag_line,
+            diagnostic_span=diag_span,
+            diagnostic_message=diag_msg,
+            current_time=now
+        )
+        self.assertEqual(r1["state"], CircuitState.CLOSED.value)
+        self.assertEqual(r1["consecutive_fingerprint_count"], 1)
+        can_run, _ = self.gov.can_mutate(self.skill_id, current_time=now)
+        self.assertTrue(can_run)
+
+        # 2. Second encounter with exact same AST error
+        r2 = self.gov.record_mutation_attempt(
+            skill_id=self.skill_id,
+            pre_hash=h_pre,
+            post_hash=h_pre,
+            success=False,
+            error_trace="rustc compile failure E0308 (attempt 2)",
+            skill_path=self.source_file,
+            diagnostic_code=diag_code,
+            diagnostic_line=diag_line,
+            diagnostic_span=diag_span,
+            diagnostic_message=diag_msg,
+            current_time=now + 1.0
+        )
+        self.assertEqual(r2["state"], CircuitState.CLOSED.value)
+        self.assertEqual(r2["consecutive_fingerprint_count"], 2)
+        can_run, _ = self.gov.can_mutate(self.skill_id, current_time=now + 1.0)
+        self.assertTrue(can_run)
+
+        # 3. Third consecutive encounter with exact same AST error -> TRIPS TO PERM_TRIPPED!
+        r3 = self.gov.record_mutation_attempt(
+            skill_id=self.skill_id,
+            pre_hash=h_pre,
+            post_hash=h_pre,
+            success=False,
+            error_trace="rustc compile failure E0308 (attempt 3: halted)",
+            skill_path=self.source_file,
+            diagnostic_code=diag_code,
+            diagnostic_line=diag_line,
+            diagnostic_span=diag_span,
+            diagnostic_message=diag_msg,
+            compiler_stderr="error[E0308]: mismatched types\n --> broken_algo.rs:4:5\n  |\n4 |     \"centroid_alpha\"\n  |     ^^^^^^^^^^^^^^^^ expected usize, found &str",
+            current_time=now + 2.0
+        )
+
+        # Check circuit state
+        self.assertEqual(r3["state"], CircuitState.PERM_TRIPPED.value)
+        self.assertEqual(r3["action"], "CONSECUTIVE_AST_ERROR_PERM_TRIPPED")
+        rec = self.gov._registry[self.skill_id]
+        self.assertEqual(rec.state, CircuitState.PERM_TRIPPED)
+        self.assertEqual(rec.consecutive_fingerprint_count, 3)
+
+        # File write permissions must be revoked (0444 read-only)
+        self.assertFalse(os.access(self.source_file, os.W_OK), "Permissions must be locked to 0444 read-only")
+
+        # can_mutate must remain BLOCKED permanently without auto-recovery
+        can_run, msg = self.gov.can_mutate(self.skill_id, current_time=now + 1000000.0)
+        self.assertFalse(can_run, "PERM_TRIPPED state must not auto-expire into HALF_OPEN")
+        self.assertIn("PERM_TRIPPED", msg)
+
+        # 4. Verify LanceDB Snapshot
+        self.assertIn("lancedb_snapshot", r3)
+        snapshot_file = Path(r3["lancedb_snapshot"]["snapshot_file"])
+        self.assertTrue(snapshot_file.exists(), f"Snapshot file {snapshot_file} must exist on disk")
+
+        with open(snapshot_file, "r", encoding="utf-8") as sf:
+            snap_data = json.load(sf)
+
+        self.assertEqual(snap_data["consecutive_occurrences"], 3)
+        self.assertEqual(snap_data["diagnostic_code"], "E0308")
+        self.assertEqual(snap_data["circuit_state"], CircuitState.PERM_TRIPPED.value)
+        self.assertTrue(snap_data["auto_mutation_halted"])
+        self.assertTrue(snap_data["escalated_to_mcp"])
+        self.assertIn("source_context", snap_data)
+        self.assertIn("centroid_alpha", snap_data["source_context"])
+        self.assertIn("compiler_stderr", snap_data)
+        self.assertIn("error[E0308]", snap_data["compiler_stderr"])
+        self.assertEqual(snap_data["pre_patch_hash"], h_pre)
+
+        # Verify latest pointer file exists
+        latest_file = Path(r3["lancedb_snapshot"]["latest_file"])
+        self.assertTrue(latest_file.exists())
+
+        # 5. Verify MCP Escalation Payload
+        self.assertIn("mcp_payload", r3)
+        mcp = r3["mcp_payload"]
+        self.assertEqual(mcp["jsonrpc"], "2.0")
+        self.assertEqual(mcp["method"], "tools/call")
+        self.assertEqual(mcp["params"]["name"], "hgb_compiler_self_heal_ast")
+
+        args = mcp["params"]["arguments"]
+        self.assertEqual(args["target_file"], str(self.source_file))
+        self.assertEqual(args["diagnostic_code"], "E0308")
+        self.assertEqual(args["error_line"], 4)
+        self.assertTrue(args["auto_rollback_on_failure"])
+        self.assertIn("centroid_alpha", args["ast_context_snippet"])
+
+        meta = mcp["metadata"]
+        self.assertEqual(meta["consecutive_identical_occurrences"], 3)
+        self.assertIn("Identical AST compiler error encountered 3 times", meta["escalation_reason"])
+
+        # 6. Verify HITL Administrative Reset
+        self.gov.reset_skill(self.skill_id, restore_path=self.source_file)
+        self.assertEqual(rec.state, CircuitState.CLOSED)
+        self.assertEqual(rec.consecutive_fingerprint_count, 0)
+        self.assertIsNone(rec.last_ast_fingerprint)
+        can_run, _ = self.gov.can_mutate(self.skill_id)
+        self.assertTrue(can_run)
+        self.assertTrue(os.access(self.source_file, os.W_OK), "Permissions must be restored to writable on reset")
+
+
+# ==============================================================================
+# 6. Test Immutable Cryptographic Audit Manifest & Verification
 # ==============================================================================
 
 class TestImmutableAuditManifest(unittest.TestCase):

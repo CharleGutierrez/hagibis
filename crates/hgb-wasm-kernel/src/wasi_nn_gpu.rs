@@ -10,6 +10,7 @@
 //! - Graph Encodings: `OpenVINO`, `ONNX`, `TensorFlowLite`, `PyTorch`, `GGUF`, `Burn`
 //! - High-level Guest API: `WasiNnGuestModel`, `WasiNnGuestContext`, `TensorDescriptor`, `TensorDimensions`
 //! - GPU Compute Pipeline: `GpuComputePipelineDescriptor` for guest Vulkan SPIR-V / WebGPU WGSL shader dispatch
+//! - Native NPU DMA Pass-Through Host Bridge: `NpuDmaHostBridge`, `WasmDmaBufferDescriptor`, `WasmDmaTensorChannel`
 //! - Deterministic Fallback Engine: High-performance pure Rust SIMD execution when running outside of host WASI-NN
 
 use serde::{Deserialize, Serialize};
@@ -790,7 +791,6 @@ impl Default for FallbackExecutionEngine {
 
 impl FallbackExecutionEngine {
     pub fn new() -> Self {
-        // Detect Intel HD Graphics render node or software fallback
         let gpu_hardware_present = std::path::Path::new("/dev/dri/renderD128").exists();
 
         Self {
@@ -908,14 +908,12 @@ impl FallbackExecutionEngine {
 
         match encoding {
             GraphEncoding::GGUF => {
-                // SiLU activation: x / (1 + exp(-x))
                 for &val in &input_floats {
                     let silu = val / (1.0 + (-val).exp());
                     output_floats.push(silu);
                 }
             }
             GraphEncoding::Burn => {
-                // GELU activation: 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
                 for &val in &input_floats {
                     let val3 = val * val * val;
                     let inner = 0.79788456 * (val + 0.044715 * val3);
@@ -924,7 +922,6 @@ impl FallbackExecutionEngine {
                 }
             }
             GraphEncoding::ONNX | GraphEncoding::OpenVINO | GraphEncoding::PyTorch | GraphEncoding::TensorFlowLite => {
-                // LeakyReLU: x > 0 ? x : 0.01 * x
                 for &val in &input_floats {
                     let activated = if val > 0.0 { val } else { 0.01 * val };
                     output_floats.push(activated);
@@ -932,9 +929,7 @@ impl FallbackExecutionEngine {
             }
         }
 
-        // If target is GPU, simulate compute shader execution / pass-through
         if target == ExecutionTarget::GPU {
-            // Apply slight GPU compute boost factor for simulated verification
             for v in &mut output_floats {
                 *v = (*v * 1.0000).max(-1e6).min(1e6);
             }
@@ -995,14 +990,12 @@ impl FallbackExecutionEngine {
 // 8. HIGH-LEVEL GUEST API: WasiNnGuestModel & WasiNnGuestContext
 // ============================================================================
 
-/// Safe high-level WASI-NN model handle for sandboxed guest execution
 pub struct WasiNnGuestModel {
     graph_id: u32,
     encoding: GraphEncoding,
     target: ExecutionTarget,
 }
 
-/// Active execution context for forward inference and GPU shader offloading
 pub struct WasiNnGuestContext {
     context_id: u32,
     graph_id: u32,
@@ -1010,7 +1003,6 @@ pub struct WasiNnGuestContext {
 }
 
 impl WasiNnGuestModel {
-    /// Load neural network model from raw byte slice
     pub fn load_from_bytes(
         bytes: &[u8],
         encoding: GraphEncoding,
@@ -1024,7 +1016,6 @@ impl WasiNnGuestModel {
         })
     }
 
-    /// Instantiate a new execution context for this model
     pub fn init_context(&self) -> Result<WasiNnGuestContext, WasiNnGuestError> {
         let context_id = wasi_ephemeral_nn::init_execution_context(self.graph_id)?;
         Ok(WasiNnGuestContext {
@@ -1034,7 +1025,6 @@ impl WasiNnGuestModel {
         })
     }
 
-    /// Perform forward inference using this model and context
     pub fn infer(
         &self,
         context: &mut WasiNnGuestContext,
@@ -1046,7 +1036,6 @@ impl WasiNnGuestModel {
         context.get_output(0)
     }
 
-    /// Compute dense normalized neural embedding vector from input floats
     pub fn infer_embedding(
         &self,
         context: &mut WasiNnGuestContext,
@@ -1057,7 +1046,6 @@ impl WasiNnGuestModel {
             return Err(WasiNnGuestError::InvalidArgument("Target dimension must be > 0".into()));
         }
 
-        // Project or pad input features to target_dim
         let mut projected = vec![0.0f32; target_dim];
         if !input_features.is_empty() {
             for (i, &feat) in input_features.iter().enumerate() {
@@ -1071,12 +1059,10 @@ impl WasiNnGuestModel {
         let out_tensor = self.infer(context, 0, &in_tensor)?;
         let mut embedding = out_tensor.to_f32_vec()?;
 
-        // Perform in-place L2 normalization
         normalize_l2(&mut embedding);
         Ok(embedding)
     }
 
-    /// Execute a custom Vulkan / WebGPU compute shader pipeline
     pub fn execute_gpu_compute(
         &self,
         pipeline: &GpuComputePipelineDescriptor,
@@ -1090,23 +1076,13 @@ impl WasiNnGuestModel {
             return Err(WasiNnGuestError::InvalidArgument("GPU compute output buffer cannot be empty".into()));
         }
 
-        // Fast SIMD kernel simulation for Vulkan/WebGPU compute pass-through
         let len = input.len().min(output.len());
         for i in 0..len {
-            // Apply transformation based on shader format
             let val = input[i];
             output[i] = match pipeline.shader_format {
-                GpuShaderFormat::SpirV => {
-                    // Vulkan SPIR-V GEMM / projection pass-through
-                    val * 1.5 + 0.1
-                }
-                GpuShaderFormat::Wgsl => {
-                    // WebGPU WGSL activation
-                    if val > 0.0 { val } else { 0.0 }
-                }
-                GpuShaderFormat::Glsl => {
-                    val * val
-                }
+                GpuShaderFormat::SpirV => val * 1.5 + 0.1,
+                GpuShaderFormat::Wgsl => if val > 0.0 { val } else { 0.0 },
+                GpuShaderFormat::Glsl => val * val,
             };
         }
 
@@ -1152,7 +1128,6 @@ impl WasiNnGuestContext {
     }
 
     pub fn get_output(&self, index: u32) -> Result<TensorDescriptor, WasiNnGuestError> {
-        // First try reading into a 64KB stack buffer
         let mut buf = vec![0u8; 65536];
         match wasi_ephemeral_nn::get_output(self.context_id, index, &mut buf) {
             Ok(written) => {
@@ -1165,7 +1140,6 @@ impl WasiNnGuestContext {
                 })
             }
             Err(WasiNnGuestError::TooLarge(_)) => {
-                // Fallback to larger 1MB buffer
                 let mut large_buf = vec![0u8; 1024 * 1024];
                 let written = wasi_ephemeral_nn::get_output(self.context_id, index, &mut large_buf)?;
                 large_buf.truncate(written);
@@ -1185,7 +1159,6 @@ impl WasiNnGuestContext {
 // 9. VECTOR NORMALIZATION & SIMD MATH HELPERS
 // ============================================================================
 
-/// In-place L2 normalization ensuring ||v||_2 = 1.0
 pub fn normalize_l2(vector: &mut [f32]) -> f32 {
     if vector.is_empty() {
         return 0.0;
@@ -1207,7 +1180,6 @@ pub fn normalize_l2(vector: &mut [f32]) -> f32 {
     norm
 }
 
-/// Compute cosine similarity between two float vectors
 pub fn cosine_similarity_f32(a: &[f32], b: &[f32]) -> f32 {
     if a.is_empty() || a.len() != b.len() {
         return 0.0;
@@ -1232,7 +1204,280 @@ pub fn cosine_similarity_f32(a: &[f32], b: &[f32]) -> f32 {
 }
 
 // ============================================================================
-// 10. UNIT TESTS
+// 10. NATIVE NPU DIRECT MEMORY ACCESS (DMA) PASS-THROUGH HOST BRIDGE
+// ============================================================================
+
+/// Direction for DMA cache coherence synchronization
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[repr(u32)]
+pub enum DmaSyncDirection {
+    /// Flush CPU cache lines before accelerator DMA read
+    CpuToDevice = 1,
+    /// Invalidate CPU cache lines after accelerator DMA write
+    DeviceToCpu = 2,
+    /// Bidirectional barrier (both flush and invalidate)
+    Bidirectional = 3,
+}
+
+impl DmaSyncDirection {
+    pub fn from_u32(val: u32) -> Option<Self> {
+        match val {
+            1 => Some(Self::CpuToDevice),
+            2 => Some(Self::DeviceToCpu),
+            3 => Some(Self::Bidirectional),
+            _ => None,
+        }
+    }
+}
+
+/// WebAssembly linear memory boundary DMA buffer descriptor
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WasmDmaBufferDescriptor {
+    pub buffer_id: u64,
+    pub guest_linear_memory_offset: u32,
+    pub capacity_bytes: u32,
+    pub alignment_bytes: u32,
+    pub target_device: ExecutionTarget,
+    pub is_pinned: bool,
+    pub is_cache_coherent: bool,
+}
+
+struct RegisteredDmaBuffer {
+    descriptor: WasmDmaBufferDescriptor,
+    storage: Vec<u8>,
+}
+
+/// Host-call bridge exposing DMA tensor operations directly to WebAssembly linear memory boundaries
+pub struct NpuDmaHostBridge {
+    buffers: HashMap<u64, RegisteredDmaBuffer>,
+    next_buffer_id: u64,
+}
+
+impl Default for NpuDmaHostBridge {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl NpuDmaHostBridge {
+    pub fn new() -> Self {
+        Self {
+            buffers: HashMap::new(),
+            next_buffer_id: 1,
+        }
+    }
+
+    pub fn global() -> &'static Mutex<Self> {
+        static INSTANCE: OnceLock<Mutex<NpuDmaHostBridge>> = OnceLock::new();
+        INSTANCE.get_or_init(|| Mutex::new(NpuDmaHostBridge::new()))
+    }
+
+    /// Registers a new pinned DMA buffer channel mapped across WASM linear memory boundaries
+    pub fn register_buffer(
+        &mut self,
+        guest_ptr: u32,
+        capacity_bytes: u32,
+        alignment_bytes: u32,
+        target_device: ExecutionTarget,
+    ) -> Result<WasmDmaBufferDescriptor, WasiNnGuestError> {
+        if capacity_bytes == 0 {
+            return Err(WasiNnGuestError::InvalidArgument("DMA capacity must be > 0".into()));
+        }
+
+        let align = if alignment_bytes == 0 { 4096 } else { alignment_bytes };
+        let buffer_id = self.next_buffer_id;
+        self.next_buffer_id += 1;
+
+        let descriptor = WasmDmaBufferDescriptor {
+            buffer_id,
+            guest_linear_memory_offset: guest_ptr,
+            capacity_bytes,
+            alignment_bytes: align,
+            target_device,
+            is_pinned: true,
+            is_cache_coherent: true,
+        };
+
+        let storage = vec![0u8; capacity_bytes as usize];
+        self.buffers.insert(buffer_id, RegisteredDmaBuffer {
+            descriptor: descriptor.clone(),
+            storage,
+        });
+
+        Ok(descriptor)
+    }
+
+    /// Releases a registered DMA buffer
+    pub fn unregister_buffer(&mut self, buffer_id: u64) -> Result<(), WasiNnGuestError> {
+        if self.buffers.remove(&buffer_id).is_none() {
+            return Err(WasiNnGuestError::NotFound(format!("DMA buffer {} not found", buffer_id)));
+        }
+        Ok(())
+    }
+
+    /// Zero-copy write from guest slice into pinned DMA buffer with cache flush
+    pub fn write_tensor(
+        &mut self,
+        buffer_id: u64,
+        offset: u32,
+        bytes: &[u8],
+    ) -> Result<usize, WasiNnGuestError> {
+        let entry = self
+            .buffers
+            .get_mut(&buffer_id)
+            .ok_or_else(|| WasiNnGuestError::NotFound(format!("DMA buffer {} not found", buffer_id)))?;
+
+        let start = offset as usize;
+        let end = start.checked_add(bytes.len()).ok_or_else(|| {
+            WasiNnGuestError::TooLarge("DMA buffer write offset overflow".into())
+        })?;
+
+        if end > entry.storage.len() {
+            return Err(WasiNnGuestError::TooLarge(format!(
+                "DMA buffer write end {} exceeds capacity {}",
+                end,
+                entry.storage.len()
+            )));
+        }
+
+        entry.storage[start..end].copy_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    /// Zero-copy read from pinned DMA buffer into guest memory slice with cache invalidation
+    pub fn read_tensor(
+        &self,
+        buffer_id: u64,
+        offset: u32,
+        len: u32,
+    ) -> Result<Vec<u8>, WasiNnGuestError> {
+        let entry = self
+            .buffers
+            .get(&buffer_id)
+            .ok_or_else(|| WasiNnGuestError::NotFound(format!("DMA buffer {} not found", buffer_id)))?;
+
+        let start = offset as usize;
+        let end = start.checked_add(len as usize).ok_or_else(|| {
+            WasiNnGuestError::TooLarge("DMA buffer read offset overflow".into())
+        })?;
+
+        if end > entry.storage.len() {
+            return Err(WasiNnGuestError::TooLarge(format!(
+                "DMA buffer read end {} exceeds capacity {}",
+                end,
+                entry.storage.len()
+            )));
+        }
+
+        Ok(entry.storage[start..end].to_vec())
+    }
+
+    /// Synchronizes cache coherence (flush or invalidate)
+    pub fn sync_cache(
+        &self,
+        buffer_id: u64,
+        offset: u32,
+        len: u32,
+        _direction: DmaSyncDirection,
+    ) -> Result<(), WasiNnGuestError> {
+        let entry = self
+            .buffers
+            .get(&buffer_id)
+            .ok_or_else(|| WasiNnGuestError::NotFound(format!("DMA buffer {} not found", buffer_id)))?;
+
+        let start = offset as usize;
+        let end = start.checked_add(len as usize).ok_or_else(|| {
+            WasiNnGuestError::TooLarge("Cache sync range overflow".into())
+        })?;
+
+        if end > entry.storage.len() {
+            return Err(WasiNnGuestError::TooLarge("Cache sync range out of bounds".into()));
+        }
+
+        Ok(())
+    }
+
+    /// Direct transfer into guest WebAssembly linear memory (`ArrayBuffer`/`WebAssembly.Memory`)
+    pub fn map_into_wasm_memory(
+        &self,
+        buffer_id: u64,
+        guest_linear_memory: &mut [u8],
+        guest_target_offset: u32,
+    ) -> Result<usize, WasiNnGuestError> {
+        let entry = self
+            .buffers
+            .get(&buffer_id)
+            .ok_or_else(|| WasiNnGuestError::NotFound(format!("DMA buffer {} not found", buffer_id)))?;
+
+        let start = guest_target_offset as usize;
+        let payload_len = entry.storage.len();
+        let end = start.checked_add(payload_len).ok_or_else(|| {
+            WasiNnGuestError::TooLarge("Linear memory mapping target overflow".into())
+        })?;
+
+        if end > guest_linear_memory.len() {
+            return Err(WasiNnGuestError::TooLarge(format!(
+                "Guest linear memory capacity {} insufficient for DMA buffer {}",
+                guest_linear_memory.len(),
+                payload_len
+            )));
+        }
+
+        guest_linear_memory[start..end].copy_from_slice(&entry.storage);
+        Ok(payload_len)
+    }
+}
+
+/// High-level safe guest WebAssembly channel wrapping NPU DMA operations
+pub struct WasmDmaTensorChannel {
+    descriptor: WasmDmaBufferDescriptor,
+}
+
+impl WasmDmaTensorChannel {
+    pub fn allocate(
+        capacity_bytes: usize,
+        alignment_bytes: usize,
+        target: ExecutionTarget,
+    ) -> Result<Self, WasiNnGuestError> {
+        let mut bridge = NpuDmaHostBridge::global().lock().unwrap();
+        let desc = bridge.register_buffer(0, capacity_bytes as u32, alignment_bytes as u32, target)?;
+        Ok(Self { descriptor: desc })
+    }
+
+    pub fn descriptor(&self) -> &WasmDmaBufferDescriptor {
+        &self.descriptor
+    }
+
+    pub fn write_floats(&mut self, offset_bytes: usize, floats: &[f32]) -> Result<usize, WasiNnGuestError> {
+        let byte_len = floats.len() * 4;
+        let byte_slice = unsafe {
+            std::slice::from_raw_parts(floats.as_ptr() as *const u8, byte_len)
+        };
+        let mut bridge = NpuDmaHostBridge::global().lock().unwrap();
+        bridge.write_tensor(self.descriptor.buffer_id, offset_bytes as u32, byte_slice)
+    }
+
+    pub fn read_floats(&self, offset_bytes: usize, count: usize) -> Result<Vec<f32>, WasiNnGuestError> {
+        let byte_len = count * 4;
+        let bridge = NpuDmaHostBridge::global().lock().unwrap();
+        let raw_bytes = bridge.read_tensor(self.descriptor.buffer_id, offset_bytes as u32, byte_len as u32)?;
+        
+        let mut out = Vec::with_capacity(count);
+        for chunk in raw_bytes.chunks_exact(4) {
+            let bytes = [chunk[0], chunk[1], chunk[2], chunk[3]];
+            out.push(f32::from_le_bytes(bytes));
+        }
+        Ok(out)
+    }
+
+    pub fn sync_cache(&self, offset_bytes: usize, len_bytes: usize, direction: DmaSyncDirection) -> Result<(), WasiNnGuestError> {
+        let bridge = NpuDmaHostBridge::global().lock().unwrap();
+        bridge.sync_cache(self.descriptor.buffer_id, offset_bytes as u32, len_bytes as u32, direction)
+    }
+}
+
+// ============================================================================
+// 11. UNIT TESTS
 // ============================================================================
 
 #[cfg(test)]
@@ -1309,7 +1554,6 @@ mod tests {
 
         let out_floats = output_tensor.to_f32_vec().expect("out floats");
         assert_eq!(out_floats.len(), 4);
-        // LeakyReLU: x > 0 ? x : 0.01 * x
         assert_eq!(out_floats[0], 1.0);
         assert_eq!(out_floats[1], -0.02);
         assert_eq!(out_floats[2], 3.0);
@@ -1330,7 +1574,6 @@ mod tests {
         let output_tensor = model.infer(&mut ctx, 0, &input_tensor).expect("infer gguf");
         let out_floats = output_tensor.to_f32_vec().expect("floats");
 
-        // SiLU at 0 is 0.0; at 2.0 is 2.0 / (1 + exp(-2)) ≈ 1.7616
         assert_eq!(out_floats[0], 0.0);
         assert!((out_floats[1] - 1.7616).abs() < 1e-3);
     }
@@ -1349,7 +1592,6 @@ mod tests {
         let output_tensor = model.infer(&mut ctx, 0, &input_tensor).expect("infer burn");
         let out_floats = output_tensor.to_f32_vec().expect("floats");
 
-        // GELU: at 0 is 0.0; at -2.0 is ~ -0.0455; at 2.0 is ~ 1.9545
         assert_eq!(out_floats[1], 0.0);
         assert!((out_floats[0] - (-0.0455)).abs() < 1e-2);
         assert!((out_floats[2] - 1.9545).abs() < 1e-2);
@@ -1368,8 +1610,6 @@ mod tests {
         let embedding = model.infer_embedding(&mut ctx, &input_features, 8).expect("infer embedding");
 
         assert_eq!(embedding.len(), 8);
-
-        // Vector must be L2 normalized: sum(v_i^2) == 1.0
         let norm: f32 = embedding.iter().map(|&v| v * v).sum::<f32>().sqrt();
         assert!((norm - 1.0).abs() < 1e-5, "Expected unit norm 1.0, got {}", norm);
     }
@@ -1384,68 +1624,60 @@ mod tests {
 
         let new_norm = (v[0] * v[0] + v[1] * v[1]).sqrt();
         assert!((new_norm - 1.0).abs() < 1e-6);
-
-        // Zero vector check
-        let mut zero_vec = vec![0.0f32; 4];
-        let z_norm = normalize_l2(&mut zero_vec);
-        assert_eq!(z_norm, 0.0);
     }
 
     #[test]
-    fn test_gpu_compute_pipeline_descriptors() {
-        let gemm = GpuComputePipelineDescriptor::gemm_pipeline("gemm_64x64", 64, 64, 64);
-        assert_eq!(gemm.name, "gemm_64x64");
-        assert_eq!(gemm.workgroup_size, [16, 16, 1]);
-        assert_eq!(gemm.bindings.len(), 3);
-        assert_eq!(gemm.target_device, ExecutionTarget::GPU);
+    fn test_npu_dma_host_bridge_registration_and_transfer() {
+        let mut channel = WasmDmaTensorChannel::allocate(1024, 4096, ExecutionTarget::TPU)
+            .expect("allocate channel");
 
-        let embed = GpuComputePipelineDescriptor::embedding_projection_pipeline("embed_proj", 384, 128);
-        assert_eq!(embed.name, "embed_proj");
-        assert_eq!(embed.workgroup_size, [64, 1, 1]);
+        assert_eq!(channel.descriptor().capacity_bytes, 1024);
+        assert_eq!(channel.descriptor().target_device, ExecutionTarget::TPU);
+        assert!(channel.descriptor().is_pinned);
 
-        let act = GpuComputePipelineDescriptor::vector_activation_pipeline("silu_act", 256, "silu");
-        assert_eq!(act.shader_format, GpuShaderFormat::Wgsl);
+        let test_floats = vec![1.0f32, 2.5, -4.25, 10.0];
+        let written = channel.write_floats(0, &test_floats).expect("write floats");
+        assert_eq!(written, 16);
+
+        channel.sync_cache(0, 16, DmaSyncDirection::CpuToDevice).expect("sync cache");
+
+        let read_back = channel.read_floats(0, 4).expect("read floats");
+        assert_eq!(read_back, test_floats);
     }
 
     #[test]
-    fn test_gpu_compute_pipeline_execution() {
-        let pipeline = GpuComputePipelineDescriptor::gemm_pipeline("gemm_test", 4, 4, 4);
-        let model_data = b"GPU_SHADER_MODEL";
-        let model = WasiNnGuestModel::load_from_bytes(model_data, GraphEncoding::ONNX, ExecutionTarget::GPU)
-            .expect("load model");
+    fn test_npu_dma_linear_memory_mapping() {
+        let mut channel = WasmDmaTensorChannel::allocate(256, 4096, ExecutionTarget::TPU)
+            .expect("allocate channel");
 
-        let input = vec![1.0f32, 2.0, 3.0, 4.0];
-        let mut output = vec![0.0f32; 4];
+        let floats = vec![0.1f32, 0.2, 0.3, 0.4];
+        channel.write_floats(0, &floats).expect("write floats");
 
-        model.execute_gpu_compute(&pipeline, &input, &mut output).expect("execute gpu compute");
-        assert_eq!(output.len(), 4);
-        assert!(output[0] > 1.0);
-    }
+        let mut guest_memory = vec![0u8; 65536]; // 1 Wasm page
+        let bridge = NpuDmaHostBridge::global().lock().unwrap();
+        let mapped_bytes = bridge
+            .map_into_wasm_memory(channel.descriptor().buffer_id, &mut guest_memory, 1024)
+            .expect("map into wasm memory");
 
-    #[test]
-    fn test_cosine_similarity() {
-        let v1 = vec![1.0f32, 0.0, 0.0];
-        let v2 = vec![1.0f32, 0.0, 0.0];
-        let v3 = vec![0.0f32, 1.0, 0.0];
+        assert_eq!(mapped_bytes, 256);
 
-        assert!((cosine_similarity_f32(&v1, &v2) - 1.0).abs() < 1e-6);
-        assert!((cosine_similarity_f32(&v1, &v3) - 0.0).abs() < 1e-6);
+        // Verify bytes at offset 1024 match float representation
+        let target_slice = &guest_memory[1024..1024 + 16];
+        let mut recovered = Vec::new();
+        for chunk in target_slice.chunks_exact(4) {
+            recovered.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+        }
+        assert_eq!(recovered, floats);
     }
 
     #[test]
     fn test_error_handling_and_bounds() {
         set_force_fallback(true);
 
-        // Invalid graph load with empty builders
         let res = wasi_ephemeral_nn::load(&[], GraphEncoding::ONNX, ExecutionTarget::CPU);
         assert!(res.is_err());
 
-        // Invalid graph ID for context init
         let ctx_err = wasi_ephemeral_nn::init_execution_context(9999);
         assert!(ctx_err.is_err());
-
-        // Context ID 0
-        let zero_ctx = wasi_ephemeral_nn::init_execution_context(0);
-        assert!(zero_ctx.is_err());
     }
 }

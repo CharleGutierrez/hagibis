@@ -34,10 +34,10 @@ pub use component_model_bridge::{
 
 pub mod wasi_nn_gpu;
 pub use wasi_nn_gpu::{
-    wasi_ephemeral_nn, ExecutionTarget, FallbackExecutionEngine, GpuBindingDescriptor,
-    GpuBindingType, GpuComputePipelineDescriptor, GpuShaderFormat, GraphEncoding,
-    TensorDescriptor, TensorDimensions, TensorType, WasiNnGuestContext, WasiNnGuestError,
-    WasiNnGuestModel,
+    wasi_ephemeral_nn, DmaSyncDirection, ExecutionTarget, FallbackExecutionEngine, GpuBindingDescriptor,
+    GpuBindingType, GpuComputePipelineDescriptor, GpuShaderFormat, GraphEncoding, NpuDmaHostBridge,
+    TensorDescriptor, TensorDimensions, TensorType, WasmDmaBufferDescriptor, WasmDmaTensorChannel,
+    WasiNnGuestContext, WasiNnGuestError, WasiNnGuestModel,
 };
 
 pub mod kernel_build_cache_manager;
@@ -511,9 +511,6 @@ pub extern "C" fn hgb_shm_commit_write(bytes_written: usize) -> usize {
 // ============================================================================
 
 /// Stream raw f32 embedding vector directly into guest linear memory
-///
-/// Validates that `raw_f32_bytes.len() == dimensions * 4`, writes into guest memory,
-/// and returns the guest linear memory byte offset where the vector begins.
 pub fn stream_embedding_to_guest(dimensions: u32, raw_f32_bytes: &[u8]) -> Result<u32, String> {
     if dimensions == 0 {
         return Err("Dimensions must be greater than zero".to_string());
@@ -533,7 +530,6 @@ pub fn stream_embedding_to_guest(dimensions: u32, raw_f32_bytes: &[u8]) -> Resul
         }
         let desc = state.descriptor.as_mut().unwrap();
 
-        // 4-byte alignment
         let current_tail = desc.tail_offset as usize;
         let aligned_tail = (current_tail + 3) & !3;
         let start = (desc.base_offset as usize) + aligned_tail;
@@ -698,7 +694,6 @@ impl WasiNnTensor {
     }
 }
 
-/// Guest WASI-NN Context & Model Storage
 struct GuestWasiNnState {
     graphs: std::collections::HashMap<u32, (WasiNnGraphEncoding, WasiNnExecutionTarget, Vec<u8>)>,
     contexts: std::collections::HashMap<u32, (u32, std::collections::HashMap<u32, WasiNnTensor>, std::collections::HashMap<u32, WasiNnTensor>)>,
@@ -772,10 +767,7 @@ pub fn hgb_wasi_nn_compute(context_id: u32) -> Result<(), String> {
         let input_floats = input.to_f32_vec();
         let mut output_floats = Vec::with_capacity(input_floats.len());
 
-        // Fast in-sandbox forward activation & quantized projection:
-        // GELU approximation + residual projection
         for &x in &input_floats {
-            // GELU: 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
             let x3 = x * x * x;
             let inner = 0.79788456 * (x + 0.044715 * x3);
             let tanh_approx = inner.tanh();
@@ -798,7 +790,6 @@ pub fn hgb_wasi_nn_get_output(context_id: u32, index: u32) -> Result<WasiNnTenso
             .ok_or_else(|| format!("Output tensor not found at index {}", index))
     })
 }
-
 // ============================================================================
 // Multi-Language Component Model Plugin Manifest
 // ============================================================================
@@ -808,7 +799,7 @@ pub fn hgb_wasi_nn_get_output(context_id: u32, index: u32) -> Result<WasiNnTenso
 pub struct ComponentPluginManifest {
     pub name: String,
     pub version: String,
-    pub language: String, // "rust", "go", "python", "typescript"
+    pub language: String,
     pub author: String,
     pub entrypoint: String,
     pub exported_tools: Vec<String>,
@@ -854,7 +845,6 @@ impl Default for BpeTokenizer {
 }
 
 impl BpeTokenizer {
-    /// Initialize with standard 256-byte fallback vocabulary and common subword merges
     pub fn new_default() -> Self {
         let mut tokenizer = Self {
             vocab: std::collections::HashMap::new(),
@@ -863,16 +853,14 @@ impl BpeTokenizer {
             next_id: 0,
         };
 
-        // Seed with all 256 byte tokens for guaranteed lossless encoding
         for b in 0u8..=255 {
             let s = (b as char).to_string();
             tokenizer.add_token(&s);
         }
 
-        // Seed common multi-character merges and programming keywords
         let common_merges = [
             ("t", "h"), ("th", "e"), ("i", "n"), ("a", "n"), ("e", "r"),
-            ("r", "e"), ("o", "n"), ("a", "t"), ("e", "n"), ("o", "r"),
+            ("r", "e"), ("o", "n"), ("a", "at"), ("e", "n"), ("o", "r"),
             ("e", "s"), ("t", "i"), ("i", "s"), ("t", "e"), ("a", "r"),
             ("f", "n"), ("v", "a"), ("va", "r"), ("c", "o"), ("co", "nst"),
             ("p", "u"), ("pu", "b"), ("e", "x"), ("ex", "port"), ("f", "or"),
@@ -887,7 +875,6 @@ impl BpeTokenizer {
         tokenizer
     }
 
-    /// Add a token to vocabulary, returning its unique token ID
     pub fn add_token(&mut self, token: &str) -> u32 {
         if let Some(&id) = self.vocab.get(token) {
             return id;
@@ -899,7 +886,6 @@ impl BpeTokenizer {
         id
     }
 
-    /// Register a merge pair (e.g. "t" + "h" -> "th")
     pub fn add_merge(&mut self, first: &str, second: &str) {
         let merged = format!("{}{}", first, second);
         self.add_token(first);
@@ -908,12 +894,10 @@ impl BpeTokenizer {
         self.merges.push((first.to_string(), second.to_string()));
     }
 
-    /// Total vocabulary size
     pub fn vocab_size(&self) -> usize {
         self.vocab.len()
     }
 
-    /// Encode input string into BPE token IDs
     pub fn encode(&self, text: &str) -> Vec<u32> {
         if text.is_empty() {
             return Vec::new();
@@ -948,7 +932,6 @@ impl BpeTokenizer {
             .collect()
     }
 
-    /// Decode BPE token IDs back to a reconstructed string
     pub fn decode(&self, tokens: &[u32]) -> String {
         let mut out = String::new();
         for &tok in tokens {
@@ -962,7 +945,6 @@ impl BpeTokenizer {
     }
 }
 
-/// Compute cosine similarity between two float vectors
 pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     if a.is_empty() || a.len() != b.len() {
         return 0.0;
@@ -983,7 +965,6 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     }
 }
 
-/// Compute Euclidean distance between two float vectors
 pub fn euclidean_distance(a: &[f32], b: &[f32]) -> f32 {
     if a.is_empty() || a.len() != b.len() {
         return 0.0;
@@ -996,7 +977,6 @@ pub fn euclidean_distance(a: &[f32], b: &[f32]) -> f32 {
     sum_sq.sqrt()
 }
 
-/// Compute vector dot product
 pub fn dot_product(a: &[f32], b: &[f32]) -> f32 {
     if a.len() != b.len() {
         return 0.0;
@@ -1004,7 +984,6 @@ pub fn dot_product(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b.iter()).map(|(&x, &y)| x * y).sum()
 }
 
-/// Multiply rows x cols matrix by vector of length cols, returning vector of length rows
 pub fn matrix_vector_mul(matrix: &[f32], rows: usize, cols: usize, vector: &[f32]) -> Result<Vec<f32>, String> {
     if matrix.len() != rows * cols {
         return Err(format!(
@@ -1030,14 +1009,13 @@ pub fn matrix_vector_mul(matrix: &[f32], rows: usize, cols: usize, vector: &[f32
     Ok(result)
 }
 
-/// 1D Kalman state filter for real-time latency and telemetry smoothing
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct KalmanFilter1D {
-    pub x: f32, // State estimate
-    pub p: f32, // Estimate error covariance
-    pub q: f32, // Process noise covariance
-    pub r: f32, // Measurement noise covariance
-    pub k: f32, // Kalman gain
+    pub x: f32,
+    pub p: f32,
+    pub q: f32,
+    pub r: f32,
+    pub k: f32,
 }
 
 impl KalmanFilter1D {
@@ -1051,12 +1029,10 @@ impl KalmanFilter1D {
         }
     }
 
-    /// Predict next state step (covariance expands by process noise)
     pub fn predict(&mut self) {
         self.p += self.q;
     }
 
-    /// Update state with fresh measurement, returning filtered state
     pub fn update(&mut self, measurement: f32) -> f32 {
         self.predict();
         self.k = self.p / (self.p + self.r);
@@ -1074,7 +1050,6 @@ impl KalmanFilter1D {
     }
 }
 
-/// N-Dimensional Kalman Filter for state vectors
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct KalmanFilterND {
     pub state: Vec<f32>,
@@ -1107,11 +1082,6 @@ impl KalmanFilterND {
     }
 }
 
-// ----------------------------------------------------------------------------
-// Built-In Production-Grade Freestanding Zig Kernel Primitive Sources
-// ----------------------------------------------------------------------------
-
-/// Freestanding Zig BPE Tokenizer microkernel
 pub const ZIG_BPE_TOKENIZER_SOURCE: &str = r#"
 var in_buf: [16384]u8 = undefined;
 var out_buf: [16384]u8 = undefined;
@@ -1140,8 +1110,6 @@ pub export fn hgb_tool_manifest() u64 {
 
 pub export fn hgb_tool_invoke(input_ptr: [*]const u8, input_len: usize) u64 {
     const input = input_ptr[0..input_len];
-    
-    // Fast byte-level and subword tokenization scan
     var tokens: usize = 0;
     var i: usize = 0;
     while (i < input.len) {
@@ -1159,11 +1127,9 @@ pub export fn hgb_tool_invoke(input_ptr: [*]const u8, input_len: usize) u64 {
             i += 1;
         }
     }
-    
     const prefix = "{\"status\":\"success\",\"primitive\":\"bpe_tokenizer\",\"tokens\":";
     @memcpy(out_buf[0..prefix.len], prefix);
     var idx: usize = prefix.len;
-    
     var temp_c = tokens;
     var num_buf: [24]u8 = undefined;
     var num_len: usize = 0;
@@ -1182,11 +1148,9 @@ pub export fn hgb_tool_invoke(input_ptr: [*]const u8, input_len: usize) u64 {
         out_buf[idx] = num_buf[num_len - 1 - rev_i];
         idx += 1;
     }
-    
     const mid = ",\"bytes_processed\":";
     @memcpy(out_buf[idx..idx + mid.len], mid);
     idx += mid.len;
-    
     var in_len_val = input.len;
     num_len = 0;
     if (in_len_val == 0) {
@@ -1204,17 +1168,14 @@ pub export fn hgb_tool_invoke(input_ptr: [*]const u8, input_len: usize) u64 {
         out_buf[idx] = num_buf[num_len - 1 - rev_i];
         idx += 1;
     }
-    
     out_buf[idx] = '}';
     idx += 1;
-    
     const ptr_u64: u64 = @intFromPtr(&out_buf[0]);
     const len_u64: u64 = idx;
     return ptr_u64 | (len_u64 << 32);
 }
 "#;
 
-/// Freestanding Zig Vector Cosine and Euclidean Distance microkernel
 pub const ZIG_COSINE_MATH_SOURCE: &str = r#"
 var in_buf: [16384]u8 = undefined;
 var out_buf: [16384]u8 = undefined;
@@ -1244,7 +1205,6 @@ pub export fn hgb_tool_manifest() u64 {
 pub export fn hgb_tool_invoke(input_ptr: [*]const u8, input_len: usize) u64 {
     _ = input_ptr;
     _ = input_len;
-    
     const resp = "{\"status\":\"success\",\"primitive\":\"cosine_distance\",\"similarity\":0.9854,\"euclidean\":0.1708}";
     @memcpy(out_buf[0..resp.len], resp);
     const ptr_u64: u64 = @intFromPtr(&out_buf[0]);
@@ -1253,7 +1213,6 @@ pub export fn hgb_tool_invoke(input_ptr: [*]const u8, input_len: usize) u64 {
 }
 "#;
 
-/// Freestanding Zig Kalman Filter microkernel
 pub const ZIG_KALMAN_FILTER_SOURCE: &str = r#"
 var in_buf: [16384]u8 = undefined;
 var out_buf: [16384]u8 = undefined;
@@ -1283,7 +1242,6 @@ pub export fn hgb_tool_manifest() u64 {
 pub export fn hgb_tool_invoke(input_ptr: [*]const u8, input_len: usize) u64 {
     _ = input_ptr;
     _ = input_len;
-    
     const resp = "{\"status\":\"success\",\"primitive\":\"kalman_filter\",\"state\":42.5,\"converged\":true}";
     @memcpy(out_buf[0..resp.len], resp);
     const ptr_u64: u64 = @intFromPtr(&out_buf[0]);
@@ -1292,7 +1250,6 @@ pub export fn hgb_tool_invoke(input_ptr: [*]const u8, input_len: usize) u64 {
 }
 "#;
 
-/// Freestanding Zig Matrix-Vector Multiplier microkernel
 pub const ZIG_MATRIX_VECTOR_SOURCE: &str = r#"
 var in_buf: [16384]u8 = undefined;
 var out_buf: [16384]u8 = undefined;
@@ -1322,7 +1279,6 @@ pub export fn hgb_tool_manifest() u64 {
 pub export fn hgb_tool_invoke(input_ptr: [*]const u8, input_len: usize) u64 {
     _ = input_ptr;
     _ = input_len;
-    
     const resp = "{\"status\":\"success\",\"primitive\":\"matrix_vector_product\",\"dimension\":128,\"computed\":true}";
     @memcpy(out_buf[0..resp.len], resp);
     const ptr_u64: u64 = @intFromPtr(&out_buf[0]);
@@ -1331,7 +1287,6 @@ pub export fn hgb_tool_invoke(input_ptr: [*]const u8, input_len: usize) u64 {
 }
 "#;
 
-/// Dynamic Tool Specification conforming to WIT `dynamic-tool-compiler` interface
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolSpec {
     pub name: String,
@@ -1357,33 +1312,27 @@ impl ToolSpec {
         self
     }
 
-    /// Construct a Zig tool specification for LLM-generated code
     pub fn new_zig(name: impl Into<String>, description: impl Into<String>, zig_code: impl Into<String>) -> Self {
         Self::new(name, description, "zig", zig_code)
     }
 
-    /// Construct a WAT (WebAssembly Text) tool specification for LLM-generated code
     pub fn new_wat(name: impl Into<String>, description: impl Into<String>, wat_code: impl Into<String>) -> Self {
         Self::new(name, description, "wat", wat_code)
     }
 
-    /// Construct a dynamic tool specification synthesized directly by an LLM
     pub fn from_llm(name: impl Into<String>, description: impl Into<String>, source_language: impl Into<String>, source_code: impl Into<String>) -> Self {
         Self::new(name, description, source_language, source_code)
     }
 
-    /// Check if tool source language is Zig
     pub fn is_zig(&self) -> bool {
         self.source_language.eq_ignore_ascii_case("zig") || self.source_language.is_empty()
     }
 
-    /// Check if tool source language is WAT
     pub fn is_wat(&self) -> bool {
         self.source_language.eq_ignore_ascii_case("wat")
     }
 }
 
-/// Dynamic Compilation Outcome conforming to WIT `dynamic-tool-compiler` interface
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CompilationOutcome {
     pub success: bool,
@@ -1430,7 +1379,6 @@ impl CompilationOutcome {
     }
 }
 
-/// Dynamic Tool Manifest conforming to WIT `agent-runtime-extension` interface
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DynamicToolManifest {
     pub tool_id: String,
@@ -1462,9 +1410,7 @@ impl DynamicToolManifest {
     }
 }
 
-/// Freestanding Zig regex matcher template
 pub const ZIG_REGEX_MATCHER_SOURCE: &str = r#"
-// Hagibis Freestanding Regular Expression Matcher Kernel
 var memory_arena: [65536]u8 = undefined;
 var arena_offset: usize = 0;
 var in_buf: [32768]u8 = undefined;
@@ -1501,9 +1447,7 @@ export fn hgb_tool_invoke(input_ptr: [*]const u8, input_len: usize) u64 {
 }
 "#;
 
-/// Freestanding Zig math evaluator & matrix transformations template
 pub const ZIG_MATH_EVALUATOR_SOURCE: &str = r#"
-// Hagibis Freestanding Math & Matrix Transform Kernel
 var memory_arena: [65536]u8 = undefined;
 var arena_offset: usize = 0;
 var in_buf: [32768]u8 = undefined;
@@ -1540,9 +1484,7 @@ export fn hgb_tool_invoke(input_ptr: [*]const u8, input_len: usize) u64 {
 }
 "#;
 
-/// Freestanding Zig JSON slicer template
 pub const ZIG_JSON_SLICER_SOURCE: &str = r#"
-// Hagibis Freestanding JSON Slicing & Parsing Kernel
 var memory_arena: [65536]u8 = undefined;
 var arena_offset: usize = 0;
 var in_buf: [32768]u8 = undefined;
@@ -1579,7 +1521,6 @@ export fn hgb_tool_invoke(input_ptr: [*]const u8, input_len: usize) u64 {
 }
 "#;
 
-/// Freestanding Zig Hardware-Accelerated Tensor & SIMD microkernel using @Vector(4, f32) pattern
 pub const ZIG_HARDWARE_ACCELERATED_TENSOR_SOURCE: &str = r#"
 var in_buf: [16384]u8 = undefined;
 var out_buf: [16384]u8 = undefined;
@@ -1742,7 +1683,6 @@ pub export fn hgb_tool_invoke(input_ptr: [*]const u8, input_len: usize) u64 {
 }
 "#;
 
-/// Generate freestanding Zig tool code from a tool name and custom or template logic
 pub fn generate_freestanding_zig_tool(name: &str, tool_logic: &str) -> String {
     if tool_logic.trim().is_empty() {
         let lower = name.to_lowercase();
@@ -1757,7 +1697,6 @@ pub fn generate_freestanding_zig_tool(name: &str, tool_logic: &str) -> String {
         }
     }
 
-    // If arbitrary tool code provided by LLM contains complete export definitions, return as-is
     if tool_logic.contains("export fn hgb_tool_invoke") || tool_logic.contains("export fn run") {
         return tool_logic.to_string();
     }
@@ -1806,7 +1745,6 @@ export fn run() i32 {{
     )
 }
 
-/// Synthesize arbitrary tool code generated by an LLM at runtime for WebAssembly execution
 pub fn synthesize_llm_tool_code(name: &str, language: &str, code: &str) -> String {
     if language.eq_ignore_ascii_case("zig") || language.is_empty() {
         generate_freestanding_zig_tool(name, code)
@@ -1815,7 +1753,6 @@ pub fn synthesize_llm_tool_code(name: &str, language: &str, code: &str) -> Strin
     }
 }
 
-/// Get builtin Zig primitive source code by canonical or alias name
 pub fn get_builtin_zig_primitive(name: &str) -> Option<&'static str> {
     match name {
         "bpe_tokenizer" | "bpe" | "tokenizer" => Some(ZIG_BPE_TOKENIZER_SOURCE),
@@ -1830,7 +1767,6 @@ pub fn get_builtin_zig_primitive(name: &str) -> Option<&'static str> {
     }
 }
 
-/// List all available built-in Zig primitive names
 pub fn list_builtin_zig_primitives() -> Vec<&'static str> {
     vec![
         "bpe_tokenizer",
@@ -1844,11 +1780,6 @@ pub fn list_builtin_zig_primitives() -> Vec<&'static str> {
     ]
 }
 
-// ============================================================================
-// UNTRUSTED SANDBOX RUNNER INTERFACE (Pillar 1: Supercharge WASM Kernel & Edge Isolation)
-// ============================================================================
-
-/// Policy and strict resource limits for executing untrusted agent-generated code
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SandboxPolicy {
     pub fuel_limit: u64,
@@ -1863,7 +1794,7 @@ impl Default for SandboxPolicy {
         Self {
             fuel_limit: 10_000_000,
             epoch_deadline_ms: 1000,
-            max_memory_pages: 256, // 16 MiB (256 * 64 KiB)
+            max_memory_pages: 256,
             allow_stdout: false,
             allow_env: false,
         }
@@ -1871,7 +1802,6 @@ impl Default for SandboxPolicy {
 }
 
 impl SandboxPolicy {
-    /// Create a new policy with custom fuel, epoch deadline, and max memory pages
     pub fn new(fuel_limit: u64, epoch_deadline_ms: u64, max_memory_pages: u32) -> Self {
         Self {
             fuel_limit,
@@ -1882,23 +1812,21 @@ impl SandboxPolicy {
         }
     }
 
-    /// Strict sandboxed policy for untrusted agent-generated code
     pub fn strict() -> Self {
         Self {
             fuel_limit: 5_000_000,
             epoch_deadline_ms: 500,
-            max_memory_pages: 128, // 8 MiB
+            max_memory_pages: 128,
             allow_stdout: false,
             allow_env: false,
         }
     }
 
-    /// Permissive policy for trusted tools
     pub fn permissive() -> Self {
         Self {
             fuel_limit: 50_000_000,
             epoch_deadline_ms: 5000,
-            max_memory_pages: 1024, // 64 MiB
+            max_memory_pages: 1024,
             allow_stdout: true,
             allow_env: true,
         }
@@ -1929,13 +1857,11 @@ impl SandboxPolicy {
         self
     }
 
-    /// Memory limit in bytes (pages * 64 KiB)
     pub fn max_memory_bytes(&self) -> usize {
         (self.max_memory_pages as usize) * 64 * 1024
     }
 }
 
-/// Execution telemetry and output from metered sandbox execution
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MeteredExecutionResult {
     pub exit_code: i32,
@@ -1946,7 +1872,6 @@ pub struct MeteredExecutionResult {
 }
 
 impl MeteredExecutionResult {
-    /// Construct a successful execution result
     pub fn ok(exit_code: i32, fuel_consumed: u64, duration_us: u64, output: Vec<u8>) -> Self {
         Self {
             exit_code,
@@ -1957,7 +1882,6 @@ impl MeteredExecutionResult {
         }
     }
 
-    /// Construct an execution result with error/trap diagnostic
     pub fn err(exit_code: i32, fuel_consumed: u64, duration_us: u64, diagnostic: impl Into<String>) -> Self {
         Self {
             exit_code,
@@ -1968,23 +1892,15 @@ impl MeteredExecutionResult {
         }
     }
 
-    /// Whether execution succeeded without traps/errors (non-negative exit code and no error diagnostic)
     pub fn is_success(&self) -> bool {
         self.error_diagnostic.is_none() && self.exit_code >= 0
     }
 
-    /// Interpret output as UTF-8 string slice
     pub fn output_as_str(&self) -> Result<&str, std::str::Utf8Error> {
         std::str::from_utf8(&self.output)
     }
 }
 
-// ============================================================================
-// PILLAR 2: HARDWARE-ACCELERATED TENSOR & WASM SIMD-128 ENGINE
-// ============================================================================
-
-/// Tensor Capability Policy defining hardware security bounds and execution constraints.
-/// Conforms to WIT `tensor-capability-policy` specification.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TensorCapabilityPolicy {
     pub allow_gpu_offload: bool,
@@ -2007,7 +1923,6 @@ impl Default for TensorCapabilityPolicy {
 }
 
 impl TensorCapabilityPolicy {
-    /// Construct a custom tensor capability policy
     pub fn new(
         allow_gpu_offload: bool,
         allow_simd_128: bool,
@@ -2024,7 +1939,6 @@ impl TensorCapabilityPolicy {
         }
     }
 
-    /// Strict capability policy for sandboxed / resource-constrained microkernels
     pub fn strict() -> Self {
         Self {
             allow_gpu_offload: false,
@@ -2035,7 +1949,6 @@ impl TensorCapabilityPolicy {
         }
     }
 
-    /// High-performance capability policy with GPU offload enabled
     pub fn high_performance() -> Self {
         Self {
             allow_gpu_offload: true,
@@ -2046,7 +1959,6 @@ impl TensorCapabilityPolicy {
         }
     }
 
-    /// Enforce capability security bounds: dimension checks, total memory, and VRAM limits
     pub fn enforce_bounds(&self, m: usize, k: usize, n: usize) -> Result<(), String> {
         if m == 0 || k == 0 || n == 0 {
             return Err("Matrix dimensions must be non-zero".to_string());
@@ -2060,7 +1972,6 @@ impl TensorCapabilityPolicy {
             ));
         }
 
-        // Calculate required memory: A(m*k) + B(k*n) + C(m*n) in f32 (4 bytes per element)
         let elems_a = m.checked_mul(k).ok_or_else(|| "Matrix A dimension overflow".to_string())?;
         let elems_b = k.checked_mul(n).ok_or_else(|| "Matrix B dimension overflow".to_string())?;
         let elems_c = m.checked_mul(n).ok_or_else(|| "Matrix C dimension overflow".to_string())?;
@@ -2087,7 +1998,6 @@ impl TensorCapabilityPolicy {
         Ok(())
     }
 
-    /// Enforce 1D vector capability bounds
     pub fn enforce_vector_bounds(&self, len: usize) -> Result<(), String> {
         if len == 0 {
             return Err("Vector length must be non-zero".to_string());
@@ -2113,7 +2023,6 @@ impl TensorCapabilityPolicy {
     }
 }
 
-/// SIMD 128-bit Dot Product (4-wide f32x4 unrolled vectorization)
 #[inline(always)]
 pub fn hgb_simd_dot_product_f32(vec_a: &[f32], vec_b: &[f32]) -> f32 {
     let len = vec_a.len().min(vec_b.len());
@@ -2141,7 +2050,6 @@ pub fn hgb_simd_dot_product_f32(vec_a: &[f32], vec_b: &[f32]) -> f32 {
     total
 }
 
-/// SIMD 128-bit ReLU activation (4-wide f32x4 unrolled vectorization)
 #[inline(always)]
 pub fn hgb_simd_relu_f32(tensor: &[f32]) -> Vec<f32> {
     let len = tensor.len();
@@ -2169,8 +2077,6 @@ pub fn hgb_simd_relu_f32(tensor: &[f32]) -> Vec<f32> {
     output
 }
 
-/// Raw kernel for SIMD 128-bit matrix multiplication
-/// Computes C[i, j] += A[i, p] * B[p, j] with 4-wide unrolling over j
 #[inline(always)]
 pub fn raw_simd_matmul(
     a_ptr: *const f32,
@@ -2185,7 +2091,6 @@ pub fn raw_simd_matmul(
     }
 
     unsafe {
-        // Zero initialize destination buffer
         std::ptr::write_bytes(out_ptr, 0, m * n);
 
         let n_chunks = n / 4;
@@ -2203,7 +2108,6 @@ pub fn raw_simd_matmul(
 
                 let row_b_offset = p * n;
 
-                // 4-wide f32x4 SIMD inner loop
                 for c in 0..n_chunks {
                     let j = c * 4;
                     let b_idx = row_b_offset + j;
@@ -2225,7 +2129,6 @@ pub fn raw_simd_matmul(
                     *c3 += a_val * b3;
                 }
 
-                // Remainder handling
                 let rem_start = n_chunks * 4;
                 for j in 0..n_rem {
                     let col = rem_start + j;
@@ -2238,10 +2141,6 @@ pub fn raw_simd_matmul(
     }
 }
 
-/// SIMD 128-bit Matrix Multiplication C = A * B (m x k * k x n = m x n)
-///
-/// Implements cache-friendly (i, k, j) loop ordering with 4-wide f32x4 SIMD vectorization
-/// across matrix B and matrix C columns.
 pub fn hgb_simd_matmul_f32(
     matrix_a: &[f32],
     matrix_b: &[f32],
@@ -2274,11 +2173,6 @@ pub fn hgb_simd_matmul_f32(
     Ok(out)
 }
 
-// ----------------------------------------------------------------------------
-// C-ABI Exports for Freestanding Agent Tools & Vector Distance Kernels
-// ----------------------------------------------------------------------------
-
-/// Exported C-ABI: WebAssembly SIMD 128-bit 4-lane f32 dot product
 #[no_mangle]
 pub extern "C" fn wasm_simd_dot_f32(vec_a_ptr: *const f32, vec_b_ptr: *const f32, len: usize) -> f32 {
     if vec_a_ptr.is_null() || vec_b_ptr.is_null() || len == 0 {
@@ -2289,7 +2183,6 @@ pub extern "C" fn wasm_simd_dot_f32(vec_a_ptr: *const f32, vec_b_ptr: *const f32
     hgb_simd_dot_product_f32(slice_a, slice_b)
 }
 
-/// Exported C-ABI: WebAssembly SIMD 128-bit 4-lane f32 cosine similarity
 #[no_mangle]
 pub extern "C" fn wasm_simd_cosine_f32(vec_a_ptr: *const f32, vec_b_ptr: *const f32, len: usize) -> f32 {
     if vec_a_ptr.is_null() || vec_b_ptr.is_null() || len == 0 {
@@ -2300,7 +2193,6 @@ pub extern "C" fn wasm_simd_cosine_f32(vec_a_ptr: *const f32, vec_b_ptr: *const 
     cosine_similarity(slice_a, slice_b)
 }
 
-/// Exported C-ABI: WebAssembly SIMD 128-bit 4-lane f32 Euclidean squared distance
 #[no_mangle]
 pub extern "C" fn wasm_simd_l2_f32(vec_a_ptr: *const f32, vec_b_ptr: *const f32, len: usize) -> f32 {
     if vec_a_ptr.is_null() || vec_b_ptr.is_null() || len == 0 {
@@ -2316,13 +2208,11 @@ pub extern "C" fn wasm_simd_l2_f32(vec_a_ptr: *const f32, vec_b_ptr: *const f32,
     sum_sq
 }
 
-/// Exported C-ABI: 128-bit SIMD Vector Dot Product (legacy alias)
 #[no_mangle]
 pub extern "C" fn hgb_wasm_simd_dot_product(vec_a_ptr: *const f32, vec_b_ptr: *const f32, len: usize) -> f32 {
     wasm_simd_dot_f32(vec_a_ptr, vec_b_ptr, len)
 }
 
-/// Exported C-ABI: 128-bit SIMD Matrix Multiplication C = A * B
 #[no_mangle]
 pub extern "C" fn hgb_wasm_simd_matmul(
     a_ptr: *const f32,
@@ -2335,11 +2225,6 @@ pub extern "C" fn hgb_wasm_simd_matmul(
     raw_simd_matmul(a_ptr, b_ptr, out_ptr, m, k, n);
 }
 
-// ----------------------------------------------------------------------------
-// WIT High-Level Bindings: `hardware-accelerated-tensor`
-// ----------------------------------------------------------------------------
-
-/// WIT func `matmul-f32`
 pub fn hgb_wit_matmul_f32(
     matrix_a: Vec<f32>,
     matrix_b: Vec<f32>,
@@ -2351,7 +2236,6 @@ pub fn hgb_wit_matmul_f32(
     hgb_simd_matmul_f32(&matrix_a, &matrix_b, m as usize, k as usize, n as usize, Some(&policy))
 }
 
-/// WIT func `vector-dot-product-simd`
 pub fn hgb_wit_vector_dot_product_simd(vec_a: Vec<f32>, vec_b: Vec<f32>) -> Result<f32, String> {
     if vec_a.is_empty() || vec_b.is_empty() {
         return Err("Input vectors cannot be empty".to_string());
@@ -2362,7 +2246,6 @@ pub fn hgb_wit_vector_dot_product_simd(vec_a: Vec<f32>, vec_b: Vec<f32>) -> Resu
     Ok(hgb_simd_dot_product_f32(&vec_a, &vec_b))
 }
 
-/// WIT func `vector-cosine-similarity-simd`
 pub fn hgb_wit_vector_cosine_similarity_simd(vec_a: Vec<f32>, vec_b: Vec<f32>) -> Result<f32, String> {
     if vec_a.is_empty() || vec_b.is_empty() {
         return Err("Input vectors cannot be empty".to_string());
@@ -2373,7 +2256,6 @@ pub fn hgb_wit_vector_cosine_similarity_simd(vec_a: Vec<f32>, vec_b: Vec<f32>) -
     Ok(cosine_similarity(&vec_a, &vec_b))
 }
 
-/// WIT func `vector-l2-distance-simd`
 pub fn hgb_wit_vector_l2_distance_simd(vec_a: Vec<f32>, vec_b: Vec<f32>) -> Result<f32, String> {
     if vec_a.is_empty() || vec_b.is_empty() {
         return Err("Input vectors cannot be empty".to_string());
@@ -2389,7 +2271,6 @@ pub fn hgb_wit_vector_l2_distance_simd(vec_a: Vec<f32>, vec_b: Vec<f32>) -> Resu
     Ok(sum_sq)
 }
 
-/// WIT func `relu-activation-simd`
 pub fn hgb_wit_relu_activation_simd(tensor: Vec<f32>) -> Result<Vec<f32>, String> {
     if tensor.is_empty() {
         return Err("Input tensor cannot be empty".to_string());
@@ -2397,11 +2278,6 @@ pub fn hgb_wit_relu_activation_simd(tensor: Vec<f32>) -> Result<Vec<f32>, String
     Ok(hgb_simd_relu_f32(&tensor))
 }
 
-// ============================================================================
-// AGENT COMPONENT MODEL INTERFACE (Pillar 1: Component Model Support)
-// ============================================================================
-
-/// Dynamic Tool Invocation conforming to WIT `agent-component-model` interface
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentToolInvocation {
     pub tool_id: String,
@@ -2440,7 +2316,6 @@ impl AgentToolInvocation {
     }
 }
 
-/// Dynamic Tool Output conforming to WIT `agent-component-model` interface
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentToolOutput {
     pub exit_code: i32,
@@ -2473,7 +2348,6 @@ impl AgentToolOutput {
     }
 }
 
-/// WIT High-Level Function Wrapper for Component Tool Invocation
 pub fn hgb_invoke_component_tool(
     inv: AgentToolInvocation,
     handler: impl FnOnce(&AgentToolInvocation) -> Result<String, String>,
@@ -2484,11 +2358,6 @@ pub fn hgb_invoke_component_tool(
     }
 }
 
-// ============================================================================
-// HAGIBIS SKILLS WIT INTERFACE TYPES (`hagibis:skills@0.3.0`)
-// ============================================================================
-
-/// Dynamic skill parameter value variant conforming to WIT `skill-parameter.value`
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", content = "value")]
 pub enum SkillParameterValue {
@@ -2499,7 +2368,6 @@ pub enum SkillParameterValue {
     JsonPayload(String),
 }
 
-/// Skill argument entry conforming to WIT `skill-parameter.skill-arg`
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SkillArg {
     pub name: String,
@@ -2536,7 +2404,6 @@ impl SkillArg {
     }
 }
 
-/// Capability kinds conforming to WIT `skill-capability.capability-kind`
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SkillCapabilityKind {
     FsRead,
@@ -2551,7 +2418,6 @@ pub enum SkillCapabilityKind {
     NetworkEgress,
 }
 
-/// Permission grant conforming to WIT `skill-capability.permission-grant`
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PermissionGrant {
     pub kind: SkillCapabilityKind,
@@ -2559,7 +2425,6 @@ pub struct PermissionGrant {
     pub max_memory_pages: u32,
 }
 
-/// Granular capability grant for tenant isolation conforming to WIT `skill-capability`
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GranularWasiCapabilityGrant {
     pub tenant_id: String,
@@ -2570,7 +2435,6 @@ pub struct GranularWasiCapabilityGrant {
     pub gas_fuel_limit: u64,
 }
 
-/// Skill descriptor conforming to WIT `skill-manifest.skill-descriptor`
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SkillDescriptor {
     pub name: String,
@@ -2599,7 +2463,6 @@ impl SkillDescriptor {
     }
 }
 
-/// Execution outcome conforming to WIT `skill-execute.execution-outcome`
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SkillExecutionOutcome {
     pub success: bool,
@@ -2696,7 +2559,6 @@ mod tests {
         assert_eq!(tensor, parsed);
         assert_eq!(parsed.byte_length, (1 * 16 * 768 * 2) as u32);
 
-        // Attach buffer and write header at head
         let desc = ShmBufferDescriptor {
             shm_id: "tensor_shm".to_string(),
             base_offset: 0,
@@ -2720,7 +2582,7 @@ mod tests {
         let desc = ShmBufferDescriptor {
             shm_id: "tokens_shm".to_string(),
             base_offset: 2048,
-            capacity_bytes: 128, // can hold 32 u32 tokens
+            capacity_bytes: 128,
             head_offset: 0,
             tail_offset: 0,
             flags: SHM_FLAG_READWRITE,
@@ -2731,12 +2593,9 @@ mod tests {
         let written = hgb_shm_write_token_stream(&tokens).expect("write tokens");
         assert_eq!(written, 6);
 
-        // Commit extra bytes
         let tail = hgb_shm_commit_write(16);
         assert_eq!(tail, (6 * 4) + 16);
 
-        // Overflow test: capacity is 128 bytes, currently at 40 bytes.
-        // Trying to write 30 tokens = 120 bytes -> 40 + 120 = 160 > 128 -> must fail!
         let big_tokens = vec![42u32; 30];
         let overflow_res = hgb_shm_write_token_stream(&big_tokens);
         assert!(overflow_res.is_err());
@@ -2744,7 +2603,6 @@ mod tests {
 
     #[test]
     fn test_wasi_nn_graph_and_quantized_inference_in_wasm() {
-        // Pseudo GGUF / Burn model weights
         let model_bytes = vec![0x47, 0x47, 0x55, 0x46, 0x01, 0x00, 0x00, 0x00];
         let graph_id = hgb_wasi_nn_load(&model_bytes, WasiNnGraphEncoding::GGUF, WasiNnExecutionTarget::CPU)
             .expect("load graph");
@@ -2764,7 +2622,6 @@ mod tests {
         assert_eq!(out_tensor.dtype, TensorDataType::F32);
         let out_floats = out_tensor.to_f32_vec();
         assert_eq!(out_floats.len(), 4);
-        // GELU of positive numbers is positive; GELU of 0 is 0
         assert!(out_floats[0] > 0.3);
         assert!(out_floats[2].abs() < 1e-4);
         assert!(out_floats[3] > 3.0);
@@ -2795,7 +2652,7 @@ mod tests {
         let text = "hello the world fn pub export";
         let tokens = bpe.encode(text);
         assert!(!tokens.is_empty());
-        assert!(tokens.len() < text.len()); // Token compression achieved
+        assert!(tokens.len() < text.len());
 
         let decoded = bpe.decode(&tokens);
         assert_eq!(decoded, text);
@@ -2827,7 +2684,6 @@ mod tests {
             let state = kf.update(m);
             assert!(state > 0.0);
         }
-        // State should converge close to 10.0
         assert!((kf.state() - 10.0).abs() < 1.0);
         assert!(kf.covariance() < 1.0);
 
@@ -2840,15 +2696,11 @@ mod tests {
 
     #[test]
     fn test_matrix_vector_multiplication() {
-        // 2x2 matrix: [[1, 2], [3, 4]]
-        // vector: [2, 3]
-        // result: [1*2 + 2*3, 3*2 + 4*3] = [8, 18]
         let mat = vec![1.0f32, 2.0, 3.0, 4.0];
         let vec = vec![2.0f32, 3.0];
         let res = matrix_vector_mul(&mat, 2, 2, &vec).expect("matvec");
         assert_eq!(res, vec![8.0, 18.0]);
 
-        // Error check on dimension mismatch
         let bad_vec = vec![1.0f32];
         assert!(matrix_vector_mul(&mat, 2, 2, &bad_vec).is_err());
     }
@@ -2938,12 +2790,10 @@ mod tests {
         assert_eq!(custom_policy.max_memory_pages, 64);
         assert!(custom_policy.allow_stdout);
 
-        // Serialization roundtrip
         let json = serde_json::to_string(&custom_policy).expect("serialize policy");
         let deserialized: SandboxPolicy = serde_json::from_str(&json).expect("deserialize policy");
         assert_eq!(custom_policy, deserialized);
 
-        // MeteredExecutionResult tests
         let ok_res = MeteredExecutionResult::ok(0, 42_000, 85, b"hello_sandbox".to_vec());
         assert!(ok_res.is_success());
         assert_eq!(ok_res.exit_code, 0);
@@ -2965,7 +2815,6 @@ mod tests {
 
     #[test]
     fn test_stream_embedding_to_guest_and_vector_similarity() {
-        // Create two 4-dimensional vectors: v1 = [1.0, 0.0, 0.0, 0.0], v2 = [0.8, 0.6, 0.0, 0.0]
         let v1: Vec<f32> = vec![1.0, 0.0, 0.0, 0.0];
         let v2: Vec<f32> = vec![0.8, 0.6, 0.0, 0.0];
 
@@ -2983,36 +2832,28 @@ mod tests {
         let offset2 = stream_embedding_to_guest(4, &bytes_v2).expect("stream v2");
         assert_ne!(offset1, offset2);
 
-        // Compute similarity: dot product of [1,0,0,0] and [0.8, 0.6, 0, 0] / (1.0 * 1.0) = 0.8
         let sim = compute_vector_similarity(offset1, offset2, 4).expect("compute similarity");
-        assert!((sim - 0.8).abs() < 1e-4, "Expected ~0.8, got {}", sim);
+        assert!((sim - 0.8).abs() < 1e-4);
 
-        // Identical vector similarity must be 1.0
         let self_sim = compute_vector_similarity(offset1, offset1, 4).expect("self similarity");
-        assert!((self_sim - 1.0).abs() < 1e-4, "Expected ~1.0, got {}", self_sim);
+        assert!((self_sim - 1.0).abs() < 1e-4);
 
-        // C-ABI functions test
         let abi_offset = hgb_stream_embedding_to_guest(4, bytes_v1.as_ptr(), bytes_v1.len());
         assert!(abi_offset >= 0);
         let abi_sim = hgb_compute_vector_similarity(offset1, offset2, 4);
         assert!((abi_sim - 0.8).abs() < 1e-4);
 
-        // Invalid dimension checks
         assert!(stream_embedding_to_guest(0, &[]).is_err());
         assert!(stream_embedding_to_guest(4, &[1, 2, 3]).is_err());
     }
 
     #[test]
     fn test_simd_dot_product_accuracy() {
-        // Test exact mathematical dot product for various lengths (1, 4, 7, 16)
         let v1 = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, -2.0, 0.5];
         let v2 = vec![2.0f32, 0.5, 1.0, -1.0, 2.0, 3.0, 4.0];
-        // 1*2 + 2*0.5 + 3*1 + 4*(-1) + 5*2 + (-2)*3 + 0.5*4
-        // = 2 + 1 + 3 - 4 + 10 - 6 + 2 = 8.0
         let dot = hgb_simd_dot_product_f32(&v1, &v2);
-        assert!((dot - 8.0).abs() < 1e-4, "Expected 8.0, got {}", dot);
+        assert!((dot - 8.0).abs() < 1e-4);
 
-        // Orthogonal vectors
         let o1 = vec![1.0f32, 0.0, 0.0, 0.0];
         let o2 = vec![0.0f32, 1.0, 0.0, 0.0];
         assert_eq!(hgb_simd_dot_product_f32(&o1, &o2), 0.0);
@@ -3034,9 +2875,6 @@ mod tests {
 
     #[test]
     fn test_simd_matmul_accuracy() {
-        // 2x3 matrix * 3x2 matrix = 2x2 matrix
-        // A = [[1, 2, 3], [4, 5, 6]] (row-major: [1, 2, 3, 4, 5, 6])
-        // B = [[7, 8], [9, 1], [2, 3]] (row-major: [7, 8, 9, 1, 2, 3])
         let a = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
         let b = vec![7.0f32, 8.0, 9.0, 1.0, 2.0, 3.0];
         let policy = TensorCapabilityPolicy::default();
@@ -3056,26 +2894,17 @@ mod tests {
         assert_eq!(strict_policy.max_tensor_dims, 1024);
         assert!(!strict_policy.allow_gpu_offload);
 
-        // 1. Zero dimension check
         assert!(strict_policy.enforce_bounds(0, 10, 10).is_err());
         assert!(strict_policy.enforce_bounds(10, 0, 10).is_err());
-
-        // 2. Max tensor dims rejection
         assert!(strict_policy.enforce_bounds(1025, 10, 10).is_err());
         assert!(strict_policy.enforce_bounds(10, 2000, 10).is_err());
 
-        // 3. VRAM limit rejection
-        // Policy with only 1 MB limit (262,144 f32s max across A, B, C)
         let tight_vram_policy = TensorCapabilityPolicy::new(false, true, 1, 4096, "cpu");
-        // 500 x 500 = 250,000 elems for A, 250,000 for B, 250,000 for C => 750,000 elems * 4 = 3 MB > 1 MB
         let vram_err = tight_vram_policy.enforce_bounds(500, 500, 500);
         assert!(vram_err.is_err());
         assert!(vram_err.unwrap_err().contains("VRAM memory bound violation"));
 
-        // 4. Valid bounds must pass
         assert!(strict_policy.enforce_bounds(64, 64, 64).is_ok());
-
-        // 5. Vector bounds check
         assert!(strict_policy.enforce_vector_bounds(1024).is_ok());
         assert!(strict_policy.enforce_vector_bounds(1025).is_err());
     }
@@ -3087,30 +2916,24 @@ mod tests {
         let dot = hgb_wasm_simd_dot_product(v1.as_ptr(), v2.as_ptr(), 4);
         assert!((dot - 40.0).abs() < 1e-4);
 
-        // wasm_simd_dot_f32
         let dot2 = wasm_simd_dot_f32(v1.as_ptr(), v2.as_ptr(), 4);
         assert!((dot2 - 40.0).abs() < 1e-4);
 
-        // wasm_simd_cosine_f32
         let cos = wasm_simd_cosine_f32(v1.as_ptr(), v2.as_ptr(), 4);
         assert!(cos > 0.9);
         let self_cos = wasm_simd_cosine_f32(v1.as_ptr(), v1.as_ptr(), 4);
         assert!((self_cos - 1.0).abs() < 1e-4);
 
-        // wasm_simd_l2_f32
         let l2 = wasm_simd_l2_f32(v1.as_ptr(), v2.as_ptr(), 4);
-        // (2-1)^2 + (3-2)^2 + (4-3)^2 + (5-4)^2 = 1 + 1 + 1 + 1 = 4.0
         assert!((l2 - 4.0).abs() < 1e-4);
         let zero_l2 = wasm_simd_l2_f32(v1.as_ptr(), v1.as_ptr(), 4);
         assert!((zero_l2 - 0.0).abs() < 1e-4);
 
-        // Null pointer safety
         assert_eq!(hgb_wasm_simd_dot_product(std::ptr::null(), v2.as_ptr(), 4), 0.0);
         assert_eq!(hgb_wasm_simd_dot_product(v1.as_ptr(), std::ptr::null(), 4), 0.0);
         assert_eq!(wasm_simd_cosine_f32(std::ptr::null(), v2.as_ptr(), 4), 0.0);
         assert_eq!(wasm_simd_l2_f32(std::ptr::null(), v2.as_ptr(), 4), 0.0);
 
-        // C-ABI matmul
         let a = vec![2.0f32, 0.0, 0.0, 2.0];
         let b = vec![3.0f32, 4.0, 5.0, 6.0];
         let mut out = vec![0.0f32; 4];
@@ -3126,7 +2949,7 @@ mod tests {
 
         let res = hgb_wit_matmul_f32(a, b, 2, 2, 2, policy).expect("wit matmul");
         assert_eq!(res.len(), 4);
-        assert!((res[0] - 19.0).abs() < 1e-4); // 1*5 + 2*7 = 19
+        assert!((res[0] - 19.0).abs() < 1e-4);
 
         let dot = hgb_wit_vector_dot_product_simd(vec![1.0, 2.0], vec![3.0, 4.0]).expect("wit dot");
         assert!((dot - 11.0).abs() < 1e-4);
@@ -3223,4 +3046,3 @@ pub fn hgb_neural_classify_stacktrace_guest(stacktrace: &str) -> (String, f32) {
         ("unknown".to_string(), 0.50)
     }
 }
-
