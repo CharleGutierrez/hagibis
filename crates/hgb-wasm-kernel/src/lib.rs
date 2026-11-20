@@ -24,6 +24,9 @@ pub use canonical_abi_shm_views::{
     AbiError, CANONICAL_ABI_HEADER_MAGIC, CANONICAL_HEADER_SIZE, CANONICAL_ALIGNMENT_DEFAULT,
 };
 
+pub mod spsc_ring_buffer;
+pub use spsc_ring_buffer::*;
+
 pub mod component_model_bridge;
 pub use component_model_bridge::{
     CanonicalAbiFunction, CanonicalValue, ComponentHeaderInfo, ComponentTrap, MemoryRegionType,

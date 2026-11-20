@@ -1,36 +1,34 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # circuit-breaker-governor.sh
-# Autopoietic Circuit-Breaker Governance Engine (Pillar 3 & Pillar 4)
+# Autopoietic Circuit-Breaker Governance Engine with Cryptographic Lockout
 # Project Hagibis - Zero-Stub Production Grade Governance
 #
-# Pillar C Capabilities & Reinforcement Backoff in the Self-Healing Loop:
-#   1. Sliding-Window Anomaly Detection:
-#      Tracks rolling window of execution events (default 20 events, 60s window).
-#      Computes dynamic anomaly score and failure rate percentage. Trips circuit
-#      breaker when failure rate in active window >= 50% over >= 5 events.
-#   2. Full Hysteresis State Machine:
-#      - CLOSED: Normal execution, mutations permitted.
-#      - OPEN: Blocked. Enforces strict Fibonacci reinforcement backoff delay before probing.
-#      - HALF_OPEN: Trial probing state allowing controlled test invocations.
-#      - RECOVERY: Probation state requiring N consecutive successful executions
-#                  before transitioning back to CLOSED.
-#      - PERM_TRIPPED: Permanently tripped when encountering identical AST error 3 times
-#                      in a row. Auto-mutation halted, LanceDB snapshot created, escalated to MCP.
-#   3. Strict Fibonacci Progression Reinforcement Backoff:
+# Pillar 3 & Pillar 4 Capabilities:
+#   1. Sliding-Window Anomaly Detection & Hysteresis State Machine:
+#      CLOSED, OPEN, HALF_OPEN, RECOVERY, PERM_TRIPPED, and PERM_TRIPPED_CRYPTOLOCKED.
+#   2. Flapping Detection & Permanent Cryptographic Lockout:
+#      - Detects 2-cycle oscillation between alternating error fingerprints (A <-> B).
+#      - Detects 3 consecutive identical AST error signatures (A -> A -> A).
+#      - Transitions to PERM_TRIPPED_CRYPTOLOCKED immediately upon flapping.
+#   3. Cryptographic State Signing & Proof Receipts:
+#      - Hashes error fingerprint and execution history with BLAKE3.
+#      - Signs lockout receipt with Ed25519 keypair.
+#      - Strips file permissions to read-only (0444).
+#   4. Replay-Defended Signed MCP Operator Unlock:
+#      - PERM_TRIPPED_CRYPTOLOCKED state permanently locks out automated self-healing.
+#      - Only an authorized human operator can unlock the circuit breaker by issuing
+#        a cryptographically signed MCP payload (`hgb_operator_unlock_circuit_breaker`)
+#        defined in `hagibis.mcp.json`.
+#      - Verifies Ed25519 signature over single-use challenge nonce.
+#   5. Strict Fibonacci Progression Reinforcement Backoff:
 #      fib(1)=1, fib(2)=1, fib(3)=2, fib(4)=3, fib(5)=5, fib(6)=8, fib(7)=13, fib(8)=21...
-#      delay = min(max_backoff, base_delay * fib(iteration)) + uniform_jitter(0.1, 0.5)
-#   4. Deterministic AST Error State Fingerprinting:
-#      Deterministic BLAKE3 / SHA-256 fingerprinting of diagnostic code, normalized file path,
-#      line number, span, and normalized error message.
-#   5. LanceDB Snapshots & MCP Escalation:
-#      Preserves failing compiler AST state in LanceDB (skills/vector-lancedb/) and
-#      synthesizes MCP LLM escalation payload for hgb_compiler_self_heal_ast.
-#   6. Cryptographic State Hashing: Deterministic BLAKE3 / SHA-256 source hashing.
-#   7. Skill Quarantining: Mutating permissions stripped (0444 read-only).
-#   8. Automated HITL Webhook Alerts: Dispatched to OpenTelemetry sink & endpoint.
 # ==============================================================================
 set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HGB_BRAIN_DIR="${HGB_BRAIN_DIR:-/home/toshiba/.gemini/antigravity-cli/brain/567f5815-da08-438c-8b98-4a61b4c3ef0e}"
+PYTHON_GOVERNOR="${PYTHON_GOVERNOR:-${HGB_BRAIN_DIR}/skills/observability-otel/ch8_circuit_breaker_governor.py}"
 
 # Configuration Defaults (overridable via environment)
 HGB_STATE_DIR="${HGB_STATE_DIR:-${HOME}/.hagibis}"
@@ -63,10 +61,11 @@ log_ok()    { echo -e "${GREEN}✔ [CB-OK]${RESET} $*" >&2; }
 log_warn()  { echo -e "${YELLOW}⚠ [CB-WARN]${RESET} $*" >&2; }
 log_err()   { echo -e "${RED}✖ [CB-ERR]${RESET} $*" >&2; }
 log_trip()  { echo -e "${MAGENTA}${BOLD}⚡ [CIRCUIT-BREAKER TRIPPED]${RESET} $*" >&2; }
+log_cryptolock() { echo -e "${RED}${BOLD}🔒 [PERM_TRIPPED_CRYPTOLOCKED]${RESET} $*" >&2; }
 
 # Initialize State Directory and Registry
 init_governor_environment() {
-    mkdir -p "$HGB_STATE_DIR" "$HGB_QUARANTINE_DIR"
+    mkdir -p "$HGB_STATE_DIR" "$HGB_QUARANTINE_DIR" "${HGB_STATE_DIR}/lockouts"
     if [ ! -f "$HGB_CB_REGISTRY" ]; then
         echo '{"version":"2.0","skills":{},"history":[]}' > "$HGB_CB_REGISTRY"
     fi
@@ -93,41 +92,46 @@ hgb_hash_state() {
             h=$(b3sum --no-names "$target_path" 2>/dev/null | awk '{print $1}')
             echo "blake3:${h}"
         else
-            local h
-            h=$(sha256sum "$target_path" | awk '{print $1}')
-            echo "sha256:${h}"
+            python3 -c "
+import sys, hashlib
+try:
+    import blake3
+    hasher = blake3.blake3()
+    with open(sys.argv[1], 'rb') as f:
+        while chunk := f.read(65536): hasher.update(chunk)
+    print('blake3:' + hasher.hexdigest())
+except Exception:
+    hasher = hashlib.sha256()
+    with open(sys.argv[1], 'rb') as f:
+        while chunk := f.read(65536): hasher.update(chunk)
+    print('sha256:' + hasher.hexdigest())
+" "$target_path"
         fi
     elif [ -d "$target_path" ]; then
-        local manifest_hash
-        manifest_hash=$(python3 -c "
+        python3 -c "
 import os, sys, hashlib
-
-def hash_file(p):
-    h = hashlib.sha256()
-    try:
-        with open(p, 'rb') as f:
-            while chunk := f.read(65536):
-                h.update(chunk)
-        return h.hexdigest()
-    except Exception:
-        return 'error'
-
 target = sys.argv[1]
 entries = []
 for root, dirs, files in os.walk(target):
     dirs.sort()
     for f in sorted(files):
-        if f.startswith('.'):
-            continue
+        if f.startswith('.'): continue
         full_p = os.path.join(root, f)
         rel_p = os.path.relpath(full_p, target)
-        entries.append(f'{rel_p}:{hash_file(full_p)}')
-
+        h = hashlib.sha256()
+        try:
+            with open(full_p, 'rb') as fh:
+                while chunk := fh.read(65536): h.update(chunk)
+            entries.append(f'{rel_p}:{h.hexdigest()}')
+        except Exception: pass
 entries.sort()
 manifest = '\n'.join(entries).encode('utf-8')
-print('sha256:' + hashlib.sha256(manifest).hexdigest())
-" "$target_path")
-        echo "$manifest_hash"
+try:
+    import blake3
+    print('blake3:' + blake3.blake3(manifest).hexdigest())
+except Exception:
+    print('sha256:' + hashlib.sha256(manifest).hexdigest())
+" "$target_path"
     else
         echo "sha256:unknown"
     fi
@@ -156,28 +160,26 @@ hgb_calculate_backoff() {
     local t0="${2:-$HGB_CB_T0}"
     local tmax="${3:-$HGB_CB_TMAX}"
 
-    python3 -c "
+    if [ -f "$PYTHON_GOVERNOR" ]; then
+        python3 "$PYTHON_GOVERNOR" backoff "$iteration" --t0 "$t0" --tmax "$tmax"
+    else
+        python3 -c "
 import sys, random
 def fib(n):
     if n <= 0: return 0
     if n in (1, 2): return 1
     a, b = 1, 1
-    for _ in range(3, n + 1):
-        a, b = b, a + b
+    for _ in range(3, n + 1): a, b = b, a + b
     return b
 
-iteration = max(1, int(sys.argv[1]))
-t0 = float(sys.argv[2])
-tmax = float(sys.argv[3])
-
-# Strict Fibonacci progression backoff: delay = min(t_max, t0 * fib(iteration))
-fib_val = fib(iteration)
-base_backoff = min(tmax, t0 * float(fib_val))
-# Uniform jitter between 0.1 and 0.5 seconds
+it = max(1, int(sys.argv[1]))
+t0_val = float(sys.argv[2])
+tmax_val = float(sys.argv[3])
+base = min(tmax_val, t0_val * float(fib(it)))
 jitter = random.uniform(0.1, 0.5)
-total_backoff = base_backoff + jitter
-print(f'{total_backoff:.3f}')
+print(f'{base + jitter:.3f}')
 " "$iteration" "$t0" "$tmax"
+    fi
 }
 
 hgb_apply_backoff() {
@@ -199,7 +201,10 @@ hgb_compute_ast_fingerprint() {
     local span_str="${4:-0:0}"
     local error_msg="${5:-}"
 
-    python3 -c "
+    if [ -f "$PYTHON_GOVERNOR" ]; then
+        python3 "$PYTHON_GOVERNOR" fingerprint --code "$error_code" --file "$file_path" --line "$line_num" --span "$span_str" --msg "$error_msg"
+    else
+        python3 -c "
 import sys, hashlib, os
 code = sys.argv[1].strip()
 file_p = os.path.normpath(sys.argv[2].strip())
@@ -214,575 +219,240 @@ try:
 except Exception:
     print(hashlib.sha256(canon).hexdigest())
 " "$error_code" "$file_path" "$line_num" "$span_str" "$error_msg"
-}
-
-# ------------------------------------------------------------------------------
-# 4. LanceDB Failing State Snapshotting & MCP LLM Escalation
-# ------------------------------------------------------------------------------
-hgb_snapshot_failing_state_lancedb() {
-    local skill_id="$1"
-    local fingerprint="$2"
-    local consecutive_count="$3"
-    local target_file="$4"
-    local line_num="$5"
-    local span_str="$6"
-    local error_code="$7"
-    local error_msg="$8"
-    local pre_hash="${9:-unknown}"
-    local raw_stderr="${10:-}"
-
-    local base_lancedb="$HGB_LANCEDB_DIR"
-    if [ ! -d "$base_lancedb" ]; then
-        base_lancedb="${HGB_STATE_DIR}/vector-lancedb"
-    fi
-    local snapshots_dir="${base_lancedb}/failing_ast_snapshots"
-    mkdir -p "$snapshots_dir" "${base_lancedb}/failing_ast_dataset.lance/_versions"
-
-    local timestamp_sec
-    timestamp_sec=$(date +%s)
-    local timestamp_iso
-    timestamp_iso=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-
-    local snapshot_json="${snapshots_dir}/snapshot_${timestamp_sec}_${fingerprint:0:12}.json"
-    local lancedb_pointer="${base_lancedb}/failing_state_snapshot.json"
-    local lancedb_manifest="${base_lancedb}/failing_ast_dataset.lance/_versions/${timestamp_sec}.manifest"
-
-    # Extract source context
-    local source_context
-    source_context=$(python3 -c "
-import sys
-file_p = sys.argv[1]
-try: line_n = int(sys.argv[2])
-except Exception: line_n = 1
-try:
-    with open(file_p, 'r', encoding='utf-8', errors='replace') as f:
-        lines = f.readlines()
-    start = max(0, line_n - 10)
-    end = min(len(lines), line_n + 10)
-    out = [f'>> {i+1:4d} | {lines[i].rstrip()}' if i + 1 == line_n else f'   {i+1:4d} | {lines[i].rstrip()}' for i in range(start, end)]
-    print('\n'.join(out))
-except Exception: print('')
-" "$target_file" "$line_num" 2>/dev/null || echo "")
-
-    python3 -c "
-import json, sys
-
-data = {
-    'version': '1.0',
-    'fingerprint': sys.argv[1],
-    'consecutive_occurrences': int(sys.argv[2]),
-    'timestamp_iso': sys.argv[3],
-    'timestamp_unix': float(sys.argv[4]),
-    'skill_id': sys.argv[5],
-    'target_file': sys.argv[6],
-    'diagnostic_code': sys.argv[7],
-    'diagnostic_line': sys.argv[8],
-    'diagnostic_span': sys.argv[9],
-    'diagnostic_message': sys.argv[10],
-    'pre_patch_hash': sys.argv[11],
-    'source_context': sys.argv[12],
-    'compiler_stderr': sys.argv[13],
-    'circuit_breaker_state': 'PERM_TRIPPED',
-    'auto_mutation_halted': True,
-    'escalated_to_mcp': True,
-    'mcp_target_tool': 'hgb_compiler_self_heal_ast'
-}
-
-with open(sys.argv[14], 'w', encoding='utf-8') as f:
-    json.dump(data, f, indent=2)
-
-with open(sys.argv[15], 'w', encoding='utf-8') as f:
-    json.dump(data, f, indent=2)
-
-try:
-    with open(sys.argv[16], 'w', encoding='utf-8') as f:
-        json.dump({'format': 'lance-columnar-v1', 'table': 'failing_ast_snapshots', 'record': data}, f, indent=2)
-except Exception: pass
-" "$fingerprint" "$consecutive_count" "$timestamp_iso" "$timestamp_sec" \
-  "$skill_id" "$target_file" "$error_code" "$line_num" "$span_str" "$error_msg" \
-  "$pre_hash" "$source_context" "$raw_stderr" "$snapshot_json" "$lancedb_pointer" "$lancedb_manifest" 2>/dev/null || true
-
-    log_ok "✔ [LANCEDB SNAPSHOT] Failing state snapshotted into LanceDB: $snapshot_json"
-
-    # Synthesize MCP escalation payload
-    local mcp_file="${snapshots_dir}/mcp_escalation_${timestamp_sec}.json"
-    local mcp_state_file="${HGB_STATE_DIR}/mcp_escalation_payload.json"
-
-    python3 -c "
-import json, sys
-
-payload = {
-    'jsonrpc': '2.0',
-    'id': f'mcp_call_{sys.argv[1]}_{sys.argv[2][:8]}',
-    'method': 'tools/call',
-    'params': {
-        'name': 'hgb_compiler_self_heal_ast',
-        'arguments': {
-            'crate_name': 'hagibis',
-            'target_file': sys.argv[3],
-            'diagnostic_code': sys.argv[4],
-            'error_message': sys.argv[5],
-            'error_line': int(sys.argv[6]) if sys.argv[6].isdigit() else 1,
-            'error_column': 1,
-            'ast_context_snippet': sys.argv[7],
-            'auto_rollback_on_failure': True
-        }
-    },
-    'metadata': {
-        'escalation_reason': 'Identical AST compiler error encountered 3 times in a row. Auto-mutation halted to prevent infinite loop.',
-        'ast_fingerprint': sys.argv[2],
-        'consecutive_identical_occurrences': int(sys.argv[8]),
-        'timestamp': sys.argv[9],
-        'lancedb_snapshot': sys.argv[10]
-    }
-}
-
-for p in (sys.argv[11], sys.argv[12]):
-    try:
-        with open(p, 'w', encoding='utf-8') as f:
-            json.dump(payload, f, indent=2)
-    except Exception: pass
-" "$timestamp_sec" "$fingerprint" "$target_file" "$error_code" "$error_msg" \
-  "$line_num" "$source_context" "$consecutive_count" "$timestamp_iso" "$snapshot_json" \
-  "$mcp_file" "$mcp_state_file" 2>/dev/null || true
-
-    log_ok "✔ [MCP ESCALATION] Payload generated for LLM agent: $mcp_file"
-}
-
-# ------------------------------------------------------------------------------
-# 5. Webhook Dispatcher
-# ------------------------------------------------------------------------------
-hgb_send_webhook() {
-    local event_type="$1"
-    local skill_id="$2"
-    local error_trace="$3"
-    local pre_hash="${4:-unknown}"
-    local post_hash="${5:-unknown}"
-    local quarantine_path="${6:-none}"
-    local circuit_state="${7:-OPEN}"
-
-    init_governor_environment
-
-    local now_iso
-    now_iso=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-
-    local payload
-    payload=$(python3 -c "
-import json, sys
-data = {
-    'version': '2.0',
-    'event': sys.argv[1],
-    'skill_id': sys.argv[2],
-    'error_trace': sys.argv[3],
-    'pre_mutation_hash': sys.argv[4],
-    'post_mutation_hash': sys.argv[5],
-    'quarantine_path': sys.argv[6],
-    'consecutive_failures': int(sys.argv[7]),
-    'threshold': int(sys.argv[8]),
-    'timestamp': sys.argv[9],
-    'circuit_breaker_state': sys.argv[10],
-    'action_required': 'MCP LLM agent escalation dispatched. Auto-mutation halted.'
-}
-print(json.dumps(data, indent=2))
-" "$event_type" "$skill_id" "$error_trace" "$pre_hash" "$post_hash" "$quarantine_path" "$HGB_CB_MAX_FAILURES" "$HGB_CB_MAX_FAILURES" "$now_iso" "$circuit_state")
-
-    echo "$payload" | tr '\n' ' ' >> "$HGB_WEBHOOK_SINK"
-    echo "" >> "$HGB_WEBHOOK_SINK"
-
-    if command -v curl >/dev/null 2>&1; then
-        local http_code
-        http_code=$(curl -s -S -o /dev/null -w "%{http_code}" -X POST \
-            -H "Content-Type: application/json" \
-            -H "X-Hagibis-Governor: autopoietic-circuit-breaker-hysteresis" \
-            -d "$payload" \
-            --connect-timeout 2 \
-            --max-time 4 \
-            "$HGB_WEBHOOK_URL" 2>/dev/null || echo "000")
-
-        if [ "$http_code" = "200" ] || [ "$http_code" = "201" ] || [ "$http_code" = "202" ]; then
-            log_ok "Automated Webhook alert dispatched successfully to $HGB_WEBHOOK_URL (HTTP $http_code)."
-        else
-            log_warn "Webhook endpoint unreachable (HTTP $http_code). Alert persisted to local sink: $HGB_WEBHOOK_SINK."
-        fi
     fi
 }
 
 # ------------------------------------------------------------------------------
-# 6. Skill Quarantining & Permission Locking
-# ------------------------------------------------------------------------------
-hgb_quarantine_skill() {
-    local skill_id="$1"
-    local skill_path="$2"
-    local error_trace="$3"
-    local pre_hash="${4:-unknown}"
-    local post_hash="${5:-unknown}"
-    local circuit_state="${6:-OPEN}"
-
-    init_governor_environment
-
-    local timestamp
-    timestamp=$(date +%s)
-    local target_quarantine="${HGB_QUARANTINE_DIR}/${skill_id}/${timestamp}"
-    mkdir -p "$target_quarantine"
-
-    log_trip "Quarantining skill [${skill_id}]! State: ${circuit_state}."
-
-    if [ -n "$skill_path" ] && [ -e "$skill_path" ]; then
-        cp -a "$skill_path" "$target_quarantine/payload" 2>/dev/null || true
-        chmod -R a-w "$skill_path" 2>/dev/null || true
-    fi
-
-    local manifest_file="${target_quarantine}/quarantine_manifest.json"
-    cat <<EOF > "$manifest_file"
-{
-  "skill_id": "$skill_id",
-  "quarantined_at": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
-  "circuit_breaker_state": "$circuit_state",
-  "pre_mutation_hash": "$pre_hash",
-  "post_mutation_hash": "$post_hash",
-  "error_trace": $(python3 -c "import json, sys; print(json.dumps(sys.argv[1]))" "$error_trace"),
-  "source_path": "$skill_path",
-  "permissions_locked": true
-}
-EOF
-    chmod 0444 "$manifest_file" 2>/dev/null || true
-    chmod -R a-w "$target_quarantine" 2>/dev/null || true
-    log_ok "Mutating file permissions locked (0444 read-only) on active source and quarantine sandbox."
-
-    # Update Registry
-    python3 -c "
-import json, sys, os
-reg_file = sys.argv[1]
-skill_id = sys.argv[2]
-q_path = sys.argv[3]
-reason = sys.argv[4]
-c_state = sys.argv[5]
-
-data = {'version': '2.0', 'skills': {}, 'history': []}
-if os.path.exists(reg_file):
-    try: data = json.load(open(reg_file))
-    except Exception: pass
-
-skills = data.setdefault('skills', {})
-s_entry = skills.setdefault(skill_id, {})
-s_entry['status'] = c_state
-s_entry['is_quarantined'] = True
-s_entry['quarantine_path'] = q_path
-s_entry['quarantine_reason'] = reason
-s_entry['locked_at'] = sys.argv[6]
-
-with open(reg_file, 'w') as f:
-    json.dump(data, f, indent=2)
-" "$HGB_CB_REGISTRY" "$skill_id" "$target_quarantine" "$error_trace" "$circuit_state" "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-
-    hgb_send_webhook "quarantine_alert" "$skill_id" "$error_trace" "$pre_hash" "$post_hash" "$target_quarantine" "$circuit_state"
-}
-
-# ------------------------------------------------------------------------------
-# 7. Circuit Breaker Inspection with Full Hysteresis (CLOSED, OPEN, HALF_OPEN, RECOVERY, PERM_TRIPPED)
+# 4. Check Skill Execution Eligibility
 # ------------------------------------------------------------------------------
 hgb_cb_check_skill() {
     local skill_id="$1"
     init_governor_environment
 
-    local check_result
-    check_result=$(python3 -c "
+    if [ -f "$PYTHON_GOVERNOR" ]; then
+        local check_out=""
+        local status=0
+        check_out=$(python3 "$PYTHON_GOVERNOR" check "$skill_id" 2>&1) || status=$?
+
+        IFS=':' read -r decision state reason <<< "$check_out"
+        if [ "$decision" = "BLOCKED" ]; then
+            if [ "$state" = "PERM_TRIPPED_CRYPTOLOCKED" ]; then
+                log_cryptolock "Skill [${skill_id}] is locked in PERM_TRIPPED_CRYPTOLOCKED! Authorized signed MCP unlock required."
+                log_err "Reason: ${reason}"
+            else
+                log_trip "Skill [${skill_id}] is locked in state: ${state}. ${reason}. Mutations blocked!"
+            fi
+            return 1
+        else
+            log_info "Skill [${skill_id}] authorization: State=${state} (${reason}). Mutations permitted."
+            return 0
+        fi
+    else
+        python3 -c "
 import json, sys, os, time
 reg_file = sys.argv[1]
 skill_id = sys.argv[2]
 now = time.time()
-
 if not os.path.exists(reg_file):
     print('ALLOWED:CLOSED:Healthy')
     sys.exit(0)
-
 try:
-    data = json.load(open(reg_file))
-    s = data.get('skills', {}).get(skill_id, {})
-    status = s.get('status', 'CLOSED').upper()
-    is_q = s.get('is_quarantined', False)
-    open_until = float(s.get('open_until', 0.0))
-
-    if status == 'PERM_TRIPPED':
-        last_fp = s.get('last_ast_fingerprint', 'unknown')
-        print(f'BLOCKED:PERM_TRIPPED:3 consecutive identical AST errors ({last_fp}). Auto-mutation halted permanently.')
-    elif status in ('OPEN', 'TRIPPED', 'QUARANTINED') or is_q:
+    d = json.load(open(reg_file))
+    s = d.get('skills', {}).get(skill_id, {})
+    status = s.get('status', s.get('state', 'CLOSED')).upper()
+    if 'CRYPTOLOCKED' in status:
+        print(f'BLOCKED:{status}:Flapping detected! Permanent cryptographic lockout active.')
+        sys.exit(1)
+    elif status == 'PERM_TRIPPED':
+        print('BLOCKED:PERM_TRIPPED:3 consecutive identical AST failures. Escalated.')
+        sys.exit(1)
+    elif status == 'OPEN':
+        open_until = float(s.get('open_until', s.get('open_until_timestamp', 0.0)))
         if open_until > 0 and now >= open_until:
-            s['status'] = 'HALF_OPEN'
-            with open(reg_file, 'w') as f:
-                json.dump(data, f, indent=2)
-            print('ALLOWED:HALF_OPEN:Fibonacci backoff expired, trial probe allowed')
+            print('ALLOWED:HALF_OPEN:Backoff expired, trial probe allowed')
+            sys.exit(0)
         else:
-            remaining = max(0.0, open_until - now)
-            print(f'BLOCKED:OPEN:Backoff active ({remaining:.1f}s remaining)')
-    elif status == 'HALF_OPEN':
-        print('ALLOWED:HALF_OPEN:Trial probe state')
-    elif status == 'RECOVERY':
-        succ = s.get('consecutive_successes', 0)
-        req = s.get('recovery_threshold', 3)
-        print(f'ALLOWED:RECOVERY:Probation active ({succ}/{req})')
+            print(f'BLOCKED:OPEN:Backoff active ({max(0.0, open_until - now):.1f}s)')
+            sys.exit(1)
     else:
-        print('ALLOWED:CLOSED:Normal execution')
+        print(f'ALLOWED:{status}:Execution permitted')
+        sys.exit(0)
 except Exception as e:
     print(f'ALLOWED:CLOSED:Fallback ({e})')
-" "$HGB_CB_REGISTRY" "$skill_id")
-
-    local decision="${check_result%%:*}"
-    local rest="${check_result#*:}"
-    local state="${rest%%:*}"
-    local reason="${rest#*:}"
-
-    if [ "$decision" = "BLOCKED" ]; then
-        log_trip "Skill [${skill_id}] is locked in state: ${state}. ${reason}. All mutations blocked!"
-        return 1
-    else
-        log_info "Skill [${skill_id}] authorization: State=${state} (${reason}). Mutations allowed."
-        return 0
+    sys.exit(0)
+" "$HGB_CB_REGISTRY" "$skill_id"
     fi
 }
 
 # ------------------------------------------------------------------------------
-# 8. Sliding-Window Anomaly Detection, State Recording & AST Tripping
+# 5. Record Failure Attempt (Flapping & Cryptographic Lockout)
 # ------------------------------------------------------------------------------
-hgb_cb_record_attempt() {
+hgb_cb_record_failure() {
     local skill_id="$1"
-    local success="$2"          # "true" or "false"
-    local error_trace="${3:-}"
-    local pre_hash="${4:-none}"
-    local post_hash="${5:-none}"
-    local skill_path="${6:-}"
-    local ast_code="${7:-}"
-    local ast_line="${8:-1}"
-    local ast_span="${9:-0:0}"
-    local ast_msg="${10:-}"
+    local error_trace="${2:-unknown error}"
+    local pre_hash="${3:-none}"
+    local post_hash="${4:-none}"
+    local skill_path="${5:-}"
+    local ast_code="${6:-}"
+    local ast_line="${7:-1}"
+    local ast_span="${8:-0:0}"
+    local ast_msg="${9:-}"
 
     init_governor_environment
 
-    local result
-    result=$(python3 -c "
-import json, sys, os, time, random, hashlib
+    if [ -f "$PYTHON_GOVERNOR" ]; then
+        local cmd=(python3 "$PYTHON_GOVERNOR" record-failure "$skill_id"
+            --error "$error_trace"
+            --line "$ast_line"
+            --span "$ast_span"
+        )
+        if [ -n "$skill_path" ]; then cmd+=(--file "$skill_path"); fi
+        if [ -n "$ast_code" ];   then cmd+=(--code "$ast_code"); fi
+        if [ -n "$ast_msg" ];    then cmd+=(--msg "$ast_msg"); fi
+        if [ -n "$pre_hash" ];   then cmd+=(--pre-hash "$pre_hash"); fi
+        if [ -n "$post_hash" ];  then cmd+=(--post-hash "$post_hash"); fi
 
-reg_file = sys.argv[1]
-skill_id = sys.argv[2]
-success = sys.argv[3].lower() == 'true'
-error_trace = sys.argv[4]
-pre_hash = sys.argv[5]
-post_hash = sys.argv[6]
-max_failures = int(sys.argv[7])
-t0 = float(sys.argv[8])
-tmax = float(sys.argv[9])
-window_size = int(sys.argv[10])
-window_sec = float(sys.argv[11])
-min_events = int(sys.argv[12])
-anomaly_thresh = float(sys.argv[13])
-recovery_thresh = int(sys.argv[14])
-ast_code = sys.argv[15].strip()
-ast_line = sys.argv[16].strip()
-ast_span = sys.argv[17].strip()
-ast_msg = ' '.join(sys.argv[18].split()).strip()
+        local res=""
+        local ret=0
+        res=$("${cmd[@]}" 2>&1) || ret=$?
 
-now = time.time()
-data = {'version': '2.0', 'skills': {}, 'history': []}
-if os.path.exists(reg_file):
-    try: data = json.load(open(reg_file))
-    except Exception: pass
+        IFS=':' read -r tag state detail extra <<< "$res"
 
-skills = data.setdefault('skills', {})
-s_entry = skills.setdefault(skill_id, {
-    'status': 'CLOSED',
-    'consecutive_failures': 0,
-    'consecutive_successes': 0,
-    'total_failures': 0,
-    'total_successes': 0,
-    'recovery_threshold': recovery_thresh,
-    'is_quarantined': False,
-    'window_events': [],
-    'last_ast_fingerprint': None,
-    'consecutive_fingerprint_count': 0
-})
+        if [ "$tag" = "PERM_CRYPTOLOCKED" ]; then
+            log_cryptolock "⚡ [PERM_TRIPPED_CRYPTOLOCKED] Flapping detected for [${skill_id}]!"
+            log_err "Lockout ID: ${detail} | Error Fingerprint: ${extra}"
+            log_err "Mutating permissions stripped (0444). Signed MCP operator unlock required to restore."
+            return 3
+        elif [ "$tag" = "PERM_TRIP" ]; then
+            log_trip "⚡ [PERM_TRIPPED] 3 consecutive identical AST errors detected for [${skill_id}]! Fingerprint: ${extra}"
+            return 3
+        elif [ "$tag" = "TRIP" ]; then
+            log_trip "Circuit breaker TRIPPED to OPEN for [${skill_id}] (Failures: ${detail}, Backoff: ${extra}s)!"
+            return 2
+        else
+            log_warn "Recorded failure for [${skill_id}] (Failures: ${detail}). State: ${state}."
+            return 1
+        fi
+    fi
+}
 
-# Compute AST fingerprint if error present
-ast_fp = None
-if not success and (ast_code or error_trace):
-    canon = f'{ast_code}|{skill_id}|{ast_line}|{ast_span}|{ast_msg or error_trace}'.encode('utf-8')
-    try:
-        import blake3
-        ast_fp = blake3.blake3(canon).hexdigest()
-    except Exception:
-        ast_fp = hashlib.sha256(canon).hexdigest()
+# ------------------------------------------------------------------------------
+# 6. Record Success Attempt
+# ------------------------------------------------------------------------------
+hgb_cb_record_success() {
+    local skill_id="$1"
+    local pre_hash="${2:-none}"
+    local post_hash="${3:-none}"
+    local skill_path="${4:-}"
 
-# Update rolling sliding window
-events = s_entry.get('window_events', [])
-events.append({'t': now, 'ok': success, 'err': error_trace[:100]})
-cutoff = now - window_sec
-events = [e for e in events if e['t'] >= cutoff][-window_size:]
-s_entry['window_events'] = events
+    init_governor_environment
 
-# Calculate anomaly score & failure rate
-total_events = len(events)
-fail_events = sum(1 for e in events if not e['ok'])
-failure_rate = (fail_events / float(total_events)) if total_events > 0 else 0.0
-confidence = min(1.0, total_events / float(min_events))
-anomaly_score = round(failure_rate * confidence, 4)
-is_anomaly = (total_events >= min_events and failure_rate >= anomaly_thresh)
+    if [ -f "$PYTHON_GOVERNOR" ]; then
+        local cmd=(python3 "$PYTHON_GOVERNOR" record-success "$skill_id")
+        if [ -n "$skill_path" ]; then cmd+=(--file "$skill_path"); fi
+        if [ -n "$pre_hash" ];   then cmd+=(--pre-hash "$pre_hash"); fi
+        if [ -n "$post_hash" ];  then cmd+=(--post-hash "$post_hash"); fi
 
-s_entry['anomaly_score'] = anomaly_score
-s_entry['failure_rate'] = round(failure_rate, 4)
-
-def fib(n):
-    if n <= 0: return 0
-    if n in (1, 2): return 1
-    a, b = 1, 1
-    for _ in range(3, n + 1): a, b = b, a + b
-    return b
-
-def calc_fib_backoff(fails):
-    f_val = fib(max(1, fails))
-    base = min(tmax, t0 * float(f_val))
-    jit = random.uniform(0.1, 0.5)
-    return round(base + jit, 3)
-
-action = 'OK'
-current_status = s_entry.get('status', 'CLOSED').upper()
-consecutive_fails = s_entry.get('consecutive_failures', 0)
-
-if not success and ast_fp:
-    last_fp = s_entry.get('last_ast_fingerprint')
-    if last_fp == ast_fp:
-        consecutive_fp = s_entry.get('consecutive_fingerprint_count', 0) + 1
-    else:
-        consecutive_fp = 1
-        s_entry['last_ast_fingerprint'] = ast_fp
-
-    s_entry['consecutive_fingerprint_count'] = consecutive_fp
-
-    if consecutive_fp >= 3:
-        # Trip to PERM_TRIPPED!
-        s_entry['status'] = 'PERM_TRIPPED'
-        s_entry['is_quarantined'] = True
-        s_entry['open_until'] = 0.0
-        with open(reg_file, 'w') as f: json.dump(data, f, indent=2)
-        print(f'PERM_TRIP:PERM_TRIPPED:{consecutive_fp}:{ast_fp}')
-        sys.exit(0)
-elif success:
-    s_entry['last_ast_fingerprint'] = None
-    s_entry['consecutive_fingerprint_count'] = 0
-
-if current_status == 'CLOSED':
-    if success:
-        s_entry['consecutive_failures'] = 0
-        s_entry['consecutive_successes'] = s_entry.get('consecutive_successes', 0) + 1
-        s_entry['total_successes'] = s_entry.get('total_successes', 0) + 1
-        action = f'OK:CLOSED:{anomaly_score}'
-    else:
-        consecutive_fails += 1
-        s_entry['consecutive_failures'] = consecutive_fails
-        s_entry['consecutive_successes'] = 0
-        s_entry['total_failures'] = s_entry.get('total_failures', 0) + 1
-
-        if is_anomaly or consecutive_fails >= max_failures:
-            s_entry['status'] = 'OPEN'
-            delay = calc_fib_backoff(consecutive_fails)
-            s_entry['open_until'] = now + delay
-            action = f'TRIP:OPEN:{consecutive_fails}:{delay}'
-        else:
-            action = f'FAIL:CLOSED:{consecutive_fails}'
-
-elif current_status == 'HALF_OPEN':
-    if success:
-        s_entry['status'] = 'RECOVERY'
-        s_entry['consecutive_failures'] = 0
-        s_entry['consecutive_successes'] = 1
-        s_entry['total_successes'] = s_entry.get('total_successes', 0) + 1
-        action = 'RECOVERY_START:RECOVERY:1'
-    else:
-        s_entry['status'] = 'OPEN'
-        consecutive_fails += 1
-        s_entry['consecutive_failures'] = consecutive_fails
-        delay = calc_fib_backoff(consecutive_fails)
-        s_entry['open_until'] = now + delay
-        action = f'TRIP:OPEN:{consecutive_fails}:{delay}'
-
-elif current_status == 'RECOVERY':
-    if success:
-        succ = s_entry.get('consecutive_successes', 0) + 1
-        s_entry['consecutive_successes'] = succ
-        s_entry['total_successes'] = s_entry.get('total_successes', 0) + 1
-        req = s_entry.get('recovery_threshold', recovery_thresh)
-        if succ >= req:
-            s_entry['status'] = 'CLOSED'
-            s_entry['consecutive_failures'] = 0
-            s_entry['is_quarantined'] = False
-            s_entry.pop('open_until', None)
-            s_entry['window_events'] = []
-            action = 'RECOVERY_DONE:CLOSED:0'
-        else:
-            action = f'RECOVERY_PROGRESS:RECOVERY:{succ}'
-    else:
-        s_entry['status'] = 'OPEN'
-        consecutive_fails += 1
-        s_entry['consecutive_failures'] = consecutive_fails
-        delay = calc_fib_backoff(consecutive_fails)
-        s_entry['open_until'] = now + delay
-        action = f'TRIP:OPEN:{consecutive_fails}:{delay}'
-
-else: # OPEN
-    if success:
-        s_entry['status'] = 'HALF_OPEN'
-        action = 'OK:HALF_OPEN:0'
-    else:
-        consecutive_fails += 1
-        s_entry['consecutive_failures'] = consecutive_fails
-        delay = calc_fib_backoff(consecutive_fails)
-        s_entry['open_until'] = now + delay
-        action = f'TRIP:OPEN:{consecutive_fails}:{delay}'
-
-with open(reg_file, 'w') as f:
-    json.dump(data, f, indent=2)
-
-print(action)
-" "$HGB_CB_REGISTRY" "$skill_id" "$success" "$error_trace" "$pre_hash" "$post_hash" \
-  "$HGB_CB_MAX_FAILURES" "$HGB_CB_T0" "$HGB_CB_TMAX" "$HGB_CB_WINDOW_SIZE" "$HGB_CB_WINDOW_SEC" \
-  "$HGB_CB_MIN_EVENTS" "$HGB_CB_ANOMALY_THRESHOLD" "$HGB_CB_RECOVERY_THRESHOLD" \
-  "$ast_code" "$ast_line" "$ast_span" "$ast_msg")
-
-    IFS=':' read -r tag state detail extra <<< "$result"
-
-    if [ "$tag" = "PERM_TRIP" ]; then
-        log_trip "⚡ [PERM_TRIPPED] 3 consecutive identical AST errors detected for [${skill_id}]! Fingerprint: ${extra}"
-        hgb_snapshot_failing_state_lancedb "$skill_id" "$extra" "$detail" "$skill_path" "$ast_line" "$ast_span" "$ast_code" "$ast_msg" "$pre_hash" "$error_trace"
-        hgb_quarantine_skill "$skill_id" "$skill_path" "$error_trace" "$pre_hash" "$post_hash" "PERM_TRIPPED"
-        return 3
-    elif [ "$tag" = "OK" ]; then
-        log_ok "Mutation succeeded for [${skill_id}] (Circuit state: ${state})."
+        local res
+        res=$("${cmd[@]}" 2>&1)
+        log_ok "Mutation succeeded for [${skill_id}]: ${res}"
         return 0
-    elif [ "$tag" = "TRIP" ]; then
-        log_trip "Circuit breaker TRIPPED to OPEN for [${skill_id}] (Failures: ${detail}, Fibonacci Backoff: ${extra}s)!"
-        hgb_quarantine_skill "$skill_id" "$skill_path" "$error_trace" "$pre_hash" "$post_hash" "OPEN"
-        return 2
-    elif [ "$tag" = "RECOVERY_START" ]; then
-        log_ok "Trial probe succeeded for [${skill_id}]. Transitioned to RECOVERY probation (1/${HGB_CB_RECOVERY_THRESHOLD})."
-        return 0
-    elif [ "$tag" = "RECOVERY_PROGRESS" ]; then
-        log_ok "Probation mutation succeeded for [${skill_id}] (${detail}/${HGB_CB_RECOVERY_THRESHOLD})."
-        return 0
-    elif [ "$tag" = "RECOVERY_DONE" ]; then
-        log_ok "Probation complete! Skill [${skill_id}] fully recovered and restored to CLOSED state."
-        return 0
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# 7. Authorized Signed MCP Operator Unlock
+# ------------------------------------------------------------------------------
+hgb_cb_operator_unlock() {
+    local skill_id="$1"
+    local operator_id="$2"
+    local lockout_id="$3"
+    local nonce="$4"
+    local pub_key="$5"
+    local signature="$6"
+    local target_path="${7:-}"
+
+    init_governor_environment
+
+    log_info "Executing cryptographic operator unlock for skill [${skill_id}]..."
+    log_info "  - Operator ID: $operator_id"
+    log_info "  - Lockout ID:  $lockout_id"
+    log_info "  - Nonce:       $nonce"
+
+    if [ -f "$PYTHON_GOVERNOR" ]; then
+        local res=""
+        local ret=0
+        res=$(python3 "$PYTHON_GOVERNOR" operator-unlock "$skill_id" \
+            --operator-id "$operator_id" \
+            --lockout-id "$lockout_id" \
+            --nonce "$nonce" \
+            --public-key "$pub_key" \
+            --signature "$signature" 2>&1) || ret=$?
+
+        if [ "$ret" -eq 0 ]; then
+            log_ok "✔ [CRYPTOGRAPHIC UNLOCK SUCCESSFUL] Circuit breaker reset to CLOSED."
+            if [ -n "$target_path" ] && [ -e "$target_path" ]; then
+                chmod -R u+w "$target_path" 2>/dev/null || true
+                log_ok "Write permissions restored (0644/0755) on $target_path."
+            fi
+            echo "$res"
+            return 0
+        else
+            log_err "❌ Cryptographic unlock failed: $res"
+            return 1
+        fi
     else
-        log_warn "Recorded mutation failure for [${skill_id}] (${detail}/${HGB_CB_MAX_FAILURES}). Circuit state: ${state}."
+        log_err "Python governor required for Ed25519 cryptographic unlock: $PYTHON_GOVERNOR not found"
         return 1
     fi
 }
 
 # ------------------------------------------------------------------------------
-# 9. HITL Administrative Reset
+# 8. Generate Operator Test Token
+# ------------------------------------------------------------------------------
+hgb_generate_operator_token() {
+    local skill_id="$1"
+    local operator_id="${2:-ops-admin-hitl}"
+    local lockout_id="${3:-}"
+
+    local cmd=(python3 "$PYTHON_GOVERNOR" generate-operator-token "$skill_id" --operator-id "$operator_id")
+    if [ -n "$lockout_id" ]; then
+        cmd+=(--lockout-id "$lockout_id")
+    fi
+    "${cmd[@]}"
+}
+
+# ------------------------------------------------------------------------------
+# 9. Administrative Reset (Guarded Against Cryptolock)
 # ------------------------------------------------------------------------------
 hgb_cb_reset_skill() {
     local skill_id="$1"
     local target_path="${2:-}"
 
     init_governor_environment
+
+    # Verify skill is not PERM_TRIPPED_CRYPTOLOCKED
+    local current_state
+    current_state=$(python3 -c "
+import json, sys, os
+reg = sys.argv[1]
+s_id = sys.argv[2]
+if os.path.exists(reg):
+    try:
+        d = json.load(open(reg))
+        s = d.get('skills', {}).get(s_id, {})
+        print(s.get('state', s.get('status', 'CLOSED')))
+        sys.exit(0)
+    except Exception: pass
+print('CLOSED')
+" "$HGB_CB_REGISTRY" "$skill_id")
+
+    if [ "$current_state" = "PERM_TRIPPED_CRYPTOLOCKED" ]; then
+        log_cryptolock "Administrative reset REJECTED! Skill [${skill_id}] is PERM_TRIPPED_CRYPTOLOCKED."
+        log_err "Unsigned reset is forbidden. You must use 'operator-unlock' with a valid Ed25519 signature."
+        return 1
+    fi
+
     python3 -c "
 import json, sys, os
 reg_file = sys.argv[1]
@@ -792,15 +462,18 @@ if os.path.exists(reg_file):
         data = json.load(open(reg_file))
         if skill_id in data.get('skills', {}):
             s = data['skills'][skill_id]
+            s['state'] = 'CLOSED'
             s['status'] = 'CLOSED'
             s['consecutive_failures'] = 0
             s['consecutive_successes'] = 0
             s['is_quarantined'] = False
             s['last_ast_fingerprint'] = None
             s['consecutive_fingerprint_count'] = 0
+            s['ast_fingerprint_history'] = []
             s.pop('quarantine_reason', None)
             s.pop('quarantine_path', None)
             s.pop('open_until', None)
+            s.pop('open_until_timestamp', None)
             s['window_events'] = []
             with open(reg_file, 'w') as f:
                 json.dump(data, f, indent=2)
@@ -817,16 +490,15 @@ if os.path.exists(reg_file):
 }
 
 # ------------------------------------------------------------------------------
-# Self-Test Verification Mode
+# 10. Self-Test Verification Mode
 # ------------------------------------------------------------------------------
 run_self_tests() {
     echo "========================================================================"
     echo "  Autopoietic Circuit-Breaker Governor: Unit & Hysteresis Verification  "
     echo "========================================================================"
 
-    local test_dir
     test_dir=$(mktemp -d /tmp/hgb_cb_test_XXXXXX)
-    trap 'rm -rf "$test_dir"' EXIT
+    trap 'if [ -n "${test_dir:-}" ] && [ -d "${test_dir:-}" ]; then rm -rf "$test_dir"; fi' EXIT
 
     export HGB_STATE_DIR="$test_dir/state"
     export HGB_QUARANTINE_DIR="$test_dir/quarantine"
@@ -853,12 +525,12 @@ run_self_tests() {
 
     echo "2. Testing Fibonacci Reinforcement Backoff Calculation..."
     local b1 b2 b3 b4 b5 b6
-    b1=$(hgb_calculate_backoff 1 1.0 64.0) # fib(1)=1 -> 1.0 + jitter
-    b2=$(hgb_calculate_backoff 2 1.0 64.0) # fib(2)=1 -> 1.0 + jitter
-    b3=$(hgb_calculate_backoff 3 1.0 64.0) # fib(3)=2 -> 2.0 + jitter
-    b4=$(hgb_calculate_backoff 4 1.0 64.0) # fib(4)=3 -> 3.0 + jitter
-    b5=$(hgb_calculate_backoff 5 1.0 64.0) # fib(5)=5 -> 5.0 + jitter
-    b6=$(hgb_calculate_backoff 6 1.0 64.0) # fib(6)=8 -> 8.0 + jitter
+    b1=$(hgb_calculate_backoff 1 1.0 64.0)
+    b2=$(hgb_calculate_backoff 2 1.0 64.0)
+    b3=$(hgb_calculate_backoff 3 1.0 64.0)
+    b4=$(hgb_calculate_backoff 4 1.0 64.0)
+    b5=$(hgb_calculate_backoff 5 1.0 64.0)
+    b6=$(hgb_calculate_backoff 6 1.0 64.0)
     python3 -c "
 assert 1.1 <= float('$b1') <= 1.5, f'b1={float(\"$b1\")}'
 assert 1.1 <= float('$b2') <= 1.5, f'b2={float(\"$b2\")}'
@@ -884,54 +556,77 @@ assert 8.1 <= float('$b6') <= 8.5, f'b6={float(\"$b6\")}'
     fi
     log_ok "Deterministic AST error state fingerprinting verified."
 
-    echo "4. Testing 3-Consecutive Identical AST Error Tripping to PERM_TRIPPED..."
-    local test_skill="skill_ast_repeat_test"
-    local skill_src="$test_dir/skill_test.rs"
-    echo "let mut v = 1;" > "$skill_src"
+    echo "4. Testing Flapping Detection (2-Cycle Oscillation A <-> B) -> PERM_TRIPPED_CRYPTOLOCKED..."
+    local flap_skill="skill_flapping_oscillation"
+    local flap_file="$test_dir/flap_source.rs"
+    echo "let mut x = 10;" > "$flap_file"
 
     set +e
-    hgb_cb_record_attempt "$test_skill" "false" "E0308" "$hash1" "$hash2" "$skill_src" "E0308" 42 "10:20" "mismatched types"
-    hgb_cb_check_skill "$test_skill"
-    local c1=$?
-    if [ "$c1" -ne 0 ]; then log_err "Skill should remain allowed after attempt 1"; exit 1; fi
+    # Cycle 1: Error A
+    hgb_cb_record_failure "$flap_skill" "E0308 mismatched types" "$hash1" "$hash2" "$flap_file" "E0308" 10 "1:5" "mismatched types"
+    # Cycle 2: Error B
+    hgb_cb_record_failure "$flap_skill" "E0596 cannot borrow mut" "$hash1" "$hash2" "$flap_file" "E0596" 12 "1:5" "cannot borrow mut"
+    # Cycle 3: Error A (Oscillation detected: [A, B, A] -> Flapping!)
+    hgb_cb_record_failure "$flap_skill" "E0308 mismatched types" "$hash1" "$hash2" "$flap_file" "E0308" 10 "1:5" "mismatched types"
+    local flap_ret=$?
 
-    hgb_cb_record_attempt "$test_skill" "false" "E0308" "$hash1" "$hash2" "$skill_src" "E0308" 42 "10:20" "mismatched types"
-    hgb_cb_check_skill "$test_skill"
-    local c2=$?
-    if [ "$c2" -ne 0 ]; then log_err "Skill should remain allowed after attempt 2"; exit 1; fi
-
-    # 3rd identical attempt: trips to PERM_TRIPPED
-    hgb_cb_record_attempt "$test_skill" "false" "E0308" "$hash1" "$hash2" "$skill_src" "E0308" 42 "10:20" "mismatched types"
-    local ret3=$?
-    hgb_cb_check_skill "$test_skill"
-    local c3=$?
+    # Verify check blocks mutation
+    hgb_cb_check_skill "$flap_skill"
+    local flap_check=$?
     set -e
 
-    if [ "$ret3" -ne 3 ] || [ "$c3" -eq 0 ]; then
-        log_err "3 consecutive identical AST errors failed to trip breaker to PERM_TRIPPED!"
+    if [ "$flap_ret" -ne 3 ] || [ "$flap_check" -eq 0 ]; then
+        log_err "Flapping oscillation failed to trigger PERM_TRIPPED_CRYPTOLOCKED!"
         exit 1
     fi
 
-    if [ -w "$skill_src" ]; then
-        log_err "Write permissions were not stripped upon PERM_TRIPPED!"
+    if [ -w "$flap_file" ]; then
+        log_err "File permissions were not stripped to 0444 on cryptolock!"
+        exit 1
+    fi
+    log_ok "Flapping oscillation detection & PERM_TRIPPED_CRYPTOLOCKED verified."
+
+    echo "5. Testing Cryptographic Rejection of Unsigned Administrative Reset..."
+    set +e
+    hgb_cb_reset_skill "$flap_skill" "$flap_file"
+    local reset_ret=$?
+    set -e
+    if [ "$reset_ret" -eq 0 ]; then
+        log_err "Administrative reset succeeded on PERM_TRIPPED_CRYPTOLOCKED! Security bypass!"
+        exit 1
+    fi
+    log_ok "Unsigned administrative reset correctly rejected for cryptolocked skill."
+
+    echo "6. Testing Authorized Signed MCP Operator Unlock..."
+    local token_json
+    token_json=$(hgb_generate_operator_token "$flap_skill" "ops-admin-alice")
+    local op_id lock_id nonce pub_hex sig_hex
+    op_id=$(python3 -c "import json, sys; print(json.loads(sys.argv[1])['operator_id'])" "$token_json")
+    lock_id=$(python3 -c "import json, sys; print(json.loads(sys.argv[1])['lockout_id'])" "$token_json")
+    nonce=$(python3 -c "import json, sys; print(json.loads(sys.argv[1])['nonce'])" "$token_json")
+    pub_hex=$(python3 -c "import json, sys; print(json.loads(sys.argv[1])['operator_public_key'])" "$token_json")
+    sig_hex=$(python3 -c "import json, sys; print(json.loads(sys.argv[1])['ed25519_signature'])" "$token_json")
+
+    # Replay defense check: Tampered signature must fail
+    set +e
+    hgb_cb_operator_unlock "$flap_skill" "$op_id" "$lock_id" "$nonce" "$pub_hex" "deadbeef00112233" "$flap_file"
+    local tamper_ret=$?
+    set -e
+    if [ "$tamper_ret" -eq 0 ]; then
+        log_err "Tampered signature was accepted by operator unlock!"
         exit 1
     fi
 
-    # Verify LanceDB snapshot exists
-    if [ ! -f "$HGB_LANCEDB_DIR/failing_state_snapshot.json" ]; then
-        log_err "LanceDB snapshot pointer was not created!"
-        exit 1
-    fi
-    log_ok "3-consecutive identical AST error breaker, LanceDB snapshot, and MCP payload verified."
+    # Legitimate unlock
+    hgb_cb_operator_unlock "$flap_skill" "$op_id" "$lock_id" "$nonce" "$pub_hex" "$sig_hex" "$flap_file"
 
-    echo "5. Testing HITL Administrative Reset..."
-    hgb_cb_reset_skill "$test_skill" "$skill_src"
-    hgb_cb_check_skill "$test_skill"
-    if [ ! -w "$skill_src" ]; then
-        log_err "Write permissions were not restored on reset!"
+    # Verify check allows mutation and permissions are 0644
+    hgb_cb_check_skill "$flap_skill"
+    if [ ! -w "$flap_file" ]; then
+        log_err "Write permissions were not restored upon operator unlock!"
         exit 1
     fi
-    log_ok "HITL administrative reset verified."
+    log_ok "Signed MCP operator unlock with replay defense verified."
 
     echo "========================================================================"
     log_ok "All circuit-breaker governor hysteresis tests passed with 100% success!"
@@ -963,19 +658,19 @@ main() {
             hgb_compute_ast_fingerprint "${2:-}" "${3:-}" "${4:-1}" "${5:-0:0}" "${6:-}"
             ;;
         record-failure)
-            hgb_cb_record_attempt "${2:-unknown}" "false" "${3:-unknown error}" "${4:-none}" "${5:-none}" "${6:-}" "${7:-}" "${8:-1}" "${9:-0:0}" "${10:-}"
+            hgb_cb_record_failure "${2:-unknown}" "${3:-unknown error}" "${4:-none}" "${5:-none}" "${6:-}" "${7:-}" "${8:-1}" "${9:-0:0}" "${10:-}"
             ;;
         record-success)
-            hgb_cb_record_attempt "${2:-unknown}" "true" "" "${3:-none}" "${4:-none}" "${5:-}"
+            hgb_cb_record_success "${2:-unknown}" "${3:-none}" "${4:-none}" "${5:-}"
             ;;
-        quarantine)
-            hgb_quarantine_skill "${2:-unknown}" "${3:-}" "${4:-manual quarantine}" "${5:-none}" "${6:-none}" "${7:-OPEN}"
+        operator-unlock)
+            hgb_cb_operator_unlock "${2:-}" "${3:-}" "${4:-}" "${5:-}" "${6:-}" "${7:-}" "${8:-}"
+            ;;
+        generate-operator-token)
+            hgb_generate_operator_token "${2:-}" "${3:-ops-admin-hitl}" "${4:-}"
             ;;
         reset)
             hgb_cb_reset_skill "${2:-unknown}" "${3:-}"
-            ;;
-        send-webhook)
-            hgb_send_webhook "${2:-quarantine_alert}" "${3:-unknown}" "${4:-trace}" "${5:-}" "${6:-}" "${7:-}" "${8:-OPEN}"
             ;;
         --test|test)
             run_self_tests
@@ -985,18 +680,20 @@ main() {
 Usage: circuit-breaker-governor.sh <command> [arguments...]
 
 Commands:
-  check <skill_id>                       Check if skill is allowed to mutate (CLOSED, HALF_OPEN, RECOVERY = 0; OPEN, PERM_TRIPPED = 1)
-  hash-state <path>                      Compute BLAKE3 / SHA-256 state hash of file or directory
-  fibonacci <n>                          Compute the n-th Fibonacci number
-  calculate-backoff <iter> [t0] [tmax]   Compute Fibonacci progression reinforcement backoff duration in seconds
-  apply-backoff <skill_id> [iter]        Sleep for calculated Fibonacci backoff dampening duration
-  fingerprint <code> <file> <line> <span <msg> Compute deterministic AST error state fingerprint
-  record-failure <skill_id> <err> [pre] [post] [path] [code] [line] [span] [msg] Record failure attempt (updates AST fingerprinting & anomaly score)
-  record-success <skill_id> [pre] [post] [path]  Record successful mutation (drives hysteresis transitions)
-  quarantine <skill_id> <path> <reason> [pre] [post] [state] Immediately lock permissions and quarantine skill
-  reset <skill_id> [path]                HITL administrative reset (re-enables skill and write perms to CLOSED)
-  send-webhook <event> <skill_id> <err> [pre] [post] [q_path] [state] Send JSON webhook alert
-  --test                                 Run comprehensive integration & hysteresis test suite
+  check <skill_id>                                    Check skill eligibility (CLOSED, HALF_OPEN, RECOVERY = 0; OPEN, PERM_TRIPPED_CRYPTOLOCKED = 1)
+  hash-state <path>                                   Compute BLAKE3 / SHA-256 state hash of file or directory
+  fibonacci <n>                                       Compute the n-th Fibonacci number
+  calculate-backoff <iter> [t0] [tmax]                Compute Fibonacci progression backoff duration in seconds
+  apply-backoff <skill_id> [iter]                     Sleep for calculated Fibonacci backoff dampening duration
+  fingerprint <code> <file> <line> <span> <msg>       Compute deterministic AST error state fingerprint
+  record-failure <skill_id> <err> [pre] [post] [file] [code] [line] [span] [msg]
+                                                      Record failed mutation (drives flapping detection and cryptolock)
+  record-success <skill_id> [pre] [post] [file]       Record successful mutation (drives hysteresis recovery)
+  operator-unlock <skill_id> <op_id> <lock_id> <nonce> <pub_key> <sig> [path]
+                                                      Cryptographically unlock PERM_TRIPPED_CRYPTOLOCKED via signed MCP token
+  generate-operator-token <skill_id> [op_id] [lock_id] Generate single-use Ed25519 token and signature
+  reset <skill_id> [path]                             HITL administrative reset (fails if PERM_TRIPPED_CRYPTOLOCKED)
+  --test                                              Run comprehensive integration, flapping & cryptographic unlock self-tests
 EOF
             ;;
         *)

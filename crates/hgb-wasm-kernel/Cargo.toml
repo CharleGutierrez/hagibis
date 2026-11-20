@@ -21,3 +21,8 @@ path = "src/bin/wasm_kernel.rs"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
+blake3 = { workspace = true }
+ed25519-dalek = "3.0.0"
+wasmtime = "18.0"
+wat = "1.0"
+anyhow = "1.0"

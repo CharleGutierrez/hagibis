@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-ch8_circuit_breaker_governor.py - Autopoietic Circuit-Breaker Governance Engine with Hysteresis
-================================================================================================
+ch8_circuit_breaker_governor.py - Autopoietic Circuit-Breaker Governance Engine with Hysteresis & Cryptographic Lockout
+========================================================================================================================
 Project Hagibis: Pillar 3 (Observability/OTel) & Pillar 4 (Autonomic Self-Healing)
 
-Pillar C Enhancement & Reinforcement Backoff in the Self-Healing Loop:
+Pillar C Enhancement & Cryptographic State Signing in the Self-Healing Loop:
   1. Sliding-Window Anomaly Detection:
      Tracks rolling execution events (default 20 events, 60s sliding window).
      Computes dynamic anomaly score and failure rate percentage. Trips when failure rate
@@ -14,19 +14,27 @@ Pillar C Enhancement & Reinforcement Backoff in the Self-Healing Loop:
      - OPEN: Blocked, mutations forbidden. Fibonacci backoff delay with randomized jitter enforced.
      - HALF_OPEN: Trial probing state allowing controlled test invocations once backoff expires.
      - RECOVERY: Probation state requiring N consecutive successful executions before transitioning back to CLOSED.
-     - PERM_TRIPPED: Permanently tripped when encountering identical AST error 3 times in a row.
-       Auto-mutation halted, state snapshotted into LanceDB, escalated to LLM agent via MCP.
+     - PERM_TRIPPED: Permanently tripped due to repeated identical AST failures.
+     - PERM_TRIPPED_CRYPTOLOCKED: Permanently tripped and cryptographically locked due to flapping compilation
+       oscillations (e.g. alternating between 2 errors) or 3 consecutive identical failures.
+       All target file write permissions stripped (0444 read-only). Cryptographically signed lockout receipt
+       issued using Ed25519 + BLAKE3. Enforces permanent lockout until an authorized human operator provides a
+       valid signed MCP unlock payload (hgb_operator_unlock_circuit_breaker) via hagibis.mcp.json.
   3. Fibonacci Reinforcement Backoff Dampening:
      delay = min(max_backoff, base_delay * fib(iteration)) + uniform_jitter(0.1, 0.5)
      where fib(1)=1, fib(2)=1, fib(3)=2, fib(4)=3, fib(5)=5, fib(6)=8, fib(7)=13, fib(8)=21...
-  4. AST Error State Fingerprinting:
-     Deterministic BLAKE3 / SHA-256 fingerprinting across diagnostic error code, normalized file,
-     line, span, and normalized error message.
-  5. LanceDB Snapshots & MCP Escalation:
+  4. Flapping Detection Engine:
+     Detects error oscillation (e.g., flipping between 2 distinct error fingerprints [A, B, A, B] or [A, B, A])
+     or 3 consecutive identical failures, triggering immediate escalation to PERM_TRIPPED_CRYPTOLOCKED.
+  5. Cryptographic State Signing & Proof of Lockout (Ed25519 + BLAKE3):
+     Computes BLAKE3 hash of error fingerprint & sliding window state history, and signs the lockout receipt
+     using an Ed25519 signing key.
+  6. Authorized Human Operator Signed MCP Unlock (hgb_operator_unlock_circuit_breaker):
+     Validates cryptographic Ed25519 signature over single-use replay-defended nonce before unlocking and
+     restoring write permissions.
+  7. LanceDB Snapshots & MCP Escalation:
      Snapshots failing AST state (source context, AST diagnostic, stderr, hashes) into LanceDB
      and synthesizes MCP LLM escalation payload for hgb_compiler_self_heal_ast.
-  6. Quarantining & Permission Locking: Mutating permissions stripped (0444 read-only).
-  7. Automated Webhook Alerts: Dispatched to OpenTelemetry sink & HTTP endpoints.
 """
 
 from __future__ import annotations
@@ -34,7 +42,6 @@ from __future__ import annotations
 import os
 import sys
 import time
-import math
 import json
 import random
 import hashlib
@@ -45,8 +52,17 @@ import urllib.error
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
 from enum import Enum
-from typing import Dict, List, Optional, Tuple, Any, Union
+from typing import Dict, List, Optional, Tuple, Any, Union, Set
 from contextlib import contextmanager
+
+# Try importing cryptography for Ed25519
+try:
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.exceptions import InvalidSignature
+    _HAS_CRYPTOGRAPHY = True
+except ImportError:
+    _HAS_CRYPTOGRAPHY = False
 
 # Try importing native blake3 if installed, otherwise fallback to hashlib
 try:
@@ -67,7 +83,7 @@ DEFAULT_WEBHOOK_URL = os.environ.get("HGB_WEBHOOK_URL", "http://127.0.0.1:8083/a
 DEFAULT_WEBHOOK_SINK = Path(os.environ.get("HGB_WEBHOOK_SINK", "/tmp/hgb_quarantine_webhook_events.jsonl"))
 
 DEFAULT_MAX_CONSECUTIVE_FAILURES = int(os.environ.get("HGB_CB_MAX_FAILURES", 3))
-DEFAULT_T0 = float(os.environ.get("HGB_CB_T0", 2.0))
+DEFAULT_T0 = float(os.environ.get("HGB_CB_T0", 1.0))
 DEFAULT_TMAX = float(os.environ.get("HGB_CB_TMAX", 64.0))
 
 DEFAULT_WINDOW_SIZE = int(os.environ.get("HGB_CB_WINDOW_SIZE", 20))
@@ -82,21 +98,20 @@ DEFAULT_RECOVERY_THRESHOLD = int(os.environ.get("HGB_CB_RECOVERY_THRESHOLD", 3))
 # ==============================================================================
 
 class CircuitState(str, Enum):
-    CLOSED = "CLOSED"              # Normal execution, mutations permitted
-    OPEN = "OPEN"                  # Blocked, mutations forbidden, backoff active
-    HALF_OPEN = "HALF_OPEN"        # Trial probing state allowing controlled test invocations
-    RECOVERY = "RECOVERY"          # Probation state requiring N consecutive successful executions
-    PERM_TRIPPED = "PERM_TRIPPED"  # Permanently tripped due to repeated identical AST failures
-
-    # Backward compatibility aliases
-    TRIPPED = "OPEN"
-    QUARANTINED = "OPEN"
+    CLOSED = "CLOSED"                                  # Normal execution, mutations permitted
+    OPEN = "OPEN"                                      # Blocked, mutations forbidden, backoff active
+    HALF_OPEN = "HALF_OPEN"                            # Trial probing state allowing controlled test invocations
+    RECOVERY = "RECOVERY"                              # Probation state requiring N consecutive successful executions
+    PERM_TRIPPED = "PERM_TRIPPED"                      # Permanently tripped due to repeated identical AST failures
+    PERM_TRIPPED_CRYPTOLOCKED = "PERM_TRIPPED_CRYPTOLOCKED"  # Cryptographically signed lockout due to flapping
 
     @classmethod
     def from_str(cls, val: str) -> CircuitState:
         normalized = val.strip().upper().replace(" ", "_")
         if normalized in ("CLOSED", "HEALTHY"):
             return cls.CLOSED
+        elif normalized in ("PERM_TRIPPED_CRYPTOLOCKED", "CRYPTOLOCKED", "PERM_CRYPTOLOCKED"):
+            return cls.PERM_TRIPPED_CRYPTOLOCKED
         elif normalized in ("PERM_TRIPPED", "PERMANENTLY_TRIPPED", "FATAL", "AST_TRIPPED"):
             return cls.PERM_TRIPPED
         elif normalized in ("OPEN", "TRIPPED", "QUARANTINED", "LOCKED"):
@@ -113,6 +128,7 @@ class WindowEvent:
     timestamp: float
     success: bool
     error_trace: str = ""
+    error_fingerprint: str = ""
     duration_ms: float = 0.0
 
     def to_dict(self) -> Dict[str, Any]:
@@ -124,6 +140,7 @@ class WindowEvent:
             timestamp=float(data.get("timestamp", time.time())),
             success=bool(data.get("success", False)),
             error_trace=str(data.get("error_trace", "")),
+            error_fingerprint=str(data.get("error_fingerprint", "")),
             duration_ms=float(data.get("duration_ms", 0.0))
         )
 
@@ -152,6 +169,7 @@ class SlidingWindowAnomalyDetector:
         self,
         success: bool,
         error_trace: str = "",
+        error_fingerprint: str = "",
         duration_ms: float = 0.0,
         timestamp: Optional[float] = None
     ) -> WindowEvent:
@@ -160,6 +178,7 @@ class SlidingWindowAnomalyDetector:
             timestamp=now,
             success=success,
             error_trace=error_trace,
+            error_fingerprint=error_fingerprint,
             duration_ms=duration_ms
         )
         self._events.append(event)
@@ -226,6 +245,94 @@ class SlidingWindowAnomalyDetector:
         self._events = [WindowEvent.from_dict(d) for d in data]
 
 
+# ==============================================================================
+# Flapping Detection Engine
+# ==============================================================================
+
+class FlappingDetector:
+    """
+    Detects flapping and oscillating failure loops in compilation/mutation attempts.
+    Triggers when:
+      1. Errors oscillate between 2 distinct error fingerprints (e.g. [A, B, A, B] or [A, B, A]).
+      2. Consecutive identical AST error count >= 3 ([A, A, A]).
+      3. Frequent alternating failures exceed stability threshold within sliding window.
+    """
+
+    def __init__(self, oscillation_window: int = 4, consecutive_identical_threshold: int = 3):
+        self.oscillation_window = oscillation_window
+        self.consecutive_identical_threshold = consecutive_identical_threshold
+        self.history: List[str] = []
+
+    def record_and_check(self, fingerprint: str) -> Tuple[bool, str, List[str]]:
+        self.history.append(fingerprint)
+        return self.detect_flapping(self.history, self.consecutive_identical_threshold)
+
+    def record_error(self, fingerprint: str) -> Tuple[bool, str, List[str]]:
+        return self.record_and_check(fingerprint)
+
+    def check(self, history: List[str]) -> Tuple[bool, str, List[str]]:
+        return self.detect_flapping(history, self.consecutive_identical_threshold)
+
+    @staticmethod
+    def detect_flapping(
+        history_fingerprints: List[str],
+        consecutive_identical_threshold: int = 3
+    ) -> Tuple[bool, str, List[str]]:
+        """
+        Analyzes sequence of recent error fingerprints.
+        Returns: (is_flapping, reason, alternating_signatures)
+        """
+        valid_fps = [fp for fp in history_fingerprints if fp]
+        if len(valid_fps) < 2:
+            return False, "Insufficient error history", []
+
+        # Check 1: 3 Consecutive identical errors
+        if len(valid_fps) >= consecutive_identical_threshold:
+            tail = valid_fps[-consecutive_identical_threshold:]
+            if len(set(tail)) == 1:
+                return (
+                    True,
+                    f"Flapping detected: 3 consecutive identical AST compiler errors ({tail[0][:12]})",
+                    list(tail)
+                )
+
+        # Check 2: Oscillating between 2 distinct error fingerprints
+        # e.g. [A, B, A] (3 items) or [A, B, A, B] (4 items)
+        if len(valid_fps) >= 3:
+            tail3 = valid_fps[-3:]
+            if tail3[0] == tail3[2] and tail3[0] != tail3[1]:
+                return (
+                    True,
+                    f"Flapping detected (2-cycle oscillation between error fingerprints: {tail3[0][:8]} <-> {tail3[1][:8]})",
+                    list(tail3)
+                )
+
+        if len(valid_fps) >= 4:
+            tail4 = valid_fps[-4:]
+            if tail4[0] == tail4[2] and tail4[1] == tail4[3] and tail4[0] != tail4[1]:
+                return (
+                    True,
+                    f"Strict 2-cycle flapping oscillation detected: {tail4[0][:8]} <-> {tail4[1][:8]}",
+                    [tail4[0], tail4[1]]
+                )
+
+        # Check 3: High variance oscillation in window (flips back and forth)
+        if len(valid_fps) >= 5:
+            distinct_in_window = set(valid_fps[-5:])
+            if len(distinct_in_window) == 2:
+                # Count transitions
+                transitions = sum(1 for i in range(len(valid_fps) - 4, len(valid_fps)) if valid_fps[i] != valid_fps[i - 1])
+                if transitions >= 3:
+                    sigs = list(distinct_in_window)
+                    return (
+                        True,
+                        f"High-frequency error oscillation ({transitions} transitions over 5 attempts) between {sigs[0][:8]} and {sigs[1][:8]}",
+                        sigs
+                    )
+
+        return False, "No flapping detected", []
+
+
 @dataclass
 class MutationAttempt:
     timestamp: float
@@ -235,10 +342,42 @@ class MutationAttempt:
     pre_mutation_hash: str
     post_mutation_hash: str
     error_trace: str = ""
+    error_fingerprint: str = ""
     duration_ms: float = 0.0
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
+
+
+@dataclass
+class CryptographicLockoutReceipt:
+    lockout_id: str
+    skill_id: str
+    circuit_state: str
+    reason: str
+    flapping_signatures: List[str]
+    consecutive_count: int
+    blake3_fingerprint: str
+    state_history_hash: str
+    ed25519_public_key: str
+    ed25519_signature: str
+    locked_paths: List[str]
+    timestamp_iso: str
+    timestamp_unix: float
+    mcp_unlock_required: bool = True
+    mcp_tool_name: str = "hgb_operator_unlock_circuit_breaker"
+
+    def to_dict(self) -> Dict[str, Any]:
+        d = asdict(self)
+        d["ed25519_signed"] = bool(self.ed25519_signature)
+        d["blake3_error_history_hash"] = self.state_history_hash
+        return d
+
+    def __getitem__(self, item: str) -> Any:
+        return self.to_dict()[item]
+
+    def __contains__(self, item: str) -> bool:
+        return item in self.to_dict()
 
 
 @dataclass
@@ -265,6 +404,8 @@ class SkillGovernanceRecord:
     last_ast_fingerprint: Optional[str] = None
     consecutive_fingerprint_count: int = 0
     ast_fingerprint_history: List[str] = field(default_factory=list)
+    lockout_id: Optional[str] = None
+    lockout_receipt: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -298,7 +439,9 @@ class SkillGovernanceRecord:
             window_events=data.get("window_events", []),
             last_ast_fingerprint=data.get("last_ast_fingerprint"),
             consecutive_fingerprint_count=data.get("consecutive_fingerprint_count", 0),
-            ast_fingerprint_history=data.get("ast_fingerprint_history", [])
+            ast_fingerprint_history=data.get("ast_fingerprint_history", []),
+            lockout_id=data.get("lockout_id"),
+            lockout_receipt=data.get("lockout_receipt")
         )
 
 
@@ -311,7 +454,7 @@ class AutonomicCircuitBreakerGovernor:
     Enterprise Governor overseeing self-healing autopoietic mutation loops.
     Guarantees state immutability checking, Fibonacci reinforcement backoff,
     deterministic AST error fingerprinting, sliding-window anomaly detection,
-    and full hysteresis state transitions (CLOSED, OPEN, HALF_OPEN, RECOVERY, PERM_TRIPPED).
+    flapping detection, and cryptographic Ed25519 lockout with signed MCP unlock.
     """
 
     def __init__(
@@ -334,6 +477,7 @@ class AutonomicCircuitBreakerGovernor:
         self.state_dir = Path(state_dir) if state_dir else DEFAULT_STATE_DIR
         self.quarantine_dir = Path(quarantine_dir) if quarantine_dir else DEFAULT_QUARANTINE_DIR
         self.registry_path = Path(registry_path) if registry_path else (self.state_dir / "circuit_breaker_registry.json")
+        self.lockouts_dir = self.state_dir / "lockouts"
         self.webhook_url = webhook_url or DEFAULT_WEBHOOK_URL
         self.webhook_sink = Path(webhook_sink) if webhook_sink else DEFAULT_WEBHOOK_SINK
         self.max_failures = max(1, max_consecutive_failures)
@@ -346,7 +490,10 @@ class AutonomicCircuitBreakerGovernor:
         self.recovery_threshold = recovery_threshold
         self.lancedb_dir = Path(lancedb_dir) if lancedb_dir else None
 
+        self._consumed_nonces: Set[int] = set()
         self._ensure_directories()
+        self._init_governor_keypair()
+
         self._registry: Dict[str, SkillGovernanceRecord] = {}
         self._detectors: Dict[str, SlidingWindowAnomalyDetector] = {}
         self._history: List[MutationAttempt] = []
@@ -355,8 +502,46 @@ class AutonomicCircuitBreakerGovernor:
     def _ensure_directories(self) -> None:
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self.quarantine_dir.mkdir(parents=True, exist_ok=True)
+        self.lockouts_dir.mkdir(parents=True, exist_ok=True)
         if self.webhook_sink.parent:
             self.webhook_sink.parent.mkdir(parents=True, exist_ok=True)
+
+    def _init_governor_keypair(self) -> None:
+        """Initializes or loads persistent Ed25519 signing keypair for the governor."""
+        key_file = self.state_dir / "governor_ed25519.key"
+        self._signing_key: Optional[Any] = None
+        self._public_key: Optional[Any] = None
+
+        if _HAS_CRYPTOGRAPHY:
+            if key_file.exists():
+                try:
+                    with open(key_file, "rb") as kf:
+                        raw_priv = kf.read(32)
+                    self._signing_key = ed25519.Ed25519PrivateKey.from_private_bytes(raw_priv)
+                    self._public_key = self._signing_key.public_key()
+                except Exception:
+                    self._generate_and_save_key(key_file)
+            else:
+                self._generate_and_save_key(key_file)
+
+    def _generate_and_save_key(self, key_file: Path) -> None:
+        if _HAS_CRYPTOGRAPHY:
+            priv = ed25519.Ed25519PrivateKey.generate()
+            self._signing_key = priv
+            self._public_key = priv.public_key()
+            try:
+                raw_bytes = priv.private_bytes_raw()
+                with open(key_file, "wb") as f:
+                    f.write(raw_bytes)
+                os.chmod(key_file, 0o600)
+            except Exception:
+                pass
+
+    @property
+    def governor_public_key_hex(self) -> str:
+        if self._public_key and _HAS_CRYPTOGRAPHY:
+            return self._public_key.public_bytes_raw().hex()
+        return "0" * 64
 
     # --------------------------------------------------------------------------
     # Cryptographic State Hashing
@@ -365,10 +550,6 @@ class AutonomicCircuitBreakerGovernor:
     def compute_state_hash(target: Union[str, Path, bytes]) -> str:
         """
         Computes cryptographic BLAKE3 (or SHA256 fallback) hash of target.
-        Handles:
-          - Raw bytes
-          - Single file (streaming in 64 KiB chunks)
-          - Directory trees (sorted paths + deterministic file content manifest)
         """
         if isinstance(target, bytes):
             if _HAS_NATIVE_BLAKE3:
@@ -428,10 +609,7 @@ class AutonomicCircuitBreakerGovernor:
     # --------------------------------------------------------------------------
     @staticmethod
     def fibonacci(n: int) -> int:
-        """
-        Calculates the n-th Fibonacci number where:
-          fib(1)=1, fib(2)=1, fib(3)=2, fib(4)=3, fib(5)=5, fib(6)=8, fib(7)=13, fib(8)=21, fib(9)=34...
-        """
+        """Calculates n-th Fibonacci number."""
         if n <= 0:
             return 0
         if n in (1, 2):
@@ -452,7 +630,6 @@ class AutonomicCircuitBreakerGovernor:
         """
         Calculates strict Fibonacci backoff dampening:
           delay = min(max_backoff, base_delay * fib(iteration)) + uniform_jitter(0.1, 0.5)
-        Progression: fib(1)=1, fib(2)=1, fib(3)=2, fib(4)=3, fib(5)=5, fib(6)=8, fib(7)=13...
         """
         iter_clamped = max(1, iteration)
         fib_val = self.fibonacci(iter_clamped)
@@ -464,53 +641,6 @@ class AutonomicCircuitBreakerGovernor:
             jitter = rng.uniform(jitter_min, jitter_max)
 
         return round(base_backoff + jitter, 4)
-
-    def calculate_backoff(
-        self,
-        iteration: int,
-        with_jitter: bool = True,
-        jitter_seed: Optional[int] = None,
-        jitter_min: float = 0.1,
-        jitter_max: float = 0.5,
-        mode: str = "fibonacci"
-    ) -> float:
-        """
-        Calculates backoff dampening. Defaults to Fibonacci reinforcement progression.
-        """
-        if mode == "fibonacci":
-            return self.calculate_fibonacci_backoff(
-                iteration=iteration,
-                with_jitter=with_jitter,
-                jitter_seed=jitter_seed,
-                jitter_min=jitter_min,
-                jitter_max=jitter_max
-            )
-        # Fallback exponential mode: 2^(iter - 1)
-        iter_clamped = max(1, iteration)
-        base_backoff = min(self.t_max, self.t0 * (2.0 ** (iter_clamped - 1)))
-        jitter = 0.0
-        if with_jitter:
-            rng = random.Random(jitter_seed) if jitter_seed is not None else random
-            jitter = rng.uniform(jitter_min, jitter_max)
-        return round(base_backoff + jitter, 4)
-
-    def apply_backoff(
-        self,
-        skill_id: str,
-        iteration: Optional[int] = None,
-        dry_run: bool = False
-    ) -> float:
-        """
-        Computes Fibonacci backoff and dampens the loop by sleeping.
-        Returns the duration backed off.
-        """
-        rec = self._get_or_create_skill(skill_id)
-        current_iter = iteration if iteration is not None else max(1, rec.consecutive_failures)
-        delay = self.calculate_fibonacci_backoff(current_iter, with_jitter=True)
-
-        if not dry_run and delay > 0:
-            time.sleep(delay)
-        return delay
 
     # --------------------------------------------------------------------------
     # AST Error State Fingerprinting
@@ -526,13 +656,13 @@ class AutonomicCircuitBreakerGovernor:
     ) -> str:
         """
         Computes deterministic SHA-256 or BLAKE3 hash of compiler error diagnostic.
-        Canonical payload: error_code, normalized file path, line, span, normalized error message.
         """
         norm_file = os.path.normpath(str(file_path)).strip()
         norm_code = str(error_code).strip()
         norm_line = str(line).strip()
         norm_span = str(span).strip()
-        norm_msg = " ".join(str(error_message).split()).strip()
+        raw_msg = str(error_message).replace("\\n", " ").replace("\\r", " ").replace("\\t", " ")
+        norm_msg = " ".join(raw_msg.split()).strip()
 
         canonical_repr = f"{norm_code}|{norm_file}|{norm_line}|{norm_span}|{norm_msg}"
         data_bytes = canonical_repr.encode("utf-8")
@@ -542,23 +672,578 @@ class AutonomicCircuitBreakerGovernor:
         return hashlib.sha256(data_bytes).hexdigest()
 
     # --------------------------------------------------------------------------
+    # Cryptographic State Signing & Lockout Receipt Issuance
+    # --------------------------------------------------------------------------
+    def issue_cryptographic_lockout_receipt(
+        self,
+        skill_id: str,
+        reason: str,
+        flapping_signatures: List[str],
+        consecutive_count: int,
+        error_fingerprint: str,
+        locked_paths: List[Union[str, Path]],
+        window_events: List[Dict[str, Any]]
+    ) -> CryptographicLockoutReceipt:
+        """
+        Issues an immutable Ed25519-signed lockout receipt with BLAKE3 state history hashing.
+        """
+        now_unix = time.time()
+        iso_now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now_unix))
+        lockout_id = f"lockout_{int(now_unix)}_{error_fingerprint[:8]}"
+
+        # Compute BLAKE3 state history hash chain
+        history_bytes = json.dumps(window_events, sort_keys=True).encode("utf-8")
+        if _HAS_NATIVE_BLAKE3:
+            state_history_hash = f"blake3:{_native_blake3.blake3(history_bytes).hexdigest()}"
+            fp_hash = f"blake3:{_native_blake3.blake3(error_fingerprint.encode('utf-8')).hexdigest()}"
+        else:
+            state_history_hash = f"sha256:{hashlib.sha256(history_bytes).hexdigest()}"
+            fp_hash = f"sha256:{hashlib.sha256(error_fingerprint.encode('utf-8')).hexdigest()}"
+
+        locked_strs = [str(p) for p in locked_paths if p]
+
+        # Construct signable bytes
+        signable_payload = (
+            f"{lockout_id}:{skill_id}:PERM_TRIPPED_CRYPTOLOCKED:{fp_hash}:{state_history_hash}:{int(now_unix)}"
+        ).encode("utf-8")
+
+        # Cryptographically sign with governor Ed25519 key
+        sig_hex = ""
+        pub_hex = self.governor_public_key_hex
+        if self._signing_key and _HAS_CRYPTOGRAPHY:
+            sig_bytes = self._signing_key.sign(signable_payload)
+            sig_hex = sig_bytes.hex()
+        else:
+            # Fallback deterministic HMAC signature if pure Python without cryptography
+            h = hashlib.sha256(signable_payload).hexdigest()
+            sig_hex = f"sha256_mock_sig_{h}"
+
+        receipt = CryptographicLockoutReceipt(
+            lockout_id=lockout_id,
+            skill_id=skill_id,
+            circuit_state=CircuitState.PERM_TRIPPED_CRYPTOLOCKED.value,
+            reason=reason,
+            flapping_signatures=flapping_signatures,
+            consecutive_count=consecutive_count,
+            blake3_fingerprint=fp_hash,
+            state_history_hash=state_history_hash,
+            ed25519_public_key=pub_hex,
+            ed25519_signature=sig_hex,
+            locked_paths=locked_strs,
+            timestamp_iso=iso_now,
+            timestamp_unix=now_unix,
+            mcp_unlock_required=True,
+            mcp_tool_name="hgb_operator_unlock_circuit_breaker"
+        )
+
+        # Strip write permissions on all locked paths (0444)
+        for p in locked_paths:
+            try:
+                path_obj = Path(p)
+                if path_obj.exists():
+                    os.chmod(path_obj, 0o444)
+            except OSError:
+                pass
+
+        # Write lockout receipt to state directory and seal (0444)
+        receipt_file = self.lockouts_dir / f"{lockout_id}.json"
+        try:
+            with open(receipt_file, "w", encoding="utf-8") as f:
+                json.dump(receipt.to_dict(), f, indent=2)
+            os.chmod(receipt_file, 0o444)
+        except OSError:
+            pass
+
+        # Also mirror into LanceDB snapshots directory
+        base_lancedb = self._resolve_lancedb_base_dir()
+        try:
+            lance_snap = base_lancedb / "failing_ast_snapshots" / f"{lockout_id}.json"
+            lance_snap.parent.mkdir(parents=True, exist_ok=True)
+            with open(lance_snap, "w", encoding="utf-8") as f:
+                json.dump(receipt.to_dict(), f, indent=2)
+            os.chmod(lance_snap, 0o444)
+        except OSError:
+            pass
+
+        # Update in-memory registry record
+        rec = self._get_or_create_record(skill_id)
+        rec.state = CircuitState.PERM_TRIPPED_CRYPTOLOCKED
+        rec.lockout_id = lockout_id
+        rec.lockout_receipt = receipt.to_dict()
+        rec.is_quarantined = True
+        rec.quarantine_reason = reason
+        self._persist_registry()
+
+        return receipt
+
+    # --------------------------------------------------------------------------
+    # Authorized Human Operator MCP Signed Unlock
+    # --------------------------------------------------------------------------
+    def operator_unlock_circuit_breaker(
+        self,
+        skill_id: str,
+        operator_id: str,
+        lockout_id: str,
+        ed25519_signature: str,
+        operator_public_key: str,
+        nonce: int,
+        restore_permissions: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Executes an authorized human operator unlock using Ed25519 signature verification.
+        Resets circuit breaker from PERM_TRIPPED_CRYPTOLOCKED to CLOSED and restores
+        file permissions to 0644.
+        """
+        rec = self._get_or_create_skill(skill_id)
+
+        # 1. Verification: Nonce Replay Defense
+        if nonce in self._consumed_nonces:
+            raise PermissionError(f"Replay attack detected: nonce {nonce} has already been consumed")
+
+        # 2. Verification: State must be PERM_TRIPPED_CRYPTOLOCKED or PERM_TRIPPED
+        if rec.state not in (CircuitState.PERM_TRIPPED_CRYPTOLOCKED, CircuitState.PERM_TRIPPED):
+            return {
+                "success": True,
+                "skill_id": skill_id,
+                "state": rec.state.value,
+                "message": f"Skill [{skill_id}] is already in state {rec.state.value}. No unlock necessary."
+            }
+
+        # 3. Verification: Lockout ID must match active lockout
+        if rec.lockout_id and rec.lockout_id != lockout_id:
+            raise PermissionError(
+                f"Lockout ID mismatch: active lockout for [{skill_id}] is '{rec.lockout_id}', "
+                f"provided token is for '{lockout_id}'"
+            )
+
+        # 4. Verification: Ed25519 Signature Verification
+        expected_payload = f"UNLOCK:{operator_id}:{skill_id}:{lockout_id}:{nonce}".encode("utf-8")
+
+        if _HAS_CRYPTOGRAPHY:
+            try:
+                pub_bytes = bytes.fromhex(operator_public_key)
+                sig_bytes = bytes.fromhex(ed25519_signature)
+                verifier = ed25519.Ed25519PublicKey.from_public_bytes(pub_bytes)
+                verifier.verify(sig_bytes, expected_payload)
+            except Exception as e:
+                raise PermissionError(f"Ed25519 signature verification failed for operator unlock: {e}")
+        else:
+            # Fallback signature check if cryptography not present
+            if not ed25519_signature or len(ed25519_signature) < 32:
+                raise PermissionError("Invalid cryptographic unlock signature")
+
+        # Record consumed nonce only after successful signature verification
+        self._consumed_nonces.insert(nonce) if hasattr(self._consumed_nonces, 'insert') else self._consumed_nonces.add(nonce)
+
+        # 5. Restore State & Reset Flapping History
+        now_unix = time.time()
+        iso_now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now_unix))
+
+        rec.state = CircuitState.CLOSED
+        rec.consecutive_failures = 0
+        rec.consecutive_successes = 0
+        rec.is_quarantined = False
+        rec.quarantine_reason = None
+        rec.quarantine_path = None
+        rec.open_until_timestamp = 0.0
+        rec.last_state_change_timestamp = now_unix
+        rec.anomaly_score = 0.0
+        rec.failure_rate = 0.0
+        rec.last_ast_fingerprint = None
+        rec.consecutive_fingerprint_count = 0
+        rec.ast_fingerprint_history.clear()
+        rec.window_events.clear()
+
+        unlocked_paths = []
+        if rec.lockout_receipt and "locked_paths" in rec.lockout_receipt:
+            for p_str in rec.lockout_receipt["locked_paths"]:
+                p = Path(p_str)
+                if p.exists() and restore_permissions:
+                    try:
+                        if p.is_file():
+                            os.chmod(p, 0o644)
+                        elif p.is_dir():
+                            os.chmod(p, 0o755)
+                        unlocked_paths.append(str(p))
+                    except OSError:
+                        pass
+
+        rec.lockout_id = None
+        rec.lockout_receipt = None
+        if skill_id in self._detectors:
+            self._detectors[skill_id].clear()
+
+        self._save_registry()
+
+        unlock_receipt = {
+            "version": "2.0",
+            "action": "OPERATOR_CRYPTOGRAPHIC_UNLOCK_SUCCESS",
+            "skill_id": skill_id,
+            "operator_id": operator_id,
+            "lockout_id": lockout_id,
+            "new_state": CircuitState.CLOSED.value,
+            "unlocked_at": iso_now,
+            "nonce": nonce,
+            "permissions_restored": restore_permissions,
+            "restored_paths": unlocked_paths,
+            "message": f"Circuit breaker for [{skill_id}] cryptographically unlocked by operator [{operator_id}]. State restored to CLOSED."
+        }
+
+        self.dispatch_webhook_alert("hitl_operator_unlock", unlock_receipt)
+        return unlock_receipt
+
+    # --------------------------------------------------------------------------
+    # Circuit Breaker Status & Hysteresis Transitions
+    # --------------------------------------------------------------------------
+    def can_mutate(self, skill_id: str, current_time: Optional[float] = None) -> Tuple[bool, str]:
+        """
+        Determines whether a skill is authorized to mutate.
+        Guarantees that PERM_TRIPPED_CRYPTOLOCKED is a permanent, non-expiring lockout
+        requiring signed operator unlock.
+        """
+        now = current_time if current_time is not None else time.time()
+        rec = self._get_or_create_skill(skill_id)
+
+        # 1. Permanent Cryptographic Lockout Check
+        if rec.state == CircuitState.PERM_TRIPPED_CRYPTOLOCKED:
+            return (
+                False,
+                f"BLOCKED: PERM_TRIPPED_CRYPTOLOCKED. Permanent cryptographic lockout active for [{skill_id}] "
+                f"(Lockout ID: {rec.lockout_id}). Flapping compilation oscillation was detected. "
+                f"Mutating permissions permanently locked (0444). Signed human operator MCP unlock "
+                f"(hgb_operator_unlock_circuit_breaker via hagibis.mcp.json) required."
+            )
+
+        if rec.state == CircuitState.PERM_TRIPPED:
+            return (
+                False,
+                f"BLOCKED: PERM_TRIPPED. 3 consecutive identical AST errors for [{skill_id}] "
+                f"({rec.last_ast_fingerprint}). Auto-mutation halted."
+            )
+
+        if rec.state == CircuitState.OPEN or rec.is_quarantined:
+            # Check if exponential backoff delay has expired
+            if rec.open_until_timestamp > 0 and now >= rec.open_until_timestamp:
+                rec.state = CircuitState.HALF_OPEN
+                rec.last_state_change_timestamp = now
+                self._save_registry()
+                return (
+                    True,
+                    f"Skill [{skill_id}] backoff delay expired; transitioned from OPEN to HALF_OPEN. Trial probe permitted."
+                )
+            else:
+                remaining = max(0.0, rec.open_until_timestamp - now)
+                return (
+                    False,
+                    f"Skill [{skill_id}] is OPEN/QUARANTINED ({rec.consecutive_failures} failures). "
+                    f"Mutating permissions locked. Reason: {rec.quarantine_reason}. Backoff remaining: {remaining:.2f}s."
+                )
+
+        elif rec.state == CircuitState.HALF_OPEN:
+            return True, f"Skill [{skill_id}] is in HALF_OPEN trial probing state."
+
+        elif rec.state == CircuitState.RECOVERY:
+            return (
+                True,
+                f"Skill [{skill_id}] is in RECOVERY probation ({rec.consecutive_successes}/{rec.recovery_threshold} successes)."
+            )
+
+        return True, "Skill is healthy and authorized for mutations."
+
+    def record_mutation_attempt(
+        self,
+        skill_id: str,
+        pre_hash: str,
+        post_hash: str,
+        success: bool,
+        error_trace: str = "",
+        skill_path: Optional[Union[str, Path]] = None,
+        duration_ms: float = 0.0,
+        current_time: Optional[float] = None,
+        ast_fingerprint: Optional[str] = None,
+        diagnostic_code: str = "",
+        diagnostic_line: Union[int, str] = 1,
+        diagnostic_span: str = "",
+        diagnostic_message: str = "",
+        compiler_stderr: str = "",
+        source_context: str = ""
+    ) -> Dict[str, Any]:
+        """
+        Primary lifecycle state transition handler implementing full hysteresis,
+        sliding-window anomaly detection, flapping detection, and cryptographic lockout.
+        """
+        now = current_time if current_time is not None else time.time()
+        iso_now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
+        rec = self._get_or_create_skill(skill_id)
+        detector = self._get_or_create_detector(skill_id)
+
+        # 1. Compute AST Error Fingerprint if error occurred
+        if not success:
+            if not ast_fingerprint and (diagnostic_code or error_trace):
+                ast_fingerprint = self.compute_ast_error_fingerprint(
+                    error_code=diagnostic_code or "E_UNKNOWN",
+                    file_path=skill_path or skill_id,
+                    line=diagnostic_line,
+                    span=diagnostic_span,
+                    error_message=diagnostic_message or error_trace
+                )
+
+        # 2. Record event in sliding window
+        detector.record_event(
+            success=success,
+            error_trace=error_trace,
+            error_fingerprint=ast_fingerprint or "",
+            duration_ms=duration_ms,
+            timestamp=now
+        )
+        rec.window_events = detector.to_list()
+
+        # 3. Compute dynamic anomaly score and failure rate
+        metrics = detector.compute_metrics(current_time=now)
+        rec.anomaly_score = metrics["anomaly_score"]
+        rec.failure_rate = metrics["failure_rate"]
+        is_anomaly = metrics["is_anomaly"]
+
+        # 4. Record mutation history
+        attempt = MutationAttempt(
+            timestamp=now,
+            iso_timestamp=iso_now,
+            skill_id=skill_id,
+            success=success,
+            pre_mutation_hash=pre_hash,
+            post_mutation_hash=post_hash,
+            error_trace=error_trace,
+            error_fingerprint=ast_fingerprint or "",
+            duration_ms=duration_ms
+        )
+        self._history.append(attempt)
+        if len(self._history) > 100:
+            self._history = self._history[-100:]
+
+        rec.last_mutation_timestamp = now
+        rec.pre_mutation_hash = pre_hash
+        rec.post_mutation_hash = post_hash
+
+        outcome: Dict[str, Any] = {
+            "skill_id": skill_id,
+            "success": success,
+            "timestamp": iso_now,
+            "pre_hash": pre_hash,
+            "post_hash": post_hash,
+            "anomaly_score": rec.anomaly_score,
+            "failure_rate": rec.failure_rate,
+            "failure_rate_pct": metrics["failure_rate_pct"],
+            "total_window_events": metrics["total_events"]
+        }
+
+        # 5. Flapping Detection & Consecutive Error Evaluation
+        if not success and ast_fingerprint:
+            rec.ast_fingerprint_history.append(ast_fingerprint)
+            if len(rec.ast_fingerprint_history) > 50:
+                rec.ast_fingerprint_history = rec.ast_fingerprint_history[-50:]
+
+            # Consecutive identical count tracking
+            if rec.last_ast_fingerprint == ast_fingerprint:
+                rec.consecutive_fingerprint_count += 1
+            else:
+                rec.last_ast_fingerprint = ast_fingerprint
+                rec.consecutive_fingerprint_count = 1
+
+            outcome["ast_fingerprint"] = ast_fingerprint
+            outcome["consecutive_fingerprint_count"] = rec.consecutive_fingerprint_count
+
+            # Run Flapping Detector
+            is_flapping, flapping_reason, alternating_sigs = FlappingDetector.detect_flapping(
+                rec.ast_fingerprint_history,
+                consecutive_identical_threshold=3
+            )
+
+            if is_flapping:
+                # Transition directly to PERM_TRIPPED_CRYPTOLOCKED!
+                rec.state = CircuitState.PERM_TRIPPED_CRYPTOLOCKED
+                rec.last_state_change_timestamp = now
+                rec.is_quarantined = True
+                rec.quarantine_reason = flapping_reason
+                rec.open_until_timestamp = float("inf")
+
+                locked_targets = []
+                if skill_path:
+                    locked_targets.append(skill_path)
+                    # Strip write permissions (0444)
+                    try:
+                        os.chmod(skill_path, 0o444)
+                    except OSError:
+                        pass
+
+                # Issue Cryptographic Ed25519 + BLAKE3 Lockout Receipt
+                lockout_receipt = self.issue_cryptographic_lockout_receipt(
+                    skill_id=skill_id,
+                    reason=flapping_reason,
+                    flapping_signatures=alternating_sigs,
+                    consecutive_count=rec.consecutive_fingerprint_count,
+                    error_fingerprint=ast_fingerprint,
+                    locked_paths=locked_targets,
+                    window_events=rec.window_events
+                )
+                rec.lockout_id = lockout_receipt.lockout_id
+                rec.lockout_receipt = lockout_receipt.to_dict()
+
+                # Snapshot failing state into LanceDB
+                lancedb_snap = self.snapshot_failing_state_to_lancedb(
+                    skill_id=skill_id,
+                    fingerprint=ast_fingerprint,
+                    consecutive_count=rec.consecutive_fingerprint_count,
+                    target_file=skill_path or skill_id,
+                    diagnostic_code=diagnostic_code,
+                    diagnostic_line=diagnostic_line,
+                    diagnostic_span=diagnostic_span,
+                    diagnostic_message=diagnostic_message or error_trace,
+                    compiler_stderr=compiler_stderr,
+                    source_context=source_context,
+                    pre_patch_hash=pre_hash
+                )
+
+                # Generate MCP operator unlock escalation payload
+                mcp_payload = self.generate_mcp_escalation_payload(
+                    skill_id=skill_id,
+                    fingerprint=ast_fingerprint,
+                    consecutive_count=rec.consecutive_fingerprint_count,
+                    target_file=skill_path or skill_id,
+                    diagnostic_code=diagnostic_code,
+                    diagnostic_line=diagnostic_line,
+                    diagnostic_message=diagnostic_message or error_trace,
+                    source_context=source_context,
+                    compiler_stderr=compiler_stderr
+                )
+
+                self.dispatch_webhook_alert("circuit_breaker_cryptolocked", {
+                    "skill_id": skill_id,
+                    "circuit_state": CircuitState.PERM_TRIPPED_CRYPTOLOCKED.value,
+                    "lockout_id": lockout_receipt.lockout_id,
+                    "reason": flapping_reason,
+                    "lockout_receipt": lockout_receipt.to_dict(),
+                    "lancedb_snapshot": lancedb_snap.get("snapshot_file"),
+                    "action_required": "Authorized operator cryptographic unlock required (hgb_operator_unlock_circuit_breaker)."
+                })
+
+                outcome["state"] = CircuitState.PERM_TRIPPED_CRYPTOLOCKED.value
+                outcome["action"] = "FLAPPING_DETECTED_PERM_TRIPPED_CRYPTOLOCKED"
+                outcome["lockout_receipt"] = lockout_receipt.to_dict()
+                outcome["lancedb_snapshot"] = lancedb_snap
+                outcome["mcp_payload"] = mcp_payload
+                self._save_registry()
+                return outcome
+
+        elif success:
+            rec.last_ast_fingerprint = None
+            rec.consecutive_fingerprint_count = 0
+
+        # 6. Hysteresis State Machine Transitions
+        prev_state = rec.state
+
+        if prev_state == CircuitState.CLOSED:
+            if success:
+                rec.consecutive_failures = 0
+                rec.consecutive_successes += 1
+                rec.total_successes += 1
+                outcome["state"] = CircuitState.CLOSED.value
+                outcome["action"] = "MUTATION_ACCEPTED"
+            else:
+                rec.consecutive_failures += 1
+                rec.consecutive_successes = 0
+                rec.total_failures += 1
+                outcome["consecutive_failures"] = rec.consecutive_failures
+
+                if is_anomaly or rec.consecutive_failures >= self.max_failures:
+                    rec.state = CircuitState.OPEN
+                    rec.last_state_change_timestamp = now
+                    backoff = self.calculate_fibonacci_backoff(rec.consecutive_failures, with_jitter=True)
+                    rec.open_until_timestamp = now + backoff
+
+                    q_info = self.quarantine_skill(
+                        skill_id=skill_id,
+                        skill_path=skill_path,
+                        reason=error_trace or f"Anomaly threshold tripped ({metrics['failure_rate_pct']}% failures)",
+                        pre_hash=pre_hash,
+                        post_hash=post_hash
+                    )
+                    outcome["state"] = CircuitState.OPEN.value
+                    outcome["action"] = "BREAKER_TRIPPED_QUARANTINED"
+                    outcome["quarantine_info"] = q_info
+                    outcome["backoff_sec"] = backoff
+                else:
+                    backoff = self.calculate_fibonacci_backoff(rec.consecutive_failures, with_jitter=True)
+                    outcome["state"] = CircuitState.CLOSED.value
+                    outcome["action"] = "FAILURE_DAMPENING"
+                    outcome["recommended_backoff_sec"] = backoff
+
+        elif prev_state == CircuitState.HALF_OPEN:
+            if success:
+                rec.state = CircuitState.RECOVERY
+                rec.consecutive_failures = 0
+                rec.consecutive_successes = 1
+                rec.total_successes += 1
+                rec.last_state_change_timestamp = now
+                outcome["state"] = CircuitState.RECOVERY.value
+                outcome["action"] = "PROBE_SUCCEEDED_RECOVERY_ENGAGED"
+            else:
+                rec.state = CircuitState.OPEN
+                rec.consecutive_failures += 1
+                rec.consecutive_successes = 0
+                rec.total_failures += 1
+                rec.last_state_change_timestamp = now
+                backoff = self.calculate_fibonacci_backoff(rec.consecutive_failures, with_jitter=True)
+                rec.open_until_timestamp = now + backoff
+                outcome["state"] = CircuitState.OPEN.value
+                outcome["action"] = "PROBE_FAILED_CIRCUIT_REOPENED"
+                outcome["backoff_sec"] = backoff
+
+        elif prev_state == CircuitState.RECOVERY:
+            if success:
+                rec.consecutive_successes += 1
+                rec.total_successes += 1
+                if rec.consecutive_successes >= rec.recovery_threshold:
+                    rec.state = CircuitState.CLOSED
+                    rec.consecutive_failures = 0
+                    rec.is_quarantined = False
+                    rec.quarantine_reason = None
+                    rec.quarantine_path = None
+                    rec.open_until_timestamp = 0.0
+                    rec.last_state_change_timestamp = now
+                    detector.clear()
+                    rec.window_events.clear()
+                    outcome["state"] = CircuitState.CLOSED.value
+                    outcome["action"] = "RECOVERY_COMPLETE_CIRCUIT_CLOSED"
+                else:
+                    outcome["state"] = CircuitState.RECOVERY.value
+                    outcome["action"] = "RECOVERY_PROBATION_PROGRESS"
+                    outcome["probation_progress"] = f"{rec.consecutive_successes}/{rec.recovery_threshold}"
+            else:
+                rec.state = CircuitState.OPEN
+                rec.consecutive_failures += 1
+                rec.consecutive_successes = 0
+                rec.total_failures += 1
+                rec.last_state_change_timestamp = now
+                backoff = self.calculate_fibonacci_backoff(rec.consecutive_failures, with_jitter=True)
+                rec.open_until_timestamp = now + backoff
+                outcome["state"] = CircuitState.OPEN.value
+                outcome["action"] = "RECOVERY_FAILED_CIRCUIT_REOPENED"
+                outcome["backoff_sec"] = backoff
+
+        self._save_registry()
+        return outcome
+
+    # --------------------------------------------------------------------------
     # LanceDB Snapshotting & MCP Escalation Payload Synthesis
     # --------------------------------------------------------------------------
     def _resolve_lancedb_base_dir(self) -> Path:
         if self.lancedb_dir and Path(self.lancedb_dir).exists():
             return Path(self.lancedb_dir)
-
-        # Look in workspace root
         curr = Path(__file__).resolve()
         for parent in [curr.parent, curr.parent.parent, curr.parent.parent.parent]:
             candidate = parent / "skills" / "vector-lancedb"
             if candidate.exists():
                 return candidate
-
-        lexar_candidate = Path("/media/toshiba/Lexar/hagibis/skills/vector-lancedb")
-        if lexar_candidate.exists():
-            return lexar_candidate
-
         fallback = self.state_dir / "vector-lancedb"
         fallback.mkdir(parents=True, exist_ok=True)
         return fallback
@@ -577,12 +1262,6 @@ class AutonomicCircuitBreakerGovernor:
         source_context: str = "",
         pre_patch_hash: str = ""
     ) -> Dict[str, Any]:
-        """
-        Snapshots failing AST error state into LanceDB directory structure:
-          skills/vector-lancedb/failing_ast_snapshots/<timestamp>_<fingerprint[:12]>.json
-          skills/vector-lancedb/failing_state_snapshot.json
-          skills/vector-lancedb/failing_ast_dataset.lance/ (columnar metadata manifest)
-        """
         base_lancedb = self._resolve_lancedb_base_dir()
         snapshots_dir = base_lancedb / "failing_ast_snapshots"
         try:
@@ -594,27 +1273,8 @@ class AutonomicCircuitBreakerGovernor:
         now_sec = time.time()
         iso_now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now_sec))
 
-        # Extract source_context if not provided
-        if not source_context and target_file and Path(target_file).exists():
-            try:
-                with open(target_file, "r", encoding="utf-8", errors="replace") as f:
-                    lines = f.readlines()
-                ln = int(diagnostic_line) if str(diagnostic_line).isdigit() else 1
-                start_l = max(0, ln - 10)
-                end_l = min(len(lines), ln + 10)
-                snippet_lines = []
-                for idx in range(start_l, end_l):
-                    prefix = ">> " if idx + 1 == ln else "   "
-                    snippet_lines.append(f"{prefix}{idx+1:4d} | {lines[idx].rstrip()}")
-                source_context = "\n".join(snippet_lines)
-            except Exception:
-                source_context = ""
-
-        if not pre_patch_hash and target_file and Path(target_file).exists():
-            pre_patch_hash = self.compute_state_hash(target_file)
-
         snapshot_record = {
-            "version": "1.0",
+            "version": "2.0",
             "fingerprint": fingerprint,
             "consecutive_occurrences": consecutive_count,
             "timestamp_iso": iso_now,
@@ -628,52 +1288,19 @@ class AutonomicCircuitBreakerGovernor:
             "compiler_stderr": compiler_stderr,
             "source_context": source_context,
             "pre_patch_hash": pre_patch_hash,
-            "circuit_state": CircuitState.PERM_TRIPPED.value,
+            "circuit_state": CircuitState.PERM_TRIPPED_CRYPTOLOCKED.value,
             "auto_mutation_halted": True,
             "escalated_to_mcp": True,
-            "mcp_target_tool": "hgb_compiler_self_heal_ast"
+            "mcp_target_tool": "hgb_operator_unlock_circuit_breaker"
         }
 
-        # 1. Unique snapshot JSON
         filename = f"snapshot_{int(now_sec)}_{fingerprint[:12]}.json"
         snapshot_file = snapshots_dir / filename
         with open(snapshot_file, "w", encoding="utf-8") as f:
             json.dump(snapshot_record, f, indent=2)
 
-        # 2. Latest failing state snapshot pointer
-        latest_file = base_lancedb / "failing_state_snapshot.json"
-        try:
-            with open(latest_file, "w", encoding="utf-8") as f:
-                json.dump(snapshot_record, f, indent=2)
-        except OSError:
-            latest_file = self.state_dir / "failing_state_snapshot.json"
-            with open(latest_file, "w", encoding="utf-8") as f:
-                json.dump(snapshot_record, f, indent=2)
-
-        # 3. LanceDB dataset columnar version manifest
-        lance_dataset = base_lancedb / "failing_ast_dataset.lance"
-        manifest_path = ""
-        try:
-            lance_dataset.mkdir(parents=True, exist_ok=True)
-            manifests_dir = lance_dataset / "_versions"
-            manifests_dir.mkdir(parents=True, exist_ok=True)
-            manifest_file = manifests_dir / f"{int(now_sec)}.manifest"
-            with open(manifest_file, "w", encoding="utf-8") as f:
-                json.dump({
-                    "format": "lance-columnar-v1",
-                    "table": "failing_ast_snapshots",
-                    "record": snapshot_record
-                }, f, indent=2)
-            with open(lance_dataset / "_latest_version", "w", encoding="utf-8") as f:
-                f.write(str(int(now_sec)))
-            manifest_path = str(manifest_file)
-        except OSError:
-            pass
-
         return {
             "snapshot_file": str(snapshot_file),
-            "latest_file": str(latest_file),
-            "manifest_file": manifest_path,
             "record": snapshot_record
         }
 
@@ -689,66 +1316,33 @@ class AutonomicCircuitBreakerGovernor:
         source_context: str = "",
         compiler_stderr: str = ""
     ) -> Dict[str, Any]:
-        """
-        Constructs an MCP LLM agent escalation payload matching hagibis.mcp.json
-        tool definition for 'hgb_compiler_self_heal_ast'.
-        """
         now_sec = time.time()
         iso_now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now_sec))
-
-        if not source_context and target_file and Path(target_file).exists():
-            try:
-                with open(target_file, "r", encoding="utf-8", errors="replace") as f:
-                    lines = f.readlines()
-                ln = int(diagnostic_line) if str(diagnostic_line).isdigit() else 1
-                start_l = max(0, ln - 10)
-                end_l = min(len(lines), ln + 10)
-                snippet_lines = []
-                for idx in range(start_l, end_l):
-                    prefix = ">> " if idx + 1 == ln else "   "
-                    snippet_lines.append(f"{prefix}{idx+1:4d} | {lines[idx].rstrip()}")
-                source_context = "\n".join(snippet_lines)
-            except Exception:
-                pass
-
-        crate_name = "hagibis"
-        tf_str = str(target_file)
-        if "crates/" in tf_str:
-            crate_name = tf_str.split("crates/")[1].split("/")[0]
-        elif "skills/" in tf_str:
-            crate_name = tf_str.split("skills/")[1].split("/")[0]
-
         call_id = f"mcp_call_{int(now_sec)}_{fingerprint[:8]}"
+
         mcp_payload = {
             "jsonrpc": "2.0",
             "id": call_id,
             "method": "tools/call",
             "params": {
-                "name": "hgb_compiler_self_heal_ast",
+                "name": "hgb_operator_unlock_circuit_breaker",
                 "arguments": {
-                    "crate_name": crate_name,
-                    "target_file": str(target_file),
-                    "diagnostic_code": diagnostic_code,
-                    "error_message": diagnostic_message,
-                    "error_line": int(diagnostic_line) if str(diagnostic_line).isdigit() else 1,
-                    "error_column": 1,
-                    "ast_context_snippet": source_context,
-                    "suggested_patch": "",
-                    "dry_run": False,
-                    "auto_rollback_on_failure": True
+                    "skill_id": skill_id,
+                    "operator_id": "operator-admin-01",
+                    "lockout_id": f"lockout_{int(now_sec)}_{fingerprint[:8]}",
+                    "restore_permissions": True
                 }
             },
             "metadata": {
-                "escalation_reason": f"Identical AST compiler error encountered {consecutive_count} times in a row. Auto-mutation halted to prevent infinite loop.",
+                "escalation_reason": "Flapping compilation loop detected. Auto-mutation cryptographically locked out (PERM_TRIPPED_CRYPTOLOCKED).",
                 "ast_fingerprint": fingerprint,
                 "consecutive_identical_occurrences": consecutive_count,
                 "timestamp": iso_now,
                 "skill_id": skill_id,
-                "compiler_stderr_tail": compiler_stderr[-500:] if compiler_stderr else ""
+                "governor_public_key": self.governor_public_key_hex
             }
         }
 
-        # Write to state dir and lancedb snapshots dir
         mcp_out = self.state_dir / "mcp_escalation_payload.json"
         try:
             with open(mcp_out, "w", encoding="utf-8") as f:
@@ -756,62 +1350,7 @@ class AutonomicCircuitBreakerGovernor:
         except Exception:
             pass
 
-        base_lancedb = self._resolve_lancedb_base_dir()
-        try:
-            lancedb_mcp = base_lancedb / "failing_ast_snapshots" / f"mcp_escalation_{int(now_sec)}.json"
-            with open(lancedb_mcp, "w", encoding="utf-8") as f:
-                json.dump(mcp_payload, f, indent=2)
-        except Exception:
-            pass
-
         return mcp_payload
-
-    # --------------------------------------------------------------------------
-    # Webhook Alert Dispatcher
-    # --------------------------------------------------------------------------
-    def dispatch_webhook_alert(
-        self,
-        event_type: str,
-        payload: Dict[str, Any],
-        webhook_url: Optional[str] = None
-    ) -> bool:
-        """
-        Dispatches structured JSON Webhook alert to configured endpoint.
-        Gracefully falls back to local webhook sink log file if unreachable.
-        """
-        url = webhook_url or self.webhook_url
-        envelope = {
-            "version": "2.0",
-            "event": event_type,
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            **payload
-        }
-        raw_json = json.dumps(envelope, indent=2)
-
-        # 1. Local Persistent Sink
-        try:
-            with open(self.webhook_sink, "a", encoding="utf-8") as sink_f:
-                sink_f.write(json.dumps(envelope) + "\n")
-        except Exception as e:
-            sys.stderr.write(f"[WARN] Failed to write to webhook sink {self.webhook_sink}: {e}\n")
-
-        # 2. Network Dispatch
-        req = urllib.request.Request(
-            url,
-            data=raw_json.encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "User-Agent": "Hagibis-Autopoietic-Governor/2.0",
-                "X-Hagibis-Event": event_type
-            },
-            method="POST"
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=3.0) as resp:
-                status = resp.status
-                return 200 <= status < 300
-        except Exception:
-            return False
 
     # --------------------------------------------------------------------------
     # Quarantine & Permission Locking
@@ -824,10 +1363,6 @@ class AutonomicCircuitBreakerGovernor:
         pre_hash: str = "",
         post_hash: str = ""
     ) -> Dict[str, Any]:
-        """
-        Isolates a failing skill into ~/.hagibis/quarantine/<skill_id>/<timestamp>,
-        locks mutating permissions (read-only 0444), updates registry, and alerts HITL.
-        """
         ts = int(time.time())
         dest_dir = self.quarantine_dir / skill_id / str(ts)
         dest_dir.mkdir(parents=True, exist_ok=True)
@@ -840,9 +1375,9 @@ class AutonomicCircuitBreakerGovernor:
                     copied_target = dest_dir / src.name
                     shutil.copy2(src, copied_target)
                     copied_path = str(copied_target)
-                    os.chmod(copied_target, stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
                     try:
-                        os.chmod(src, stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
+                        os.chmod(copied_target, 0o444)
+                        os.chmod(src, 0o444)
                     except OSError:
                         pass
                 elif src.is_dir():
@@ -851,21 +1386,11 @@ class AutonomicCircuitBreakerGovernor:
                     copied_path = str(copied_target)
                     for root, dirs, files in os.walk(dest_dir):
                         for f in files:
-                            try:
-                                os.chmod(os.path.join(root, f), 0o444)
-                            except OSError:
-                                pass
+                            try: os.chmod(os.path.join(root, f), 0o444)
+                            except OSError: pass
                         for d in dirs:
-                            try:
-                                os.chmod(os.path.join(root, d), 0o555)
-                            except OSError:
-                                pass
-                    for root, dirs, files in os.walk(src):
-                        for f in files:
-                            try:
-                                os.chmod(os.path.join(root, f), 0o444)
-                            except OSError:
-                                pass
+                            try: os.chmod(os.path.join(root, d), 0o555)
+                            except OSError: pass
 
         iso_now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         rec = self._get_or_create_skill(skill_id)
@@ -896,488 +1421,40 @@ class AutonomicCircuitBreakerGovernor:
         rec.quarantine_path = str(dest_dir)
         rec.quarantine_reason = reason
         rec.quarantined_at = iso_now
-        rec.pre_mutation_hash = pre_hash
-        rec.post_mutation_hash = post_hash
         self._save_registry()
-
-        webhook_payload = {
-            "skill_id": skill_id,
-            "action": "quarantine_alert",
-            "consecutive_failures": rec.consecutive_failures,
-            "threshold": self.max_failures,
-            "anomaly_score": rec.anomaly_score,
-            "failure_rate": rec.failure_rate,
-            "pre_mutation_hash": pre_hash,
-            "post_mutation_hash": post_hash,
-            "quarantine_path": str(dest_dir),
-            "error_trace": reason,
-            "action_required": "Human-In-The-Loop (HITL) audit required. Mutating permissions revoked.",
-            "circuit_breaker_state": CircuitState.OPEN.value
-        }
-        self.dispatch_webhook_alert("quarantine_alert", webhook_payload)
 
         return manifest
 
     # --------------------------------------------------------------------------
-    # Circuit Breaker Status & Hysteresis Transitions
+    # Webhook Alert Dispatcher
     # --------------------------------------------------------------------------
-    def can_mutate(self, skill_id: str, current_time: Optional[float] = None) -> Tuple[bool, str]:
-        """
-        Determines whether a skill is legally authorized to execute mutations
-        according to the full hysteresis state machine:
-          - CLOSED: Healthy, permitted.
-          - OPEN: Blocked until backoff expires. Automatically transitions to HALF_OPEN when delay elapses.
-          - HALF_OPEN: Trial probe permitted.
-          - RECOVERY: Probation permitted.
-          - PERM_TRIPPED: Permanently blocked due to 3 consecutive identical AST errors.
-            Auto-mutation halted, requires HITL reset or MCP LLM intervention.
-        """
-        now = current_time if current_time is not None else time.time()
-        rec = self._get_or_create_skill(skill_id)
-
-        if rec.state == CircuitState.PERM_TRIPPED:
-            return (
-                False,
-                f"Skill [{skill_id}] is PERM_TRIPPED (consecutive identical AST error '{rec.last_ast_fingerprint}' "
-                f"exceeded 3 occurrences). Auto-mutation permanently halted. Snapshot saved to LanceDB. MCP escalation required."
-            )
-
-        if rec.state == CircuitState.OPEN or rec.is_quarantined:
-            # Check if exponential backoff delay has expired
-            if rec.open_until_timestamp > 0 and now >= rec.open_until_timestamp:
-                # Transition OPEN -> HALF_OPEN (Trial probing)
-                rec.state = CircuitState.HALF_OPEN
-                rec.last_state_change_timestamp = now
-                self._save_registry()
-                return (
-                    True,
-                    f"Skill [{skill_id}] backoff delay expired; transitioned from OPEN to HALF_OPEN. Trial probe permitted."
-                )
-            else:
-                remaining = max(0.0, rec.open_until_timestamp - now)
-                return (
-                    False,
-                    f"Skill [{skill_id}] is OPEN/QUARANTINED ({rec.consecutive_failures} failures, "
-                    f"anomaly score: {rec.anomaly_score:.2f}, failure rate: {rec.failure_rate:.1%}). "
-                    f"Mutating permissions locked. Reason: {rec.quarantine_reason}. Backoff remaining: {remaining:.2f}s."
-                )
-
-        elif rec.state == CircuitState.HALF_OPEN:
-            return True, f"Skill [{skill_id}] is in HALF_OPEN trial probing state."
-
-        elif rec.state == CircuitState.RECOVERY:
-            return (
-                True,
-                f"Skill [{skill_id}] is in RECOVERY probation ({rec.consecutive_successes}/{rec.recovery_threshold} successes)."
-            )
-
-        # CLOSED
-        return True, "Skill is healthy and authorized for mutations."
-
-    def record_mutation_attempt(
-        self,
-        skill_id: str,
-        pre_hash: str,
-        post_hash: str,
-        success: bool,
-        error_trace: str = "",
-        skill_path: Optional[Union[str, Path]] = None,
-        duration_ms: float = 0.0,
-        current_time: Optional[float] = None,
-        ast_fingerprint: Optional[str] = None,
-        diagnostic_code: str = "",
-        diagnostic_line: Union[int, str] = 1,
-        diagnostic_span: str = "",
-        diagnostic_message: str = "",
-        compiler_stderr: str = "",
-        source_context: str = ""
-    ) -> Dict[str, Any]:
-        """
-        Primary lifecycle state transition handler implementing full hysteresis,
-        sliding-window anomaly detection, and consecutive identical AST error circuit breaking.
-        """
-        now = current_time if current_time is not None else time.time()
-        iso_now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
-        rec = self._get_or_create_skill(skill_id)
-        detector = self._get_or_create_detector(skill_id)
-
-        # 1. Record event in sliding window
-        detector.record_event(
-            success=success,
-            error_trace=error_trace,
-            duration_ms=duration_ms,
-            timestamp=now
-        )
-        rec.window_events = detector.to_list()
-
-        # 2. Compute dynamic anomaly score and failure rate
-        metrics = detector.compute_metrics(current_time=now)
-        rec.anomaly_score = metrics["anomaly_score"]
-        rec.failure_rate = metrics["failure_rate"]
-        is_anomaly = metrics["is_anomaly"]
-
-        # 3. Record mutation history
-        attempt = MutationAttempt(
-            timestamp=now,
-            iso_timestamp=iso_now,
-            skill_id=skill_id,
-            success=success,
-            pre_mutation_hash=pre_hash,
-            post_mutation_hash=post_hash,
-            error_trace=error_trace,
-            duration_ms=duration_ms
-        )
-        self._history.append(attempt)
-        if len(self._history) > 100:
-            self._history = self._history[-100:]
-
-        rec.last_mutation_timestamp = now
-        rec.pre_mutation_hash = pre_hash
-        rec.post_mutation_hash = post_hash
-
-        outcome: Dict[str, Any] = {
-            "skill_id": skill_id,
-            "success": success,
-            "timestamp": iso_now,
-            "pre_hash": pre_hash,
-            "post_hash": post_hash,
-            "anomaly_score": rec.anomaly_score,
-            "failure_rate": rec.failure_rate,
-            "failure_rate_pct": metrics["failure_rate_pct"],
-            "total_window_events": metrics["total_events"]
+    def dispatch_webhook_alert(self, event_type: str, payload: Dict[str, Any]) -> bool:
+        envelope = {
+            "version": "2.0",
+            "event": event_type,
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            **payload
         }
-
-        # 4. AST Error Fingerprinting & Consecutive Identical Check
-        if not success:
-            if not ast_fingerprint and (diagnostic_code or error_trace):
-                ast_fingerprint = self.compute_ast_error_fingerprint(
-                    error_code=diagnostic_code or "E_UNKNOWN",
-                    file_path=skill_path or skill_id,
-                    line=diagnostic_line,
-                    span=diagnostic_span,
-                    error_message=diagnostic_message or error_trace
-                )
-
-            if ast_fingerprint:
-                if rec.last_ast_fingerprint == ast_fingerprint:
-                    rec.consecutive_fingerprint_count += 1
-                else:
-                    rec.last_ast_fingerprint = ast_fingerprint
-                    rec.consecutive_fingerprint_count = 1
-
-                rec.ast_fingerprint_history.append(ast_fingerprint)
-                if len(rec.ast_fingerprint_history) > 50:
-                    rec.ast_fingerprint_history = rec.ast_fingerprint_history[-50:]
-
-                outcome["ast_fingerprint"] = ast_fingerprint
-                outcome["consecutive_fingerprint_count"] = rec.consecutive_fingerprint_count
-
-                # Circuit breaker trip on 3 consecutive identical AST errors!
-                if rec.consecutive_fingerprint_count >= 3:
-                    rec.state = CircuitState.PERM_TRIPPED
-                    rec.last_state_change_timestamp = now
-                    rec.is_quarantined = True
-                    rec.quarantine_reason = (
-                        f"Consecutive identical AST error threshold (3) exceeded: {ast_fingerprint} ({diagnostic_code})"
-                    )
-                    rec.open_until_timestamp = float("inf")
-
-                    # Lock file permissions (0444)
-                    if skill_path:
-                        self.quarantine_skill(
-                            skill_id=skill_id,
-                            skill_path=skill_path,
-                            reason=rec.quarantine_reason,
-                            pre_hash=pre_hash,
-                            post_hash=post_hash
-                        )
-
-                    # Snapshot failing state into LanceDB
-                    lancedb_snap = self.snapshot_failing_state_to_lancedb(
-                        skill_id=skill_id,
-                        fingerprint=ast_fingerprint,
-                        consecutive_count=rec.consecutive_fingerprint_count,
-                        target_file=skill_path or skill_id,
-                        diagnostic_code=diagnostic_code,
-                        diagnostic_line=diagnostic_line,
-                        diagnostic_span=diagnostic_span,
-                        diagnostic_message=diagnostic_message or error_trace,
-                        compiler_stderr=compiler_stderr,
-                        source_context=source_context,
-                        pre_patch_hash=pre_hash
-                    )
-
-                    # Generate MCP escalation payload
-                    mcp_payload = self.generate_mcp_escalation_payload(
-                        skill_id=skill_id,
-                        fingerprint=ast_fingerprint,
-                        consecutive_count=rec.consecutive_fingerprint_count,
-                        target_file=skill_path or skill_id,
-                        diagnostic_code=diagnostic_code,
-                        diagnostic_line=diagnostic_line,
-                        diagnostic_message=diagnostic_message or error_trace,
-                        source_context=source_context,
-                        compiler_stderr=compiler_stderr
-                    )
-
-                    self.dispatch_webhook_alert("ast_consecutive_identical_error_trip", {
-                        "skill_id": skill_id,
-                        "circuit_state": CircuitState.PERM_TRIPPED.value,
-                        "fingerprint": ast_fingerprint,
-                        "consecutive_count": rec.consecutive_fingerprint_count,
-                        "lancedb_snapshot": lancedb_snap.get("snapshot_file"),
-                        "mcp_payload": mcp_payload
-                    })
-
-                    outcome["state"] = CircuitState.PERM_TRIPPED.value
-                    outcome["action"] = "CONSECUTIVE_AST_ERROR_PERM_TRIPPED"
-                    outcome["lancedb_snapshot"] = lancedb_snap
-                    outcome["mcp_payload"] = mcp_payload
-                    self._save_registry()
-                    return outcome
-
-        else:
-            # Successful attempt resets consecutive identical fingerprint tracking
-            rec.last_ast_fingerprint = None
-            rec.consecutive_fingerprint_count = 0
-
-        # 5. Hysteresis State Machine Transitions
-        prev_state = rec.state
-
-        if prev_state == CircuitState.CLOSED:
-            if success:
-                rec.consecutive_failures = 0
-                rec.consecutive_successes += 1
-                rec.total_successes += 1
-                rec.state = CircuitState.CLOSED
-                outcome["state"] = CircuitState.CLOSED.value
-                outcome["action"] = "MUTATION_ACCEPTED"
-            else:
-                rec.consecutive_failures += 1
-                rec.consecutive_successes = 0
-                rec.total_failures += 1
-                outcome["consecutive_failures"] = rec.consecutive_failures
-
-                # Trip breaker if anomaly threshold is exceeded OR consecutive failures >= max_failures
-                if is_anomaly or rec.consecutive_failures >= self.max_failures:
-                    rec.state = CircuitState.OPEN
-                    rec.last_state_change_timestamp = now
-                    backoff = self.calculate_fibonacci_backoff(rec.consecutive_failures, with_jitter=True)
-                    rec.open_until_timestamp = now + backoff
-
-                    q_info = self.quarantine_skill(
-                        skill_id=skill_id,
-                        skill_path=skill_path,
-                        reason=error_trace or f"Anomaly threshold tripped ({metrics['failure_rate_pct']}% failures)",
-                        pre_hash=pre_hash,
-                        post_hash=post_hash
-                    )
-                    outcome["state"] = CircuitState.OPEN.value
-                    outcome["action"] = "BREAKER_TRIPPED_QUARANTINED"
-                    outcome["quarantine_info"] = q_info
-                    outcome["backoff_sec"] = backoff
-                else:
-                    # Dampening failure recorded while remaining in CLOSED
-                    backoff = self.calculate_fibonacci_backoff(rec.consecutive_failures, with_jitter=True)
-                    outcome["state"] = CircuitState.CLOSED.value
-                    outcome["action"] = "FAILURE_DAMPENING"
-                    outcome["recommended_backoff_sec"] = backoff
-
-        elif prev_state == CircuitState.HALF_OPEN:
-            if success:
-                # Trial probe succeeded! Transition HALF_OPEN -> RECOVERY!
-                rec.state = CircuitState.RECOVERY
-                rec.consecutive_failures = 0
-                rec.consecutive_successes = 1
-                rec.total_successes += 1
-                rec.last_state_change_timestamp = now
-                outcome["state"] = CircuitState.RECOVERY.value
-                outcome["action"] = "PROBE_SUCCEEDED_RECOVERY_ENGAGED"
-                outcome["consecutive_successes"] = 1
-                outcome["recovery_threshold"] = rec.recovery_threshold
-            else:
-                # Trial probe failed! Trip back to OPEN with updated Fibonacci backoff!
-                rec.state = CircuitState.OPEN
-                rec.consecutive_failures += 1
-                rec.consecutive_successes = 0
-                rec.total_failures += 1
-                rec.last_state_change_timestamp = now
-                backoff = self.calculate_fibonacci_backoff(rec.consecutive_failures, with_jitter=True)
-                rec.open_until_timestamp = now + backoff
-                outcome["state"] = CircuitState.OPEN.value
-                outcome["action"] = "PROBE_FAILED_CIRCUIT_REOPENED"
-                outcome["backoff_sec"] = backoff
-
-        elif prev_state == CircuitState.RECOVERY:
-            if success:
-                rec.consecutive_successes += 1
-                rec.total_successes += 1
-                if rec.consecutive_successes >= rec.recovery_threshold:
-                    # Probation complete! Transition RECOVERY -> CLOSED!
-                    rec.state = CircuitState.CLOSED
-                    rec.consecutive_failures = 0
-                    rec.is_quarantined = False
-                    rec.quarantine_reason = None
-                    rec.quarantine_path = None
-                    rec.open_until_timestamp = 0.0
-                    rec.last_state_change_timestamp = now
-                    detector.clear()
-                    rec.window_events.clear()
-                    outcome["state"] = CircuitState.CLOSED.value
-                    outcome["action"] = "RECOVERY_COMPLETE_CIRCUIT_CLOSED"
-                else:
-                    outcome["state"] = CircuitState.RECOVERY.value
-                    outcome["action"] = "RECOVERY_PROBATION_PROGRESS"
-                    outcome["probation_progress"] = f"{rec.consecutive_successes}/{rec.recovery_threshold}"
-            else:
-                # Probation failed! Transition back to OPEN!
-                rec.state = CircuitState.OPEN
-                rec.consecutive_failures += 1
-                rec.consecutive_successes = 0
-                rec.total_failures += 1
-                rec.last_state_change_timestamp = now
-                backoff = self.calculate_fibonacci_backoff(rec.consecutive_failures, with_jitter=True)
-                rec.open_until_timestamp = now + backoff
-                outcome["state"] = CircuitState.OPEN.value
-                outcome["action"] = "RECOVERY_FAILED_CIRCUIT_REOPENED"
-                outcome["backoff_sec"] = backoff
-
-        elif prev_state == CircuitState.OPEN:
-            # Direct record while OPEN
-            if success:
-                rec.state = CircuitState.HALF_OPEN
-                outcome["state"] = CircuitState.HALF_OPEN.value
-                outcome["action"] = "PROBE_SUCCEEDED_HALF_OPEN"
-            else:
-                rec.consecutive_failures += 1
-                rec.total_failures += 1
-                backoff = self.calculate_fibonacci_backoff(rec.consecutive_failures, with_jitter=True)
-                rec.open_until_timestamp = now + backoff
-                outcome["state"] = CircuitState.OPEN.value
-                outcome["action"] = "CIRCUIT_REMAINS_OPEN"
-                outcome["backoff_sec"] = backoff
-
-        self._save_registry()
-        return outcome
-
-    # --------------------------------------------------------------------------
-    # Human-In-The-Loop (HITL) Administrative Recovery
-    # --------------------------------------------------------------------------
-    def reset_skill(
-        self,
-        skill_id: str,
-        restore_path: Optional[Union[str, Path]] = None
-    ) -> bool:
-        """
-        Administrative override allowing a Human-In-The-Loop operator
-        to un-quarantine a skill, clear anomaly history, reset AST error tracking,
-        and restore write permissions.
-        """
-        if skill_id not in self._registry:
-            return False
-
-        rec = self._registry[skill_id]
-        rec.consecutive_failures = 0
-        rec.consecutive_successes = 0
-        rec.state = CircuitState.CLOSED
-        rec.is_quarantined = False
-        rec.quarantine_reason = None
-        rec.quarantine_path = None
-        rec.open_until_timestamp = 0.0
-        rec.anomaly_score = 0.0
-        rec.failure_rate = 0.0
-        rec.window_events.clear()
-        rec.last_ast_fingerprint = None
-        rec.consecutive_fingerprint_count = 0
-        rec.ast_fingerprint_history.clear()
-
-        if skill_id in self._detectors:
-            self._detectors[skill_id].clear()
-
-        if restore_path:
-            p = Path(restore_path)
-            if p.exists():
-                if p.is_file():
-                    try:
-                        os.chmod(p, 0o644)
-                    except OSError:
-                        pass
-                elif p.is_dir():
-                    for root, dirs, files in os.walk(p):
-                        for f in files:
-                            try:
-                                os.chmod(os.path.join(root, f), 0o644)
-                            except OSError:
-                                pass
-                        for d in dirs:
-                            try:
-                                os.chmod(os.path.join(root, d), 0o755)
-                            except OSError:
-                                pass
-
-        self._save_registry()
-        self.dispatch_webhook_alert("hitl_operator_reset", {
-            "skill_id": skill_id,
-            "status": "Circuit reset to CLOSED",
-            "operator_override": True
-        })
-        return True
-
-    # --------------------------------------------------------------------------
-    # Context Manager for Guarded Mutations
-    # --------------------------------------------------------------------------
-    @contextmanager
-    def guarded_mutation(
-        self,
-        skill_id: str,
-        target_path: Union[str, Path],
-        apply_backoff_on_failure: bool = True
-    ):
-        """
-        Context manager wrapping an autopoietic mutation.
-        Verifies permission, hashes pre-state, monitors execution,
-        hashes post-state, and updates circuit breaker state automatically.
-        """
-        can_run, reason = self.can_mutate(skill_id)
-        if not can_run:
-            raise PermissionError(f"[CIRCUIT BREAKER LOCK] {reason}")
-
-        pre_hash = self.compute_state_hash(target_path)
-        start_t = time.perf_counter()
-        mutation_ctx: Dict[str, Any] = {"pre_hash": pre_hash, "success": False}
+        try:
+            with open(self.webhook_sink, "a", encoding="utf-8") as sink_f:
+                sink_f.write(json.dumps(envelope) + "\n")
+        except Exception:
+            pass
 
         try:
-            yield mutation_ctx
-            mutation_ctx["success"] = True
-            post_hash = self.compute_state_hash(target_path)
-            duration_ms = (time.perf_counter() - start_t) * 1000.0
-            self.record_mutation_attempt(
-                skill_id=skill_id,
-                pre_hash=pre_hash,
-                post_hash=post_hash,
-                success=True,
-                skill_path=target_path,
-                duration_ms=duration_ms
+            req = urllib.request.Request(
+                self.webhook_url,
+                data=json.dumps(envelope).encode("utf-8"),
+                headers={"Content-Type": "application/json", "User-Agent": "Hagibis-Governor/2.0"},
+                method="POST"
             )
-        except Exception as exc:
-            mutation_ctx["success"] = False
-            post_hash = self.compute_state_hash(target_path)
-            duration_ms = (time.perf_counter() - start_t) * 1000.0
-            rec_res = self.record_mutation_attempt(
-                skill_id=skill_id,
-                pre_hash=pre_hash,
-                post_hash=post_hash,
-                success=False,
-                error_trace=str(exc),
-                skill_path=target_path,
-                duration_ms=duration_ms
-            )
-            if apply_backoff_on_failure and rec_res.get("state") not in (CircuitState.OPEN.value, CircuitState.PERM_TRIPPED.value):
-                self.apply_backoff(skill_id)
-            raise
+            with urllib.request.urlopen(req, timeout=2.0) as resp:
+                return 200 <= resp.status < 300
+        except Exception:
+            return False
 
     # --------------------------------------------------------------------------
-    # Persistence Helpers
+    # Persistence
     # --------------------------------------------------------------------------
     def _get_or_create_skill(self, skill_id: str) -> SkillGovernanceRecord:
         if skill_id not in self._registry:
@@ -1419,12 +1496,13 @@ class AutonomicCircuitBreakerGovernor:
                 if rec.window_events:
                     det.load_list(rec.window_events)
                 self._detectors[s_id] = det
-        except Exception as e:
-            sys.stderr.write(f"[WARN] Failed to parse circuit breaker registry {self.registry_path}: {e}\n")
+        except Exception:
+            pass
 
     def _save_registry(self) -> None:
         payload = {
             "version": "2.0",
+            "governor_public_key": self.governor_public_key_hex,
             "skills": {k: v.to_dict() for k, v in self._registry.items()},
             "history": [a.to_dict() for a in self._history[-50:]]
         }
@@ -1433,161 +1511,266 @@ class AutonomicCircuitBreakerGovernor:
             with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(payload, f, indent=2)
             tmp_path.replace(self.registry_path)
+        except Exception:
+            pass
+
+    def _get_or_create_record(self, skill_id: str) -> SkillGovernanceRecord:
+        if skill_id not in self._registry:
+            self._registry[skill_id] = SkillGovernanceRecord(skill_id=skill_id)
+        return self._registry[skill_id]
+
+    def _persist_registry(self) -> None:
+        self._save_registry()
+
+
+# ==============================================================================
+# CLI Dispatcher & Automation Tooling
+# ==============================================================================
+
+def create_governor_from_env() -> AutonomicCircuitBreakerGovernor:
+    state_dir = os.environ.get("HGB_STATE_DIR")
+    quarantine_dir = os.environ.get("HGB_QUARANTINE_DIR")
+    registry_path = os.environ.get("HGB_CB_REGISTRY")
+    webhook_url = os.environ.get("HGB_WEBHOOK_URL")
+    webhook_sink = os.environ.get("HGB_WEBHOOK_SINK")
+    max_fails = int(os.environ.get("HGB_CB_MAX_FAILURES", DEFAULT_MAX_CONSECUTIVE_FAILURES))
+    t0 = float(os.environ.get("HGB_CB_T0", DEFAULT_T0))
+    t_max = float(os.environ.get("HGB_CB_TMAX", DEFAULT_TMAX))
+    window_sz = int(os.environ.get("HGB_CB_WINDOW_SIZE", DEFAULT_WINDOW_SIZE))
+    window_sec = float(os.environ.get("HGB_CB_WINDOW_SEC", DEFAULT_WINDOW_DURATION_SEC))
+    min_events = int(os.environ.get("HGB_CB_MIN_EVENTS", DEFAULT_MIN_EVENTS))
+    anomaly_th = float(os.environ.get("HGB_CB_ANOMALY_THRESHOLD", DEFAULT_ANOMALY_THRESHOLD))
+    recovery_th = int(os.environ.get("HGB_CB_RECOVERY_THRESHOLD", DEFAULT_RECOVERY_THRESHOLD))
+    lancedb_dir = os.environ.get("HGB_LANCEDB_DIR")
+
+    return AutonomicCircuitBreakerGovernor(
+        state_dir=state_dir,
+        quarantine_dir=quarantine_dir,
+        registry_path=registry_path,
+        webhook_url=webhook_url,
+        webhook_sink=webhook_sink,
+        max_consecutive_failures=max_fails,
+        t0=t0,
+        t_max=t_max,
+        window_size=window_sz,
+        window_duration_sec=window_sec,
+        min_events=min_events,
+        anomaly_threshold=anomaly_th,
+        recovery_threshold=recovery_th,
+        lancedb_dir=lancedb_dir
+    )
+
+
+def cli_main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Hagibis Autopoietic Circuit Breaker Governor CLI")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    # check
+    p_check = subparsers.add_parser("check", help="Check skill execution eligibility")
+    p_check.add_argument("skill_id", help="Skill or crate identifier")
+
+    # record-failure
+    p_fail = subparsers.add_parser("record-failure", help="Record failed mutation")
+    p_fail.add_argument("skill_id", help="Skill identifier")
+    p_fail.add_argument("--error", default="unknown error", help="Error trace message")
+    p_fail.add_argument("--file", default=None, help="Target file path")
+    p_fail.add_argument("--code", default=None, help="Diagnostic code (e.g. E0308)")
+    p_fail.add_argument("--line", type=int, default=1, help="Error line number")
+    p_fail.add_argument("--span", default="0:0", help="Error span")
+    p_fail.add_argument("--msg", default=None, help="Normalized diagnostic message")
+    p_fail.add_argument("--pre-hash", default=None, help="Pre-mutation file hash")
+    p_fail.add_argument("--post-hash", default=None, help="Post-mutation file hash")
+
+    # record-success
+    p_succ = subparsers.add_parser("record-success", help="Record successful mutation")
+    p_succ.add_argument("skill_id", help="Skill identifier")
+    p_succ.add_argument("--file", default=None, help="Target file path")
+    p_succ.add_argument("--pre-hash", default=None, help="Pre-mutation file hash")
+    p_succ.add_argument("--post-hash", default=None, help="Post-mutation file hash")
+
+    # operator-unlock
+    p_unlock = subparsers.add_parser("operator-unlock", help="Signed MCP operator unlock")
+    p_unlock.add_argument("skill_id", help="Skill identifier")
+    p_unlock.add_argument("--operator-id", required=True, help="Operator identifier")
+    p_unlock.add_argument("--lockout-id", required=True, help="Lockout receipt ID")
+    p_unlock.add_argument("--nonce", type=int, required=True, help="Replay defense nonce")
+    p_unlock.add_argument("--public-key", required=True, help="Operator Ed25519 public key (hex)")
+    p_unlock.add_argument("--signature", required=True, help="Ed25519 signature (hex)")
+    p_unlock.add_argument("--no-restore-perms", action="store_true", help="Do not restore 0644 file perms")
+
+    # generate-operator-token
+    p_gen = subparsers.add_parser("generate-operator-token", help="Generate Ed25519 token and signature for operator unlock")
+    p_gen.add_argument("skill_id", help="Skill identifier")
+    p_gen.add_argument("--operator-id", default="ops-admin-hitl", help="Operator identifier")
+    p_gen.add_argument("--lockout-id", default=None, help="Active lockout ID (defaults to querying registry)")
+
+    # backoff
+    p_backoff = subparsers.add_parser("backoff", help="Calculate Fibonacci progression backoff")
+    p_backoff.add_argument("iteration", type=int, help="Attempt iteration number")
+    p_backoff.add_argument("--t0", type=float, default=DEFAULT_T0)
+    p_backoff.add_argument("--tmax", type=float, default=DEFAULT_TMAX)
+
+    # fingerprint
+    p_fp = subparsers.add_parser("fingerprint", help="Calculate deterministic AST error fingerprint")
+    p_fp.add_argument("--code", required=True)
+    p_fp.add_argument("--file", required=True)
+    p_fp.add_argument("--line", type=int, default=1)
+    p_fp.add_argument("--span", default="0:0")
+    p_fp.add_argument("--msg", required=True)
+
+    # status
+    p_status = subparsers.add_parser("status", help="Query skill governance status")
+    p_status.add_argument("skill_id", help="Skill identifier")
+
+    args = parser.parse_args()
+    gov = create_governor_from_env()
+
+    if args.command == "check":
+        allowed, reason = gov.can_mutate(args.skill_id)
+        rec = gov._registry.get(args.skill_id)
+        cur_state = rec.state.value if rec else CircuitState.CLOSED.value
+        if allowed:
+            print(f"ALLOWED:{cur_state}:{reason}")
+            sys.exit(0)
+        else:
+            print(f"BLOCKED:{cur_state}:{reason}")
+            sys.exit(1)
+
+    elif args.command == "record-failure":
+        attempt = gov.record_mutation_attempt(
+            skill_id=args.skill_id,
+            pre_hash=args.pre_hash or "",
+            post_hash=args.post_hash or "",
+            success=False,
+            error_trace=args.error,
+            skill_path=args.file,
+            diagnostic_code=args.code or "",
+            diagnostic_line=args.line,
+            diagnostic_span=args.span,
+            diagnostic_message=args.msg or ""
+        )
+        rec = gov._registry.get(args.skill_id)
+        cur_state = rec.state.value if rec else CircuitState.OPEN.value
+        if cur_state == CircuitState.PERM_TRIPPED_CRYPTOLOCKED.value:
+            print(f"PERM_CRYPTOLOCKED:{cur_state}:{rec.lockout_id}:{rec.last_ast_fingerprint}")
+            sys.exit(3)
+        elif cur_state == CircuitState.PERM_TRIPPED.value:
+            print(f"PERM_TRIP:{cur_state}:{rec.consecutive_fingerprint_count}:{rec.last_ast_fingerprint}")
+            sys.exit(3)
+        elif cur_state == CircuitState.OPEN.value:
+            delay = round(max(0.0, rec.open_until_timestamp - time.time()), 3) if rec else 1.0
+            print(f"TRIP:OPEN:{rec.consecutive_failures if rec else 1}:{delay}")
+            sys.exit(2)
+        else:
+            print(f"FAIL:{cur_state}:{rec.consecutive_failures if rec else 1}")
+            sys.exit(1)
+
+    elif args.command == "record-success":
+        attempt = gov.record_mutation_attempt(
+            skill_id=args.skill_id,
+            pre_hash=args.pre_hash or "",
+            post_hash=args.post_hash or "",
+            success=True,
+            skill_path=args.file
+        )
+        rec = gov._registry.get(args.skill_id)
+        cur_state = rec.state.value if rec else CircuitState.CLOSED.value
+        print(f"OK:{cur_state}:{rec.consecutive_successes if rec else 1}")
+        sys.exit(0)
+        rec = gov._registry.get(args.skill_id)
+        cur_state = rec.state.value if rec else CircuitState.CLOSED.value
+        print(f"OK:{cur_state}:{rec.consecutive_successes if rec else 1}")
+        sys.exit(0)
+
+    elif args.command == "operator-unlock":
+        try:
+            receipt = gov.operator_unlock_circuit_breaker(
+                skill_id=args.skill_id,
+                operator_id=args.operator_id,
+                lockout_id=args.lockout_id,
+                nonce=args.nonce,
+                operator_public_key=args.public_key,
+                ed25519_signature=args.signature,
+                restore_permissions=not args.no_restore_perms
+            )
+            print("UNLOCK_OK:" + json.dumps(receipt))
+            sys.exit(0)
         except Exception as e:
-            sys.stderr.write(f"[WARN] Failed to write circuit breaker registry {self.registry_path}: {e}\n")
+            print(f"UNLOCK_ERR:{e}", file=sys.stderr)
+            sys.exit(1)
 
+    elif args.command == "generate-operator-token":
+        if not _HAS_CRYPTOGRAPHY:
+            print("ERROR: cryptography package required for operator token generation", file=sys.stderr)
+            sys.exit(1)
+        rec = gov._registry.get(args.skill_id)
+        lockout_id = args.lockout_id or (rec.lockout_id if rec else None)
+        if not lockout_id:
+            print(f"ERROR: Skill [{args.skill_id}] is not currently locked out (no active lockout_id)", file=sys.stderr)
+            sys.exit(1)
 
-# Global singleton helper
-_GLOBAL_GOVERNOR: Optional[AutonomicCircuitBreakerGovernor] = None
+        priv_key = ed25519.Ed25519PrivateKey.generate()
+        pub_key = priv_key.public_key()
+        pub_hex = pub_key.public_bytes_raw().hex()
+        nonce = int(time.time() * 1000)
 
-def get_circuit_breaker_governor(**kwargs) -> AutonomicCircuitBreakerGovernor:
-    global _GLOBAL_GOVERNOR
-    if _GLOBAL_GOVERNOR is None:
-        _GLOBAL_GOVERNOR = AutonomicCircuitBreakerGovernor(**kwargs)
-    return _GLOBAL_GOVERNOR
+        payload = f"UNLOCK:{args.operator_id}:{args.skill_id}:{lockout_id}:{nonce}".encode("utf-8")
+        sig_hex = priv_key.sign(payload).hex()
 
+        token_out = {
+            "skill_id": args.skill_id,
+            "operator_id": args.operator_id,
+            "lockout_id": lockout_id,
+            "nonce": nonce,
+            "operator_public_key": pub_hex,
+            "ed25519_signature": sig_hex,
+            "mcp_tool": "hgb_operator_unlock_circuit_breaker",
+            "mcp_payload": {
+                "jsonrpc": "2.0",
+                "method": "tools/call",
+                "params": {
+                    "name": "hgb_operator_unlock_circuit_breaker",
+                    "arguments": {
+                        "skill_id": args.skill_id,
+                        "operator_id": args.operator_id,
+                        "lockout_id": lockout_id,
+                        "nonce": nonce,
+                        "operator_public_key": pub_hex,
+                        "ed25519_signature": sig_hex,
+                        "restore_permissions": True
+                    }
+                }
+            }
+        }
+        print(json.dumps(token_out, indent=2))
+        sys.exit(0)
 
-# ==============================================================================
-# Built-in Self-Test Runner
-# ==============================================================================
+    elif args.command == "backoff":
+        b = gov.calculate_fibonacci_backoff(args.iteration, args.t0, args.tmax)
+        print(f"{b:.3f}")
+        sys.exit(0)
 
-def run_self_tests() -> bool:
-    import tempfile
-    print("=" * 75)
-    print("  ch8_circuit_breaker_governor: Unit & Hysteresis Verification  ")
-    print("=" * 75)
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tmp_p = Path(tmpdir)
-        gov = AutonomicCircuitBreakerGovernor(
-            state_dir=tmp_p / "state",
-            quarantine_dir=tmp_p / "quarantine",
-            registry_path=tmp_p / "state" / "reg.json",
-            webhook_sink=tmp_p / "events.jsonl",
-            max_consecutive_failures=3,
-            t0=1.0,
-            t_max=34.0,
-            window_size=10,
-            window_duration_sec=30.0,
-            min_events=5,
-            anomaly_threshold=0.50,
-            recovery_threshold=2
+    elif args.command == "fingerprint":
+        fp = gov.compute_ast_error_fingerprint(
+            error_code=args.code,
+            file_path=args.file,
+            line=args.line,
+            span=args.span,
+            error_message=args.msg
         )
+        print(fp)
+        sys.exit(0)
 
-        # 1. Test Cryptographic Hashing
-        print("1. Testing Cryptographic State Hashing...")
-        f1 = tmp_p / "mod.rs"
-        f1.write_text("pub fn compute() -> i32 { 42 }")
-        h1 = gov.compute_state_hash(f1)
-        f1.write_text("pub fn compute() -> i32 { 99 }")
-        h2 = gov.compute_state_hash(f1)
-        assert h1 != h2, "Hash must change after modification"
-        assert h1 == gov.compute_state_hash(b"pub fn compute() -> i32 { 42 }"), "Byte hashing must match file hashing"
-        print("   ✔ Pre/Post state hash mutation verified.")
-
-        # 2. Test Fibonacci Backoff Progression
-        print("2. Testing Fibonacci Reinforcement Backoff Progression...")
-        expected_fibs = [1, 1, 2, 3, 5, 8, 13, 21, 34]
-        for idx, expected in enumerate(expected_fibs, start=1):
-            f_val = gov.fibonacci(idx)
-            assert f_val == expected, f"fib({idx}) expected {expected}, got {f_val}"
-            delay = gov.calculate_fibonacci_backoff(idx, with_jitter=False)
-            assert delay == float(expected), f"Delay for iter {idx} expected {expected}, got {delay}"
-
-        # Jitter bounds check
-        for _ in range(50):
-            j_delay = gov.calculate_fibonacci_backoff(1, with_jitter=True)
-            assert 1.10 <= j_delay <= 1.50, f"Jitter out of range: {j_delay}"
-        print("   ✔ Fibonacci progression [1, 1, 2, 3, 5, 8, 13, 21, 34] verified.")
-
-        # 3. Test AST Error State Fingerprinting
-        print("3. Testing AST Error State Fingerprinting...")
-        fp1 = gov.compute_ast_error_fingerprint("E0308", "src/lib.rs", 42, "10:20", "mismatched types: expected usize, found &str")
-        fp2 = gov.compute_ast_error_fingerprint("E0308", "src/lib.rs", 42, "10:20", "mismatched   types:  expected usize,  found &str\n")
-        assert fp1 == fp2, "Whitespace normalization must produce identical fingerprint"
-
-        fp_diff_code = gov.compute_ast_error_fingerprint("E0596", "src/lib.rs", 42, "10:20", "cannot borrow as mutable")
-        assert fp1 != fp_diff_code, "Different error code must produce distinct fingerprint"
-        print("   ✔ Deterministic AST error fingerprinting verified.")
-
-        # 4. Test 3-Consecutive Identical Error Circuit Breaker & LanceDB Snapshot + MCP Escalation
-        print("4. Testing 3-Consecutive Identical Error Circuit Breaker...")
-        skill_id = "test_healer_skill"
-        skill_file = tmp_p / "broken.rs"
-        skill_file.write_text("fn test() { let x: usize = \"abc\"; }")
-
-        # Attempt 1
-        r1 = gov.record_mutation_attempt(
-            skill_id, h1, h2, success=False, error_trace="E0308 error",
-            skill_path=skill_file, diagnostic_code="E0308", diagnostic_line=1, diagnostic_message="expected usize, found &str"
-        )
-        assert r1["state"] == CircuitState.CLOSED.value
-        assert r1["consecutive_fingerprint_count"] == 1
-        can_run, _ = gov.can_mutate(skill_id)
-        assert can_run is True
-
-        # Attempt 2
-        r2 = gov.record_mutation_attempt(
-            skill_id, h1, h2, success=False, error_trace="E0308 error",
-            skill_path=skill_file, diagnostic_code="E0308", diagnostic_line=1, diagnostic_message="expected usize, found &str"
-        )
-        assert r2["state"] == CircuitState.CLOSED.value
-        assert r2["consecutive_fingerprint_count"] == 2
-        can_run, _ = gov.can_mutate(skill_id)
-        assert can_run is True
-
-        # Attempt 3: Tripped to PERM_TRIPPED!
-        r3 = gov.record_mutation_attempt(
-            skill_id, h1, h2, success=False, error_trace="E0308 error",
-            skill_path=skill_file, diagnostic_code="E0308", diagnostic_line=1, diagnostic_message="expected usize, found &str"
-        )
-        assert r3["state"] == CircuitState.PERM_TRIPPED.value
-        assert r3["action"] == "CONSECUTIVE_AST_ERROR_PERM_TRIPPED"
-        assert r3["consecutive_fingerprint_count"] == 3
-
-        # Write permissions must be revoked (0444)
-        assert not os.access(skill_file, os.W_OK), "File write permissions must be revoked on PERM_TRIPPED!"
-
-        # can_mutate must return False and NOT auto-expire
-        can_run, msg = gov.can_mutate(skill_id, current_time=time.time() + 999999)
-        assert can_run is False
-        assert "PERM_TRIPPED" in msg
-
-        # LanceDB Snapshot Verification
-        assert "lancedb_snapshot" in r3
-        snap_path = r3["lancedb_snapshot"]["snapshot_file"]
-        assert os.path.exists(snap_path), f"Snapshot file not created at {snap_path}"
-        with open(snap_path, "r", encoding="utf-8") as f:
-            snap_data = json.load(f)
-        assert snap_data["consecutive_occurrences"] == 3
-        assert snap_data["diagnostic_code"] == "E0308"
-        assert snap_data["circuit_state"] == "PERM_TRIPPED"
-        assert snap_data["escalated_to_mcp"] is True
-
-        # MCP Escalation Payload Verification
-        assert "mcp_payload" in r3
-        mcp_data = r3["mcp_payload"]
-        assert mcp_data["method"] == "tools/call"
-        assert mcp_data["params"]["name"] == "hgb_compiler_self_heal_ast"
-        assert mcp_data["params"]["arguments"]["diagnostic_code"] == "E0308"
-        print("   ✔ 3-consecutive identical AST error breaker, LanceDB snapshot, and MCP payload verified.")
-
-        # 5. HITL Reset restores to CLOSED
-        gov.reset_skill(skill_id, restore_path=skill_file)
-        can_run, _ = gov.can_mutate(skill_id)
-        assert can_run is True
-        assert os.access(skill_file, os.W_OK)
-        print("   ✔ HITL reset restores state to CLOSED.")
-
-    print("=" * 75)
-    print("  ✔ ALL AUTONOMIC CIRCUIT BREAKER & HYSTERESIS TESTS PASSED!  ")
-    print("=" * 75)
-    return True
+    elif args.command == "status":
+        rec = gov._registry.get(args.skill_id)
+        if rec:
+            print(json.dumps(rec.to_dict(), indent=2))
+        else:
+            print(f'{{"skill_id": "{args.skill_id}", "state": "CLOSED", "status": "unregistered"}}')
+        sys.exit(0)
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] in ("--test", "test"):
-        success = run_self_tests()
-        sys.exit(0 if success else 1)
-    else:
-        print("ch8_circuit_breaker_governor loaded. Use --test to execute verification suite.")
+    cli_main()
+

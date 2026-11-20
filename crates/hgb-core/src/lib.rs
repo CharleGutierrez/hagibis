@@ -2303,3 +2303,13 @@ pub mod npu_dma_wasmtime_extension;
 pub use npu_dma_wasmtime_extension::{
     link_npu_dma_extension, HostDmaPool,
 };
+
+
+// Strategic Upgrade: Semantic AST Synthesizer & Structured Differ (Pillars 3 & 4)
+pub mod semantic_ast_synthesizer;
+pub use semantic_ast_synthesizer::{
+    AstDiagnostic, AstItemDelta, AstItemDescriptor, AstItemKind, AstNodeDiff,
+    InjectionPosition, InvariantReport, ItemDeltaType, ParamDelta,
+    PropertyTestEngine, SemanticAstSynthesizer, SignatureDelta, StructuredAstDiff,
+    SynthesisError, SynthesizedPatch,
+};

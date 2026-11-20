@@ -22,3 +22,4 @@ __pycache__/
 zig-out/
 .cargo/
 **/crates/*/.cargo/
+skills/vector-lancedb/failing_ast_snapshots/

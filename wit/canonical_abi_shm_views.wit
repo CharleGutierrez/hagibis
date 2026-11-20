@@ -150,6 +150,56 @@ interface canonical-abi-types {
         timestamp-ns: u64,
     }
 
+    /// Single-Producer Single-Consumer (SPSC) ring buffer descriptor bounded by linear memory capping
+    record spsc-ring-buffer-descriptor {
+        view-id: u64,
+        ring-capacity: u32,
+        element-size: u32,
+        head-offset: u32,
+        tail-offset: u32,
+        buffer-offset: u32,
+        mask: u32,
+        linear-memory-cap-bytes: u64,
+        is-cache-padded: bool,
+    }
+
+    /// Fixed 32-byte zero-copy SPSC element header with checksum verification
+    record spsc-ring-element-header {
+        sequence-number: u64,
+        payload-length: u32,
+        flags: u32,
+        timestamp-ns: u64,
+        checksum: u32,
+    }
+
+    /// SPSC zero-copy dequeue pop result
+    record spsc-pop-result {
+        header: spsc-ring-element-header,
+        payload-slice: canonical-memory-slice,
+        sequence-number: u64,
+    }
+
+    /// Cryptographic manifest for verifying incoming WASM component/module integrity before instantiation
+    record component-integrity-manifest {
+        component-name: string,
+        version: string,
+        blake3-digest: list<u8>,
+        ed25519-public-key: list<u8>,
+        ed25519-signature: list<u8>,
+        payload-byte-length: u64,
+        fuel-budget: u64,
+        max-memory-pages: u32,
+    }
+
+    /// Cryptographic validation outcome
+    record cryptographic-verification-outcome {
+        is-valid: bool,
+        computed-blake3: list<u8>,
+        signature-verified: bool,
+        error-diagnostic: option<string>,
+        verified-timestamp-ns: u64,
+    }
+
     /// Error variants encountered during zero-copy ABI view management
     variant abi-error {
         out-of-bounds(string),
@@ -166,6 +216,10 @@ interface canonical-abi-types {
         ring-empty(string),
         invalid-capacity(string),
         io-uring-error(string),
+        cryptographic-validation-failed(string),
+        fuel-exhausted(string),
+        epoch-interruption(string),
+        linear-memory-cap-exceeded(string),
     }
 }
 
@@ -236,6 +290,56 @@ interface shm-ring-conduit {
 
     /// Query available space or elements remaining in ring buffer
     ring-available: func(ring-id: u64) -> result<u32, abi-error>;
+}
+
+/// Lock-free Single-Producer Single-Consumer (SPSC) ring buffer interface operating over capped linear memory
+interface spsc-ring-buffer {
+    use canonical-abi-types.{
+        canonical-memory-slice,
+        spsc-ring-buffer-descriptor,
+        spsc-ring-element-header,
+        spsc-pop-result,
+        abi-error,
+    };
+
+    /// Initialize a lock-free SPSC ring buffer descriptor bounded by linear memory cap
+    create-spsc-ring: func(view-id: u64, ring-capacity: u32, element-size: u32, linear-memory-cap-bytes: u64) -> result<spsc-ring-buffer-descriptor, abi-error>;
+
+    /// Enqueue an element into the SPSC ring buffer with acquire/release ordering
+    spsc-push: func(ring-id: u64, header: spsc-ring-element-header, payload: canonical-memory-slice) -> result<u64, abi-error>;
+
+    /// Dequeue an element from the SPSC ring buffer with acquire/release ordering
+    spsc-pop: func(ring-id: u64) -> result<spsc-pop-result, abi-error>;
+
+    /// Read current atomic head position
+    spsc-head: func(ring-id: u64) -> result<u64, abi-error>;
+
+    /// Read current atomic tail position
+    spsc-tail: func(ring-id: u64) -> result<u64, abi-error>;
+
+    /// Query available ready elements in SPSC ring buffer
+    spsc-available: func(ring-id: u64) -> result<u32, abi-error>;
+
+    /// Query remaining write capacity before backpressure
+    spsc-remaining-capacity: func(ring-id: u64) -> result<u32, abi-error>;
+}
+
+/// Strict cryptographic verification interface (BLAKE3 checksum + Ed25519 signature)
+interface cryptographic-wit-validator {
+    use canonical-abi-types.{
+        component-integrity-manifest,
+        cryptographic-verification-outcome,
+        abi-error,
+    };
+
+    /// Strictly validate cryptographic checksum and signature on incoming component payload
+    validate-component-payload: func(payload: list<u8>, manifest: component-integrity-manifest) -> result<cryptographic-verification-outcome, abi-error>;
+
+    /// Compute 32-byte BLAKE3 cryptographic digest of input payload
+    compute-blake3-digest: func(payload: list<u8>) -> list<u8>;
+
+    /// Verify Ed25519 digital signature over input data
+    verify-ed25519-signature: func(data: list<u8>, signature: list<u8>, public-key: list<u8>) -> result<bool, abi-error>;
 }
 
 /// Capability checker interface for validating unforgeable tokens and verifying memory permissions
@@ -312,9 +416,13 @@ world canonical-interop {
     import canonical-abi-shm;
     import capability-checker;
     import shm-ring-conduit;
+    import spsc-ring-buffer;
+    import cryptographic-wit-validator;
     import io-uring-shm-bridge;
     export canonical-abi-shm;
     export capability-checker;
     export shm-ring-conduit;
+    export spsc-ring-buffer;
+    export cryptographic-wit-validator;
     export io-uring-shm-bridge;
 }

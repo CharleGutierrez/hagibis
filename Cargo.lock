@@ -2202,9 +2202,14 @@ dependencies = [
 name = "hgb-wasm-kernel"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "blake3",
+ "ed25519-dalek",
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "wasmtime",
+ "wat 1.261.0",
 ]
 
 [[package]]

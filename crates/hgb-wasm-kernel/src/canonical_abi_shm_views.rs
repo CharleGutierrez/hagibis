@@ -13,6 +13,8 @@ use std::time::Instant;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+pub use crate::spsc_ring_buffer::*;
+
 // ============================================================================
 // CONSTANTS & ACTION CODES
 // ============================================================================
@@ -28,6 +30,15 @@ pub const CANONICAL_ALIGNMENT_DEFAULT: usize = 64;
 
 /// Magic signature for Shared Memory Ring Buffer: ASCII "HGBSHMRG" (0x48474253484D5247)
 pub const SHM_RING_MAGIC: u64 = 0x48474253484D5247;
+
+/// Magic signature for Single-Producer Single-Consumer (SPSC) Ring Buffer: ASCII "HGBSPSC1" (0x4847425350534331)
+pub const SPSC_RING_MAGIC: u64 = 0x4847425350534331;
+
+/// Header control block size in bytes for SPSC ring buffer
+pub const SPSC_RING_CONTROL_HEADER_SIZE: usize = 64;
+
+/// Fixed 32-byte element header size for SPSC ring buffer (includes Adler-32 checksum)
+pub const SPSC_RING_ELEMENT_HEADER_SIZE: usize = 32;
 
 /// Header control block size in bytes
 pub const SHM_RING_CONTROL_HEADER_SIZE: usize = 64;
@@ -85,6 +96,14 @@ pub enum AbiError {
     InvalidCapacity { capacity: usize, reason: String },
     /// Linux io_uring error (e.g. invalid opcode, unregistered buffer, ring full)
     IoUringError { errno: i32, message: String },
+    /// Strict cryptographic validation failed (tampered payload, invalid BLAKE3, or bad Ed25519 signature)
+    CryptographicValidationFailed { reason: String },
+    /// Wasmtime fuel exhaustion trapped runaway guest execution
+    FuelExhausted { consumed: u64, limit: u64 },
+    /// Wasmtime epoch interruption asynchronously preempted runaway guest execution
+    EpochInterruption { reason: String },
+    /// Capped linear memory access boundary violation
+    LinearMemoryCapExceeded { requested_bytes: usize, cap_bytes: usize },
 }
 
 /// Type alias aligning with Canonical ABI error naming conventions
@@ -140,6 +159,18 @@ impl fmt::Display for AbiError {
             }
             Self::IoUringError { errno, message } => {
                 write!(f, "io_uring error (errno {}): {}", errno, message)
+            }
+            Self::CryptographicValidationFailed { reason } => {
+                write!(f, "Cryptographic validation failed: {}", reason)
+            }
+            Self::FuelExhausted { consumed, limit } => {
+                write!(f, "Wasmtime fuel exhausted: consumed {} units (limit: {})", consumed, limit)
+            }
+            Self::EpochInterruption { reason } => {
+                write!(f, "Wasmtime epoch-based interruption preempted execution: {}", reason)
+            }
+            Self::LinearMemoryCapExceeded { requested_bytes, cap_bytes } => {
+                write!(f, "Linear memory capping violation: requested {} bytes exceeds capped limit of {} bytes", requested_bytes, cap_bytes)
             }
         }
     }
