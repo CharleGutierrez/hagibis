@@ -1037,6 +1037,16 @@ pub use microvm_sandbox_executor::{
     FirecrackerJailInfo, FirecrackerSpawnConfig,
 };
 
+// Powerhouse Pillar 3: Hybrid MicroVM-Wasm Fast-Path Caching (UFFD Lazy Demand-Paging & Hot-Pool)
+pub mod microvm_snapshot_cache;
+pub use microvm_snapshot_cache::{
+    BaseSnapshotTemplate, CowMemoryRegion, MemoryBackendType, MicrovmSnapshotPool,
+    MicrovmSnapshotPoolConfig, MicrovmSnapshotPoolMetrics, PooledMicrovm, PooledMicrovmState,
+    SnapshotResumeLatencyReport, UffdCapability, UffdMemoryHandler, UffdPageFaultStats,
+    UffdProbe, UffdStatsSnapshot, VirtualizationProbe, PAGE_SIZE, UFFDIO_COPY, UFFDIO_REGISTER,
+    UFFDIO_REGISTER_MODE_MISSING, UFFDIO_ZEROPAGE, UFFD_EVENT_PAGEFAULT,
+};
+
 // Autonomous Expansion Pillar 1: Hybrid Kernel-Level Acceleration (dynatune & kernel-optimizer)
 pub mod hybrid_kernel_accelerator;
 pub use hybrid_kernel_accelerator::{

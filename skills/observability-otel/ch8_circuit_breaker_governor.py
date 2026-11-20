@@ -92,6 +92,15 @@ DEFAULT_MIN_EVENTS = int(os.environ.get("HGB_CB_MIN_EVENTS", 5))
 DEFAULT_ANOMALY_THRESHOLD = float(os.environ.get("HGB_CB_ANOMALY_THRESHOLD", 0.50))
 DEFAULT_RECOVERY_THRESHOLD = int(os.environ.get("HGB_CB_RECOVERY_THRESHOLD", 3))
 
+# PID Adaptive Controller Defaults
+DEFAULT_PID_KP = float(os.environ.get("HGB_CB_PID_KP", 2.0))
+DEFAULT_PID_KI = float(os.environ.get("HGB_CB_PID_KI", 0.5))
+DEFAULT_PID_KD = float(os.environ.get("HGB_CB_PID_KD", 1.0))
+DEFAULT_PID_SETPOINT = float(os.environ.get("HGB_CB_PID_SETPOINT", 0.05))
+DEFAULT_PID_TRIP_THRESHOLD = float(os.environ.get("HGB_CB_PID_TRIP_THRESHOLD", 1.0))
+DEFAULT_PID_IMIN = float(os.environ.get("HGB_CB_PID_IMIN", -2.0))
+DEFAULT_PID_IMAX = float(os.environ.get("HGB_CB_PID_IMAX", 2.0))
+
 
 # ==============================================================================
 # Domain Models & Circuit Breaker States
@@ -243,6 +252,76 @@ class SlidingWindowAnomalyDetector:
 
     def load_list(self, data: List[Dict[str, Any]]) -> None:
         self._events = [WindowEvent.from_dict(d) for d in data]
+
+
+# ==============================================================================
+# Adaptive PID Controller (Pillar 2)
+# ==============================================================================
+
+@dataclass
+class PidController:
+    """
+    Proportional-Integral-Derivative (PID) Controller for Adaptive Circuit Breaking.
+    Modulates circuit breaker error response, backoff dampening, and tripping dynamically.
+    Features anti-windup clamping to prevent runaway integral accumulation.
+    """
+    kp: float = DEFAULT_PID_KP
+    ki: float = DEFAULT_PID_KI
+    kd: float = DEFAULT_PID_KD
+    setpoint: float = DEFAULT_PID_SETPOINT
+    i_min: float = DEFAULT_PID_IMIN
+    i_max: float = DEFAULT_PID_IMAX
+    integral: float = 0.0
+    prev_error: float = 0.0
+    last_time: Optional[float] = None
+    output: float = 0.0
+
+    def reset(self) -> None:
+        self.integral = 0.0
+        self.prev_error = 0.0
+        self.last_time = None
+        self.output = 0.0
+
+    def update(self, current_value: float, current_time: Optional[float] = None) -> float:
+        """
+        Computes control output u(t) = P + I + D based on error e(t) = current_value - setpoint.
+        """
+        now = time.time() if current_time is None else current_time
+        error = current_value - self.setpoint
+
+        if self.last_time is None:
+            dt = 1.0
+        else:
+            dt = max(0.001, now - self.last_time)
+
+        # Proportional term
+        p_term = self.kp * error
+
+        # Integral term with anti-windup clamping
+        self.integral += self.ki * error * dt
+        self.integral = max(self.i_min, min(self.i_max, self.integral))
+        i_term = self.integral
+
+        # Derivative term
+        d_term = self.kd * (error - self.prev_error) / dt
+
+        # Control output
+        self.output = p_term + i_term + d_term
+        self.prev_error = error
+        self.last_time = now
+
+        return self.output
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "kp": self.kp,
+            "ki": self.ki,
+            "kd": self.kd,
+            "setpoint": self.setpoint,
+            "integral": self.integral,
+            "prev_error": self.prev_error,
+            "output": self.output,
+        }
 
 
 # ==============================================================================
@@ -472,7 +551,14 @@ class AutonomicCircuitBreakerGovernor:
         min_events: int = DEFAULT_MIN_EVENTS,
         anomaly_threshold: float = DEFAULT_ANOMALY_THRESHOLD,
         recovery_threshold: int = DEFAULT_RECOVERY_THRESHOLD,
-        lancedb_dir: Optional[Union[str, Path]] = None
+        lancedb_dir: Optional[Union[str, Path]] = None,
+        pid_kp: float = DEFAULT_PID_KP,
+        pid_ki: float = DEFAULT_PID_KI,
+        pid_kd: float = DEFAULT_PID_KD,
+        pid_setpoint: float = DEFAULT_PID_SETPOINT,
+        pid_trip_threshold: float = DEFAULT_PID_TRIP_THRESHOLD,
+        pid_i_min: float = DEFAULT_PID_IMIN,
+        pid_i_max: float = DEFAULT_PID_IMAX
     ):
         self.state_dir = Path(state_dir) if state_dir else DEFAULT_STATE_DIR
         self.quarantine_dir = Path(quarantine_dir) if quarantine_dir else DEFAULT_QUARANTINE_DIR
@@ -489,6 +575,15 @@ class AutonomicCircuitBreakerGovernor:
         self.anomaly_threshold = anomaly_threshold
         self.recovery_threshold = recovery_threshold
         self.lancedb_dir = Path(lancedb_dir) if lancedb_dir else None
+
+        self.pid_kp = float(pid_kp)
+        self.pid_ki = float(pid_ki)
+        self.pid_kd = float(pid_kd)
+        self.pid_setpoint = float(pid_setpoint)
+        self.pid_trip_threshold = float(pid_trip_threshold)
+        self.pid_i_min = float(pid_i_min)
+        self.pid_i_max = float(pid_i_max)
+        self._pid_controllers: Dict[str, PidController] = {}
 
         self._consumed_nonces: Set[int] = set()
         self._ensure_directories()
@@ -641,6 +736,45 @@ class AutonomicCircuitBreakerGovernor:
             jitter = rng.uniform(jitter_min, jitter_max)
 
         return round(base_backoff + jitter, 4)
+
+    # --------------------------------------------------------------------------
+    # Adaptive PID Controller & Backoff (Pillar 2)
+    # --------------------------------------------------------------------------
+    def _get_or_create_pid_controller(self, skill_id: str) -> PidController:
+        if skill_id not in self._pid_controllers:
+            self._pid_controllers[skill_id] = PidController(
+                kp=self.pid_kp,
+                ki=self.pid_ki,
+                kd=self.pid_kd,
+                setpoint=self.pid_setpoint,
+                i_min=self.pid_i_min,
+                i_max=self.pid_i_max
+            )
+        return self._pid_controllers[skill_id]
+
+    @staticmethod
+    def calculate_pid_backoff(
+        consecutive_failures: int,
+        pid_output: float = 0.0,
+        t0: float = DEFAULT_T0,
+        t_max: float = DEFAULT_TMAX,
+        with_jitter: bool = True
+    ) -> float:
+        """
+        Calculates adaptive exponential backoff modulated by PID controller output with jitter smoothing:
+          delay = min(t_max, t0 * (2 ** (failures - 1)) * max(1.0, 1.0 + pid_output))
+        Smooths sudden spikes and prevents state-flapping during chaotic load duress.
+        """
+        failures_clamped = max(1, min(10, consecutive_failures))
+        base_exp = t0 * (2.0 ** (failures_clamped - 1))
+        pid_factor = max(0.5, 1.0 + max(0.0, pid_output))
+        nominal = min(t_max, base_exp * pid_factor)
+
+        if with_jitter:
+            jitter = random.uniform(0.1, 0.5)
+            dampened = random.uniform(0.5 * nominal, nominal) + jitter
+            return round(min(t_max, max(t0, dampened)), 4)
+        return round(min(t_max, max(t0, nominal)), 4)
 
     # --------------------------------------------------------------------------
     # AST Error State Fingerprinting
@@ -1138,8 +1272,16 @@ class AutonomicCircuitBreakerGovernor:
             rec.last_ast_fingerprint = None
             rec.consecutive_fingerprint_count = 0
 
-        # 6. Hysteresis State Machine Transitions
+        # 6. Hysteresis State Machine Transitions with Adaptive PID Control
         prev_state = rec.state
+
+        # Compute adaptive PID control output
+        pid = self._get_or_create_pid_controller(skill_id)
+        failure_rate = (metrics.get("failure_rate_pct", 0.0)) / 100.0
+        pid_output = pid.update(failure_rate, now)
+        is_pid_trip = (metrics.get("total_events", 0) >= self.min_events and pid_output >= self.pid_trip_threshold)
+        outcome["pid_output"] = round(pid_output, 4)
+        outcome["is_pid_trip"] = is_pid_trip
 
         if prev_state == CircuitState.CLOSED:
             if success:
@@ -1154,16 +1296,21 @@ class AutonomicCircuitBreakerGovernor:
                 rec.total_failures += 1
                 outcome["consecutive_failures"] = rec.consecutive_failures
 
-                if is_anomaly or rec.consecutive_failures >= self.max_failures:
+                if is_anomaly or is_pid_trip or rec.consecutive_failures >= self.max_failures:
                     rec.state = CircuitState.OPEN
                     rec.last_state_change_timestamp = now
-                    backoff = self.calculate_fibonacci_backoff(rec.consecutive_failures, with_jitter=True)
+                    backoff = self.calculate_pid_backoff(rec.consecutive_failures, pid_output, t0=self.t0, t_max=self.t_max, with_jitter=True)
                     rec.open_until_timestamp = now + backoff
 
+                    trip_reason = (
+                        f"PID error surge tripped (u={round(pid_output, 3)} >= {self.pid_trip_threshold})"
+                        if is_pid_trip
+                        else (error_trace or f"Anomaly threshold tripped ({metrics['failure_rate_pct']}% failures)")
+                    )
                     q_info = self.quarantine_skill(
                         skill_id=skill_id,
                         skill_path=skill_path,
-                        reason=error_trace or f"Anomaly threshold tripped ({metrics['failure_rate_pct']}% failures)",
+                        reason=trip_reason,
                         pre_hash=pre_hash,
                         post_hash=post_hash
                     )
@@ -1172,7 +1319,7 @@ class AutonomicCircuitBreakerGovernor:
                     outcome["quarantine_info"] = q_info
                     outcome["backoff_sec"] = backoff
                 else:
-                    backoff = self.calculate_fibonacci_backoff(rec.consecutive_failures, with_jitter=True)
+                    backoff = self.calculate_pid_backoff(rec.consecutive_failures, pid_output, t0=self.t0, t_max=self.t_max, with_jitter=True)
                     outcome["state"] = CircuitState.CLOSED.value
                     outcome["action"] = "FAILURE_DAMPENING"
                     outcome["recommended_backoff_sec"] = backoff
@@ -1192,7 +1339,7 @@ class AutonomicCircuitBreakerGovernor:
                 rec.consecutive_successes = 0
                 rec.total_failures += 1
                 rec.last_state_change_timestamp = now
-                backoff = self.calculate_fibonacci_backoff(rec.consecutive_failures, with_jitter=True)
+                backoff = self.calculate_pid_backoff(rec.consecutive_failures, pid_output, t0=self.t0, t_max=self.t_max, with_jitter=True)
                 rec.open_until_timestamp = now + backoff
                 outcome["state"] = CircuitState.OPEN.value
                 outcome["action"] = "PROBE_FAILED_CIRCUIT_REOPENED"
@@ -1212,6 +1359,7 @@ class AutonomicCircuitBreakerGovernor:
                     rec.last_state_change_timestamp = now
                     detector.clear()
                     rec.window_events.clear()
+                    pid.reset()
                     outcome["state"] = CircuitState.CLOSED.value
                     outcome["action"] = "RECOVERY_COMPLETE_CIRCUIT_CLOSED"
                 else:
@@ -1224,7 +1372,7 @@ class AutonomicCircuitBreakerGovernor:
                 rec.consecutive_successes = 0
                 rec.total_failures += 1
                 rec.last_state_change_timestamp = now
-                backoff = self.calculate_fibonacci_backoff(rec.consecutive_failures, with_jitter=True)
+                backoff = self.calculate_pid_backoff(rec.consecutive_failures, pid_output, t0=self.t0, t_max=self.t_max, with_jitter=True)
                 rec.open_until_timestamp = now + backoff
                 outcome["state"] = CircuitState.OPEN.value
                 outcome["action"] = "RECOVERY_FAILED_CIRCUIT_REOPENED"

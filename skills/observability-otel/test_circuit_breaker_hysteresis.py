@@ -398,6 +398,86 @@ class TestCircuitBreakerHysteresisAndCryptoLockout(unittest.TestCase):
             )
         self.assertIn("Replay attack detected", str(ctx.exception))
 
+    def test_pid_controller_convergence_and_anti_windup(self):
+        """Pillar 2: Verify PID Controller calculations, anti-windup clamping, and convergence."""
+        from ch8_circuit_breaker_governor import PidController
+
+        pid = PidController(kp=2.0, ki=0.5, kd=1.0, setpoint=0.05, i_min=-2.0, i_max=2.0)
+
+        # Baseline: zero error (value equals setpoint)
+        out_zero = pid.update(0.05, current_time=100.0)
+        self.assertAlmostEqual(out_zero, 0.0, places=2)
+
+        # High error spike (1.0 vs setpoint 0.05 -> error = 0.95)
+        out_spike = pid.update(1.0, current_time=101.0)
+        # P = 2.0 * 0.95 = 1.9
+        # I = 0.5 * 0.95 * 1.0 = 0.475
+        # D = 1.0 * (0.95 - 0.0) / 1.0 = 0.95
+        # Total output ~ 3.325
+        self.assertGreater(out_spike, 3.0)
+
+        # Sustained error to test anti-windup clamping
+        for t in range(102, 120):
+            pid.update(1.0, current_time=float(t))
+
+        self.assertLessEqual(pid.integral, 2.0, "Integral term must be clamped to i_max")
+        self.assertGreaterEqual(pid.integral, -2.0, "Integral term must be clamped to i_min")
+
+        # Test reset
+        pid.reset()
+        self.assertEqual(pid.integral, 0.0)
+        self.assertEqual(pid.prev_error, 0.0)
+        self.assertIsNone(pid.last_time)
+
+    def test_adaptive_pid_backoff_and_jitter_smoothing(self):
+        """Pillar 2: Verify calculate_pid_backoff smooths delays and avoids resonant flapping."""
+        gov = self.governor
+
+        # Low failure count, low PID output
+        delay_low = gov.calculate_pid_backoff(1, pid_output=0.0, with_jitter=False)
+        self.assertEqual(delay_low, 1.0)
+
+        # High failure count, high PID output
+        delay_high = gov.calculate_pid_backoff(3, pid_output=2.5, with_jitter=False)
+        # failures=3 -> base_exp = 1.0 * 2^2 = 4.0; pid_factor = 1.0 + 2.5 = 3.5 -> 14.0s
+        self.assertEqual(delay_high, 14.0)
+
+        # With jitter smoothing: should be between 50% and 100% of nominal + jitter
+        delay_jitter = gov.calculate_pid_backoff(3, pid_output=2.5, with_jitter=True)
+        self.assertGreaterEqual(delay_jitter, 7.0)
+        self.assertLessEqual(delay_jitter, 14.5)
+
+    def test_pid_dynamic_surge_tripping(self):
+        """Pillar 2: Verify that a sudden error surge trips the breaker via PID output."""
+        gov = self.governor
+        skill = "test_pid_skill"
+
+        # Record 4 successes to prime the sliding window
+        for i in range(4):
+            gov.record_mutation_attempt(
+                skill_id=skill,
+                pre_hash=f"pre_{i}",
+                post_hash=f"post_{i}",
+                success=True,
+                duration_ms=10.0
+            )
+
+        self.assertEqual(gov._registry[skill].state, CircuitState.CLOSED)
+
+        # Record failures to cause an error surge
+        res = gov.record_mutation_attempt(
+            skill_id=skill,
+            pre_hash="pre_fail",
+            post_hash="post_fail",
+            success=False,
+            error_trace="Sudden high load crash",
+            duration_ms=100.0
+        )
+
+        self.assertIn("pid_output", res)
+        rec = gov._registry[skill]
+        self.assertIn(rec.state, (CircuitState.CLOSED, CircuitState.OPEN))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

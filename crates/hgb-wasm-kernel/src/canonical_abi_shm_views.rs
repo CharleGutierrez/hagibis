@@ -1540,6 +1540,18 @@ impl<'a> CanonicalAbiShmView<'a> {
             slice: &self.slice[sub_offset..end],
         })
     }
+
+    /// Atomic 64-bit load with acquire ordering
+    pub fn atomic_load_u64(&self, offset: usize) -> Result<u64, AbiError> {
+        let end = offset.checked_add(8).ok_or_else(|| AbiError::OutOfBounds { offset, len: 8, capacity: self.len })?;
+        if end > self.len {
+            return Err(AbiError::OutOfBounds { offset, len: 8, capacity: self.len });
+        }
+        let ptr = self.slice[offset..].as_ptr();
+        verify_alignment(ptr as usize, 8)?;
+        let atomic_ref = unsafe { &*(ptr as *const AtomicU64) };
+        Ok(atomic_ref.load(Ordering::Acquire))
+    }
 }
 
 /// Zero-copy mutable slice over linear memory with bounds checking and alignment verification
@@ -1668,6 +1680,46 @@ impl<'a> CanonicalAbiShmViewMut<'a> {
         }
         self.slice[..src.len()].copy_from_slice(src);
         Ok(src.len())
+    }
+
+    /// Atomic 64-bit load with acquire ordering
+    pub fn atomic_load_u64(&self, offset: usize) -> Result<u64, AbiError> {
+        let end = offset.checked_add(8).ok_or_else(|| AbiError::OutOfBounds { offset, len: 8, capacity: self.len })?;
+        if end > self.len {
+            return Err(AbiError::OutOfBounds { offset, len: 8, capacity: self.len });
+        }
+        let ptr = self.slice[offset..].as_ptr();
+        verify_alignment(ptr as usize, 8)?;
+        let atomic_ref = unsafe { &*(ptr as *const AtomicU64) };
+        Ok(atomic_ref.load(Ordering::Acquire))
+    }
+
+    /// Atomic 64-bit store with release ordering
+    pub fn atomic_store_u64(&mut self, offset: usize, val: u64) -> Result<(), AbiError> {
+        let end = offset.checked_add(8).ok_or_else(|| AbiError::OutOfBounds { offset, len: 8, capacity: self.len })?;
+        if end > self.len {
+            return Err(AbiError::OutOfBounds { offset, len: 8, capacity: self.len });
+        }
+        let ptr = self.slice[offset..].as_mut_ptr();
+        verify_alignment(ptr as usize, 8)?;
+        let atomic_ref = unsafe { &*(ptr as *const AtomicU64) };
+        atomic_ref.store(val, Ordering::Release);
+        Ok(())
+    }
+
+    /// Atomic 64-bit compare-and-swap (CAS) with AcqRel/Acquire ordering
+    pub fn atomic_cas_u64(&mut self, offset: usize, expected: u64, desired: u64) -> Result<AtomicCasOutcome, AbiError> {
+        let end = offset.checked_add(8).ok_or_else(|| AbiError::OutOfBounds { offset, len: 8, capacity: self.len })?;
+        if end > self.len {
+            return Err(AbiError::OutOfBounds { offset, len: 8, capacity: self.len });
+        }
+        let ptr = self.slice[offset..].as_mut_ptr();
+        verify_alignment(ptr as usize, 8)?;
+        let atomic_ref = unsafe { &*(ptr as *const AtomicU64) };
+        match atomic_ref.compare_exchange(expected, desired, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(prev) => Ok(AtomicCasOutcome::new(true, prev, desired)),
+            Err(actual) => Ok(AtomicCasOutcome::new(false, actual, actual)),
+        }
     }
 }
 

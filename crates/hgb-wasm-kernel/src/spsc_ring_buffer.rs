@@ -210,6 +210,33 @@ pub struct SpscPopResult {
     pub sequence_number: u64,
 }
 
+/// Atomic Compare-And-Swap (CAS) outcome record matching WIT `atomic-cas-outcome`
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AtomicCasOutcome {
+    pub success: bool,
+    pub previous_value: u64,
+    pub current_value: u64,
+}
+
+unsafe impl PodCopy for AtomicCasOutcome {}
+
+impl AtomicCasOutcome {
+    #[inline(always)]
+    pub fn new(success: bool, previous_value: u64, current_value: u64) -> Self {
+        Self {
+            success,
+            previous_value,
+            current_value,
+        }
+    }
+
+    #[inline(always)]
+    pub fn is_success(&self) -> bool {
+        self.success
+    }
+}
+
 enum SpscStorage {
     Owned(Vec<u8>),
     Mapped {
@@ -616,6 +643,229 @@ impl SpscRingBuffer {
     pub fn memory_cap_bytes(&self) -> u64 {
         self.descriptor.linear_memory_cap_bytes
     }
+
+    /// Atomic Compare-And-Swap on SPSC ring head with AcqRel / Acquire ordering
+    pub fn cas_head(&self, expected: u64, desired: u64) -> Result<AtomicCasOutcome, AbiError> {
+        self.compare_exchange_head(expected, desired, Ordering::AcqRel, Ordering::Acquire)
+    }
+
+    /// Atomic Compare-And-Swap on SPSC ring tail with AcqRel / Acquire ordering
+    pub fn cas_tail(&self, expected: u64, desired: u64) -> Result<AtomicCasOutcome, AbiError> {
+        self.compare_exchange_tail(expected, desired, Ordering::AcqRel, Ordering::Acquire)
+    }
+
+    /// Weak CAS on SPSC ring head
+    pub fn cas_head_weak(&self, expected: u64, desired: u64) -> Result<AtomicCasOutcome, AbiError> {
+        self.compare_exchange_weak_head(expected, desired, Ordering::AcqRel, Ordering::Acquire)
+    }
+
+    /// Weak CAS on SPSC ring tail
+    pub fn cas_tail_weak(&self, expected: u64, desired: u64) -> Result<AtomicCasOutcome, AbiError> {
+        self.compare_exchange_weak_tail(expected, desired, Ordering::AcqRel, Ordering::Acquire)
+    }
+
+    pub fn compare_exchange_head(
+        &self,
+        expected: u64,
+        desired: u64,
+        success: Ordering,
+        failure: Ordering,
+    ) -> Result<AtomicCasOutcome, AbiError> {
+        let head_end = (self.descriptor.head_offset as usize) + 8;
+        if (head_end as u64) > self.descriptor.linear_memory_cap_bytes {
+            return Err(AbiError::LinearMemoryCapExceeded {
+                requested_bytes: head_end,
+                cap_bytes: self.descriptor.linear_memory_cap_bytes as usize,
+            });
+        }
+        match self.head.compare_exchange(expected, desired, success, failure) {
+            Ok(prev) => {
+                self.sync_head_to_memory(desired);
+                Ok(AtomicCasOutcome::new(true, prev, desired))
+            }
+            Err(actual) => Ok(AtomicCasOutcome::new(false, actual, actual)),
+        }
+    }
+
+    pub fn compare_exchange_weak_head(
+        &self,
+        expected: u64,
+        desired: u64,
+        success: Ordering,
+        failure: Ordering,
+    ) -> Result<AtomicCasOutcome, AbiError> {
+        let head_end = (self.descriptor.head_offset as usize) + 8;
+        if (head_end as u64) > self.descriptor.linear_memory_cap_bytes {
+            return Err(AbiError::LinearMemoryCapExceeded {
+                requested_bytes: head_end,
+                cap_bytes: self.descriptor.linear_memory_cap_bytes as usize,
+            });
+        }
+        match self.head.compare_exchange_weak(expected, desired, success, failure) {
+            Ok(prev) => {
+                self.sync_head_to_memory(desired);
+                Ok(AtomicCasOutcome::new(true, prev, desired))
+            }
+            Err(actual) => Ok(AtomicCasOutcome::new(false, actual, actual)),
+        }
+    }
+
+    pub fn compare_exchange_tail(
+        &self,
+        expected: u64,
+        desired: u64,
+        success: Ordering,
+        failure: Ordering,
+    ) -> Result<AtomicCasOutcome, AbiError> {
+        let tail_end = (self.descriptor.tail_offset as usize) + 8;
+        if (tail_end as u64) > self.descriptor.linear_memory_cap_bytes {
+            return Err(AbiError::LinearMemoryCapExceeded {
+                requested_bytes: tail_end,
+                cap_bytes: self.descriptor.linear_memory_cap_bytes as usize,
+            });
+        }
+        match self.tail.compare_exchange(expected, desired, success, failure) {
+            Ok(prev) => {
+                self.sync_tail_to_memory(desired);
+                Ok(AtomicCasOutcome::new(true, prev, desired))
+            }
+            Err(actual) => Ok(AtomicCasOutcome::new(false, actual, actual)),
+        }
+    }
+
+    pub fn compare_exchange_weak_tail(
+        &self,
+        expected: u64,
+        desired: u64,
+        success: Ordering,
+        failure: Ordering,
+    ) -> Result<AtomicCasOutcome, AbiError> {
+        let tail_end = (self.descriptor.tail_offset as usize) + 8;
+        if (tail_end as u64) > self.descriptor.linear_memory_cap_bytes {
+            return Err(AbiError::LinearMemoryCapExceeded {
+                requested_bytes: tail_end,
+                cap_bytes: self.descriptor.linear_memory_cap_bytes as usize,
+            });
+        }
+        match self.tail.compare_exchange_weak(expected, desired, success, failure) {
+            Ok(prev) => {
+                self.sync_tail_to_memory(desired);
+                Ok(AtomicCasOutcome::new(true, prev, desired))
+            }
+            Err(actual) => Ok(AtomicCasOutcome::new(false, actual, actual)),
+        }
+    }
+
+    /// Perform arbitrary 64-bit bounds-checked atomic Compare-And-Swap at an 8-byte aligned offset
+    pub fn atomic_cas_64(
+        &self,
+        offset: usize,
+        expected: u64,
+        desired: u64,
+    ) -> Result<AtomicCasOutcome, AbiError> {
+        self.atomic_cas_64_ordered(offset, expected, desired, Ordering::AcqRel, Ordering::Acquire)
+    }
+
+    pub fn atomic_cas_64_ordered(
+        &self,
+        offset: usize,
+        expected: u64,
+        desired: u64,
+        success: Ordering,
+        failure: Ordering,
+    ) -> Result<AtomicCasOutcome, AbiError> {
+        verify_alignment(offset, 8)?;
+        let end = offset.checked_add(8).ok_or_else(|| AbiError::OutOfBounds {
+            offset,
+            len: 8,
+            capacity: self.memory_len,
+        })?;
+        if (end as u64) > self.descriptor.linear_memory_cap_bytes {
+            return Err(AbiError::LinearMemoryCapExceeded {
+                requested_bytes: end,
+                cap_bytes: self.descriptor.linear_memory_cap_bytes as usize,
+            });
+        }
+        if end > self.memory_len {
+            return Err(AbiError::OutOfBounds {
+                offset,
+                len: 8,
+                capacity: self.memory_len,
+            });
+        }
+        let target_ptr = unsafe { self.base_ptr.add(offset) as *const AtomicU64 };
+        verify_alignment(target_ptr as usize, 8)?;
+        let atomic_ref = unsafe { &*target_ptr };
+        match atomic_ref.compare_exchange(expected, desired, success, failure) {
+            Ok(prev) => {
+                if offset == self.descriptor.head_offset as usize {
+                    self.head.store(desired, Ordering::Release);
+                } else if offset == self.descriptor.tail_offset as usize {
+                    self.tail.store(desired, Ordering::Release);
+                }
+                Ok(AtomicCasOutcome::new(true, prev, desired))
+            }
+            Err(actual) => Ok(AtomicCasOutcome::new(false, actual, actual)),
+        }
+    }
+}
+
+/// Global concurrent registry managing live SPSC ring buffers for Canonical WIT dispatch
+pub struct SpscRingRegistry {
+    rings: std::sync::RwLock<std::collections::HashMap<u64, Arc<SpscRingBuffer>>>,
+}
+
+impl SpscRingRegistry {
+    pub fn new() -> Self {
+        Self {
+            rings: std::sync::RwLock::new(std::collections::HashMap::new()),
+        }
+    }
+
+    pub fn register(&self, ring: Arc<SpscRingBuffer>) {
+        self.rings.write().unwrap().insert(ring.descriptor().view_id, ring);
+    }
+
+    pub fn unregister(&self, view_id: u64) -> Option<Arc<SpscRingBuffer>> {
+        self.rings.write().unwrap().remove(&view_id)
+    }
+
+    pub fn get(&self, view_id: u64) -> Option<Arc<SpscRingBuffer>> {
+        self.rings.read().unwrap().get(&view_id).cloned()
+    }
+
+    pub fn cas_head(&self, ring_id: u64, expected: u64, desired: u64) -> Result<AtomicCasOutcome, AbiError> {
+        let ring = self.get(ring_id).ok_or(AbiError::ViewNotFound { view_id: ring_id })?;
+        ring.cas_head(expected, desired)
+    }
+
+    pub fn cas_tail(&self, ring_id: u64, expected: u64, desired: u64) -> Result<AtomicCasOutcome, AbiError> {
+        let ring = self.get(ring_id).ok_or(AbiError::ViewNotFound { view_id: ring_id })?;
+        ring.cas_tail(expected, desired)
+    }
+
+    pub fn atomic_cas(&self, view_id: u64, offset: u64, expected: u64, desired: u64) -> Result<AtomicCasOutcome, AbiError> {
+        let ring = self.get(view_id).ok_or(AbiError::ViewNotFound { view_id })?;
+        ring.atomic_cas_64(offset as usize, expected, desired)
+    }
+}
+
+static GLOBAL_REGISTRY: std::sync::OnceLock<SpscRingRegistry> = std::sync::OnceLock::new();
+
+pub fn global_spsc_registry() -> &'static SpscRingRegistry {
+    GLOBAL_REGISTRY.get_or_init(SpscRingRegistry::new)
+}
+
+pub fn spsc_cas_head(ring_id: u64, expected: u64, desired: u64) -> Result<AtomicCasOutcome, AbiError> {
+    global_spsc_registry().cas_head(ring_id, expected, desired)
+}
+
+pub fn spsc_cas_tail(ring_id: u64, expected: u64, desired: u64) -> Result<AtomicCasOutcome, AbiError> {
+    global_spsc_registry().cas_tail(ring_id, expected, desired)
+}
+
+pub fn spsc_atomic_cas(view_id: u64, offset: u64, expected: u64, desired: u64) -> Result<AtomicCasOutcome, AbiError> {
+    global_spsc_registry().atomic_cas(view_id, offset, expected, desired)
 }
 
 // ============================================================================

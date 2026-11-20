@@ -222,3 +222,126 @@ fn test_spsc_ring_buffer_power_of_two_and_backpressure() {
     // Push 1 element now succeeds
     ring.try_push(overflow_hdr, &[5, 6, 7, 8]).expect("push into freed slot");
 }
+
+#[test]
+fn test_spsc_atomic_cas_head_and_tail_correctness() {
+    let capacity = 16u32;
+    let element_size = 32u32;
+    let cap_bytes = 1024 * 1024u64;
+    let ring = SpscRingBuffer::new(capacity, element_size, 100, cap_bytes).expect("create SPSC ring");
+
+    // Head starts at 0
+    assert_eq!(ring.ring_head(), 0);
+
+    // Contested CAS on head: expect 5, but it is 0 -> should fail with success=false, prev=0
+    let failure = ring.cas_head(5, 10).expect("cas head call");
+    assert!(!failure.is_success());
+    assert_eq!(failure.previous_value, 0);
+    assert_eq!(failure.current_value, 0);
+    assert_eq!(ring.ring_head(), 0);
+
+    // Successful CAS on head: expect 0, desired 1 -> should succeed
+    let success = ring.cas_head(0, 1).expect("cas head call");
+    assert!(success.is_success());
+    assert_eq!(success.previous_value, 0);
+    assert_eq!(success.current_value, 1);
+    assert_eq!(ring.ring_head(), 1);
+
+    // Tail CAS
+    assert_eq!(ring.ring_tail(), 0);
+    let tail_success = ring.cas_tail(0, 1).expect("cas tail call");
+    assert!(tail_success.is_success());
+    assert_eq!(tail_success.previous_value, 0);
+    assert_eq!(tail_success.current_value, 1);
+    assert_eq!(ring.ring_tail(), 1);
+}
+
+#[test]
+fn test_spsc_atomic_cas_64_arbitrary_bounds_and_alignment() {
+    let capacity = 16u32;
+    let element_size = 64u32;
+    let cap_bytes = 1024 * 1024u64;
+    let ring = SpscRingBuffer::new(capacity, element_size, 101, cap_bytes).expect("create SPSC ring");
+
+    // Unaligned offset must be rejected
+    let unaligned = ring.atomic_cas_64(3, 0, 42);
+    assert!(matches!(unaligned, Err(AbiError::AlignmentFault { .. })));
+
+    // Aligned offset (e.g. 64)
+    let cas1 = ring.atomic_cas_64(64, 0, 12345).expect("cas aligned");
+    assert!(cas1.is_success());
+    assert_eq!(cas1.current_value, 12345);
+
+    // CAS with contested value
+    let cas2 = ring.atomic_cas_64(64, 0, 99999).expect("cas contested");
+    assert!(!cas2.is_success());
+    assert_eq!(cas2.previous_value, 12345);
+}
+
+#[test]
+fn test_spsc_atomic_cas_high_concurrency_contention() {
+    let capacity = 64u32;
+    let element_size = 64u32;
+    let cap_bytes = 1024 * 1024u64;
+    let ring = Arc::new(SpscRingBuffer::new(capacity, element_size, 102, cap_bytes).expect("create SPSC ring"));
+
+    let num_threads = 8;
+    let increments_per_thread = 500u64;
+    let target_offset = 64usize; // aligned offset
+
+    let mut handles = vec![];
+    for _ in 0..num_threads {
+        let r = Arc::clone(&ring);
+        handles.push(thread::spawn(move || {
+            for _ in 0..increments_per_thread {
+                loop {
+                    // Try atomic CAS loop until success
+                    let current = match r.atomic_cas_64(target_offset, 0, 0) {
+                        Ok(res) => res.previous_value,
+                        Err(e) => panic!("atomic cas error: {:?}", e),
+                    };
+                    let outcome = r.atomic_cas_64(target_offset, current, current + 1).expect("cas increment");
+                    if outcome.is_success() {
+                        break;
+                    }
+                    thread::yield_now();
+                }
+            }
+        }));
+    }
+
+    for h in handles {
+        h.join().expect("thread join");
+    }
+
+    // Verify exact total count
+    let final_res = ring.atomic_cas_64(target_offset, 0, 0).expect("final read");
+    assert_eq!(final_res.previous_value, (num_threads as u64) * increments_per_thread);
+}
+
+#[test]
+fn test_spsc_registry_wit_functions() {
+    use hgb_wasm_kernel::canonical_abi_shm_views::{
+        global_spsc_registry, spsc_atomic_cas, spsc_cas_head, spsc_cas_tail,
+    };
+
+    let ring = Arc::new(SpscRingBuffer::new(32, 64, 999, 1024 * 1024).expect("create ring"));
+    global_spsc_registry().register(ring);
+
+    // Call WIT global dispatch functions
+    let head_res = spsc_cas_head(999, 0, 5).expect("spsc_cas_head");
+    assert!(head_res.is_success());
+    assert_eq!(head_res.current_value, 5);
+
+    let tail_res = spsc_cas_tail(999, 0, 3).expect("spsc_cas_tail");
+    assert!(tail_res.is_success());
+    assert_eq!(tail_res.current_value, 3);
+
+    let atomic_res = spsc_atomic_cas(999, 256, 0, 777).expect("spsc_atomic_cas");
+    assert!(atomic_res.is_success());
+    assert_eq!(atomic_res.current_value, 777);
+
+    // Unknown ring id returns ViewNotFound
+    let not_found = spsc_cas_head(88888, 0, 1);
+    assert!(matches!(not_found, Err(AbiError::ViewNotFound { .. })));
+}

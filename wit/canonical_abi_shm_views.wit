@@ -200,6 +200,13 @@ interface canonical-abi-types {
         verified-timestamp-ns: u64,
     }
 
+    /// Atomic Compare-And-Swap (CAS) outcome record
+    record atomic-cas-outcome {
+        success: bool,
+        previous-value: u64,
+        current-value: u64,
+    }
+
     /// Error variants encountered during zero-copy ABI view management
     variant abi-error {
         out-of-bounds(string),
@@ -299,6 +306,7 @@ interface spsc-ring-buffer {
         spsc-ring-buffer-descriptor,
         spsc-ring-element-header,
         spsc-pop-result,
+        atomic-cas-outcome,
         abi-error,
     };
 
@@ -322,6 +330,15 @@ interface spsc-ring-buffer {
 
     /// Query remaining write capacity before backpressure
     spsc-remaining-capacity: func(ring-id: u64) -> result<u32, abi-error>;
+
+    /// Atomic Compare-And-Swap on SPSC ring head pointer with acquire-release ordering
+    spsc-cas-head: func(ring-id: u64, expected: u64, desired: u64) -> result<atomic-cas-outcome, abi-error>;
+
+    /// Atomic Compare-And-Swap on SPSC ring tail pointer with acquire-release ordering
+    spsc-cas-tail: func(ring-id: u64, expected: u64, desired: u64) -> result<atomic-cas-outcome, abi-error>;
+
+    /// Arbitrary 64-bit atomic Compare-And-Swap at aligned offset within shared memory view
+    spsc-atomic-cas: func(view-id: u64, offset: u64, expected: u64, desired: u64) -> result<atomic-cas-outcome, abi-error>;
 }
 
 /// Strict cryptographic verification interface (BLAKE3 checksum + Ed25519 signature)

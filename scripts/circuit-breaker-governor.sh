@@ -28,7 +28,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HGB_BRAIN_DIR="${HGB_BRAIN_DIR:-/home/toshiba/.gemini/antigravity-cli/brain/567f5815-da08-438c-8b98-4a61b4c3ef0e}"
-PYTHON_GOVERNOR="${PYTHON_GOVERNOR:-${HGB_BRAIN_DIR}/skills/observability-otel/ch8_circuit_breaker_governor.py}"
+PYTHON_GOVERNOR="${PYTHON_GOVERNOR:-${SCRIPT_DIR}/../skills/observability-otel/ch8_circuit_breaker_governor.py}"
+if [ ! -f "$PYTHON_GOVERNOR" ]; then
+    PYTHON_GOVERNOR="${HGB_BRAIN_DIR}/skills/observability-otel/ch8_circuit_breaker_governor.py"
+fi
 
 # Configuration Defaults (overridable via environment)
 HGB_STATE_DIR="${HGB_STATE_DIR:-${HOME}/.hagibis}"
@@ -45,6 +48,13 @@ HGB_CB_WINDOW_SEC="${HGB_CB_WINDOW_SEC:-60.0}"
 HGB_CB_MIN_EVENTS="${HGB_CB_MIN_EVENTS:-5}"
 HGB_CB_ANOMALY_THRESHOLD="${HGB_CB_ANOMALY_THRESHOLD:-0.50}"
 HGB_CB_RECOVERY_THRESHOLD="${HGB_CB_RECOVERY_THRESHOLD:-3}"
+
+# Adaptive PID Controller Defaults (Pillar 2)
+HGB_CB_PID_KP="${HGB_CB_PID_KP:-2.0}"
+HGB_CB_PID_KI="${HGB_CB_PID_KI:-0.5}"
+HGB_CB_PID_KD="${HGB_CB_PID_KD:-1.0}"
+HGB_CB_PID_SETPOINT="${HGB_CB_PID_SETPOINT:-0.05}"
+HGB_CB_PID_TRIP_THRESHOLD="${HGB_CB_PID_TRIP_THRESHOLD:-1.0}"
 
 # ANSI Colors
 RED="\033[31m"

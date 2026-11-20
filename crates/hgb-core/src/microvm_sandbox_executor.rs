@@ -682,6 +682,7 @@ pub struct FirecrackerEphemeralSandbox {
     firecracker_bin_path: Option<PathBuf>,
     dynatune_bridge: Arc<DynatuneBridge>,
     snapshot_cache: Arc<FirecrackerSnapshotCache>,
+    snapshot_pool: Arc<crate::microvm_snapshot_cache::MicrovmSnapshotPool>,
 }
 
 impl Default for FirecrackerEphemeralSandbox {
@@ -710,12 +711,33 @@ impl FirecrackerEphemeralSandbox {
 
         let fc_bin = candidates.into_iter().find(|p| p.exists());
         let snapshot_cache = Arc::new(FirecrackerSnapshotCache::new(&ws_buf));
+        let pool_cfg = crate::microvm_snapshot_cache::MicrovmSnapshotPoolConfig {
+            initial_pool_size: 2,
+            min_idle_size: 1,
+            max_pool_size: 8,
+            ..Default::default()
+        };
+        let snapshot_pool = Arc::new(
+            crate::microvm_snapshot_cache::MicrovmSnapshotPool::with_config(&ws_buf, pool_cfg)
+                .unwrap_or_else(|_| {
+                    crate::microvm_snapshot_cache::MicrovmSnapshotPool::with_config(
+                        &ws_buf,
+                        crate::microvm_snapshot_cache::MicrovmSnapshotPoolConfig {
+                            initial_pool_size: 0,
+                            min_idle_size: 0,
+                            ..Default::default()
+                        },
+                    )
+                    .expect("fallback snapshot pool creation")
+                }),
+        );
 
         Self {
             workspace_root: ws_buf,
             firecracker_bin_path: fc_bin,
             dynatune_bridge: bridge,
             snapshot_cache,
+            snapshot_pool,
         }
     }
 
@@ -732,6 +754,38 @@ impl FirecrackerEphemeralSandbox {
     /// Access the internal Firecracker snapshot cache
     pub fn snapshot_cache(&self) -> &Arc<FirecrackerSnapshotCache> {
         &self.snapshot_cache
+    }
+
+    /// Access the internal MicroVM Snapshot Hot Pool
+    pub fn snapshot_pool(&self) -> &Arc<crate::microvm_snapshot_cache::MicrovmSnapshotPool> {
+        &self.snapshot_pool
+    }
+
+    /// Execute workload using the fast-path snapshot hot pool (<10ms)
+    pub fn execute_with_fast_path(&self, spec: &EphemeralExecSpec) -> Result<EphemeralExecResult> {
+        // Thermal & Battery checks
+        let telem = self.dynatune_bridge.read_complete_hardware_telemetry();
+        let current_temp = telem.cpu_pkg_temp_c.max(telem.max_temp_c);
+        if current_temp > 82.0 {
+            return Err(HgbError::Execution(format!(
+                "Hardware safeguard advisory: Firecracker microVM launch aborted. Host CPU temperature {:.1}°C exceeds critical thermal limit (82.0°C). Throttling required to prevent chassis thermal shutdown.",
+                current_temp
+            )));
+        }
+        if let Some(ref primary_bat) = telem.primary_battery {
+            if primary_bat.is_discharging && primary_bat.capacity_pct < 15 {
+                return Err(HgbError::Execution(format!(
+                    "Hardware safeguard advisory: Firecracker microVM launch aborted. Battery capacity is {}% (< 15% critical reserve) on discharge. Connect AC power to resume microVM workloads.",
+                    primary_bat.capacity_pct
+                )));
+            }
+        } else if !telem.ac_connected && telem.batteries.iter().any(|b| b.is_discharging && b.capacity_pct < 15) {
+            return Err(HgbError::Execution(
+                "Hardware safeguard advisory: Firecracker microVM launch aborted. Battery capacity is below 15% critical reserve on discharge. Connect AC power to resume microVM workloads.".to_string(),
+            ));
+        }
+
+        self.snapshot_pool.execute_workload(spec)
     }
 
     /// Pre-warm base microVM snapshot template state in /dev/shm

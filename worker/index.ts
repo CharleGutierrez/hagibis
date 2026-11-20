@@ -12,6 +12,15 @@
  * - Pillar 4: Sub-millisecond vector similarity search over edge embeddings
  */
 
+import {
+  EdgeTracer,
+  EdgeSpan,
+  CompletedEdgeSpan,
+  getGlobalTelemetryQueue,
+  queueEdgeSpan,
+  TelemetryBufferDurableObject,
+} from "./worker_otel_telemetry";
+
 declare global {
   interface KVNamespaceListKey<Metadata = unknown> {
     name: string;
