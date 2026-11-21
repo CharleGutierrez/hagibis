@@ -12,8 +12,10 @@ pub mod native_cache;
 pub mod jit_pipeline;
 pub mod binary_decompilation_transpiler;
 pub mod pgo_bolt_feedback;
+pub mod formal_verification;
 
 // Re-exports
+pub use formal_verification::*;
 pub use hot_trace_profiler::{
     ExecutionTier, FunctionTrace, HotTraceProfiler, HotTraceSnapshot, PromotionPolicy,
     TierTransition,

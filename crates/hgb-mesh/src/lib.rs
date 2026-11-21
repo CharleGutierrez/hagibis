@@ -24,9 +24,11 @@ pub mod quic_distributed_compute_grid;
 pub mod edge_websocket_quic_federation;
 pub mod distributed_vector_fabric;
 pub mod quorum_circuit_breaker;
+pub mod pbft_consensus;
 
 // Public re-exports
 pub use error::{MeshError, Result};
+pub use pbft_consensus::*;
 pub use quorum_circuit_breaker::{
     CircuitBreakerState, PeerEndorsement, QuorumCircuitBreaker, QuorumVoteResult,
 };

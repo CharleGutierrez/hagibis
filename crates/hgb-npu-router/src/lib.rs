@@ -17,8 +17,10 @@ pub mod realtime_telemetry_load_balancer;
 pub mod npu_lancedb_embedding_router;
 pub mod perf_dynatune_kernel_autotuner;
 pub mod npu_dma_engine;
+pub mod zero_copy_tensor_bridge;
 
 pub use error::{NpuRouterError, Result};
+pub use zero_copy_tensor_bridge::*;
 pub use npu_dma_engine::{
     DmaBufferAllocator, DmaBufferDescriptor, DmaPageAlignment, DmaPinnedBuffer,
     DmaTensorDispatcher, DmaTransferReceipt, VfioBarRegion, VfioIrqType,
