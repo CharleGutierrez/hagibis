@@ -200,6 +200,18 @@ interface canonical-abi-types {
         verified-timestamp-ns: u64,
     }
 
+    /// Cryptographically signed network permission token restricting outbound guest network access
+    record network-permission-token {
+        token-id: u64,
+        allowed-hosts: list<string>,
+        min-port: u16,
+        max-port: u16,
+        max-outbound-requests: u32,
+        egress-bytes-limit: u64,
+        nonce: u64,
+        signature: list<u8>,
+    }
+
     /// Atomic Compare-And-Swap (CAS) outcome record
     record atomic-cas-outcome {
         success: bool,
@@ -361,7 +373,7 @@ interface cryptographic-wit-validator {
 
 /// Capability checker interface for validating unforgeable tokens and verifying memory permissions
 interface capability-checker {
-    use canonical-abi-types.{memory-capability-token, capability-permission, abi-error};
+    use canonical-abi-types.{memory-capability-token, network-permission-token, capability-permission, abi-error};
 
     /// Validate that a memory capability token possesses a valid cryptographic signature
     verify-token: func(token: memory-capability-token) -> result<bool, abi-error>;
@@ -371,6 +383,35 @@ interface capability-checker {
 
     /// Check if a capability token authorizes read-only access
     can-read: func(token: memory-capability-token) -> bool;
+
+    /// Revoke an active capability token dynamically at runtime
+    revoke-capability: func(token-id: u64, reason: string) -> result<bool, abi-error>;
+
+    /// Check if a capability token has been revoked
+    is-capability-revoked: func(token-id: u64) -> bool;
+
+    /// Dynamically inject fine-grained memory capability token into running instance without restart
+    inject-memory-token: func(instance-id: string, token: memory-capability-token) -> result<u64, abi-error>;
+
+    /// Dynamically inject fine-grained network permission token into running instance without restart
+    inject-network-token: func(instance-id: string, token: network-permission-token) -> result<u64, abi-error>;
+}
+
+/// Dedicated dynamic capability manager interface for zero-restart capability injection and instant revocation
+interface dynamic-capability-manager {
+    use canonical-abi-types.{memory-capability-token, network-permission-token, abi-error};
+
+    /// Revoke an active capability token dynamically at runtime
+    revoke-capability: func(token-id: u64, reason: string) -> result<bool, abi-error>;
+
+    /// Check if a capability token has been revoked
+    is-capability-revoked: func(token-id: u64) -> bool;
+
+    /// Dynamically inject fine-grained memory capability token into running instance without restart
+    inject-memory-token: func(instance-id: string, token: memory-capability-token) -> result<u64, abi-error>;
+
+    /// Dynamically inject fine-grained network permission token into running instance without restart
+    inject-network-token: func(instance-id: string, token: network-permission-token) -> result<u64, abi-error>;
 }
 
 /// Linux io_uring asynchronous shared memory bridge interface for zero-copy host-guest IPC.
@@ -432,12 +473,14 @@ interface io-uring-shm-bridge {
 world canonical-interop {
     import canonical-abi-shm;
     import capability-checker;
+    import dynamic-capability-manager;
     import shm-ring-conduit;
     import spsc-ring-buffer;
     import cryptographic-wit-validator;
     import io-uring-shm-bridge;
     export canonical-abi-shm;
     export capability-checker;
+    export dynamic-capability-manager;
     export shm-ring-conduit;
     export spsc-ring-buffer;
     export cryptographic-wit-validator;

@@ -23,9 +23,13 @@ pub mod edge_worker_crdt_sync;
 pub mod quic_distributed_compute_grid;
 pub mod edge_websocket_quic_federation;
 pub mod distributed_vector_fabric;
+pub mod quorum_circuit_breaker;
 
 // Public re-exports
 pub use error::{MeshError, Result};
+pub use quorum_circuit_breaker::{
+    CircuitBreakerState, PeerEndorsement, QuorumCircuitBreaker, QuorumVoteResult,
+};
 pub use distributed_vector_fabric::{
     AgentEpisodicMemoryCluster, DistributedRagSearchResult, EpisodicMemoryRecord,
     LanceDbShard, LanceVecHeader, MeshNodeInfo, MeshVectorShardRouter,

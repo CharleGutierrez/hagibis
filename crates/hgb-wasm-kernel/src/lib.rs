@@ -27,6 +27,13 @@ pub use canonical_abi_shm_views::{
 pub mod spsc_ring_buffer;
 pub use spsc_ring_buffer::*;
 
+pub mod dynamic_capability_manager;
+pub use dynamic_capability_manager::{
+    AtomicRevocationBitset, DynamicCapabilityManager, InstanceCapabilityStore, RevocationRecord,
+    BITSET_CAPACITY,
+};
+pub use canonical_abi_shm_views::NetworkPermissionToken;
+
 pub mod component_model_bridge;
 pub use component_model_bridge::{
     CanonicalAbiFunction, CanonicalValue, ComponentHeaderInfo, ComponentTrap, MemoryRegionType,

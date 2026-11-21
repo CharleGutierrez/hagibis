@@ -60,6 +60,7 @@ Usage: $(basename "$0") [OPTIONS]
 
 Options:
   --check            Check filesystem statvfs usage & target footprints without deletion.
+  --clean-tiered     Offload & prune heavy target/ dirs & LanceDB indexes from root to NVMe/storage.
   --gc, --auto-prune Execute automated garbage collection if disk utilization exceeds ${DISK_ALARM_THRESHOLD_PERCENT}%.
                      Prunes stale debug artifacts in \$CARGO_TARGET_DIR/debug (keeps release intact),
                      deletes .fingerprint and incremental caches > 48h, and compacts LanceDB caches.
@@ -90,6 +91,9 @@ for arg in "$@"; do
             ;;
         --force)
             FORCE_GC=true
+            ;;
+        --clean-tiered)
+            MODE="clean-tiered"
             ;;
         --clean-cache)
             MODE="clean-cache"
@@ -589,6 +593,61 @@ run_garbage_collection() {
 }
 
 # ------------------------------------------------------------------------------
+# 6b. Zero-Copy Tiered Storage Compaction & Offloading (--clean-tiered)
+# ------------------------------------------------------------------------------
+run_clean_tiered() {
+    if [ "$JSON_OUTPUT" != true ]; then
+        echo ""
+        echo -e "${BLUE}======================================================================${RESET}"
+        echo -e "${BOLD} Hagibis Zero-Copy Storage Compaction & Tiered Offload (--clean-tiered)${RESET}"
+        echo -e "${BLUE}======================================================================${RESET}"
+    fi
+
+    # 1. Prune /tmp/target and all cargo target dirs
+    local tiered_targets=(
+        "/tmp/target"
+        "$TMP_TARGET_DIR"
+        "$CARGO_TARGET_DIR"
+        "$LOCAL_TARGET_DIR"
+        "$EXTERNAL_TARGET_DIR"
+    )
+
+    for tgt in "${tiered_targets[@]}"; do
+        if [ -d "$tgt" ]; then
+            if [ "$JSON_OUTPUT" != true ]; then
+                echo -e "${BLUE}[TIERED] Pruning incremental and debug caches in $tgt...${RESET}"
+            fi
+            # Purge incremental debug caches
+            rm -rf "$tgt/debug/incremental" "$tgt/release/incremental" 2>/dev/null || true
+            # Purge stale object files and profraw older than 24 hours
+            find "$tgt" -type f \( -name "*.o" -o -name "*.profraw" -o -name "*.d" \) -mtime +1 -delete 2>/dev/null || true
+            # Prune .fingerprint caches older than 24 hours
+            find "$tgt" -type d -name ".fingerprint" -exec find {} -type f -mtime +1 -delete \; 2>/dev/null || true
+        fi
+    done
+
+    # 2. Compact LanceDB caches
+    compact_lancedb_caches
+
+    # 3. Clean volatile /tmp caches
+    clean_volatile_cache
+
+    # 4. Enforce quota and prune targets older than 3 days
+    for tgt in "${tiered_targets[@]}"; do
+        if [ -d "$tgt" ]; then
+            prune_target_directory "$tgt" 3
+        fi
+    done
+
+    # 5. Check final statvfs capacity
+    check_disk_usage
+
+    if [ "$JSON_OUTPUT" != true ]; then
+        echo -e "${GREEN}✔ Tiered storage compaction and offload completed successfully.${RESET}"
+    fi
+}
+
+# ------------------------------------------------------------------------------
 # 7. Prepare Scratch Space on External Lexar Drive
 # ------------------------------------------------------------------------------
 prepare_scratch_space() {
@@ -855,6 +914,10 @@ case "$MODE" in
         ;;
     verify-ext4)
         verify_ext4_capabilities "$WORKSPACE_ROOT"
+        ;;
+    clean-tiered)
+        setup_sccache
+        run_clean_tiered
         ;;
     gc)
         setup_sccache

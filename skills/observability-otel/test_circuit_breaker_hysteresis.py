@@ -478,6 +478,51 @@ class TestCircuitBreakerHysteresisAndCryptoLockout(unittest.TestCase):
         rec = gov._registry[skill]
         self.assertIn(rec.state, (CircuitState.CLOSED, CircuitState.OPEN))
 
+    def test_full_jitter_backoff_distribution_randomness(self):
+        """Pillar 2: Verify full jitter backoff generates non-deterministic smoothing within bounds."""
+        gov = self.governor
+        samples = [gov.calculate_full_jitter_backoff(consecutive_failures=3, t0=1.0, t_max=32.0) for _ in range(50)]
+        for s in samples:
+            self.assertGreaterEqual(s, 0.0)
+            self.assertLessEqual(s, 4.0)  # t0 * 2^(3-1) = 4.0
+        # Check variance (distribution should have multiple distinct values)
+        distinct_samples = set(samples)
+        self.assertGreater(len(distinct_samples), 10, "Full jitter backoff must exhibit distributed randomness")
+
+    def test_quorum_validation_insufficient_peers_rejected(self):
+        """Pillar 2: Verify quorum rejects global trips when < 2 peers endorse, restricting to LOCAL_OPEN."""
+        gov = self.governor
+        # 0 endorsements
+        approved, count, reason = gov.validate_mesh_quorum("test_skill", CircuitState.GLOBAL_OPEN, [])
+        self.assertFalse(approved)
+        self.assertEqual(count, 0)
+        self.assertIn("LOCAL_OPEN", reason)
+
+        # 1 endorsement
+        approved, count, reason = gov.validate_mesh_quorum("test_skill", CircuitState.GLOBAL_OPEN, ["peer_node_1"])
+        self.assertFalse(approved)
+        self.assertEqual(count, 1)
+        self.assertIn("LOCAL_OPEN", reason)
+
+    def test_quorum_validation_sufficient_peers_accepted(self):
+        """Pillar 2: Verify quorum accepts global trip when >= 2 adjacent peers endorse."""
+        gov = self.governor
+        # 2 endorsements
+        approved, count, reason = gov.validate_mesh_quorum("test_skill", CircuitState.GLOBAL_OPEN, ["node_alpha", "node_beta"])
+        self.assertTrue(approved)
+        self.assertEqual(count, 2)
+        self.assertIn("Quorum achieved", reason)
+
+        # 3 endorsements for PERM_TRIPPED
+        approved, count, reason = gov.validate_mesh_quorum(
+            "test_skill",
+            CircuitState.PERM_TRIPPED,
+            [{"node_id": "peer1", "endorsed": True}, {"node_id": "peer2", "endorsed": True}, {"node_id": "peer3", "endorsed": True}]
+        )
+        self.assertTrue(approved)
+        self.assertEqual(count, 3)
+        self.assertIn("Quorum achieved", reason)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -108,6 +108,8 @@ DEFAULT_PID_IMAX = float(os.environ.get("HGB_CB_PID_IMAX", 2.0))
 
 class CircuitState(str, Enum):
     CLOSED = "CLOSED"                                  # Normal execution, mutations permitted
+    LOCAL_OPEN = "LOCAL_OPEN"                          # Localized transient trip; pending quorum agreement
+    GLOBAL_OPEN = "GLOBAL_OPEN"                        # Confirmed global cluster-wide open trip backed by >=2 mesh endorsements
     OPEN = "OPEN"                                      # Blocked, mutations forbidden, backoff active
     HALF_OPEN = "HALF_OPEN"                            # Trial probing state allowing controlled test invocations
     RECOVERY = "RECOVERY"                              # Probation state requiring N consecutive successful executions
@@ -115,10 +117,19 @@ class CircuitState(str, Enum):
     PERM_TRIPPED_CRYPTOLOCKED = "PERM_TRIPPED_CRYPTOLOCKED"  # Cryptographically signed lockout due to flapping
 
     @classmethod
-    def from_str(cls, val: str) -> CircuitState:
-        normalized = val.strip().upper().replace(" ", "_")
+    def from_str(cls, val: Any) -> CircuitState:
+        if isinstance(val, cls):
+            return val
+        s = val.value if hasattr(val, "value") else str(val)
+        if "." in s:
+            s = s.split(".")[-1]
+        normalized = s.strip().upper().replace(" ", "_")
         if normalized in ("CLOSED", "HEALTHY"):
             return cls.CLOSED
+        elif normalized in ("LOCAL_OPEN", "LOCAL_TRIPPED"):
+            return cls.LOCAL_OPEN
+        elif normalized in ("GLOBAL_OPEN", "GLOBAL_TRIPPED", "CLUSTER_OPEN"):
+            return cls.GLOBAL_OPEN
         elif normalized in ("PERM_TRIPPED_CRYPTOLOCKED", "CRYPTOLOCKED", "PERM_CRYPTOLOCKED"):
             return cls.PERM_TRIPPED_CRYPTOLOCKED
         elif normalized in ("PERM_TRIPPED", "PERMANENTLY_TRIPPED", "FATAL", "AST_TRIPPED"):
@@ -130,6 +141,51 @@ class CircuitState(str, Enum):
         elif normalized in ("RECOVERY", "PROBATION"):
             return cls.RECOVERY
         return cls.CLOSED
+
+
+class QuorumValidationResult:
+    """
+    Quorum endorsement validation result with bool coercion and tuple unpacking.
+    Supports:
+      - if res: ...
+      - valid, count, reason = res
+      - res.valid, res.peer_count, res.reason
+      - res == True / res == False
+    """
+    def __init__(self, valid: bool, count: int, reason: str, proposed_state: str = ""):
+        self.valid = valid
+        self.count = count
+        self.peer_count = count
+        self.reason = reason
+        self.proposed_state = proposed_state
+
+    def __bool__(self) -> bool:
+        return self.valid
+
+    def __iter__(self):
+        yield self.valid
+        yield self.count
+        yield self.reason
+
+    def __getitem__(self, idx):
+        return (self.valid, self.count, self.reason)[idx]
+
+    def __len__(self):
+        return 3
+
+    def __eq__(self, other):
+        if isinstance(other, bool):
+            return self.valid == other
+        if isinstance(other, tuple):
+            if len(other) == 3:
+                return (self.valid, self.count, self.reason) == other
+            elif len(other) == 2:
+                return (self.valid, self.reason) == other
+        return super().__eq__(other)
+
+    def __repr__(self) -> str:
+        status = "APPROVED" if self.valid else "REJECTED"
+        return f"QuorumValidationResult({status}, count={self.count}, reason='{self.reason}')"
 
 
 @dataclass
@@ -252,6 +308,29 @@ class SlidingWindowAnomalyDetector:
 
     def load_list(self, data: List[Dict[str, Any]]) -> None:
         self._events = [WindowEvent.from_dict(d) for d in data]
+
+
+# ==============================================================================
+# Mesh Quorum Validation Result (Pillar 2)
+# ==============================================================================
+@dataclass
+class QuorumValidationResult:
+    valid: bool
+    count: int
+    reason: str
+    proposed_state: str = ""
+
+    def __iter__(self):
+        yield self.valid
+        yield self.count
+        yield self.reason
+
+    def __bool__(self):
+        return self.valid
+
+    def __getitem__(self, idx: int):
+        return (self.valid, self.count, self.reason)[idx]
+
 
 
 # ==============================================================================
@@ -776,6 +855,100 @@ class AutonomicCircuitBreakerGovernor:
             return round(min(t_max, max(t0, dampened)), 4)
         return round(min(t_max, max(t0, nominal)), 4)
 
+    @staticmethod
+    def calculate_full_jitter_backoff(
+        consecutive_failures: int = 1,
+        t0: float = DEFAULT_T0,
+        t_max: float = DEFAULT_TMAX,
+        seed: Optional[int] = None,
+        **kwargs
+    ) -> float:
+        """
+        Calculates randomized exponential backoff with full jitter smoothing:
+          t_sleep = uniform(0.0, min(t_max, t0 * 2^failures))
+        Prevents state-flapping and thundering herds across distributed mesh nodes.
+        """
+        failures = kwargs.get("failures", consecutive_failures)
+        failures_clamped = max(1, failures)
+        nominal = min(t_max, t0 * (2.0 ** (failures_clamped - 1)))
+        rng = random.Random(seed) if seed is not None else random
+        jittered = rng.uniform(0.0, nominal)
+        return round(jittered, 4)
+
+    def validate_mesh_quorum(
+        self,
+        skill_id: str,
+        proposed_state: Union[CircuitState, str],
+        peer_endorsements: Optional[Union[List[Any], Set[Any], Dict[str, Any]]] = None,
+        min_quorum_peers: int = 2
+    ) -> QuorumValidationResult:
+        """
+        Quorum-based state validation for distributed mesh resilience:
+        Requires agreement from at least 2 adjacent mesh nodes in `hgb-mesh` before
+        a circuit breaker trips globally (e.g. to GLOBAL_OPEN or PERM_TRIPPED),
+        preventing localized transient spikes from triggering cluster-wide isolation.
+
+        Returns: QuorumValidationResult with boolean evaluation and tuple unpacking (is_approved, count, reason)
+        """
+        state_obj = CircuitState.from_str(str(proposed_state)) if isinstance(proposed_state, str) else proposed_state
+
+        if state_obj not in (CircuitState.GLOBAL_OPEN, CircuitState.PERM_TRIPPED, CircuitState.PERM_TRIPPED_CRYPTOLOCKED):
+            return QuorumValidationResult(
+                valid=True,
+                count=0,
+                reason=f"State {state_obj.value} does not require cluster quorum agreement.",
+                proposed_state=state_obj.value
+            )
+
+        if not peer_endorsements:
+            return QuorumValidationResult(
+                valid=False,
+                count=0,
+                reason=f"Zero peer endorsements provided for skill [{skill_id}]. Quorum requires >= {min_quorum_peers} adjacent nodes. Circuit breaker restricted to LOCAL_OPEN.",
+                proposed_state=state_obj.value
+            )
+
+        valid_peers = set()
+        if isinstance(peer_endorsements, (list, tuple, set)):
+            for item in peer_endorsements:
+                if isinstance(item, str):
+                    peer_id = item.strip()
+                    if peer_id:
+                        valid_peers.add(peer_id)
+                elif isinstance(item, dict):
+                    peer_id = item.get("node_id", item.get("peer_id", item.get("id", "")))
+                    if peer_id and item.get("endorsed", item.get("vote", True)):
+                        valid_peers.add(str(peer_id).strip())
+                elif hasattr(item, "node_id"):
+                    valid_peers.add(str(getattr(item, "node_id")).strip())
+                elif hasattr(item, "peer_id"):
+                    valid_peers.add(str(getattr(item, "peer_id")).strip())
+        elif isinstance(peer_endorsements, dict):
+            for peer_id, val in peer_endorsements.items():
+                if isinstance(val, bool) and val:
+                    valid_peers.add(str(peer_id).strip())
+                elif isinstance(val, dict) and val.get("endorsed", val.get("vote", True)):
+                    valid_peers.add(str(peer_id).strip())
+                elif val:
+                    valid_peers.add(str(peer_id).strip())
+
+        count = len(valid_peers)
+        if count >= min_quorum_peers:
+            return QuorumValidationResult(
+                valid=True,
+                count=count,
+                reason=f"Quorum achieved: {count} adjacent mesh nodes endorsed {state_obj.value} for skill [{skill_id}].",
+                proposed_state=state_obj.value
+            )
+        else:
+            return QuorumValidationResult(
+                valid=False,
+                count=count,
+                reason=f"Quorum rejected: Only {count}/{min_quorum_peers} adjacent mesh peers endorsed {state_obj.value}. Circuit breaker restricted to LOCAL_OPEN.",
+                proposed_state=state_obj.value
+            )
+
+
     # --------------------------------------------------------------------------
     # AST Error State Fingerprinting
     # --------------------------------------------------------------------------
@@ -1055,7 +1228,7 @@ class AutonomicCircuitBreakerGovernor:
                 f"({rec.last_ast_fingerprint}). Auto-mutation halted."
             )
 
-        if rec.state == CircuitState.OPEN or rec.is_quarantined:
+        if rec.state in (CircuitState.OPEN, CircuitState.GLOBAL_OPEN, CircuitState.LOCAL_OPEN) or rec.is_quarantined:
             # Check if exponential backoff delay has expired
             if rec.open_until_timestamp > 0 and now >= rec.open_until_timestamp:
                 rec.state = CircuitState.HALF_OPEN
@@ -1063,13 +1236,13 @@ class AutonomicCircuitBreakerGovernor:
                 self._save_registry()
                 return (
                     True,
-                    f"Skill [{skill_id}] backoff delay expired; transitioned from OPEN to HALF_OPEN. Trial probe permitted."
+                    f"Skill [{skill_id}] backoff delay expired; transitioned from {rec.state.value} to HALF_OPEN. Trial probe permitted."
                 )
             else:
                 remaining = max(0.0, rec.open_until_timestamp - now)
                 return (
                     False,
-                    f"Skill [{skill_id}] is OPEN/QUARANTINED ({rec.consecutive_failures} failures). "
+                    f"Skill [{skill_id}] is {rec.state.value}/QUARANTINED ({rec.consecutive_failures} failures). "
                     f"Mutating permissions locked. Reason: {rec.quarantine_reason}. Backoff remaining: {remaining:.2f}s."
                 )
 
@@ -1100,7 +1273,9 @@ class AutonomicCircuitBreakerGovernor:
         diagnostic_span: str = "",
         diagnostic_message: str = "",
         compiler_stderr: str = "",
-        source_context: str = ""
+        source_context: str = "",
+        peer_endorsements: Optional[Union[List[Any], Set[Any], Dict[str, Any]]] = None,
+        request_global_trip: bool = False
     ) -> Dict[str, Any]:
         """
         Primary lifecycle state transition handler implementing full hysteresis,
@@ -1297,9 +1472,26 @@ class AutonomicCircuitBreakerGovernor:
                 outcome["consecutive_failures"] = rec.consecutive_failures
 
                 if is_anomaly or is_pid_trip or rec.consecutive_failures >= self.max_failures:
-                    rec.state = CircuitState.OPEN
+                    if request_global_trip or peer_endorsements is not None:
+                        quorum_res = self.validate_mesh_quorum(
+                            skill_id=skill_id,
+                            proposed_state=CircuitState.GLOBAL_OPEN,
+                            peer_endorsements=peer_endorsements
+                        )
+                        if quorum_res.valid:
+                            rec.state = CircuitState.GLOBAL_OPEN
+                            outcome["quorum_accepted"] = True
+                            outcome["quorum_peers"] = quorum_res.count
+                        else:
+                            rec.state = CircuitState.LOCAL_OPEN
+                            outcome["quorum_accepted"] = False
+                            outcome["quorum_peers"] = quorum_res.count
+                            outcome["quorum_detail"] = quorum_res.reason
+                    else:
+                        rec.state = CircuitState.OPEN
+
                     rec.last_state_change_timestamp = now
-                    backoff = self.calculate_pid_backoff(rec.consecutive_failures, pid_output, t0=self.t0, t_max=self.t_max, with_jitter=True)
+                    backoff = self.calculate_full_jitter_backoff(rec.consecutive_failures, t0=self.t0, t_max=self.t_max)
                     rec.open_until_timestamp = now + backoff
 
                     trip_reason = (
@@ -1314,7 +1506,7 @@ class AutonomicCircuitBreakerGovernor:
                         pre_hash=pre_hash,
                         post_hash=post_hash
                     )
-                    outcome["state"] = CircuitState.OPEN.value
+                    outcome["state"] = rec.state.value
                     outcome["action"] = "BREAKER_TRIPPED_QUARANTINED"
                     outcome["quarantine_info"] = q_info
                     outcome["backoff_sec"] = backoff
@@ -1672,6 +1864,49 @@ class AutonomicCircuitBreakerGovernor:
 
 
 # ==============================================================================
+# Top-Level Functional API & Quorum Validation Helpers
+# ==============================================================================
+
+def validate_mesh_quorum(
+    skill_id: str,
+    proposed_state: Union[CircuitState, str],
+    peer_endorsements: Optional[Union[List[Any], Set[Any], Dict[str, Any]]] = None,
+    min_quorum_peers: int = 2
+) -> QuorumValidationResult:
+    """
+    Verifies >= 2 peer endorsements before transitioning to GLOBAL_OPEN or PERM_TRIPPED.
+    Prevents localized transient spikes from triggering cluster-wide isolation.
+    """
+    gov = AutonomicCircuitBreakerGovernor()
+    return gov.validate_mesh_quorum(
+        skill_id=skill_id,
+        proposed_state=proposed_state,
+        peer_endorsements=peer_endorsements,
+        min_quorum_peers=min_quorum_peers
+    )
+
+
+def calculate_full_jitter_backoff(
+    failures: int = 1,
+    t0: float = DEFAULT_T0,
+    t_max: float = DEFAULT_TMAX,
+    seed: Optional[int] = None,
+    **kwargs
+) -> float:
+    """
+    Randomized exponential backoff with full jitter smoothing:
+      random.uniform(0.0, min(t_max, t0 * 2^failures))
+    """
+    return AutonomicCircuitBreakerGovernor.calculate_full_jitter_backoff(
+        consecutive_failures=failures,
+        t0=t0,
+        t_max=t_max,
+        seed=seed,
+        **kwargs
+    )
+
+
+# ==============================================================================
 # CLI Dispatcher & Automation Tooling
 # ==============================================================================
 
@@ -1754,10 +1989,17 @@ def cli_main():
     p_gen.add_argument("--lockout-id", default=None, help="Active lockout ID (defaults to querying registry)")
 
     # backoff
-    p_backoff = subparsers.add_parser("backoff", help="Calculate Fibonacci progression backoff")
+    p_backoff = subparsers.add_parser("backoff", help="Calculate Fibonacci progression or full jitter exponential backoff")
     p_backoff.add_argument("iteration", type=int, help="Attempt iteration number")
     p_backoff.add_argument("--t0", type=float, default=DEFAULT_T0)
     p_backoff.add_argument("--tmax", type=float, default=DEFAULT_TMAX)
+    p_backoff.add_argument("--strategy", choices=["fibonacci", "full_jitter"], default="fibonacci", help="Backoff strategy")
+
+    # validate-quorum
+    p_quorum = subparsers.add_parser("validate-quorum", help="Validate mesh quorum for state transition")
+    p_quorum.add_argument("skill_id", help="Skill identifier")
+    p_quorum.add_argument("proposed_state", help="Proposed state (e.g. GLOBAL_OPEN, PERM_TRIPPED)")
+    p_quorum.add_argument("--peers", nargs="*", default=[], help="Endorsing peer node IDs")
 
     # fingerprint
     p_fp = subparsers.add_parser("fingerprint", help="Calculate deterministic AST error fingerprint")
@@ -1806,9 +2048,9 @@ def cli_main():
         elif cur_state == CircuitState.PERM_TRIPPED.value:
             print(f"PERM_TRIP:{cur_state}:{rec.consecutive_fingerprint_count}:{rec.last_ast_fingerprint}")
             sys.exit(3)
-        elif cur_state == CircuitState.OPEN.value:
+        elif cur_state in (CircuitState.OPEN.value, CircuitState.GLOBAL_OPEN.value, CircuitState.LOCAL_OPEN.value):
             delay = round(max(0.0, rec.open_until_timestamp - time.time()), 3) if rec else 1.0
-            print(f"TRIP:OPEN:{rec.consecutive_failures if rec else 1}:{delay}")
+            print(f"TRIP:{cur_state}:{rec.consecutive_failures if rec else 1}:{delay}")
             sys.exit(2)
         else:
             print(f"FAIL:{cur_state}:{rec.consecutive_failures if rec else 1}")

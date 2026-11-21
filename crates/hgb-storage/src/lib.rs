@@ -659,16 +659,14 @@ pub use distributed_sharded_offloader::{
 };
 
 // ============================================================================
-// Pillar 2: High-Throughput Pooled Multi-Reader SQLite & Embedded LSM Memtable
+// Zero-Copy Storage Compaction & Tiered LRU Caching (Pillar 1)
 // ============================================================================
-pub mod pooled_multi_reader_sqlite_lsm;
-pub use pooled_multi_reader_sqlite_lsm::{
-    cosine_similarity as lsm_cosine_similarity, EmbeddedLsmMemtable,
-    LsmMemtableStats, LsmRecord, LsmVectorMatch, MemtableConfig,
-    PoolResult, SSTableReader, SqliteMultiReaderPool, SqlitePoolConfig,
-    SqlitePoolStats, StoragePoolError, WalCheckpointMode, WalWriter, FLAG_HAS_EMBEDDING,
-    FLAG_TOMBSTONE, LSM_SST_MAGIC, LSM_WAL_MAGIC,
+pub mod lru_vector_eviction;
+pub use lru_vector_eviction::{
+    EvictionCompactionReport, LruVectorCache, LruVectorEvictionConfig,
+    VectorCompressionCodec, VectorEmbeddingSnapshot,
 };
+
 
 
 

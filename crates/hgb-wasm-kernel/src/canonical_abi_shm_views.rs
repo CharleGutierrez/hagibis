@@ -1107,6 +1107,7 @@ impl ReadWriteCapabilityToken {
     }
 }
 
+
 /// Generic capability token representing either ReadOnly or ReadWrite access
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MemoryCapabilityToken {
@@ -1157,7 +1158,156 @@ impl MemoryCapabilityToken {
     pub fn can_read(&self) -> bool {
         true
     }
+
+    pub fn token_id(&self) -> u64 {
+        match self {
+            Self::ReadOnly(t) => t.token_id,
+            Self::ReadWrite(t) => t.token_id,
+        }
+    }
+
+    pub fn nonce(&self) -> u64 {
+        match self {
+            Self::ReadOnly(t) => t.nonce,
+            Self::ReadWrite(t) => t.nonce,
+        }
+    }
+
+    pub fn allowed_offset(&self) -> usize {
+        match self {
+            Self::ReadOnly(t) => t.allowed_offset,
+            Self::ReadWrite(t) => t.allowed_offset,
+        }
+    }
+
+    pub fn allowed_len(&self) -> usize {
+        match self {
+            Self::ReadOnly(t) => t.allowed_len,
+            Self::ReadWrite(t) => t.allowed_len,
+        }
+    }
 }
+
+/// Cryptographically signed network permission token restricting outbound guest network access
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NetworkPermissionToken {
+    pub token_id: u64,
+    pub allowed_hosts: Vec<String>,
+    pub min_port: u16,
+    pub max_port: u16,
+    pub max_outbound_requests: u32,
+    pub egress_bytes_limit: u64,
+    pub nonce: u64,
+    pub signature: [u8; 32],
+}
+
+impl NetworkPermissionToken {
+    pub fn compute_signature(
+        secret: &[u8],
+        token_id: u64,
+        allowed_hosts: &[String],
+        min_port: u16,
+        max_port: u16,
+        max_outbound_requests: u32,
+        egress_bytes_limit: u64,
+        nonce: u64,
+    ) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(secret);
+        hasher.update(b":hgb:cap:net:v1:");
+        hasher.update(&token_id.to_le_bytes());
+        for host in allowed_hosts {
+            hasher.update(&(host.len() as u32).to_le_bytes());
+            hasher.update(host.as_bytes());
+        }
+        hasher.update(&min_port.to_le_bytes());
+        hasher.update(&max_port.to_le_bytes());
+        hasher.update(&max_outbound_requests.to_le_bytes());
+        hasher.update(&egress_bytes_limit.to_le_bytes());
+        hasher.update(&nonce.to_le_bytes());
+        let result = hasher.finalize();
+        let mut sig = [0u8; 32];
+        sig.copy_from_slice(&result);
+        sig
+    }
+
+    pub fn issue(
+        secret: &[u8],
+        token_id: u64,
+        allowed_hosts: Vec<String>,
+        min_port: u16,
+        max_port: u16,
+        max_outbound_requests: u32,
+        egress_bytes_limit: u64,
+        nonce: u64,
+    ) -> Self {
+        let signature = Self::compute_signature(
+            secret,
+            token_id,
+            &allowed_hosts,
+            min_port,
+            max_port,
+            max_outbound_requests,
+            egress_bytes_limit,
+            nonce,
+        );
+        Self {
+            token_id,
+            allowed_hosts,
+            min_port,
+            max_port,
+            max_outbound_requests,
+            egress_bytes_limit,
+            nonce,
+            signature,
+        }
+    }
+
+    pub fn verify(&self, secret: &[u8]) -> Result<(), AbiError> {
+        let expected = Self::compute_signature(
+            secret,
+            self.token_id,
+            &self.allowed_hosts,
+            self.min_port,
+            self.max_port,
+            self.max_outbound_requests,
+            self.egress_bytes_limit,
+            self.nonce,
+        );
+        if self.signature != expected {
+            return Err(AbiError::PermissionDenied);
+        }
+        Ok(())
+    }
+
+    pub fn allows_host(&self, host: &str) -> bool {
+        let host_lower = host.to_ascii_lowercase();
+        for allowed in &self.allowed_hosts {
+            let allowed_lower = allowed.to_ascii_lowercase();
+            if allowed_lower == "*" {
+                return true;
+            }
+            if allowed_lower.starts_with("*.") {
+                let suffix = &allowed_lower[1..];
+                if host_lower.ends_with(suffix) || host_lower == &allowed_lower[2..] {
+                    return true;
+                }
+            } else if allowed_lower == host_lower {
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn allows_port(&self, port: u16) -> bool {
+        port >= self.min_port && port <= self.max_port
+    }
+
+    pub fn allows_destination(&self, host: &str, port: u16) -> bool {
+        self.allows_host(host) && self.allows_port(port)
+    }
+}
+
 
 /// Linear memory descriptor supporting Wasmtime multi-memory configurations.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

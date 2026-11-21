@@ -11,6 +11,7 @@ pub mod simd_vectorizer;
 pub mod native_cache;
 pub mod jit_pipeline;
 pub mod binary_decompilation_transpiler;
+pub mod pgo_bolt_feedback;
 
 // Re-exports
 pub use hot_trace_profiler::{
@@ -36,6 +37,12 @@ pub use binary_decompilation_transpiler::{
     ElfParser, FunctionParameter, MachOParser, PeParser, ReconstructedFunction,
     ReconstructedInterface, RustWrapperGenerator, SectionDescriptor, StringLiteralExtractor,
     SymbolDescriptor, SymbolKind, TranspilerEngine, TranspilerError, WasmParser, WitSynthesisEngine,
+};
+pub use pgo_bolt_feedback::{
+    BenchmarkScore, ClassifiedHotPath, HotPathDetector, HotPathThresholds, NightlyBenchmarkConfig,
+    NightlyBenchmarkRunner, OptimizationAction, OptimizationPassSynthesizer, PerformanceDelta,
+    PgoFeedbackError, PgoOptimizationManifest, ProfiledFunctionMetric, SynthesizedCompilerConfig,
+    WorkloadMetricParser, WorkloadProfileMetrics,
 };
 
 /// Returns the crate version string.

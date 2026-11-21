@@ -169,6 +169,18 @@ interface orchestrator {
 
     /// Query current Raft node consensus role and leader ID
     get-consensus-status: func() -> result<string, string>;
+
+    /// Dynamically inject fine-grained memory permission token into running plugin instance
+    inject-plugin-memory-permission: func(plugin-id: string, view-id: u64, is-writable: bool, offset: u64, len: u64) -> result<u64, string>;
+
+    /// Dynamically inject fine-grained network permission token into running plugin instance
+    inject-plugin-network-permission: func(plugin-id: string, allowed-hosts: list<string>, min-port: u16, max-port: u16, max-requests: u32, max-egress-bytes: u64) -> result<u64, string>;
+
+    /// Instant runtime revocation of a capability token without restarting guest instance
+    revoke-plugin-permission: func(token-id: u64, reason: string) -> result<bool, string>;
+
+    /// Check if a plugin permission token has been revoked
+    is-plugin-permission-revoked: func(token-id: u64) -> bool;
 }
 
 world agent-orchestrator-world {

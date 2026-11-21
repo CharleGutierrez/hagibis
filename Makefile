@@ -18,7 +18,7 @@ ifneq ($(wildcard scripts/execve_shim.so),)
 export LD_PRELOAD := $(CURDIR)/scripts/execve_shim.so:$(LD_PRELOAD)
 endif
 
-.PHONY: all check test release release-fast pgo bolt pgo-bolt ci-pgo-bolt pgo-bolt-auto-ci regression-bench-check pgo-bench pgo-bolt-dynatune pgo-bolt-verify pgo-build pgo-train pgo-merge pgo-release pgo-dynatune hygiene clean-cache prune-targets clean help untangle skill\:lint skill\:test skill\:build skill-lint skill-test skill-build test-masterclass self-heal-build self-heal-bench
+.PHONY: all check test release release-fast pgo bolt pgo-bolt ci-pgo-bolt pgo-bolt-auto-ci regression-bench-check pgo-bench pgo-bolt-dynatune pgo-bolt-verify pgo-build pgo-train pgo-merge pgo-release pgo-dynatune hygiene clean-tiered clean-cache prune-targets clean help untangle skill\:lint skill\:test skill\:build skill-lint skill-test skill-build test-masterclass self-heal-build self-heal-bench
 
 all: check test
 
@@ -325,6 +325,13 @@ hygiene:
 	@echo " [Storage & Build Hygiene] Running Storage Audit & Automated Cleanup"
 	@echo "======================================================================"
 	bash scripts/build-hygiene.sh --all
+
+# Zero-Copy Tiered Storage Compaction & Target Offloading (Pillar 1)
+clean-tiered:
+	@echo "======================================================================"
+	@echo " [Tiered Storage] Offloading Target Artifacts & Compacting LanceDB Caches"
+	@echo "======================================================================"
+	bash scripts/build-hygiene.sh --clean-tiered
 
 # Clean volatile /tmp cargo build caches, probe directories, and PGO/BOLT data
 clean-cache:

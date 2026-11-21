@@ -676,6 +676,7 @@ pub struct StorageGuardrailsDaemon {
     pub controller: BackpressureController,
     pub ipc_path: PathBuf,
     pub running: Arc<AtomicBool>,
+    pub lru_cache: Option<Arc<std::sync::RwLock<crate::lru_vector_eviction::LruVectorCache>>>,
 }
 
 impl StorageGuardrailsDaemon {
@@ -690,7 +691,16 @@ impl StorageGuardrailsDaemon {
             controller: BackpressureController::default(),
             ipc_path: ipc_path.unwrap_or_else(|| PathBuf::from(DEFAULT_STORAGE_IPC_PATH)),
             running: Arc::new(AtomicBool::new(true)),
+            lru_cache: None,
         }
+    }
+
+    pub fn with_lru_cache(
+        mut self,
+        cache: Arc<std::sync::RwLock<crate::lru_vector_eviction::LruVectorCache>>,
+    ) -> Self {
+        self.lru_cache = Some(cache);
+        self
     }
 
     /// Single execution iteration: probe -> prune if needed -> export IPC
@@ -703,6 +713,16 @@ impl StorageGuardrailsDaemon {
         } else {
             None
         };
+
+        if let Some(ref cache_arc) = self.lru_cache {
+            if let Ok(mut cache) = cache_arc.write() {
+                let now = SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or(Duration::ZERO)
+                    .as_secs();
+                let _ = cache.enforce_storage_guardrails(&stats, now);
+            }
+        }
 
         let delay_ms = match stats.tier {
             StoragePressureLevel::Normal => 0.0,
