@@ -562,11 +562,18 @@ impl OllamaProvider {
     }
 
     /// Dynamically construct Ollama inference options from environment variables or host defaults:
-    /// - `OLLAMA_NUM_CTX`: Context window length (default: 4096+ or model default)
+    /// Build structured Ollama `options` map dynamically based on live host telemetry
+    /// - `OLLAMA_NUM_CTX`: Context window length (default: 8192-16384+ or prompt-adapted)
     /// - `OLLAMA_NUM_THREAD`: Hardware threads for CPU inference (default: all available physical threads)
     /// - `OLLAMA_TEMPERATURE`: Sampling temperature (e.g. 0.6)
     /// - `OLLAMA_NUM_PREDICT`: Max generated tokens (e.g. 4096 or -1)
     pub fn build_inference_options() -> Option<Value> {
+        Self::build_inference_options_with_prompt(None)
+    }
+
+    /// Build Ollama `options` dynamically sizing `num_ctx` to guarantee the prompt
+    /// fits comfortably without triggering HTTP 400 `exceed_context_size_error`.
+    pub fn build_inference_options_with_prompt(prompt: Option<&str>) -> Option<Value> {
         let mut opts = serde_json::Map::new();
 
         // Adaptive power-aware scheduling based on host Dynatune & thermal telemetry
@@ -581,10 +588,32 @@ impl OllamaProvider {
         opts.insert("num_thread".to_string(), serde_json::json!(threads));
 
         // 2. Context Window: override via OLLAMA_NUM_CTX or adapt via power scheduler budget
-        let ctx = std::env::var("OLLAMA_NUM_CTX")
+        // Dynamically estimate prompt tokens (roughly 1 token per 3 chars + 2048 response headroom)
+        let est_prompt_tokens = prompt
+            .map(|p| (p.len() as u64 / 3) + 2048)
+            .unwrap_or(0);
+
+        let default_ctx = (scheduled.num_ctx as u64).max(8192);
+        let env_ctx = std::env::var("OLLAMA_NUM_CTX")
             .ok()
-            .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(scheduled.num_ctx as u64);
+            .and_then(|v| v.parse::<u64>().ok());
+
+        let ctx = match env_ctx {
+            Some(explicit) => {
+                if est_prompt_tokens > explicit {
+                    est_prompt_tokens.next_power_of_two().max(explicit).min(65536)
+                } else {
+                    explicit
+                }
+            }
+            None => {
+                if est_prompt_tokens > default_ctx {
+                    est_prompt_tokens.next_power_of_two().max(default_ctx).min(65536)
+                } else {
+                    default_ctx
+                }
+            }
+        };
         opts.insert("num_ctx".to_string(), serde_json::json!(ctx));
 
         // 3. Temperature: override via OLLAMA_TEMPERATURE
@@ -602,6 +631,42 @@ impl OllamaProvider {
         }
 
         Some(Value::Object(opts))
+    }
+
+    /// Parse required context size from Ollama `exceed_context_size_error` message
+    /// and compute the auto-expanded power-of-two context window to safely retry.
+    pub fn parse_required_context_from_error(error_text: &str) -> Option<u64> {
+        if let Ok(val) = serde_json::from_str::<Value>(error_text) {
+            if let Some(inner_err) = val.get("error").and_then(|v| v.as_str()) {
+                if let Ok(inner_val) = serde_json::from_str::<Value>(inner_err) {
+                    if let Some(n_tokens) = inner_val.pointer("/error/n_prompt_tokens").and_then(|v| v.as_u64()) {
+                        return Some((n_tokens + 2048).next_power_of_two().max(8192).min(65536));
+                    }
+                }
+            }
+            if let Some(n_tokens) = val.pointer("/error/n_prompt_tokens").and_then(|v| v.as_u64()) {
+                return Some((n_tokens + 2048).next_power_of_two().max(8192).min(65536));
+            }
+        }
+
+        if let Some(idx) = error_text.find("request (") {
+            let rest = &error_text[idx + 9..];
+            if let Some(end_idx) = rest.find(" tokens)") {
+                if let Ok(n_tokens) = rest[..end_idx].trim().parse::<u64>() {
+                    return Some((n_tokens + 2048).next_power_of_two().max(8192).min(65536));
+                }
+            }
+        }
+
+        if let Some(idx) = error_text.find("\"n_prompt_tokens\":") {
+            let rest = &error_text[idx + 18..];
+            let num_str: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if let Ok(n_tokens) = num_str.parse::<u64>() {
+                return Some((n_tokens + 2048).next_power_of_two().max(8192).min(65536));
+            }
+        }
+
+        None
     }
 
     /// Default system capability prompt ensuring present and future local LLMs
@@ -722,7 +787,7 @@ impl OllamaProvider {
             model: effective_model,
             messages,
             stream: false,
-            options: Self::build_inference_options(),
+            options: Self::build_inference_options_with_prompt(Some(prompt)),
         };
 
         let resp_result = self
@@ -753,7 +818,47 @@ impl OllamaProvider {
                 let status_code = resp.status();
                 let error_text = resp.text().await.unwrap_or_default();
 
-                // If model not found (404), trigger smart auto-recovery with installed models
+                // Auto-Recovery 1: If request exceeds context size (HTTP 400 exceed_context_size_error),
+                // dynamically auto-expand num_ctx to accommodate the prompt and retry immediately!
+                if status_code.as_u16() == 400
+                    && (error_text.contains("exceed_context_size_error")
+                        || error_text.contains("exceeds the available context size"))
+                {
+                    let needed_ctx = Self::parse_required_context_from_error(&error_text).unwrap_or(16384);
+                    tracing::warn!(
+                        "Ollama request exceeded context size (HTTP 400). Auto-expanding num_ctx to {} and retrying...",
+                        needed_ctx
+                    );
+
+                    let mut retry_payload = payload.clone();
+                    let mut opts_obj = match retry_payload.options {
+                        Some(Value::Object(map)) => map,
+                        _ => serde_json::Map::new(),
+                    };
+                    opts_obj.insert("num_ctx".to_string(), serde_json::json!(needed_ctx));
+                    retry_payload.options = Some(Value::Object(opts_obj));
+
+                    if let Ok(retry_resp) = self
+                        .client
+                        .post(&endpoint)
+                        .headers(headers.clone())
+                        .json(&retry_payload)
+                        .send()
+                        .await
+                    {
+                        if retry_resp.status().is_success() {
+                            if let Ok(chat_resp) = retry_resp.json::<OllamaChatResponse>().await {
+                                if let Some(msg) = chat_resp.message {
+                                    return Ok(msg.content);
+                                } else if let Some(txt) = chat_resp.response {
+                                    return Ok(txt);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Auto-Recovery 2: If model not found (404), trigger smart auto-recovery with installed models
                 if status_code.as_u16() == 404 {
                     if error_text.contains("not found") {
                         let installed = Self::installed_model_names();
@@ -806,7 +911,7 @@ impl OllamaProvider {
             "prompt": prompt,
             "stream": false,
         });
-        if let Some(opts) = Self::build_inference_options() {
+        if let Some(opts) = Self::build_inference_options_with_prompt(Some(prompt)) {
             payload["options"] = opts;
         }
 
@@ -821,6 +926,36 @@ impl OllamaProvider {
         if !resp.status().is_success() {
             let status = resp.status();
             let err = resp.text().await.unwrap_or_default();
+
+            // Auto-expand num_ctx and retry if context size exceeded in generate fallback
+            if status.as_u16() == 400
+                && (err.contains("exceed_context_size_error")
+                    || err.contains("exceeds the available context size"))
+            {
+                let needed_ctx = Self::parse_required_context_from_error(&err).unwrap_or(16384);
+                tracing::warn!(
+                    "Ollama generate request exceeded context size (HTTP 400). Auto-expanding num_ctx to {} and retrying...",
+                    needed_ctx
+                );
+                let mut retry_payload = payload.clone();
+                let mut opts_obj = retry_payload
+                    .get("options")
+                    .and_then(|v| v.as_object().cloned())
+                    .unwrap_or_default();
+                opts_obj.insert("num_ctx".to_string(), serde_json::json!(needed_ctx));
+                retry_payload["options"] = Value::Object(opts_obj);
+
+                if let Ok(retry_resp) = self.client.post(&endpoint).json(&retry_payload).send().await {
+                    if retry_resp.status().is_success() {
+                        if let Ok(val) = retry_resp.json::<Value>().await {
+                            if let Some(resp_txt) = val.get("response").and_then(|v| v.as_str()) {
+                                return Ok(resp_txt.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+
             if status.as_u16() == 404 && err.contains("not found") {
                 let installed = Self::installed_model_names();
                 return Err(HgbError::Provider(format!(
@@ -1075,6 +1210,37 @@ mod tests {
                 assert!(!resp.trim().is_empty());
             }
         }
+    }
+
+    #[test]
+    fn test_parse_required_context_from_error() {
+        let err_json = r#"{"error":"{\"error\":{\"code\":400,\"message\":\"request (5512 tokens) exceeds the available context size (4096 tokens), try increasing it\",\"type\":\"exceed_context_size_error\",\"n_prompt_tokens\":5512,\"n_ctx\":4096}}"}"#;
+        let required = OllamaProvider::parse_required_context_from_error(err_json);
+        assert_eq!(required, Some(8192));
+
+        let plain_msg = "request (5512 tokens) exceeds the available context size (4096 tokens), try increasing it";
+        let required_plain = OllamaProvider::parse_required_context_from_error(plain_msg);
+        assert_eq!(required_plain, Some(8192));
+
+        let huge_msg = "request (14000 tokens) exceeds the available context size (8192 tokens)";
+        let required_huge = OllamaProvider::parse_required_context_from_error(huge_msg);
+        assert_eq!(required_huge, Some(16384));
+    }
+
+    #[test]
+    fn test_build_inference_options_with_large_prompt() {
+        // Normal small prompt
+        let opts_small = OllamaProvider::build_inference_options_with_prompt(Some("Hello"));
+        assert!(opts_small.is_some());
+        let num_ctx_small = opts_small.unwrap().get("num_ctx").unwrap().as_u64().unwrap();
+        assert!(num_ctx_small >= 8192);
+
+        // Large prompt of 30,000 characters (~10,000 tokens)
+        let large_prompt = "fn analyze_code() { println!(\"long code\"); }\n".repeat(700);
+        let opts_large = OllamaProvider::build_inference_options_with_prompt(Some(&large_prompt));
+        assert!(opts_large.is_some());
+        let num_ctx_large = opts_large.unwrap().get("num_ctx").unwrap().as_u64().unwrap();
+        assert!(num_ctx_large >= 16384);
     }
 }
 

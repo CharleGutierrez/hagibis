@@ -703,6 +703,13 @@ pub use cve_rfc_knowledge_rag::{
     KNOWLEDGE_EMBEDDING_DIM, LANCE_KNOWLEDGE_VERSION, LANCE_VEC_MAGIC as RAG_LANCE_VEC_MAGIC,
 };
 
+// Roadmap Item 4: Autonomous AST Compaction & Vector Refactoring
+pub mod autonomous_ast_compaction_cron;
+pub use autonomous_ast_compaction_cron::{
+    AutonomousAstCompactionCron, CompactionPolicy,
+    CompactionReport as AstCompactionReport, FragmentationReport,
+};
+
 
 
 

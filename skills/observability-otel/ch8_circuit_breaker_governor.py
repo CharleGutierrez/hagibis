@@ -93,13 +93,14 @@ DEFAULT_ANOMALY_THRESHOLD = float(os.environ.get("HGB_CB_ANOMALY_THRESHOLD", 0.5
 DEFAULT_RECOVERY_THRESHOLD = int(os.environ.get("HGB_CB_RECOVERY_THRESHOLD", 3))
 
 # PID Adaptive Controller Defaults
-DEFAULT_PID_KP = float(os.environ.get("HGB_CB_PID_KP", 2.0))
-DEFAULT_PID_KI = float(os.environ.get("HGB_CB_PID_KI", 0.5))
-DEFAULT_PID_KD = float(os.environ.get("HGB_CB_PID_KD", 1.0))
+DEFAULT_PID_KP = float(os.environ.get("HGB_CB_PID_KP", 4.0))
+DEFAULT_PID_KI = float(os.environ.get("HGB_CB_PID_KI", 0.8))
+DEFAULT_PID_KD = float(os.environ.get("HGB_CB_PID_KD", 2.0))
 DEFAULT_PID_SETPOINT = float(os.environ.get("HGB_CB_PID_SETPOINT", 0.05))
 DEFAULT_PID_TRIP_THRESHOLD = float(os.environ.get("HGB_CB_PID_TRIP_THRESHOLD", 1.0))
 DEFAULT_PID_IMIN = float(os.environ.get("HGB_CB_PID_IMIN", -2.0))
 DEFAULT_PID_IMAX = float(os.environ.get("HGB_CB_PID_IMAX", 2.0))
+DEFAULT_PID_BETA = float(os.environ.get("HGB_CB_BETA", 1.0))
 
 
 # ==============================================================================
@@ -230,6 +231,10 @@ class SlidingWindowAnomalyDetector:
         self.anomaly_threshold = max(0.01, min(1.0, anomaly_threshold))
         self._events: List[WindowEvent] = []
 
+    @property
+    def events(self) -> List[WindowEvent]:
+        return self._events
+
     def record_event(
         self,
         success: bool,
@@ -354,38 +359,52 @@ class PidController:
     prev_error: float = 0.0
     last_time: Optional[float] = None
     output: float = 0.0
+    p_term: float = 0.0
+    i_term: float = 0.0
+    d_term: float = 0.0
 
     def reset(self) -> None:
         self.integral = 0.0
         self.prev_error = 0.0
         self.last_time = None
         self.output = 0.0
+        self.p_term = 0.0
+        self.i_term = 0.0
+        self.d_term = 0.0
 
-    def update(self, current_value: float, current_time: Optional[float] = None) -> float:
+    def update(self, current_value: float, current_time: Optional[float] = None, dt: Optional[float] = None) -> float:
         """
         Computes control output u(t) = P + I + D based on error e(t) = current_value - setpoint.
         """
         now = time.time() if current_time is None else current_time
         error = current_value - self.setpoint
 
-        if self.last_time is None:
-            dt = 1.0
+        if dt is not None and dt > 0:
+            step_dt = dt
+        elif self.last_time is None:
+            step_dt = 1.0
         else:
-            dt = max(0.001, now - self.last_time)
+            step_dt = max(0.001, now - self.last_time)
 
         # Proportional term
         p_term = self.kp * error
 
-        # Integral term with anti-windup clamping
-        self.integral += self.ki * error * dt
-        self.integral = max(self.i_min, min(self.i_max, self.integral))
+        # Integral term with anti-windup clamping and quiescent decay
+        if error <= 0 and self.integral > 0:
+            self.integral = max(0.0, self.integral + self.ki * error * step_dt)
+        else:
+            self.integral += self.ki * error * step_dt
+            self.integral = max(self.i_min, min(self.i_max, self.integral))
         i_term = self.integral
 
         # Derivative term
-        d_term = self.kd * (error - self.prev_error) / dt
+        d_term = self.kd * (error - self.prev_error) / step_dt
 
         # Control output
         self.output = p_term + i_term + d_term
+        self.p_term = p_term
+        self.i_term = i_term
+        self.d_term = d_term
         self.prev_error = error
         self.last_time = now
 
@@ -399,7 +418,14 @@ class PidController:
             "setpoint": self.setpoint,
             "integral": self.integral,
             "prev_error": self.prev_error,
+            "p_term": self.p_term,
+            "i_term": self.i_term,
+            "d_term": self.d_term,
+            "P": self.p_term,
+            "I": self.i_term,
+            "D": self.d_term,
             "output": self.output,
+            "u_pid": self.output,
         }
 
 
@@ -799,6 +825,434 @@ class SkillGovernanceRecord:
 
 
 # ==============================================================================
+# Dynamic Adaptive PID Circuit Breaker (Pillar 2 & Roadmap Item 2)
+# ==============================================================================
+
+class AdaptiveCoolingResult(float):
+    """
+    Subclass of float containing telemetry, load scaling, and PID terms.
+    Behaves as a primitive float while exposing attributes:
+      p_term, i_term, d_term, P, I, D, u_pid, load_factor, flapping_factor, computed_cooling_seconds.
+    """
+    computed_cooling_seconds: float
+    cooling_seconds: float
+    p_term: float
+    i_term: float
+    d_term: float
+    P: float
+    I: float
+    D: float
+    u_pid: float
+    pid_output: float
+    system_load: float
+    load_factor: float
+    flapping_factor: float
+    t0: float
+    t_min: float
+    t_max: float
+    error_rate: float
+    setpoint: float
+    error_deviation: float
+    details: Dict[str, Any]
+
+    def __new__(cls, value: float, details: Optional[Dict[str, Any]] = None):
+        obj = super().__new__(cls, float(value))
+        d = details or {}
+        obj.computed_cooling_seconds = float(value)
+        obj.cooling_seconds = float(value)
+        obj.p_term = float(d.get("p_term", d.get("P", 0.0)))
+        obj.i_term = float(d.get("i_term", d.get("I", 0.0)))
+        obj.d_term = float(d.get("d_term", d.get("D", 0.0)))
+        obj.P = obj.p_term
+        obj.I = obj.i_term
+        obj.D = obj.d_term
+        obj.u_pid = float(d.get("u_pid", d.get("pid_output", 0.0)))
+        obj.pid_output = obj.u_pid
+        obj.system_load = float(d.get("system_load", 0.0))
+        obj.load_factor = float(d.get("load_factor", 1.0))
+        obj.flapping_factor = float(d.get("flapping_factor", 1.0))
+        obj.t0 = float(d.get("t0", DEFAULT_T0))
+        obj.t_min = float(d.get("t_min", 1.0))
+        obj.t_max = float(d.get("t_max", DEFAULT_TMAX))
+        obj.error_rate = float(d.get("error_rate", 0.0))
+        obj.setpoint = float(d.get("setpoint", DEFAULT_PID_SETPOINT))
+        obj.error_deviation = float(d.get("error_deviation", 0.0))
+        obj.details = d
+        for k, v in d.items():
+            setattr(obj, k, v)
+        return obj
+
+    def to_dict(self) -> Dict[str, Any]:
+        return dict(self.details)
+
+
+class AdaptivePidCircuitBreaker:
+    r"""
+    Dynamic Adaptive PID Circuit Breaker with Telemetry-Aware Hysteresis.
+    
+    Dynamically scales the cooling and probation window according to:
+      T_cool = T_0 * (1 + max(0, u_PID)) * (1 + beta * L_sys) * gamma_flap
+      clamped to [T_min, T_max].
+      
+    Where:
+      - e(t) = error_rate - setpoint
+      - u_PID = K_p * e(t) + K_i * \int e(t) dt + K_d * de/dt
+      - L_sys: Normalized system load (from /proc/loadavg or OTel metrics: queue depth, P99 latency, worker threads)
+      - beta: System load coefficient
+      - gamma_flap: Flapping / volatility dampening multiplier
+    """
+    def __init__(
+        self,
+        skill_id: Any = "default",
+        t0: float = DEFAULT_T0,
+        t_min: Optional[float] = None,
+        t_max: float = DEFAULT_TMAX,
+        kp: float = DEFAULT_PID_KP,
+        ki: float = DEFAULT_PID_KI,
+        kd: float = DEFAULT_PID_KD,
+        setpoint: float = DEFAULT_PID_SETPOINT,
+        beta: float = DEFAULT_PID_BETA,
+        i_min: float = DEFAULT_PID_IMIN,
+        i_max: float = DEFAULT_PID_IMAX,
+        max_consecutive_failures: int = DEFAULT_MAX_CONSECUTIVE_FAILURES,
+        recovery_threshold: int = DEFAULT_RECOVERY_THRESHOLD,
+        window_size: int = DEFAULT_WINDOW_SIZE,
+        window_duration_sec: float = DEFAULT_WINDOW_DURATION_SEC,
+        anomaly_threshold: float = DEFAULT_ANOMALY_THRESHOLD,
+        trip_threshold: float = DEFAULT_PID_TRIP_THRESHOLD,
+        **kwargs
+    ):
+        if hasattr(skill_id, "t0"):
+            cfg = skill_id
+            self.skill_id = str(getattr(cfg, "skill_id", kwargs.get("skill_id", "default")))
+            self.t0 = float(getattr(cfg, "t0", t0))
+            self.t_min = float(getattr(cfg, "t_min", t_min if t_min is not None else self.t0))
+            self.t_max = float(getattr(cfg, "t_max", t_max))
+            self.kp = float(getattr(cfg, "kp", kp))
+            self.ki = float(getattr(cfg, "ki", ki))
+            self.kd = float(getattr(cfg, "kd", kd))
+            self.setpoint = float(getattr(cfg, "setpoint", setpoint))
+            self.beta = float(getattr(cfg, "beta", beta))
+            self.i_min = float(getattr(cfg, "i_min", i_min))
+            self.i_max = float(getattr(cfg, "i_max", i_max))
+            self.max_consecutive_failures = int(getattr(cfg, "max_consecutive_failures", max_consecutive_failures))
+            self.recovery_threshold = int(getattr(cfg, "recovery_threshold", recovery_threshold))
+            self.window_size = int(getattr(cfg, "window_size", window_size))
+            self.window_duration_sec = float(getattr(cfg, "window_duration_sec", window_duration_sec))
+            self.anomaly_threshold = float(getattr(cfg, "anomaly_threshold", anomaly_threshold))
+            self.trip_threshold = float(getattr(cfg, "trip_threshold", trip_threshold))
+        elif isinstance(skill_id, dict):
+            cfg = skill_id
+            self.skill_id = str(cfg.get("skill_id", kwargs.get("skill_id", "default")))
+            self.t0 = float(cfg.get("t0", t0))
+            self.t_min = float(cfg.get("t_min", t_min if t_min is not None else self.t0))
+            self.t_max = float(cfg.get("t_max", t_max))
+            self.kp = float(cfg.get("kp", kp))
+            self.ki = float(cfg.get("ki", ki))
+            self.kd = float(cfg.get("kd", kd))
+            self.setpoint = float(cfg.get("setpoint", setpoint))
+            self.beta = float(cfg.get("beta", beta))
+            self.i_min = float(cfg.get("i_min", i_min))
+            self.i_max = float(cfg.get("i_max", i_max))
+            self.max_consecutive_failures = int(cfg.get("max_consecutive_failures", max_consecutive_failures))
+            self.recovery_threshold = int(cfg.get("recovery_threshold", recovery_threshold))
+            self.window_size = int(cfg.get("window_size", window_size))
+            self.window_duration_sec = float(cfg.get("window_duration_sec", window_duration_sec))
+            self.anomaly_threshold = float(cfg.get("anomaly_threshold", anomaly_threshold))
+            self.trip_threshold = float(cfg.get("trip_threshold", trip_threshold))
+        else:
+            self.skill_id = str(kwargs.get("skill_id", skill_id))
+            self.t0 = float(t0)
+            self.t_min = float(t_min if t_min is not None else self.t0)
+            self.t_max = float(t_max)
+            self.kp = float(kp)
+            self.ki = float(ki)
+            self.kd = float(kd)
+            self.setpoint = float(setpoint)
+            self.beta = float(beta)
+            self.i_min = float(i_min)
+            self.i_max = float(i_max)
+            self.max_consecutive_failures = int(max_consecutive_failures)
+            self.recovery_threshold = int(recovery_threshold)
+            self.window_size = int(window_size)
+            self.window_duration_sec = float(window_duration_sec)
+            self.anomaly_threshold = float(anomaly_threshold)
+            self.trip_threshold = float(trip_threshold)
+
+        self.state: CircuitState = CircuitState.CLOSED
+        self.consecutive_failures: int = 0
+        self.consecutive_successes: int = 0
+        self.open_until_timestamp: float = 0.0
+        self.last_state_change: float = time.time()
+
+        self.pid = PidController(
+            kp=self.kp,
+            ki=self.ki,
+            kd=self.kd,
+            setpoint=self.setpoint,
+            i_min=self.i_min,
+            i_max=self.i_max
+        )
+        self.sliding_window = SlidingWindowAnomalyDetector(
+            window_size=self.window_size,
+            window_duration_sec=self.window_duration_sec,
+            min_events=1,
+            anomaly_threshold=self.anomaly_threshold
+        )
+        self.flapping_detector = FlappingDetector()
+        self.last_cooling_details: Dict[str, Any] = {}
+
+    @staticmethod
+    def _query_system_load() -> float:
+        try:
+            with open("/proc/loadavg", "r") as f:
+                load_1m = float(f.read().split()[0])
+            cores = os.cpu_count() or 1
+            return load_1m / max(1, cores)
+        except Exception:
+            return 0.0
+
+    @staticmethod
+    def _query_telemetry_bridge() -> Dict[str, Any]:
+        try:
+            _dir = Path(__file__).resolve().parent
+            if str(_dir) not in sys.path:
+                sys.path.insert(0, str(_dir))
+            from telemetry_governor_bridge import TelemetryGovernorBridge
+            bridge = TelemetryGovernorBridge()
+            metrics = bridge.collector.compute_percentiles()
+            return {
+                "active_workers": bridge.thread_pool.current_workers,
+                "p99_latency_ms": metrics.get("p99_ms", 0.0),
+                "queue_depth": metrics.get("queue_depth", 0),
+            }
+        except Exception:
+            return {}
+
+    def compute_dynamic_cooling_period(
+        self,
+        error_rate: Optional[float] = None,
+        current_time: Optional[float] = None,
+        system_load: Optional[float] = None,
+        flapping_factor: Optional[float] = None,
+        active_workers: Optional[int] = None,
+        queue_depth: Optional[int] = None,
+        p99_latency_ms: Optional[float] = None,
+        telemetry: Optional[Dict[str, Any]] = None,
+        dt: Optional[float] = None,
+        return_details: bool = False,
+    ) -> Union[float, AdaptiveCoolingResult]:
+        """
+        Dynamically computes PID-controlled adaptive cooling window:
+          T_cool = T_0 * (1 + max(0, u_PID)) * (1 + beta * L_sys) * gamma_flap
+          clamped between T_min and T_max.
+        """
+        now = time.time() if current_time is None else float(current_time)
+
+        # 1. Determine error rate
+        if error_rate is None:
+            if getattr(self.sliding_window, "_events", None):
+                metrics = self.sliding_window.compute_metrics(now)
+                err_rate = metrics["failure_rate_pct"] / 100.0
+            else:
+                err_rate = 0.0
+        else:
+            err_rate = max(0.0, min(1.0, float(error_rate)))
+
+        # 2. Error frequency deviation and PID calculation
+        e_t = err_rate - self.setpoint
+        u_pid = self.pid.update(err_rate, current_time=now, dt=dt)
+        if e_t <= 0:
+            u_pid = min(0.0, u_pid)
+            pid_factor = 1.0
+        else:
+            pid_factor = 1.0 + max(0.0, u_pid)
+        P = self.pid.p_term
+        I = self.pid.i_term
+        D = self.pid.d_term
+
+        # 3. System load telemetry incorporation
+        telem_load = 0.0
+        has_telem = False
+        if queue_depth is not None:
+            telem_load += 0.4 * min(2.0, max(0.0, queue_depth / 10.0))
+            has_telem = True
+        if p99_latency_ms is not None:
+            p99_norm = max(0.0, (p99_latency_ms - 50.0) / 150.0) if p99_latency_ms > 50.0 else 0.0
+            telem_load += 0.4 * min(2.0, p99_norm)
+            has_telem = True
+        if active_workers is not None:
+            workers_norm = max(0.0, (active_workers - 4) / 4.0) if active_workers > 4 else 0.0
+            telem_load += 0.2 * min(2.0, workers_norm)
+            has_telem = True
+
+        if telemetry and not has_telem:
+            if "queue_depth" in telemetry:
+                telem_load += 0.4 * min(2.0, max(0.0, telemetry["queue_depth"] / 10.0))
+            if "p99_ms" in telemetry or "p99_latency_ms" in telemetry:
+                p99 = telemetry.get("p99_ms", telemetry.get("p99_latency_ms", 0.0))
+                p99_norm = max(0.0, (p99 - 50.0) / 150.0) if p99 > 50.0 else 0.0
+                telem_load += 0.4 * min(2.0, p99_norm)
+            if "active_workers" in telemetry:
+                w = telemetry["active_workers"]
+                w_norm = max(0.0, (w - 4) / 4.0) if w > 4 else 0.0
+                telem_load += 0.2 * min(2.0, w_norm)
+            has_telem = True
+
+        if system_load is not None:
+            L_sys = max(float(system_load), telem_load)
+        elif has_telem:
+            L_sys = telem_load
+        else:
+            L_proc = self._query_system_load()
+            bridge_data = self._query_telemetry_bridge()
+            b_load = 0.0
+            if bridge_data:
+                b_load += 0.4 * min(2.0, max(0.0, bridge_data.get("queue_depth", 0) / 10.0))
+                p99_b = bridge_data.get("p99_latency_ms", 0.0)
+                p99_b_norm = max(0.0, (p99_b - 50.0) / 150.0) if p99_b > 50.0 else 0.0
+                b_load += 0.4 * min(2.0, p99_b_norm)
+                w_b = bridge_data.get("active_workers", 4)
+                w_b_norm = max(0.0, (w_b - 4) / 4.0) if w_b > 4 else 0.0
+                b_load += 0.2 * min(2.0, w_b_norm)
+            L_sys = max(L_proc, b_load)
+
+        load_factor = 1.0 + self.beta * max(0.0, L_sys)
+
+        # 4. Flapping factor
+        if flapping_factor is not None:
+            gamma_flap = max(1.0, float(flapping_factor))
+        elif self.flapping_detector.history and len(self.flapping_detector.history) >= 2:
+            is_flap, _, _ = self.flapping_detector.check(self.flapping_detector.history)
+            gamma_flap = 2.0 if is_flap else 1.0
+        elif self.consecutive_failures > 1:
+            gamma_flap = 1.0 + 0.2 * (self.consecutive_failures - 1)
+        else:
+            gamma_flap = 1.0
+
+        # 5. Compound dynamic cooling period
+        raw_cooling = self.t0 * pid_factor * load_factor * gamma_flap
+        t_cool = max(self.t_min, min(self.t_max, raw_cooling))
+        t_cool_rounded = round(t_cool, 3)
+
+        details = {
+            "skill_id": self.skill_id,
+            "error_rate": round(err_rate, 4),
+            "setpoint": self.setpoint,
+            "error_deviation": round(e_t, 4),
+            "p_term": round(P, 4),
+            "i_term": round(I, 4),
+            "d_term": round(D, 4),
+            "P": round(P, 4),
+            "I": round(I, 4),
+            "D": round(D, 4),
+            "u_pid": round(u_pid, 4),
+            "pid_output": round(u_pid, 4),
+            "system_load": round(L_sys, 4),
+            "load_factor": round(load_factor, 4),
+            "flapping_factor": round(gamma_flap, 4),
+            "computed_cooling_seconds": t_cool_rounded,
+            "cooling_seconds": t_cool_rounded,
+            "t0": self.t0,
+            "t_min": self.t_min,
+            "t_max": self.t_max,
+            "beta": self.beta,
+        }
+        self.last_cooling_details = details
+
+        if return_details:
+            return details
+        return AdaptiveCoolingResult(t_cool_rounded, details)
+
+    def can_execute(self, current_time: Optional[float] = None) -> Tuple[bool, str]:
+        now = time.time() if current_time is None else float(current_time)
+        if self.state == CircuitState.CLOSED:
+            return True, "Circuit is CLOSED"
+        elif self.state == CircuitState.OPEN:
+            if self.open_until_timestamp > 0 and now >= self.open_until_timestamp:
+                self.state = CircuitState.HALF_OPEN
+                self.last_state_change = now
+                return True, "Backoff cooling expired; transitioned to HALF_OPEN probe state"
+            remaining = max(0.0, self.open_until_timestamp - now)
+            return False, f"Circuit is OPEN (cooldown active: {remaining:.1f}s remaining)"
+        elif self.state == CircuitState.HALF_OPEN:
+            return True, "Circuit is in HALF_OPEN trial probing state"
+        elif self.state == CircuitState.RECOVERY:
+            return True, f"Circuit is in RECOVERY probation ({self.consecutive_successes}/{self.recovery_threshold})"
+        return False, f"Circuit is in blocked state: {self.state.value}"
+
+    def record_success(self, current_time: Optional[float] = None) -> Dict[str, Any]:
+        now = time.time() if current_time is None else float(current_time)
+        self.sliding_window.record_event(success=True, timestamp=now)
+        self.consecutive_failures = 0
+        self.consecutive_successes += 1
+        self.pid.update(0.0, current_time=now)
+        
+        if self.state == CircuitState.HALF_OPEN:
+            self.state = CircuitState.RECOVERY
+            self.last_state_change = now
+        elif self.state == CircuitState.RECOVERY:
+            if self.consecutive_successes >= self.recovery_threshold:
+                self.state = CircuitState.CLOSED
+                self.open_until_timestamp = 0.0
+                self.pid.reset()
+                self.last_state_change = now
+
+        return {"state": self.state.value, "consecutive_successes": self.consecutive_successes}
+
+    def record_failure(
+        self,
+        error_trace: str = "error",
+        current_time: Optional[float] = None,
+        diagnostic_code: str = "",
+        system_load: Optional[float] = None
+    ) -> Dict[str, Any]:
+        now = time.time() if current_time is None else float(current_time)
+        self.sliding_window.record_event(success=False, timestamp=now)
+        self.consecutive_failures += 1
+        self.consecutive_successes = 0
+
+        metrics = self.sliding_window.compute_metrics(now)
+        cooling = self.compute_dynamic_cooling_period(
+            error_rate=metrics["failure_rate_pct"] / 100.0,
+            current_time=now,
+            system_load=system_load
+        )
+
+        should_trip = False
+        if self.consecutive_failures >= self.max_consecutive_failures:
+            should_trip = True
+        elif metrics["is_anomaly"]:
+            should_trip = True
+        elif cooling.u_pid >= self.trip_threshold:
+            should_trip = True
+
+        if should_trip or self.state in (CircuitState.HALF_OPEN, CircuitState.RECOVERY):
+            self.state = CircuitState.OPEN
+            self.open_until_timestamp = now + float(cooling)
+            self.last_state_change = now
+
+        return {
+            "state": self.state.value,
+            "consecutive_failures": self.consecutive_failures,
+            "cooling_sec": float(cooling),
+            "pid_output": cooling.u_pid,
+            "cooling_details": self.last_cooling_details
+        }
+
+    def reset(self) -> None:
+        self.state = CircuitState.CLOSED
+        self.consecutive_failures = 0
+        self.consecutive_successes = 0
+        self.open_until_timestamp = 0.0
+        self.pid.reset()
+        self.sliding_window.clear()
+        self.flapping_detector = FlappingDetector()
+        self.last_cooling_details.clear()
+        self.last_state_change = time.time()
+
+
+# ==============================================================================
 # Autonomic Circuit Breaker Governor Implementation
 # ==============================================================================
 
@@ -857,7 +1311,9 @@ class AutonomicCircuitBreakerGovernor:
         self.pid_trip_threshold = float(pid_trip_threshold)
         self.pid_i_min = float(pid_i_min)
         self.pid_i_max = float(pid_i_max)
+        self.pid_beta = float(os.environ.get("HGB_CB_BETA", 1.0))
         self._pid_controllers: Dict[str, PidController] = {}
+        self._adaptive_breakers: Dict[str, AdaptivePidCircuitBreaker] = {}
 
         self._consumed_nonces: Set[int] = set()
         self._ensure_directories()
@@ -1034,6 +1490,52 @@ class AutonomicCircuitBreakerGovernor:
     # --------------------------------------------------------------------------
     # Adaptive PID Controller & Backoff (Pillar 2)
     # --------------------------------------------------------------------------
+    def get_or_create_adaptive_breaker(self, skill_id: str) -> AdaptivePidCircuitBreaker:
+        if skill_id not in self._adaptive_breakers:
+            self._adaptive_breakers[skill_id] = AdaptivePidCircuitBreaker(
+                skill_id=skill_id,
+                t0=self.t0,
+                t_max=self.t_max,
+                kp=self.pid_kp,
+                ki=self.pid_ki,
+                kd=self.pid_kd,
+                setpoint=self.pid_setpoint,
+                beta=self.pid_beta,
+                trip_threshold=self.pid_trip_threshold,
+                max_consecutive_failures=self.max_failures,
+                recovery_threshold=self.recovery_threshold,
+                window_size=self.window_size,
+                window_duration_sec=self.window_duration_sec,
+                anomaly_threshold=self.anomaly_threshold
+            )
+        return self._adaptive_breakers[skill_id]
+
+    def compute_dynamic_cooling_period(
+        self,
+        skill_id: str = "default",
+        error_rate: Optional[float] = None,
+        current_time: Optional[float] = None,
+        system_load: Optional[float] = None,
+        flapping_factor: Optional[float] = None,
+        active_workers: Optional[int] = None,
+        queue_depth: Optional[int] = None,
+        p99_latency_ms: Optional[float] = None,
+        dt: Optional[float] = None,
+        return_details: bool = False
+    ) -> Union[float, AdaptiveCoolingResult]:
+        breaker = self.get_or_create_adaptive_breaker(skill_id)
+        return breaker.compute_dynamic_cooling_period(
+            error_rate=error_rate,
+            current_time=current_time,
+            system_load=system_load,
+            flapping_factor=flapping_factor,
+            active_workers=active_workers,
+            queue_depth=queue_depth,
+            p99_latency_ms=p99_latency_ms,
+            dt=dt,
+            return_details=return_details
+        )
+
     def _get_or_create_pid_controller(self, skill_id: str) -> PidController:
         if skill_id not in self._pid_controllers:
             self._pid_controllers[skill_id] = PidController(
@@ -2373,6 +2875,27 @@ def cli_main():
     p_backoff.add_argument("--t0", type=float, default=DEFAULT_T0)
     p_backoff.add_argument("--tmax", type=float, default=DEFAULT_TMAX)
     p_backoff.add_argument("--strategy", choices=["fibonacci", "exponential", "full_jitter"], default="exponential", help="Backoff strategy")
+    p_backoff.add_argument("--adaptive-cooldown", action="store_true", help="Output dynamic PID adaptive cooling JSON")
+
+    # adaptive-cooldown
+    p_cool = subparsers.add_parser("adaptive-cooldown", help="Compute dynamic adaptive PID cooling period")
+    p_cool.add_argument("skill_id", nargs="?", default="default", help="Skill identifier")
+    p_cool.add_argument("--error-rate", type=float, default=None, help="Error rate [0.0 - 1.0]")
+    p_cool.add_argument("--load", "--system-load", dest="system_load", type=float, default=None, help="System load")
+    p_cool.add_argument("--flapping-factor", type=float, default=None, help="Flapping factor")
+    p_cool.add_argument("--active-workers", type=int, default=None, help="Active workers")
+    p_cool.add_argument("--queue-depth", type=int, default=None, help="Queue depth")
+    p_cool.add_argument("--p99-ms", type=float, default=None, help="P99 latency in ms")
+    p_cool.add_argument("--t0", type=float, default=DEFAULT_T0)
+    p_cool.add_argument("--tmin", type=float, default=1.0)
+    p_cool.add_argument("--tmax", type=float, default=DEFAULT_TMAX)
+    p_cool.add_argument("--beta", type=float, default=DEFAULT_PID_BETA)
+    p_cool.add_argument("--kp", type=float, default=DEFAULT_PID_KP)
+    p_cool.add_argument("--ki", type=float, default=DEFAULT_PID_KI)
+    p_cool.add_argument("--kd", type=float, default=DEFAULT_PID_KD)
+    p_cool.add_argument("--setpoint", type=float, default=DEFAULT_PID_SETPOINT)
+    p_cool.add_argument("--dt", type=float, default=1.0)
+    p_cool.add_argument("--adaptive-cooldown", action="store_true", help="Flag compatibility")
 
     # validate-quorum
     p_quorum = subparsers.add_parser("validate-quorum", help="Validate mesh quorum for state transition")
@@ -2413,6 +2936,9 @@ def cli_main():
     p_rst = subparsers.add_parser("reset", help="Administrative HITL reset")
     p_rst.add_argument("skill_id", help="Skill identifier")
     p_rst.add_argument("--file", default=None, help="File path to restore permissions")
+
+    if len(sys.argv) > 1 and sys.argv[1] == "--adaptive-cooldown":
+        sys.argv[1] = "adaptive-cooldown"
 
     args = parser.parse_args()
     gov = create_governor_from_env()
@@ -2583,6 +3109,31 @@ def cli_main():
             }
         }
         print(json.dumps(token_out, indent=2))
+        sys.exit(0)
+
+    elif args.command == "adaptive-cooldown" or (args.command == "backoff" and getattr(args, "adaptive_cooldown", False)):
+        cb = AdaptivePidCircuitBreaker(
+            skill_id=getattr(args, "skill_id", "default") or "default",
+            t0=getattr(args, "t0", DEFAULT_T0),
+            t_min=getattr(args, "tmin", 1.0),
+            t_max=getattr(args, "tmax", DEFAULT_TMAX),
+            kp=getattr(args, "kp", DEFAULT_PID_KP),
+            ki=getattr(args, "ki", DEFAULT_PID_KI),
+            kd=getattr(args, "kd", DEFAULT_PID_KD),
+            setpoint=getattr(args, "setpoint", DEFAULT_PID_SETPOINT),
+            beta=getattr(args, "beta", DEFAULT_PID_BETA),
+        )
+        res = cb.compute_dynamic_cooling_period(
+            error_rate=getattr(args, "error_rate", None),
+            system_load=getattr(args, "system_load", None),
+            flapping_factor=getattr(args, "flapping_factor", None),
+            active_workers=getattr(args, "active_workers", None),
+            queue_depth=getattr(args, "queue_depth", None),
+            p99_latency_ms=getattr(args, "p99_ms", None),
+            dt=getattr(args, "dt", 1.0),
+            return_details=True
+        )
+        print(json.dumps(res, indent=2))
         sys.exit(0)
 
     elif args.command == "backoff":

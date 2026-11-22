@@ -179,6 +179,33 @@ interface canonical-abi-types {
         sequence-number: u64,
     }
 
+    /// Multi-Producer Single-Consumer (MPSC) ring buffer descriptor
+    record mpsc-ring-buffer-descriptor {
+        ring-id: u64,
+        capacity: u32,
+        element-size: u32,
+        head-offset: u32,
+        tail-offset: u32,
+        flags: u32,
+    }
+
+    /// Multi-Producer Single-Consumer (MPSC) zero-copy element header with checksum verification
+    record mpsc-ring-element-header {
+        sequence-number: u64,
+        producer-id: u64,
+        payload-length: u32,
+        flags: u32,
+        timestamp-ns: u64,
+        checksum: u32,
+    }
+
+    /// MPSC zero-copy dequeue pop result
+    record mpsc-pop-result {
+        header: mpsc-ring-element-header,
+        payload-slice: canonical-memory-slice,
+        sequence-number: u64,
+    }
+
     /// Cryptographic manifest for verifying incoming WASM component/module integrity before instantiation
     record component-integrity-manifest {
         component-name: string,

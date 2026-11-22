@@ -27,6 +27,9 @@ pub use canonical_abi_shm_views::{
 pub mod spsc_ring_buffer;
 pub use spsc_ring_buffer::*;
 
+pub mod mpsc_ring_buffer;
+pub use mpsc_ring_buffer::*;
+
 pub mod dynamic_capability_manager;
 pub use dynamic_capability_manager::{
     AtomicRevocationBitset, DynamicCapabilityManager, InstanceCapabilityStore, RevocationRecord,

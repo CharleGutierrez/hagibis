@@ -606,13 +606,25 @@ def main():
     if action == "status":
         gov_telemetry = bridge.query_governor_telemetry()
         metrics = bridge.collector.compute_percentiles()
-        print("📊 [Hagibis Telemetry Governor Bridge Status]")
-        print(f"  • CPU Governor Profile:    {bridge.current_profile}")
-        print(f"  • Active Workers:          {bridge.thread_pool.current_workers}")
-        print(f"  • MicroVM Allocation:      {bridge.microvm_mgr.current_allocation.vcpu_count} vCPUs, {bridge.microvm_mgr.current_allocation.memory_mb} MiB RAM")
-        print(f"  • P99 Latency:             {metrics['p99_ms']}ms")
-        print(f"  • Queue Depth:             {metrics['queue_depth']}")
-        print(f"  • Kernel Governor State:   {gov_telemetry.get('governor', 'unknown')}")
+        if "--json" in sys.argv:
+            data = {
+                "profile": bridge.current_profile,
+                "active_workers": bridge.thread_pool.current_workers,
+                "vcpu_count": bridge.microvm_mgr.current_allocation.vcpu_count,
+                "memory_mb": bridge.microvm_mgr.current_allocation.memory_mb,
+                "p99_ms": metrics['p99_ms'],
+                "queue_depth": metrics['queue_depth'],
+                "governor": gov_telemetry.get('governor', 'unknown')
+            }
+            print(json.dumps(data, indent=2))
+        else:
+            print("📊 [Hagibis Telemetry Governor Bridge Status]")
+            print(f"  • CPU Governor Profile:    {bridge.current_profile}")
+            print(f"  • Active Workers:          {bridge.thread_pool.current_workers}")
+            print(f"  • MicroVM Allocation:      {bridge.microvm_mgr.current_allocation.vcpu_count} vCPUs, {bridge.microvm_mgr.current_allocation.memory_mb} MiB RAM")
+            print(f"  • P99 Latency:             {metrics['p99_ms']}ms")
+            print(f"  • Queue Depth:             {metrics['queue_depth']}")
+            print(f"  • Kernel Governor State:   {gov_telemetry.get('governor', 'unknown')}")
 
     elif action == "evaluate":
         p99 = float(sys.argv[2]) if len(sys.argv) > 2 else 10.0

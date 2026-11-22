@@ -1047,6 +1047,11 @@ pub use microvm_snapshot_cache::{
     UFFDIO_REGISTER_MODE_MISSING, UFFDIO_ZEROPAGE, UFFD_EVENT_PAGEFAULT,
 };
 
+pub mod snapshot_pool_daemon;
+pub use snapshot_pool_daemon::{
+    PoolHealthCheck, PoolStatus, SnapshotPoolDaemon, SnapshotPoolDaemonMetrics,
+};
+
 // Autonomous Expansion Pillar 1: Hybrid Kernel-Level Acceleration (dynatune & kernel-optimizer)
 pub mod hybrid_kernel_accelerator;
 pub use hybrid_kernel_accelerator::{

@@ -142,11 +142,11 @@ impl AdaptivePowerScheduler {
                 // Severe thermal state (> 85°C): throttle strictly to 1 thread with cooling cooldown
                 (
                     1,
-                    1024,
+                    4096,
                     250,
                     "powersave".to_string(),
                     format!(
-                        "CRITICAL THERMAL ALERT ({:.1}°C): Capped Ollama to 1 thread, 1024 context, 250ms cooldown pause.",
+                        "CRITICAL THERMAL ALERT ({:.1}°C): Capped Ollama to 1 thread, 4096 context, 250ms cooldown pause.",
                         report.cpu_pkg_temp_c
                     ),
                 )
@@ -154,7 +154,7 @@ impl AdaptivePowerScheduler {
             ThermalSeverity::Warm => {
                 // Warm state (75°C - 85°C): maintain physical cores or drop slightly
                 let th = (physical.min(2)).max(1);
-                let ctx = if report.ac_connected { 2048 } else { 1536 };
+                let ctx = if report.ac_connected { 8192 } else { 4096 };
                 (
                     th,
                     ctx,
@@ -173,7 +173,7 @@ impl AdaptivePowerScheduler {
                 } else {
                     physical.min(2)
                 };
-                let ctx = if report.ac_connected { 4096 } else { 2048 };
+                let ctx = if report.ac_connected { 16384 } else { 8192 };
                 (
                     th,
                     ctx,

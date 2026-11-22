@@ -244,3 +244,57 @@ The `ZeroCopyLanceDbMmapEngine` (`crates/hgb-storage/src/zero_copy_lancedb_mmap.
 - **Hybrid Local-Edge Federation**: Semantic queries fan out across both local bare-metal NVMe mmap fragments and distributed edge worker KV caches, unifying decentralized agent memories under a single sub-millisecond API.
 - **MCP Integration**: Exposed through `hgb_zero_copy_vector_federation` in `hagibis.mcp.json`.
 
+---
+
+## 12. Autonomous AST Compaction & Vector Refactoring (Roadmap Item 4)
+
+To prevent index fragmentation, storage bloat, and centroid degradation as AI agents continuously index, overwrite, and delete abstract syntax tree (AST) code symbols, `hgb-storage` provides the `AutonomousAstCompactionCron` engine (`crates/hgb-storage/src/autonomous_ast_compaction_cron.rs`) and shell automation wrapper (`scripts/vector-ast-compaction.sh`).
+
+### 12.1 Fragmentation Monitoring & Thresholds
+
+During continuous development and AST mutation loops, vector indices accumulate dead vectors from superseded symbol versions, tombstones from deleted functions, and uncompacted append fragments. The compaction cron monitors five primary health metrics:
+
+| Metric | Threshold | Operational Description |
+|---|---|---|
+| **Fragment Slabs** | `> 5 fragments` | Accumulation of separate `.vec` and `.col` disk fragments |
+| **Dead Vector Ratio** | `> 15.0%` | Superseded vector records from overwritten AST symbols |
+| **Tombstone Ratio** | `> 10.0%` | Unpurged tombstone markers from deleted code items |
+| **Centroid Distortion ($\Delta c$)** | `> 0.05` | Drift between stored partition centroids and true vector means |
+| **System Load Average** | `load1 <= 4.0` | Linux `/proc/loadavg` idle cycle gate preventing CPU starvation |
+
+### 12.2 Zero-Copy Slabs & Cacheline-Aligned Consolidation
+
+When fragmentation triggers fire during system idle cycles:
+1. **Zero-Copy Slab Merging**: Scans all active `.vec` and `.col` fragments, discarding tombstones and keeping only the latest version of each unique symbol ID.
+2. **Deterministic Record Sorting**: Records are sorted by `(partition, id)` to maximize sequential CPU prefetching and cacheline spatial locality during vector traversals.
+3. **64-Byte Cacheline Alignment**: Contiguous binary vector slabs begin with a 64-byte aligned header (`LANCE_VEC_MAGIC`, dimension, count, metric code), ensuring subsequent IEEE-754 `f32` slices are 64-byte aligned for zero-copy AVX2/AVX-512 vector scanning.
+4. **Atomic MVCC Commit**: Atomically commits new manifest versions (`_versions/000000000X.manifest`) and updates `_latest_version`, followed by immediate unlinking of retired fragment slabs to reclaim disk space.
+
+### 12.3 K-Means Centroid Clustering & Semantic Drift Elimination
+
+To eliminate semantic drift caused by incremental updates:
+- Following consolidation, the engine re-runs Lloyd's iterative k-means clustering directly over the compacted partition vectors:
+  $$\mathbf{c}^{(t+1)} = \frac{\sum_{\mathbf{v} \in P} w(\mathbf{v}, \mathbf{c}^{(t)}) \mathbf{v}}{\left\| \sum_{\mathbf{v} \in P} w(\mathbf{v}, \mathbf{c}^{(t)}) \mathbf{v} \right\|_2}$$
+- Normalizes centroids to unit spheres, guaranteeing that IVF partition routing and nearest Voronoi cell pruning preserve or improve cosine similarity scores for all AST symbols.
+
+### 12.4 SQLite WAL & Metadata Table Compaction
+
+Alongside columnar slab merging, the cron engine compacts relational metadata tables:
+```sql
+PRAGMA wal_checkpoint(TRUNCATE);
+PRAGMA auto_vacuum = INCREMENTAL;
+PRAGMA incremental_vacuum;
+VACUUM;
+PRAGMA optimize;
+```
+This reclaims freed filesystem pages from SQLite WAL logs and indexes.
+
+### 12.5 Shell Automation & Daemon Cron
+
+The cron routine is operated via `scripts/vector-ast-compaction.sh`:
+- `--check`: Inspects dataset fragmentation and prints health reports.
+- `--compact`: Triggers zero-copy background compaction and SQLite VACUUM.
+- `--cron`: Evaluates system idle conditions and executes compaction if fragmentation thresholds are exceeded.
+- `--test`: Runs the complete test suite verifying zero-loss merging and similarity retention.
+
+

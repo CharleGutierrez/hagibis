@@ -958,7 +958,11 @@ impl LanceDbVectorEngine {
         if let Some(&(frag_idx, rec_idx)) = inner.record_index.get(id) {
             if let Some(frag) = inner.fragments.get(frag_idx) {
                 if let Some(rec) = frag.records.get(rec_idx) {
-                    return Ok(Some(rec.clone()));
+                    let mut r = rec.clone();
+                    if r.vector.is_empty() {
+                        r.vector = frag.get_vector(rec_idx, inner.manifest.dimension).to_vec();
+                    }
+                    return Ok(Some(r));
                 }
             }
         }

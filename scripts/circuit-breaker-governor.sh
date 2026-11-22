@@ -49,12 +49,13 @@ HGB_CB_MIN_EVENTS="${HGB_CB_MIN_EVENTS:-5}"
 HGB_CB_ANOMALY_THRESHOLD="${HGB_CB_ANOMALY_THRESHOLD:-0.50}"
 HGB_CB_RECOVERY_THRESHOLD="${HGB_CB_RECOVERY_THRESHOLD:-3}"
 
-# Adaptive PID Controller Defaults (Pillar 2)
-HGB_CB_PID_KP="${HGB_CB_PID_KP:-2.0}"
-HGB_CB_PID_KI="${HGB_CB_PID_KI:-0.5}"
-HGB_CB_PID_KD="${HGB_CB_PID_KD:-1.0}"
+# Adaptive PID Controller Defaults (Pillar 2 & Roadmap Item 2)
+HGB_CB_PID_KP="${HGB_CB_PID_KP:-4.0}"
+HGB_CB_PID_KI="${HGB_CB_PID_KI:-0.8}"
+HGB_CB_PID_KD="${HGB_CB_PID_KD:-2.0}"
 HGB_CB_PID_SETPOINT="${HGB_CB_PID_SETPOINT:-0.05}"
 HGB_CB_PID_TRIP_THRESHOLD="${HGB_CB_PID_TRIP_THRESHOLD:-1.0}"
+HGB_CB_BETA="${HGB_CB_BETA:-1.0}"
 
 # ANSI Colors
 RED="\033[31m"
@@ -196,13 +197,148 @@ print(f'{base + jitter:.3f}')
     fi
 }
 
+# ------------------------------------------------------------------------------
+# 2b. Dynamic Adaptive Hysteresis & PID Cooldown Scaling (Roadmap Item 2)
+# ------------------------------------------------------------------------------
+hgb_calculate_adaptive_cooldown() {
+    local output_json=false
+    if [ "${1:-}" = "--json" ]; then
+        output_json=true
+        shift
+    fi
+
+    local skill_id="${1:-default}"
+    local err_rate="${2:-}"
+    local sys_load="${3:-}"
+    local flap_factor="${4:-}"
+    local t0="${5:-${HGB_CB_T0:-1.0}}"
+    local tmin="${6:-${HGB_CB_TMIN:-1.0}}"
+    local tmax="${7:-${HGB_CB_TMAX:-64.0}}"
+    local beta="${8:-${HGB_CB_BETA:-1.0}}"
+
+    # 1. Real-time telemetry from system load (/proc/loadavg, CPU core count)
+    if [ -z "$sys_load" ]; then
+        if [ -f /proc/loadavg ]; then
+            local l1 cores
+            l1=$(awk '{print $1}' /proc/loadavg 2>/dev/null || echo "0.0")
+            cores=$(nproc 2>/dev/null || echo 1)
+            sys_load=$(awk -v l="$l1" -v c="$cores" 'BEGIN {if(c<1)c=1; printf "%.4f", l/c}')
+        else
+            sys_load="0.0"
+        fi
+    fi
+
+    # 2. Real-time telemetry from OpenTelemetry bridge
+    local bridge_workers=4
+    local bridge_queue=0
+    local bridge_p99=0.0
+    local bridge_script="${SCRIPT_DIR}/../skills/observability-otel/telemetry_governor_bridge.py"
+    if [ -f "$bridge_script" ]; then
+        local bridge_status
+        bridge_status=$(python3 "$bridge_script" status 2>/dev/null || true)
+        if [ -n "$bridge_status" ]; then
+            bridge_workers=$(echo "$bridge_status" | grep -i "Active Workers:" | awk '{print $NF}' || echo 4)
+            bridge_queue=$(echo "$bridge_status" | grep -i "Queue Depth:" | awk '{print $NF}' || echo 0)
+            bridge_p99=$(echo "$bridge_status" | grep -i "P99 Latency:" | awk '{print $NF}' | sed 's/ms//' || echo 0.0)
+        fi
+    fi
+
+    # 3. Query Python Governor if available
+    if [ -f "$PYTHON_GOVERNOR" ]; then
+        local cmd=(python3 "$PYTHON_GOVERNOR" adaptive-cooldown "$skill_id"
+            --t0 "$t0"
+            --tmin "$tmin"
+            --tmax "$tmax"
+            --beta "$beta"
+        )
+        if [ -n "$err_rate" ]; then cmd+=(--error-rate "$err_rate"); fi
+        if [ -n "$sys_load" ]; then cmd+=(--load "$sys_load"); fi
+        if [ -n "$flap_factor" ]; then cmd+=(--flapping-factor "$flap_factor"); fi
+        if [ -n "$bridge_workers" ]; then cmd+=(--active-workers "$bridge_workers"); fi
+        if [ -n "$bridge_queue" ]; then cmd+=(--queue-depth "$bridge_queue"); fi
+        if [ -n "$bridge_p99" ]; then cmd+=(--p99-ms "$bridge_p99"); fi
+
+        local json_res
+        json_res=$("${cmd[@]}" 2>/dev/null || true)
+        if [ -n "$json_res" ]; then
+            if [ "$output_json" = true ]; then
+                echo "$json_res"
+            else
+                python3 -c "import json, sys; d=json.loads(sys.argv[1]); print(d.get('computed_cooling_seconds', d.get('cooling_seconds', 1.0)))" "$json_res"
+            fi
+            return 0
+        fi
+    fi
+
+    # 4. Standalone fallback (PID controlled adaptive hysteresis)
+    python3 -c "
+import sys, json
+
+output_json = '$output_json' == 'true'
+skill = sys.argv[1]
+err_rate = float(sys.argv[2]) if sys.argv[2] else 0.0
+sys_load = float(sys.argv[3]) if sys.argv[3] else 0.0
+flap_factor = float(sys.argv[4]) if sys.argv[4] else 1.0
+t0 = float(sys.argv[5])
+tmin = float(sys.argv[6])
+tmax = float(sys.argv[7])
+beta = float(sys.argv[8])
+
+kp = 4.0
+ki = 0.8
+kd = 2.0
+setpoint = 0.05
+dt = 1.0
+
+e_t = err_rate - setpoint
+p_term = kp * e_t
+i_term = max(-2.0, min(2.0, ki * e_t * dt))
+d_term = kd * (e_t / dt)
+u_pid = p_term + i_term + d_term
+
+pid_factor = 1.0 + max(0.0, u_pid)
+load_factor = 1.0 + beta * max(0.0, sys_load)
+gamma_flap = max(1.0, flap_factor)
+
+t_cool = t0 * pid_factor * load_factor * gamma_flap
+t_cool = max(tmin, min(tmax, t_cool))
+
+res = {
+    'skill_id': skill,
+    'error_rate': round(err_rate, 4),
+    'setpoint': setpoint,
+    'error_deviation': round(e_t, 4),
+    'p_term': round(p_term, 4),
+    'i_term': round(i_term, 4),
+    'd_term': round(d_term, 4),
+    'P': round(p_term, 4),
+    'I': round(i_term, 4),
+    'D': round(d_term, 4),
+    'u_pid': round(u_pid, 4),
+    'pid_output': round(u_pid, 4),
+    'system_load': round(sys_load, 4),
+    'load_factor': round(load_factor, 4),
+    'flapping_factor': round(gamma_flap, 4),
+    'computed_cooling_seconds': round(t_cool, 3),
+    'cooling_seconds': round(t_cool, 3),
+    't0': t0,
+    't_min': tmin,
+    't_max': tmax
+}
+if output_json:
+    print(json.dumps(res, indent=2))
+else:
+    print(round(t_cool, 3))
+" "$skill_id" "$err_rate" "$sys_load" "$flap_factor" "$t0" "$tmin" "$tmax" "$beta"
+}
+
 hgb_apply_backoff() {
     local skill_id="${1:-unknown}"
     local iteration="${2:-1}"
     local backoff_sec
-    backoff_sec=$(hgb_calculate_backoff "$iteration")
-    log_warn "Dampening mutation attempt #${iteration} for skill [${skill_id}]: backing off ${backoff_sec}s (Fibonacci progression)..."
-    python3 -c "import time, sys; time.sleep(float(sys.argv[1]))" "$backoff_sec"
+    backoff_sec=$(hgb_calculate_adaptive_cooldown "$skill_id")
+    log_warn "Dampening mutation attempt #${iteration} for skill [${skill_id}]: adaptive PID cooldown of ${backoff_sec}s applied..."
+    python3 -c "import time, sys, os; max_s = float(os.environ.get('HGB_MAX_SLEEP_SEC', sys.argv[1])); time.sleep(min(float(sys.argv[1]), max_s))" "$backoff_sec"
 }
 
 # ------------------------------------------------------------------------------
@@ -692,6 +828,51 @@ assert 8.1 <= float('$b6') <= 8.5, f'b6={float(\"$b6\")}'
     fi
     log_ok "Signed MCP operator unlock with replay defense verified."
 
+    echo "7. Testing Dynamic Adaptive PID Cooldown & Hysteresis Scaling Under Simulated Error Bursts..."
+    # 7a. Baseline nominal error rate -> returns baseline cooling window (T0)
+    local cool_base
+    cool_base=$(hgb_calculate_adaptive_cooldown "test_skill" 0.02 0.0 1.0 1.0 1.0 64.0)
+    python3 -c "
+base = float('$cool_base')
+assert abs(base - 1.0) < 0.01, f'Expected baseline 1.0s, got {base}'
+"
+    log_ok "Baseline nominal error rate correctly yields baseline cooldown (T_cool = ${cool_base}s)."
+
+    # 7b. Error frequency surge (e(t) > 0.4) -> PID terms scale cooling window by > 3x
+    local cool_surge
+    cool_surge=$(hgb_calculate_adaptive_cooldown "test_skill" 0.50 0.0 1.0 1.0 1.0 64.0)
+    python3 -c "
+surge = float('$cool_surge')
+assert surge >= 3.0, f'Expected surge cooling >= 3.0s (> 3x), got {surge}'
+"
+    log_ok "Error frequency surge (e(t) > 0.4) scaled cooldown by > 3x (T_cool = ${cool_surge}s)."
+
+    # 7c. High system load (L > 0.8) + error burst -> dynamic compounding prevents flapping
+    local cool_compound
+    cool_compound=$(hgb_calculate_adaptive_cooldown "test_skill" 0.50 0.85 1.0 1.0 1.0 64.0)
+    python3 -c "
+comp = float('$cool_compound')
+surge = float('$cool_surge')
+assert comp > surge, f'Compounded ({comp}) must exceed surge alone ({surge})'
+assert comp >= 5.0, f'Expected compounded cooling >= 5.0s, got {comp}'
+"
+    log_ok "High system load + error burst dynamic compounding verified (T_cool = ${cool_compound}s)."
+
+    # 7d. CLI JSON output with PID terms
+    local cool_json
+    cool_json=$(hgb_calculate_adaptive_cooldown --json "test_skill" 0.50 0.85 1.0 1.0 1.0 64.0)
+    python3 -c "
+import json, sys
+d = json.loads('''$cool_json''')
+assert 'P' in d and 'I' in d and 'D' in d, 'Missing PID terms'
+assert 'load_factor' in d, 'Missing load_factor'
+assert 'flapping_factor' in d, 'Missing flapping_factor'
+assert 'computed_cooling_seconds' in d, 'Missing computed_cooling_seconds'
+assert d['load_factor'] > 1.8, f'load_factor={d[\"load_factor\"]}'
+assert d['computed_cooling_seconds'] >= 5.0
+"
+    log_ok "CLI JSON output with PID terms (P, I, D, load_factor, flapping_factor, computed_cooling_seconds) verified."
+
     echo "========================================================================"
     log_ok "All circuit-breaker governor hysteresis tests passed with 100% success!"
     echo "========================================================================"
@@ -714,6 +895,9 @@ main() {
             ;;
         calculate-backoff)
             hgb_calculate_backoff "${2:-1}" "${3:-$HGB_CB_T0}" "${4:-$HGB_CB_TMAX}" "${5:-exponential}"
+            ;;
+        calculate-adaptive-cooldown|adaptive-cooldown|--adaptive-cooldown)
+            hgb_calculate_adaptive_cooldown "${2:-default}" "${3:-}" "${4:-}" "${5:-}" "${6:-$HGB_CB_T0}" "${7:-1.0}" "${8:-$HGB_CB_TMAX}"
             ;;
         apply-backoff)
             hgb_apply_backoff "${2:-unknown}" "${3:-1}"
@@ -754,7 +938,8 @@ Commands:
   hash-state <path>                                   Compute BLAKE3 / SHA-256 state hash of file or directory
   fibonacci <n>                                       Compute the n-th Fibonacci number
   calculate-backoff <iter> [t0] [tmax]                Compute Fibonacci progression backoff duration in seconds
-  apply-backoff <skill_id> [iter]                     Sleep for calculated Fibonacci backoff dampening duration
+  calculate-adaptive-cooldown [skill] [err] [load] [flap] [t0] [tmin] [tmax]  Compute dynamic adaptive PID cooling duration in seconds
+  apply-backoff <skill_id> [iter]                     Sleep for calculated Fibonacci / adaptive backoff dampening duration
   fingerprint <code> <file> <line> <span> <msg>       Compute deterministic AST error state fingerprint
   record-failure <skill_id> <err> [pre] [post] [file] [code] [line] [span] [msg]
                                                       Record failed mutation (drives flapping detection and cryptolock)
