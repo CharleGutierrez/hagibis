@@ -12,6 +12,7 @@ use crate::accelerator_backend::{
 };
 use crate::error::{NpuRouterError, Result};
 use crate::governor_bridge::GovernorBridge;
+use crate::hardware_auto_quantizer::QuantizationMode;
 use crate::hardware_discovery::HardwareInventory;
 
 #[derive(Debug, Clone)]
@@ -129,6 +130,18 @@ impl NpuOffloadRouter {
             device_name: "Host CPU SIMD".to_string(),
             rationale: "DEFAULT DISPATCH: Parallel CPU execution.".to_string(),
             expected_latency_us: 1000,
+        }
+    }
+
+    /// Evaluates live telemetry and recommends the hardware-aware quantization mode and fusion requirement
+    pub fn recommend_quantization(&self) -> (QuantizationMode, bool) {
+        let telemetry = self.governor.poll_telemetry();
+        if telemetry.is_thermal_throttling || telemetry.thermal_headroom_c < 15.0 {
+            (QuantizationMode::INT4, true)
+        } else if !telemetry.ac_connected || telemetry.thermal_headroom_c < 30.0 {
+            (QuantizationMode::INT8, true)
+        } else {
+            (QuantizationMode::FP16, false)
         }
     }
 

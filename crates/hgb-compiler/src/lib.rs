@@ -13,9 +13,11 @@ pub mod jit_pipeline;
 pub mod binary_decompilation_transpiler;
 pub mod pgo_bolt_feedback;
 pub mod formal_verification;
+pub mod neural_symbolic_verifier;
 
 // Re-exports
 pub use formal_verification::*;
+pub use neural_symbolic_verifier::*;
 pub use hot_trace_profiler::{
     ExecutionTier, FunctionTrace, HotTraceProfiler, HotTraceSnapshot, PromotionPolicy,
     TierTransition,

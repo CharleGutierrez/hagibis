@@ -667,6 +667,13 @@ pub use lru_vector_eviction::{
     VectorCompressionCodec, VectorEmbeddingSnapshot,
 };
 
+// ============================================================================
+// Dynamic Multi-Modal Context Pruning Engine (Working Memory Manager)
+// ============================================================================
+pub mod attention_context_pruner;
+pub use attention_context_pruner::*;
+
+
 
 
 
