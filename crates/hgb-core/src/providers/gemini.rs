@@ -26,8 +26,10 @@ pub struct GeminiProvider {
 impl GeminiProvider {
     pub fn new_with_api_key(api_key: impl Into<String>) -> Self {
         let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(120))
-            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(45))
+            .connect_timeout(Duration::from_secs(4))
+            .pool_idle_timeout(Duration::from_secs(90))
+            .tcp_nodelay(true)
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
         Self {
@@ -38,8 +40,10 @@ impl GeminiProvider {
 
     pub fn new_with_oauth(oauth_mgr: GeminiOAuthManager) -> Self {
         let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(120))
-            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(45))
+            .connect_timeout(Duration::from_secs(4))
+            .pool_idle_timeout(Duration::from_secs(90))
+            .tcp_nodelay(true)
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
         Self {

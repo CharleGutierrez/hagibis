@@ -408,8 +408,8 @@ impl FolderInspectorEngine {
             }
         }
 
-        // 5. Natural language trigger words: "folder <name>", "directory <name>", "dir <name>", "path <name>", "in <name>"
-        let trigger_re = Regex::new(r#"(?i)\b(?:folder|directory|dir|path|under|in)\s+([^,\r\n\.;\?!]+)"#).unwrap();
+        // 5. Natural language trigger words: "folder <name>", "directory <name>", "dir <name>", "path <name>", "under <name>", "inside <name>"
+        let trigger_re = Regex::new(r#"(?i)\b(?:folder|directory|dir|path|under|inside(?:\s+the)?)\s+([^,\r\n\.;\?!]+)"#).unwrap();
         for caps in trigger_re.captures_iter(prompt) {
             let after_trigger = caps[1].trim();
             let words: Vec<&str> = after_trigger.split_whitespace().collect();

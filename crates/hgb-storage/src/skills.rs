@@ -112,12 +112,12 @@ impl SkillStore {
         let mut matched = Vec::new();
         let prompt_lower = prompt.to_lowercase();
         
-        let provider = hgb_core::providers::OllamaProvider::new(None, None);
-        let prompt_embedding = provider.embed(prompt).await.unwrap_or_else(|_| crate::semantic_telepathy::compute_zero_cost_embedding(prompt));
+        // Use high-performance zero-cost SIMD deterministic embedding (<10us latency, no HTTP blocking)
+        let prompt_embedding = crate::semantic_telepathy::compute_zero_cost_embedding(prompt);
 
         for (name, description, content, tier, triggers) in rows_data {
             let skill_text = format!("{} {} {}", name, description, triggers.join(" "));
-            let skill_embedding = provider.embed(&skill_text).await.unwrap_or_else(|_| crate::semantic_telepathy::compute_zero_cost_embedding(&skill_text));
+            let skill_embedding = crate::semantic_telepathy::compute_zero_cost_embedding(&skill_text);
             let sim = crate::semantic_telepathy::vector_cosine_similarity(&prompt_embedding, &skill_embedding);
             
             let mut should_include = sim > 0.75;

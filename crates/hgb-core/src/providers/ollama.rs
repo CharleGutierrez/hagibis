@@ -280,6 +280,8 @@ impl OllamaProvider {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(180))
             .connect_timeout(Duration::from_secs(4))
+            .pool_idle_timeout(Duration::from_secs(60))
+            .tcp_nodelay(true)
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
 
@@ -587,13 +589,19 @@ impl OllamaProvider {
             .unwrap_or(scheduled.num_thread as u64);
         opts.insert("num_thread".to_string(), serde_json::json!(threads));
 
-        // 2. Context Window: override via OLLAMA_NUM_CTX or adapt via power scheduler budget
-        // Dynamically estimate prompt tokens (roughly 1 token per 3 chars + 2048 response headroom)
+        // 2. Context Window: override via OLLAMA_NUM_CTX or adapt dynamically to prompt length
+        // Dynamically estimate prompt tokens (roughly 1 token per 3 chars + 512 response headroom)
         let est_prompt_tokens = prompt
-            .map(|p| (p.len() as u64 / 3) + 2048)
-            .unwrap_or(0);
+            .map(|p| (p.len() as u64 / 3) + 512)
+            .unwrap_or(2048);
 
-        let default_ctx = (scheduled.num_ctx as u64).max(8192);
+        let default_ctx = if est_prompt_tokens <= 2048 {
+            2048
+        } else if est_prompt_tokens <= 4096 {
+            4096
+        } else {
+            (scheduled.num_ctx as u64).max(4096)
+        };
         let env_ctx = std::env::var("OLLAMA_NUM_CTX")
             .ok()
             .and_then(|v| v.parse::<u64>().ok());
@@ -1229,11 +1237,11 @@ mod tests {
 
     #[test]
     fn test_build_inference_options_with_large_prompt() {
-        // Normal small prompt
+        // Normal small prompt sizes context leanly (2048) to avoid memory and latency bloat
         let opts_small = OllamaProvider::build_inference_options_with_prompt(Some("Hello"));
         assert!(opts_small.is_some());
         let num_ctx_small = opts_small.unwrap().get("num_ctx").unwrap().as_u64().unwrap();
-        assert!(num_ctx_small >= 8192);
+        assert!(num_ctx_small >= 2048);
 
         // Large prompt of 30,000 characters (~10,000 tokens)
         let large_prompt = "fn analyze_code() { println!(\"long code\"); }\n".repeat(700);

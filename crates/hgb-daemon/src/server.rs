@@ -1443,11 +1443,19 @@ impl HagibisDaemon {
                     }
                 }
 
-                if let Ok(matched) = state.skill_store.match_skills(&prompt).await {
-                    if !matched.is_empty() {
-                        final_prompt.push_str("\n\n--- AUTO-INJECTED SKILLS ---\n");
-                        for skill in matched {
-                            final_prompt.push_str(&format!("Skill [{}]: {}\n{}\n\n", skill.name, skill.description, skill.content));
+                if prompt.split_whitespace().count() > 3 {
+                    if let Ok(matched) = state.skill_store.match_skills(&prompt).await {
+                        let top_skills: Vec<_> = matched.into_iter().take(2).collect();
+                        if !top_skills.is_empty() {
+                            final_prompt.push_str("\n\n--- AUTO-INJECTED SKILLS ---\n");
+                            for skill in top_skills {
+                                let content = if skill.content.len() > 1000 {
+                                    &skill.content[..1000]
+                                } else {
+                                    &skill.content
+                                };
+                                final_prompt.push_str(&format!("Skill [{}]: {}\n{}\n\n", skill.name, skill.description, content));
+                            }
                         }
                     }
                 }
@@ -1467,9 +1475,10 @@ impl HagibisDaemon {
                 // Queries zero-copy local SQLite vector cache for relevant file mutations
                 let sibling_acc = hgb_core::SiblingOllamaAccelerator::new(ws_ctx);
                 if let Ok(matches) = sibling_acc.query_mutation_vectors(&final_prompt, 3) {
-                    if !matches.is_empty() {
+                    let relevant: Vec<_> = matches.into_iter().filter(|m| m.similarity_score >= 0.70).collect();
+                    if !relevant.is_empty() {
                         final_prompt.push_str("\n\n--- SIBLING OLLAMA MUTATION VECTORS (ZERO-NETWORK-ROUNDTRIP GROUND TRUTH) ---\n");
-                        for m in matches {
+                        for m in relevant {
                             final_prompt.push_str(&format!(
                                 "• File: {} (similarity: {:.1}% | BLAKE3: {})\n```\n{}\n```\n",
                                 m.chunk.file_path,
@@ -2209,11 +2218,19 @@ impl HagibisDaemon {
                 engine = engine.with_system_prompt(sys_prompt);
 
                 let mut final_prompt = prompt.clone();
-                if let Ok(matched) = state.skill_store.match_skills(&prompt).await {
-                    if !matched.is_empty() {
-                        final_prompt.push_str("\n\n--- AUTO-INJECTED SKILLS ---\n");
-                        for skill in matched {
-                            final_prompt.push_str(&format!("Skill [{}]: {}\n{}\n\n", skill.name, skill.description, skill.content));
+                if prompt.split_whitespace().count() > 3 {
+                    if let Ok(matched) = state.skill_store.match_skills(&prompt).await {
+                        let top_skills: Vec<_> = matched.into_iter().take(2).collect();
+                        if !top_skills.is_empty() {
+                            final_prompt.push_str("\n\n--- AUTO-INJECTED SKILLS ---\n");
+                            for skill in top_skills {
+                                let content = if skill.content.len() > 1000 {
+                                    &skill.content[..1000]
+                                } else {
+                                    &skill.content
+                                };
+                                final_prompt.push_str(&format!("Skill [{}]: {}\n{}\n\n", skill.name, skill.description, content));
+                            }
                         }
                     }
                 }
