@@ -511,6 +511,10 @@ impl HgbMcpProfile {
 
 /// The top essential vibe coding and autonomous swarm tools exposed under progressive disclosure (HgbMcpProfile::Core)
 pub const CORE_TOOLS: &[&str] = &[
+    "hgb_read_system_logs",
+    "hgb_query_lancedb_vector_store",
+    "hgb_execute_build",
+    "hgb_ingest_otel_telemetry",
     "hgb_self_healing_compile",
     "hgb_cow_sandbox",
     "hgb_vibe_speedrun",
@@ -638,6 +642,64 @@ impl HagibisMcpServer {
     /// List all advertised tools in the complete catalog
     pub fn list_full_tools() -> Value {
         serde_json::json!([
+            {
+                "name": "hgb_read_system_logs",
+                "description": "Reads system logs (.hgb/dream_journal.json, .hgb/*.log, /proc/loadavg, or journald if available) with line limits, severity filters (ERROR, WARN, INFO), and secret redaction",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "source": { "type": "string", "description": "Optional log source identifier: 'all', 'dream_journal', 'hgb_log', 'loadavg', 'journald', or specific file path", "default": "all" },
+                        "limit": { "type": "integer", "description": "Maximum number of log lines to return (default: 100)", "default": 100 },
+                        "severity": { "type": "string", "enum": ["ALL", "INFO", "WARN", "ERROR"], "description": "Log severity filter level (default: ALL)", "default": "ALL" },
+                        "redact_secrets": { "type": "boolean", "description": "Redact API keys, tokens, and credentials (default: true)", "default": true }
+                    }
+                }
+            },
+            {
+                "name": "hgb_query_lancedb_vector_store",
+                "description": "Queries LanceDB vector store (crates/hgb-storage/src/lancedb_vector_engine.rs) taking query string and top_k, returning matching chunks with cosine similarity scores",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string", "description": "Natural language or code query string to search for" },
+                        "top_k": { "type": "integer", "description": "Maximum number of nearest matching chunks to return (default: 5)", "default": 5 },
+                        "table_path": { "type": "string", "description": "Optional custom filesystem path to LanceDB dataset directory (defaults to .hgb/lancedb/semantic_memory)" },
+                        "dimension": { "type": "integer", "description": "Embedding dimensionality (default: 768)", "default": 768 },
+                        "partition": { "type": "string", "description": "Optional partition filter (e.g. 'codebase', 'docs', 'default')" },
+                        "min_score": { "type": "number", "description": "Minimum cosine similarity score threshold (default: -1.0)", "default": -1.0 }
+                    },
+                    "required": ["query"]
+                }
+            },
+            {
+                "name": "hgb_execute_build",
+                "description": "Executes sandboxed build commands (cargo check, cargo build, zig build) with configurable timeout, returns exit code, stdout, stderr, and parsed JSON error diagnostics",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "command": { "type": "string", "description": "Build command to execute (e.g. 'cargo check', 'cargo build', 'zig build')" },
+                        "args": { "type": "array", "items": { "type": "string" }, "description": "Optional additional command arguments (e.g. ['--workspace', '--release'])" },
+                        "package": { "type": "string", "description": "Optional target package/crate name (e.g. 'hgb-core')" },
+                        "release": { "type": "boolean", "description": "Build with --release flag (default: false)", "default": false },
+                        "timeout_secs": { "type": "integer", "description": "Execution timeout in seconds (default: 60)", "default": 60 },
+                        "working_dir": { "type": "string", "description": "Working directory relative to workspace root" }
+                    },
+                    "required": ["command"]
+                }
+            },
+            {
+                "name": "hgb_ingest_otel_telemetry",
+                "description": "Ingests real-time OpenTelemetry metrics (CPU usage, thermal temperature, memory PSI pressure, circuit breaker trip counters) from skills/observability-otel/ and /proc/pressure/memory directly into a structured telemetry report",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "skill_dir": { "type": "string", "description": "Path to observability-otel skill directory (default: skills/observability-otel)" },
+                        "include_hardware": { "type": "boolean", "description": "Include CPU thermal and governor telemetry (default: true)", "default": true },
+                        "include_memory_psi": { "type": "boolean", "description": "Include Linux kernel /proc/pressure/memory metrics (default: true)", "default": true },
+                        "include_circuit_breaker": { "type": "boolean", "description": "Include circuit breaker trip counters and state (default: true)", "default": true }
+                    }
+                }
+            },
             {
                 "name": "hgb_microvm_spinup",
                 "description": "Spin up an isolated Firecracker microVM instance with configurable memory_mb, vcpu_count, rootfs/kernel images, and snapshot caching",
@@ -1850,6 +1912,37 @@ impl HagibisMcpServer {
         );
 
         match name {
+            "hgb_read_system_logs" => {
+                progress_cb(20, "Scanning system logs and redacting sensitive credentials...");
+                let handler = crate::mcp_bridge_handlers::SystemLogsMcpHandler::new(&self.workspace_root);
+                let result = handler.execute(args)?;
+                progress_cb(100, "System logs retrieved successfully.");
+                Ok(serde_json::to_string_pretty(&result).unwrap_or_default())
+            }
+
+            "hgb_query_lancedb_vector_store" => {
+                progress_cb(20, "Encoding query and querying LanceDB columnar vector store...");
+                let handler = crate::mcp_bridge_handlers::LanceDbVectorStoreMcpHandler::new(&self.workspace_root);
+                let result = handler.execute(args)?;
+                progress_cb(100, "LanceDB vector store query completed.");
+                Ok(serde_json::to_string_pretty(&result).unwrap_or_default())
+            }
+
+            "hgb_execute_build" => {
+                progress_cb(10, "Validating build command sandbox security policy...");
+                let handler = crate::mcp_bridge_handlers::SandboxedBuildMcpHandler::new(&self.workspace_root);
+                let result = handler.execute(args).await?;
+                progress_cb(100, "Sandboxed build execution completed.");
+                Ok(serde_json::to_string_pretty(&result).unwrap_or_default())
+            }
+
+            "hgb_ingest_otel_telemetry" => {
+                progress_cb(20, "Sampling OpenTelemetry traces, CPU thermal telemetry, PSI memory pressure, and circuit breaker...");
+                let handler = crate::mcp_bridge_handlers::OtelMetricsIngestMcpHandler::new(&self.workspace_root);
+                let result = handler.execute(args)?;
+                progress_cb(100, "OpenTelemetry metrics ingested successfully.");
+                Ok(serde_json::to_string_pretty(&result).unwrap_or_default())
+            }
             "hgb_self_evolving_loop_trigger" => {
                 progress_cb(10, "Initializing Self-Evolving Agent Loop...");
                 let engine = crate::mcp_self_evolving_loop::SelfEvolvingAgentLoop::new(&self.workspace_root)?;

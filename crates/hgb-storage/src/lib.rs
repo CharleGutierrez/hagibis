@@ -268,6 +268,13 @@ pub use lancedb_vector_engine::{
     DistanceMetric, LanceDbVectorEngine, SearchQuery, SearchResult, VectorRecord,
 };
 
+// Pillar 4: Full-Codebase Vector RAG & Refactoring Engine
+pub mod codebase_vector_rag;
+pub use codebase_vector_rag::{
+    CodeChunkKind, CodebaseChunker, CodebaseVectorEmbedder, CodebaseVectorRagEngine,
+    RefactoringCategory, RefactoringSeverity, CODEBASE_VECTOR_DIM,
+};
+
 // Strategic Upgrade: Unified Vector-Relational Memory Bus (Zero-Copy SQLite CDC Bridge)
 pub mod unified_vector_relational_bus;
 pub use unified_vector_relational_bus::{

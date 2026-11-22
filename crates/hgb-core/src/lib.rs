@@ -52,6 +52,12 @@ pub mod web_browser;
 pub mod mcp;
 pub mod timeline;
 pub mod verification_gate;
+pub mod autonomous_healing_oracle;
+pub use autonomous_healing_oracle::{
+    AutonomousHealingOracle, BuildTarget, CompilerDiagnostic as OracleCompilerDiagnostic, DiagnosticSpan,
+    FirstGreenConsensusCertificate, HealerLoopOutcome, LlmPatchSynthesizer,
+    PatchValidator, RepairPromptFormatter, SourceContextWindow, SynthesizedPatchResult,
+};
 pub mod shell_hook;
 pub mod ambient_vibe;
 pub mod ast_arbiter;
