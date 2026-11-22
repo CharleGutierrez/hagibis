@@ -34,6 +34,22 @@ pub use dynamic_capability_manager::{
 };
 pub use canonical_abi_shm_views::NetworkPermissionToken;
 
+pub mod hardened_dual_sandbox;
+pub use hardened_dual_sandbox::{
+    HardenedDualSandboxCoordinator, ExecutionSandboxMode, UntrustedExecutionTarget,
+    UntrustedExecutionReceipt, CapabilityTokenValidator, CapabilityToken,
+    CapabilityTokenBuilder, CapabilityViolation, ViolationSeverity,
+    EnvironmentIsolationFlags, BinaryFormat, BinaryArch, IsolationBackend,
+    JailStatus, MachineConfig, SymbolDescriptor, SectionDescriptor,
+    ControlFlowGraph, BasicBlockNode, CfgEdge, DecompilationResult,
+    calculate_shannon_entropy, DEFAULT_WASM_FUEL_BUDGET, DEFAULT_MAX_MEMORY_MB,
+    DEFAULT_TIMEOUT_MS, WASM_PAGE_SIZE_BYTES, LINUX_PAGE_SIZE_BYTES,
+    WIT_CAP_NETWORK_READ, WIT_CAP_NETWORK_EGRESS, WIT_CAP_NETWORK_INGRESS,
+    WIT_CAP_FS_RO, WIT_CAP_FS_RW, WIT_CAP_FS_DELETE, WIT_CAP_CRYPTO_VERIFY,
+    WIT_CAP_PROCESS_SPAWN, WIT_CAP_SIMD_VECTORS, WIT_CAP_GPU_TENSOR,
+    WIT_CAP_REVERSE_ENGINEER,
+};
+
 pub mod component_model_bridge;
 pub use component_model_bridge::{
     CanonicalAbiFunction, CanonicalValue, ComponentHeaderInfo, ComponentTrap, MemoryRegionType,
@@ -55,6 +71,9 @@ pub use kernel_build_cache_manager::{
     KernelArtifacts, KernelBuildCacheManager, KernelBuildMetadata, KernelBuildOptions,
     WasmOptimizationMode, CACHE_METADATA_FILENAME, DEFAULT_MAX_CACHE_BYTES,
 };
+
+pub mod wit_hardened_dual_sandbox_arbiter;
+pub mod canonical_abi_wit_component_mediator;
 
 /// Tool input/output manifest exported by the WASM guest
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

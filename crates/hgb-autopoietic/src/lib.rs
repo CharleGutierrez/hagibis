@@ -13,6 +13,7 @@ pub mod live_closed_loop_compiler_healer;
 pub mod cryptographic_patch_attestation;
 pub mod patch_healer_integration;
 pub mod continuous_pgo_bolt_feedback_daemon;
+pub mod static_analysis_fuzzer_healer;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -49,6 +50,12 @@ pub use cryptographic_patch_attestation::{
 pub use patch_healer_integration::{
     AutonomousHealerOrchestrator, HealerRemediationCertificate, HealingPipelineResult,
     PatchCandidate as IntegrationPatchCandidate, VerificationProbeOutcome,
+};
+pub use static_analysis_fuzzer_healer::{
+    AutonomousSecurityPatchGenerator, CweCategory, DiagnosticSource,
+    OtelSecurityAuditReporter, OtelSecuritySpan, SafetyInvariant,
+    SecurityAuditLedgerEntry, SecurityPatchCandidate, StaticAnalysisAuditEngine,
+    StaticAuditError, VulnerabilityDiagnostic, VulnerabilitySeverity,
 };
 
 /// Zero-Downtime Binary Hot-Swapper using atomic symlinks & connection draining

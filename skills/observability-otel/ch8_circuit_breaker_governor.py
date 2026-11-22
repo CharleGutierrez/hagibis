@@ -404,6 +404,201 @@ class PidController:
 
 
 # ==============================================================================
+# Memory Spike & Leak Rate Supervision Engine
+# ==============================================================================
+
+DEFAULT_MEMORY_SPIKE_BYTES = int(os.environ.get("HGB_CB_MEM_SPIKE_BYTES", 256 * 1024 * 1024))
+DEFAULT_MAX_LEAK_RATE_BYTES_PER_SEC = float(os.environ.get("HGB_CB_MAX_LEAK_RATE", 10.0 * 1024 * 1024))
+DEFAULT_MAX_TOTAL_MEMORY_BYTES = int(os.environ.get("HGB_CB_MAX_TOTAL_MEM", 2 * 1024 * 1024 * 1024))
+
+
+@dataclass
+class MemoryReading:
+    timestamp: float
+    rss_bytes: int
+    heap_bytes: int = 0
+    allocation_count: int = 0
+
+
+class MemoryTracker:
+    """
+    Supervises memory usage across autonomous healing loops.
+    Detects:
+      1. Hard memory ceiling breaches (e.g. > 2 GB)
+      2. Instantaneous memory consumption spikes (e.g. > 256 MB delta)
+      3. Monotonic runaway leak trends (5 consecutive increasing samples)
+      4. Leak rate limits in bytes/second (e.g. > 10 MB/s growth)
+    """
+    def __init__(
+        self,
+        spike_threshold_bytes: int = DEFAULT_MEMORY_SPIKE_BYTES,
+        max_leak_rate_bytes_per_sec: float = DEFAULT_MAX_LEAK_RATE_BYTES_PER_SEC,
+        max_total_memory_bytes: int = DEFAULT_MAX_TOTAL_MEMORY_BYTES,
+        history_capacity: int = 20
+    ):
+        self.spike_threshold = spike_threshold_bytes
+        self.max_leak_rate = max_leak_rate_bytes_per_sec
+        self.max_total_mem = max_total_memory_bytes
+        self.capacity = max(5, history_capacity)
+        self.history: List[MemoryReading] = []
+
+    def reset(self) -> None:
+        self.history.clear()
+
+    def record_reading(
+        self,
+        rss_bytes: int,
+        heap_bytes: int = 0,
+        allocation_count: int = 0,
+        timestamp: Optional[float] = None
+    ) -> Tuple[bool, str, Dict[str, Any]]:
+        now = timestamp if timestamp is not None else time.time()
+        reading = MemoryReading(
+            timestamp=now,
+            rss_bytes=rss_bytes,
+            heap_bytes=heap_bytes,
+            allocation_count=allocation_count
+        )
+
+        # 1. Hard ceiling breach
+        total = max(rss_bytes, heap_bytes)
+        if total >= self.max_total_mem:
+            self.history.append(reading)
+            return True, f"Hard memory ceiling breached: {total} >= {self.max_total_mem} bytes", {"kind": "HARD_CEILING", "current": total}
+
+        # 2. Instantaneous spike breach
+        if self.history:
+            prev = self.history[-1]
+            if reading.rss_bytes > prev.rss_bytes:
+                spike = reading.rss_bytes - prev.rss_bytes
+                if spike >= self.spike_threshold:
+                    self.history.append(reading)
+                    return True, f"Instantaneous memory spike breached: +{spike} bytes >= {self.spike_threshold}", {"kind": "SPIKE", "delta": spike}
+
+        self.history.append(reading)
+        if len(self.history) > self.capacity:
+            self.history = self.history[-self.capacity:]
+
+        # 3. Monotonic runaway leak (5 samples)
+        if len(self.history) >= 5:
+            last5 = self.history[-5:]
+            if all(last5[i].rss_bytes > last5[i-1].rss_bytes for i in range(1, len(last5))):
+                growth = last5[-1].rss_bytes - last5[0].rss_bytes
+                if growth >= (self.spike_threshold // 2):
+                    return True, f"Monotonic runaway memory leak: 5 consecutive increments (+{growth} bytes)", {"kind": "MONOTONIC_LEAK", "growth": growth}
+
+        # 4. Leak rate limit
+        if len(self.history) >= 3:
+            oldest = self.history[0]
+            newest = self.history[-1]
+            dt = newest.timestamp - oldest.timestamp
+            if dt > 0.5:
+                growth = max(0, newest.rss_bytes - oldest.rss_bytes)
+                rate = growth / dt
+                if rate >= self.max_leak_rate:
+                    return True, f"Memory leak rate limit exceeded: {rate:.1f} B/s >= {self.max_leak_rate:.1f} B/s", {"kind": "LEAK_RATE", "rate": rate}
+
+        return False, "Memory nominal", {}
+
+
+# ==============================================================================
+# Infinite Recursion & Cycle Detection Engine
+# ==============================================================================
+
+class RecursionAndCycleDetector:
+    """
+    Detects cyclic thrashing and infinite recursion in autonomous code generation loops:
+      1. Turn recursion depth limit (e.g. > 12)
+      2. Zero progress stall (3 consecutive identical state hashes)
+      3. Direct 2-cycle oscillation (A -> B -> A)
+      4. Periodic cycles of length K in [3, 8] (A -> B -> ... -> A)
+    """
+    def __init__(
+        self,
+        max_recursion_depth: int = 12,
+        max_cycle_period: int = 8,
+        history_capacity: int = 50
+    ):
+        self.max_recursion_depth = max_recursion_depth
+        self.max_cycle_period = max_cycle_period
+        self.capacity = history_capacity
+        self.history: List[Dict[str, Any]] = []
+
+    def reset(self) -> None:
+        self.history.clear()
+
+    def record_turn(
+        self,
+        turn_number: int,
+        state_hash: str,
+        intent: str = "",
+        recursion_depth: int = 0,
+        timestamp: Optional[float] = None
+    ) -> Tuple[bool, str, Dict[str, Any]]:
+        now = timestamp if timestamp is not None else time.time()
+
+        # 1. Recursion depth ceiling
+        if recursion_depth >= self.max_recursion_depth:
+            return True, f"Maximum recursion depth breached: {recursion_depth} >= {self.max_recursion_depth}", {
+                "pattern": "RECURSION_DEPTH_EXCEEDED",
+                "depth": recursion_depth,
+                "max_depth": self.max_recursion_depth
+            }
+
+        snap = {
+            "turn_number": turn_number,
+            "state_hash": state_hash,
+            "intent": intent,
+            "recursion_depth": recursion_depth,
+            "timestamp": now
+        }
+        self.history.append(snap)
+        if len(self.history) > self.capacity:
+            self.history = self.history[-self.capacity:]
+
+        # 2. Zero-progress stall: 3 consecutive identical state hashes
+        if len(self.history) >= 3:
+            tail3 = self.history[-3:]
+            if tail3[0]["state_hash"] == tail3[1]["state_hash"] == tail3[2]["state_hash"]:
+                return True, "Zero-progress stall: 3 consecutive turns generated identical codebase hash without modification.", {
+                    "pattern": "ZERO_PROGRESS_STALL",
+                    "state_hash": state_hash,
+                    "turns": [t["turn_number"] for t in tail3]
+                }
+
+        # 3. Direct 2-cycle oscillation: A -> B -> A
+        if len(self.history) >= 3:
+            s_prev2 = self.history[-3]
+            s_prev1 = self.history[-2]
+            if state_hash == s_prev2["state_hash"] and state_hash != s_prev1["state_hash"]:
+                return True, f"Direct 2-cycle oscillation detected: State reverted to turn #{s_prev2['turn_number']} (Hash: {state_hash[:8]})", {
+                    "pattern": "DIRECT_OSCILLATION",
+                    "state_a": state_hash,
+                    "state_b": s_prev1["state_hash"],
+                    "rollback_target_turn": s_prev2["turn_number"]
+                }
+
+        # 4. Periodic cycle of length K (3 to max_cycle_period)
+        n = len(self.history)
+        max_k = min(self.max_cycle_period, n // 2)
+        for k in range(3, max_k + 1):
+            is_periodic = True
+            for i in range(k):
+                if self.history[n - 1 - i]["state_hash"] != self.history[n - 1 - k - i]["state_hash"]:
+                    is_periodic = False
+                    break
+            if is_periodic:
+                rollback_turn = self.history[n - 2 * k]["turn_number"]
+                return True, f"Periodic cycle detected with period {k} across {2*k} turns", {
+                    "pattern": "PERIODIC_CYCLE",
+                    "period": k,
+                    "rollback_target_turn": rollback_turn
+                }
+
+        return False, "Code generation progression nominal", {}
+
+
+# ==============================================================================
 # Flapping Detection Engine
 # ==============================================================================
 
@@ -670,6 +865,8 @@ class AutonomicCircuitBreakerGovernor:
 
         self._registry: Dict[str, SkillGovernanceRecord] = {}
         self._detectors: Dict[str, SlidingWindowAnomalyDetector] = {}
+        self._memory_trackers: Dict[str, MemoryTracker] = {}
+        self._cycle_detectors: Dict[str, RecursionAndCycleDetector] = {}
         self._history: List[MutationAttempt] = []
         self._load_registry()
 
@@ -815,6 +1012,24 @@ class AutonomicCircuitBreakerGovernor:
             jitter = rng.uniform(jitter_min, jitter_max)
 
         return round(base_backoff + jitter, 4)
+
+    def calculate_backoff(
+        self,
+        iteration: int,
+        with_jitter: bool = True,
+        jitter_min: float = 0.1,
+        jitter_max: float = 0.5
+    ) -> float:
+        """
+        Calculates exponential backoff dampening:
+          delay = min(t_max, t0 * (2 ** (iteration - 1))) + uniform_jitter
+        """
+        it = max(1, iteration)
+        base = min(self.t_max, self.t0 * (2.0 ** (it - 1)))
+        if with_jitter:
+            jitter = random.uniform(jitter_min, jitter_max)
+            return round(base + jitter, 3)
+        return round(base, 3)
 
     # --------------------------------------------------------------------------
     # Adaptive PID Controller & Backoff (Pillar 2)
@@ -1199,6 +1414,155 @@ class AutonomicCircuitBreakerGovernor:
         self.dispatch_webhook_alert("hitl_operator_unlock", unlock_receipt)
         return unlock_receipt
 
+    def reset_skill(self, skill_id: str, restore_path: Optional[Union[str, Path]] = None) -> bool:
+        """
+        HITL Administrative Reset:
+        Resets an OPEN / QUARANTINED circuit breaker back to CLOSED.
+        If skill is PERM_TRIPPED_CRYPTOLOCKED, unsigned reset is strictly rejected.
+        Restores write permissions on restore_path if provided.
+        """
+        rec = self._registry.get(skill_id)
+        if not rec:
+            return False
+        if rec.state == CircuitState.PERM_TRIPPED_CRYPTOLOCKED:
+            raise PermissionError(
+                f"Cannot perform unsigned reset on cryptolocked skill [{skill_id}]. Authorized signed MCP unlock required."
+            )
+        rec.state = CircuitState.CLOSED
+        rec.consecutive_failures = 0
+        rec.consecutive_successes = 0
+        rec.is_quarantined = False
+        rec.quarantine_reason = None
+        rec.quarantine_path = None
+        rec.open_until_timestamp = 0.0
+        rec.last_state_change_timestamp = time.time()
+        rec.anomaly_score = 0.0
+        rec.failure_rate = 0.0
+        if skill_id in self._detectors:
+            self._detectors[skill_id].clear()
+        if skill_id in self._memory_trackers:
+            self._memory_trackers[skill_id].reset()
+        if skill_id in self._cycle_detectors:
+            self._cycle_detectors[skill_id].reset()
+        if restore_path:
+            p = Path(restore_path)
+            if p.exists():
+                try:
+                    os.chmod(p, 0o644 if p.is_file() else 0o755)
+                except OSError:
+                    pass
+        self._save_registry()
+        return True
+
+    def record_memory_reading(
+        self,
+        skill_id: str,
+        rss_bytes: int,
+        heap_bytes: int = 0,
+        allocation_count: int = 0,
+        timestamp: Optional[float] = None,
+        target_paths: Optional[List[Union[str, Path]]] = None
+    ) -> Dict[str, Any]:
+        """
+        Supervises memory usage and automatically trips / escalates to PERM_TRIPPED_CRYPTOLOCKED upon leak limit breach.
+        """
+        now = timestamp if timestamp is not None else time.time()
+        if skill_id not in self._memory_trackers:
+            self._memory_trackers[skill_id] = MemoryTracker()
+        tracker = self._memory_trackers[skill_id]
+
+        is_breach, reason, details = tracker.record_reading(
+            rss_bytes=rss_bytes,
+            heap_bytes=heap_bytes,
+            allocation_count=allocation_count,
+            timestamp=now
+        )
+
+        rec = self._get_or_create_skill(skill_id)
+
+        if is_breach:
+            kind = details.get("kind", "")
+            if kind == "SPIKE":
+                rec.state = CircuitState.OPEN
+                rec.is_quarantined = True
+                rec.quarantine_reason = reason
+                rec.open_until_timestamp = now + 30.0
+                rec.last_state_change_timestamp = now
+                self._save_registry()
+                return {"is_breach": True, "state": CircuitState.OPEN.value, "reason": reason, "details": details}
+            else:
+                paths = target_paths or []
+                receipt = self.issue_cryptographic_lockout_receipt(
+                    skill_id=skill_id,
+                    reason=reason,
+                    flapping_signatures=[f"rss:{rss_bytes}"],
+                    consecutive_count=rec.consecutive_failures,
+                    error_fingerprint=f"MEM_LEAK_{int(now)}",
+                    locked_paths=paths,
+                    window_events=rec.window_events
+                )
+                self._save_registry()
+                return {
+                    "is_breach": True,
+                    "state": CircuitState.PERM_TRIPPED_CRYPTOLOCKED.value,
+                    "reason": reason,
+                    "lockout_receipt": receipt.to_dict(),
+                    "details": details
+                }
+
+        return {"is_breach": False, "state": rec.state.value, "reason": "Memory nominal", "details": {}}
+
+    def record_code_generation_turn(
+        self,
+        skill_id: str,
+        turn_number: int,
+        state_hash: str,
+        intent: str = "",
+        recursion_depth: int = 0,
+        timestamp: Optional[float] = None,
+        target_paths: Optional[List[Union[str, Path]]] = None
+    ) -> Dict[str, Any]:
+        """
+        Monitors autonomous code generation turns, detecting recursive deadlocks and hash cycles.
+        Escalates to PERM_TRIPPED_CRYPTOLOCKED immediately if a loop is detected.
+        """
+        now = timestamp if timestamp is not None else time.time()
+        if skill_id not in self._cycle_detectors:
+            self._cycle_detectors[skill_id] = RecursionAndCycleDetector()
+        cycle_det = self._cycle_detectors[skill_id]
+
+        is_cycle, reason, details = cycle_det.record_turn(
+            turn_number=turn_number,
+            state_hash=state_hash,
+            intent=intent,
+            recursion_depth=recursion_depth,
+            timestamp=now
+        )
+
+        rec = self._get_or_create_skill(skill_id)
+
+        if is_cycle:
+            paths = target_paths or []
+            receipt = self.issue_cryptographic_lockout_receipt(
+                skill_id=skill_id,
+                reason=reason,
+                flapping_signatures=[state_hash],
+                consecutive_count=turn_number,
+                error_fingerprint=f"CODE_CYCLE_{state_hash[:8]}",
+                locked_paths=paths,
+                window_events=rec.window_events
+            )
+            self._save_registry()
+            return {
+                "is_cycle": True,
+                "state": CircuitState.PERM_TRIPPED_CRYPTOLOCKED.value,
+                "reason": reason,
+                "lockout_receipt": receipt.to_dict(),
+                "details": details
+            }
+
+        return {"is_cycle": False, "state": rec.state.value, "reason": "Nominal progression", "details": {}}
+
     # --------------------------------------------------------------------------
     # Circuit Breaker Status & Hysteresis Transitions
     # --------------------------------------------------------------------------
@@ -1506,6 +1870,14 @@ class AutonomicCircuitBreakerGovernor:
                         pre_hash=pre_hash,
                         post_hash=post_hash
                     )
+                    self.dispatch_webhook_alert("quarantine_alert", {
+                        "skill_id": skill_id,
+                        "consecutive_failures": rec.consecutive_failures,
+                        "error_trace": error_trace,
+                        "trip_reason": trip_reason,
+                        "action_required": "Human-In-The-Loop inspection required",
+                        "quarantine_path": q_info.get("quarantine_path", "")
+                    })
                     outcome["state"] = rec.state.value
                     outcome["action"] = "BREAKER_TRIPPED_QUARANTINED"
                     outcome["quarantine_info"] = q_info
@@ -1944,6 +2316,13 @@ def create_governor_from_env() -> AutonomicCircuitBreakerGovernor:
     )
 
 
+def get_circuit_breaker_governor(*args, **kwargs) -> AutonomicCircuitBreakerGovernor:
+    """Factory alias ensuring backward compatibility across Python test suites."""
+    if args or kwargs:
+        return AutonomicCircuitBreakerGovernor(*args, **kwargs)
+    return create_governor_from_env()
+
+
 def cli_main():
     import argparse
     parser = argparse.ArgumentParser(description="Hagibis Autopoietic Circuit Breaker Governor CLI")
@@ -1993,7 +2372,7 @@ def cli_main():
     p_backoff.add_argument("iteration", type=int, help="Attempt iteration number")
     p_backoff.add_argument("--t0", type=float, default=DEFAULT_T0)
     p_backoff.add_argument("--tmax", type=float, default=DEFAULT_TMAX)
-    p_backoff.add_argument("--strategy", choices=["fibonacci", "full_jitter"], default="fibonacci", help="Backoff strategy")
+    p_backoff.add_argument("--strategy", choices=["fibonacci", "exponential", "full_jitter"], default="exponential", help="Backoff strategy")
 
     # validate-quorum
     p_quorum = subparsers.add_parser("validate-quorum", help="Validate mesh quorum for state transition")
@@ -2012,6 +2391,28 @@ def cli_main():
     # status
     p_status = subparsers.add_parser("status", help="Query skill governance status")
     p_status.add_argument("skill_id", help="Skill identifier")
+
+    # record-memory
+    p_mem = subparsers.add_parser("record-memory", help="Record memory reading and supervise leaks")
+    p_mem.add_argument("skill_id", help="Skill identifier")
+    p_mem.add_argument("--rss", type=int, required=True, help="RSS memory in bytes")
+    p_mem.add_argument("--heap", type=int, default=0, help="Heap memory in bytes")
+    p_mem.add_argument("--alloc", type=int, default=0, help="Allocation count")
+    p_mem.add_argument("--file", default=None, help="Target file path to lock upon leak")
+
+    # check-recursion
+    p_rec = subparsers.add_parser("check-recursion", help="Check autonomous code generation turn for recursion depth and cycles")
+    p_rec.add_argument("skill_id", help="Skill identifier")
+    p_rec.add_argument("--turn", type=int, required=True, help="Turn number")
+    p_rec.add_argument("--hash", required=True, help="Codebase state hash")
+    p_rec.add_argument("--depth", type=int, default=0, help="Recursion depth")
+    p_rec.add_argument("--intent", default="", help="Turn intent summary")
+    p_rec.add_argument("--file", default=None, help="Target file path to lock upon cycle")
+
+    # reset
+    p_rst = subparsers.add_parser("reset", help="Administrative HITL reset")
+    p_rst.add_argument("skill_id", help="Skill identifier")
+    p_rst.add_argument("--file", default=None, help="File path to restore permissions")
 
     args = parser.parse_args()
     gov = create_governor_from_env()
@@ -2068,10 +2469,58 @@ def cli_main():
         cur_state = rec.state.value if rec else CircuitState.CLOSED.value
         print(f"OK:{cur_state}:{rec.consecutive_successes if rec else 1}")
         sys.exit(0)
-        rec = gov._registry.get(args.skill_id)
-        cur_state = rec.state.value if rec else CircuitState.CLOSED.value
-        print(f"OK:{cur_state}:{rec.consecutive_successes if rec else 1}")
-        sys.exit(0)
+
+    elif args.command == "record-memory":
+        targets = [args.file] if args.file else []
+        res = gov.record_memory_reading(
+            skill_id=args.skill_id,
+            rss_bytes=args.rss,
+            heap_bytes=args.heap,
+            allocation_count=args.alloc,
+            target_paths=targets
+        )
+        if res["is_breach"]:
+            if res["state"] == CircuitState.PERM_TRIPPED_CRYPTOLOCKED.value:
+                lockout_id = res.get("lockout_receipt", {}).get("lockout_id", "")
+                print(f"MEM_CRYPTOLOCKED:{res['state']}:{lockout_id}:{res['reason']}")
+                sys.exit(3)
+            else:
+                print(f"MEM_SPIKE_OPEN:{res['state']}:{res['reason']}")
+                sys.exit(2)
+        else:
+            print(f"MEM_OK:{res['state']}:{res['reason']}")
+            sys.exit(0)
+
+    elif args.command == "check-recursion":
+        targets = [args.file] if args.file else []
+        res = gov.record_code_generation_turn(
+            skill_id=args.skill_id,
+            turn_number=args.turn,
+            state_hash=args.hash,
+            intent=args.intent,
+            recursion_depth=args.depth,
+            target_paths=targets
+        )
+        if res["is_cycle"]:
+            lockout_id = res.get("lockout_receipt", {}).get("lockout_id", "")
+            print(f"CYCLE_CRYPTOLOCKED:{res['state']}:{lockout_id}:{res['reason']}")
+            sys.exit(3)
+        else:
+            print(f"CYCLE_OK:{res['state']}:{res['reason']}")
+            sys.exit(0)
+
+    elif args.command == "reset":
+        try:
+            ok = gov.reset_skill(args.skill_id, restore_path=args.file)
+            if ok:
+                print(f"RESET_OK:{args.skill_id}")
+                sys.exit(0)
+            else:
+                print(f"RESET_NOT_FOUND:{args.skill_id}")
+                sys.exit(1)
+        except Exception as e:
+            print(f"RESET_ERR:{e}", file=sys.stderr)
+            sys.exit(1)
 
     elif args.command == "operator-unlock":
         try:
@@ -2137,7 +2586,14 @@ def cli_main():
         sys.exit(0)
 
     elif args.command == "backoff":
-        b = gov.calculate_fibonacci_backoff(args.iteration, args.t0, args.tmax)
+        gov.t0 = args.t0
+        gov.t_max = args.tmax
+        if getattr(args, "strategy", "exponential") == "fibonacci":
+            b = gov.calculate_fibonacci_backoff(args.iteration, with_jitter=True)
+        elif getattr(args, "strategy", "exponential") == "full_jitter":
+            b = gov.calculate_full_jitter_backoff(args.iteration, t0=args.t0, t_max=args.tmax)
+        else:
+            b = gov.calculate_backoff(args.iteration, with_jitter=True)
         print(f"{b:.3f}")
         sys.exit(0)
 

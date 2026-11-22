@@ -20,6 +20,7 @@ quote = "1.0"
 uuid = { version = "1.27.0", features = ["v4"] }
 blake3 = { workspace = true }
 sha2 = { workspace = true }
+regex = { workspace = true }
 ed25519-dalek = "3.0.0"
 hex = "0.4.3"
 

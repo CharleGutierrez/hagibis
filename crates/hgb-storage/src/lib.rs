@@ -10,6 +10,21 @@ pub mod vector;
 pub mod simd_vector_index;
 pub mod semantic_cache;
 pub mod distributed_vector_engine;
+pub mod long_term_semantic_memory;
+pub mod mcp_semantic_bridge;
+
+pub use long_term_semantic_memory::{
+    CodeSymbolKind, CodeSymbolRecord, CodebaseIngestReport, DeterministicSemanticEmbedder,
+    DocIngestReport, DocKnowledgeKind, DocSectionRecord, ExecutionTraceSnapshot,
+    LongTermSemanticMemoryIndex, MemorySearchQuery, MemorySearchResult as LongTermMemorySearchResult, ModuleTopologyNode,
+    SemanticMemoryItem, SEMANTIC_VECTOR_DIM,
+};
+
+pub use mcp_semantic_bridge::{
+    CodebaseRetrievalMcpHandler, McpContentItem, McpToolCallRequest, McpToolCallResponse,
+    OtelTelemetryMcpHandler, RigAgentOrchestratorMcpHandler, SqliteTransactionalMcpHandler,
+    UnifiedMcpToolDispatcher,
+};
 
 pub use db_sentinel::DbSentinel;
 pub use db_time_machine::{DbSandbox, DbSnapshot, DbTimeMachine};
@@ -672,6 +687,21 @@ pub use lru_vector_eviction::{
 // ============================================================================
 pub mod attention_context_pruner;
 pub use attention_context_pruner::*;
+
+// ============================================================================
+// High-Speed Semantic Vector Memory & Knowledge Retrieval (LanceDB)
+// ============================================================================
+pub mod cve_rfc_knowledge_rag;
+pub use cve_rfc_knowledge_rag::{
+    simd_cosine_similarity as knowledge_rag_simd_cosine_similarity,
+    AttentionRankingConfig, CitationAnchor, CitationType, CodebaseTopology,
+    CriticalDataFlowPath, CveRecord, DeterministicVectorEmbedder, InterfaceBinding,
+    KnowledgeDocType, KnowledgeDocument, KnowledgePayload, KnowledgeRagEngine,
+    MetadataFilter, ModuleEdge, ModuleNode, ProtocolInvariant, ProtocolStateTransition,
+    RagSearchResult, RagSynthesizedContext, RfcSpecification, SecurityConsideration,
+    SemanticVectorIndex, VectorIndexEntry, CACHELINE_ALIGNMENT as RAG_CACHELINE_ALIGNMENT,
+    KNOWLEDGE_EMBEDDING_DIM, LANCE_KNOWLEDGE_VERSION, LANCE_VEC_MAGIC as RAG_LANCE_VEC_MAGIC,
+};
 
 
 

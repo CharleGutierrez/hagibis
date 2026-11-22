@@ -4300,6 +4300,299 @@
         "operator_public_key",
         "ed25519_signature"
       ]
+    },
+    "hagibis_cve_rfc_query": {
+      "description": "Sub-millisecond semantic search over indexed CVE databases, RFC specifications, and codebase topologies using LanceDB-compatible vector memory with attention-weighted ranking and citation anchors",
+      "parameters": {
+        "query": {
+          "type": "string",
+          "description": "Natural language or technical semantic query (e.g., 'unsafe pointer arithmetic', 'QUIC packet amplification', 'memory safety invariant')"
+        },
+        "top_k": {
+          "type": "integer",
+          "default": 5,
+          "description": "Maximum number of ranked knowledge documents to retrieve"
+        },
+        "filter": {
+          "type": "object",
+          "properties": {
+            "doc_types": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "Cve",
+                  "Rfc",
+                  "Topology"
+                ]
+              },
+              "description": "Filter by document categories"
+            },
+            "min_cvss_score": {
+              "type": "number",
+              "description": "Minimum CVSS score threshold for CVE results"
+            },
+            "cwe_filter": {
+              "type": "string",
+              "description": "CWE classification substring filter (e.g., 'CWE-416')"
+            },
+            "rfc_numbers": {
+              "type": "array",
+              "items": {
+                "type": "integer"
+              },
+              "description": "List of RFC numbers to restrict search"
+            },
+            "required_tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Required tags that must match"
+            },
+            "module_filter": {
+              "type": "string",
+              "description": "Module path or binding name filter for topology results"
+            }
+          }
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "hagibis_ingest_knowledge_document": {
+      "description": "Ingest structured CVE security advisories, RFC protocol specifications, or codebase topologies into the LanceDB-compatible semantic vector index with 64-byte aligned columnar persistence",
+      "parameters": {
+        "doc_type": {
+          "type": "string",
+          "enum": [
+            "cve",
+            "rfc",
+            "topology"
+          ],
+          "description": "Category of document being ingested"
+        },
+        "cve": {
+          "type": "object",
+          "properties": {
+            "cve_id": {
+              "type": "string"
+            },
+            "cwe_classification": {
+              "type": "string"
+            },
+            "cvss_score": {
+              "type": "number"
+            },
+            "vulnerable_code_pattern_signature": {
+              "type": "string"
+            },
+            "remediation_guidance": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            },
+            "affected_components": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "reference_urls": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "exploit_available": {
+              "type": "boolean"
+            }
+          }
+        },
+        "rfc": {
+          "type": "object",
+          "properties": {
+            "rfc_number": {
+              "type": "integer"
+            },
+            "title": {
+              "type": "string"
+            },
+            "protocol_invariants": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "formal_rule": {
+                    "type": "string"
+                  },
+                  "enforcement_level": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "description",
+                  "formal_rule",
+                  "enforcement_level"
+                ]
+              }
+            },
+            "state_transitions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "from_state": {
+                    "type": "string"
+                  },
+                  "to_state": {
+                    "type": "string"
+                  },
+                  "trigger_event": {
+                    "type": "string"
+                  },
+                  "guard_condition": {
+                    "type": "string"
+                  },
+                  "action": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "security_considerations": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "section": {
+                    "type": "string"
+                  },
+                  "threat_model": {
+                    "type": "string"
+                  },
+                  "vulnerability": {
+                    "type": "string"
+                  },
+                  "mitigation": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "raw_text": {
+              "type": "string"
+            }
+          }
+        },
+        "topology": {
+          "type": "object",
+          "properties": {
+            "project_name": {
+              "type": "string"
+            },
+            "repository_root": {
+              "type": "string"
+            },
+            "module_graph_nodes": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "lines_of_code": {
+                    "type": "integer"
+                  },
+                  "unsafe_block_count": {
+                    "type": "integer"
+                  },
+                  "risk_weight": {
+                    "type": "number"
+                  }
+                }
+              }
+            },
+            "interface_bindings": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "interface_name": {
+                    "type": "string"
+                  },
+                  "exports": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "imports": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "abi_version": {
+                    "type": "string"
+                  },
+                  "is_wasm_component": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            },
+            "critical_data_flow_paths": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "path_id": {
+                    "type": "string"
+                  },
+                  "source_component": {
+                    "type": "string"
+                  },
+                  "sink_component": {
+                    "type": "string"
+                  },
+                  "intermediate_nodes": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "is_tainted": {
+                    "type": "boolean"
+                  },
+                  "safety_invariants": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "required": [
+        "doc_type"
+      ]
     }
   },
   "mcpServers": {

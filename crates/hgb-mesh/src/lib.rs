@@ -25,10 +25,18 @@ pub mod edge_websocket_quic_federation;
 pub mod distributed_vector_fabric;
 pub mod quorum_circuit_breaker;
 pub mod pbft_consensus;
+pub mod multi_agent_mesh_orchestrator;
 
 // Public re-exports
 pub use error::{MeshError, Result};
 pub use pbft_consensus::*;
+pub use multi_agent_mesh_orchestrator::{
+    CodeAuditReport, CweFinding, DistributedAgentOrchestrator, GeneratedTestCase,
+    PerformanceTuningReport, PgoMetrics, SwarmAgentRole, SwarmConsensusReport,
+    SwarmConsensusVote, SwarmNodeDescriptor, SwarmProposalDebate, SwarmTask,
+    SwarmTaskPayload, SwarmTaskResult, TaskPriority, TaskStatus, VoteDecision,
+    WasmComponentGuestRunner,
+};
 pub use quorum_circuit_breaker::{
     CircuitBreakerState, PeerEndorsement, QuorumCircuitBreaker, QuorumVoteResult,
 };

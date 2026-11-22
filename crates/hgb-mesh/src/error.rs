@@ -56,4 +56,10 @@ pub enum MeshError {
 
     #[error("Cryptographic failure: {0}")]
     CryptographicFailure(String),
+
+    #[error("Resource not found: {0}")]
+    NotFound(String),
+
+    #[error("Lock acquisition failed: {0}")]
+    LockError(String),
 }

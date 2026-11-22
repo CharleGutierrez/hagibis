@@ -1936,6 +1936,7 @@ dependencies = [
  "hgb-core",
  "hgb-wasm-kernel",
  "quote",
+ "regex",
  "serde",
  "serde_json",
  "sha2 0.10.9",

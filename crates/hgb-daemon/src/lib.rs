@@ -4,6 +4,7 @@ pub mod proxy_server;
 pub mod remote_bot;
 pub mod mcp_sse_server;
 pub mod event_driven_pipeline_engine;
+pub mod firecracker_hardware_isolation;
 pub use server::{DaemonState, HagibisDaemon};
 pub use ambient_service::{AmbientDaemonService, DreamJournal, DreamJournalEntry};
 pub use event_driven_pipeline_engine::{

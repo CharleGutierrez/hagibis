@@ -2323,3 +2323,32 @@ pub use semantic_ast_synthesizer::{
     PropertyTestEngine, SemanticAstSynthesizer, SignatureDelta, StructuredAstDiff,
     SynthesisError, SynthesizedPatch,
 };
+
+// Strategic Upgrade: Adaptive PID Circuit Breaker, Hysteresis & Cryptographic Lockout (Pillars 3 & 4)
+pub mod adaptive_pid_circuit_breaker;
+pub use adaptive_pid_circuit_breaker::{
+    AdaptivePidCircuitBreaker, AnomalyMetrics, CircuitBreakerConfig, CircuitState as AdaptiveCircuitState,
+    CodeTurnSnapshot, CryptographicLockoutReceipt as AdaptiveLockoutReceipt,
+    CycleDetectionResult, CyclePatternKind, ExecutionAttemptOutcome, ExecutionAttemptSpec,
+    FlappingDetector as AdaptiveFlappingDetector, FlappingPattern, GovernorKeypair,
+    McpUnlockReceipt as AdaptiveMcpUnlockReceipt, McpUnlockRequest as AdaptiveMcpUnlockRequest,
+    MemoryBreachKind, MemoryReading, MemoryThresholdConfig, MemoryTracker,
+    PidConfig as AdaptivePidConfig, PidController as AdaptivePidController,
+    RecursionAndCycleDetector, SlidingWindowAnomalyDetector as AdaptiveAnomalyDetector,
+};
+
+// Strategic Upgrade: Continuous PGO/BOLT Closed-Loop Feedback Pipeline (Pillars 1, 3 & 4)
+pub mod pgo_bolt_feedback_loop;
+pub use pgo_bolt_feedback_loop::{
+    BoltLayoutOptimizer, BoltOptimizationReport, ContinuousPgoBoltFeedbackPipeline,
+    ContinuousTelemetrySnapshot, HotSwapReceipt as PgoHotSwapReceipt, HotspotMetric,
+    OptimizationTriggerDecision, OptimizationUrgency, PgoBoltConfig,
+    PipelineLifecycleState, ProfileLifecycleManager, ProfileMergeReceipt,
+    RollbackReceipt, TriggerEvaluationEngine, TriggerThresholds, ZeroDowntimeBinarySwapper,
+};
+
+pub mod mcp_bridge_handlers;
+pub use mcp_bridge_handlers::{
+    CodebaseRetrievalSchemas, OtelTelemetryMcpHandler, RigAgentOrchestratorMcpHandler, SqliteTransactionalMcpHandler,
+};
+

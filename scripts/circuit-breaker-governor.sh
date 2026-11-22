@@ -169,26 +169,30 @@ hgb_calculate_backoff() {
     local iteration="${1:-1}"
     local t0="${2:-$HGB_CB_T0}"
     local tmax="${3:-$HGB_CB_TMAX}"
+    local strategy="${4:-exponential}"
 
     if [ -f "$PYTHON_GOVERNOR" ]; then
-        python3 "$PYTHON_GOVERNOR" backoff "$iteration" --t0 "$t0" --tmax "$tmax"
+        python3 "$PYTHON_GOVERNOR" backoff "$iteration" --t0 "$t0" --tmax "$tmax" --strategy "$strategy"
     else
         python3 -c "
 import sys, random
-def fib(n):
-    if n <= 0: return 0
-    if n in (1, 2): return 1
-    a, b = 1, 1
-    for _ in range(3, n + 1): a, b = b, a + b
-    return b
-
 it = max(1, int(sys.argv[1]))
 t0_val = float(sys.argv[2])
 tmax_val = float(sys.argv[3])
-base = min(tmax_val, t0_val * float(fib(it)))
+strat = sys.argv[4] if len(sys.argv) > 4 else 'exponential'
+if strat == 'fibonacci':
+    def fib(n):
+        if n <= 0: return 0
+        if n in (1, 2): return 1
+        a, b = 1, 1
+        for _ in range(3, n + 1): a, b = b, a + b
+        return b
+    base = min(tmax_val, t0_val * float(fib(it)))
+else:
+    base = min(tmax_val, t0_val * (2.0 ** (it - 1)))
 jitter = random.uniform(0.1, 0.5)
 print(f'{base + jitter:.3f}')
-" "$iteration" "$t0" "$tmax"
+" "$iteration" "$t0" "$tmax" "$strategy"
     fi
 }
 
@@ -500,6 +504,56 @@ if os.path.exists(reg_file):
 }
 
 # ------------------------------------------------------------------------------
+# 8. Record Memory Reading & Leak Rate Supervision
+# ------------------------------------------------------------------------------
+hgb_cb_record_memory() {
+    local skill_id="$1"
+    local rss_bytes="${2:-0}"
+    local heap_bytes="${3:-0}"
+    local alloc_count="${4:-0}"
+    local target_path="${5:-}"
+
+    init_governor_environment
+    if [ -f "$PYTHON_GOVERNOR" ]; then
+        local extra_args=()
+        if [ -n "$target_path" ]; then
+            extra_args+=(--file "$target_path")
+        fi
+        python3 "$PYTHON_GOVERNOR" record-memory "$skill_id" \
+            --rss "$rss_bytes" \
+            --heap "$heap_bytes" \
+            --alloc "$alloc_count" \
+            "${extra_args[@]}"
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# 9. Check Autonomous Code Generation Recursion & Cycles
+# ------------------------------------------------------------------------------
+hgb_cb_check_recursion() {
+    local skill_id="$1"
+    local turn_number="${2:-1}"
+    local state_hash="$3"
+    local depth="${4:-0}"
+    local intent="${5:-}"
+    local target_path="${6:-}"
+
+    init_governor_environment
+    if [ -f "$PYTHON_GOVERNOR" ]; then
+        local extra_args=()
+        if [ -n "$target_path" ]; then
+            extra_args+=(--file "$target_path")
+        fi
+        python3 "$PYTHON_GOVERNOR" check-recursion "$skill_id" \
+            --turn "$turn_number" \
+            --hash "$state_hash" \
+            --depth "$depth" \
+            --intent "$intent" \
+            "${extra_args[@]}"
+    fi
+}
+
+# ------------------------------------------------------------------------------
 # 10. Self-Test Verification Mode
 # ------------------------------------------------------------------------------
 run_self_tests() {
@@ -535,12 +589,12 @@ run_self_tests() {
 
     echo "2. Testing Fibonacci Reinforcement Backoff Calculation..."
     local b1 b2 b3 b4 b5 b6
-    b1=$(hgb_calculate_backoff 1 1.0 64.0)
-    b2=$(hgb_calculate_backoff 2 1.0 64.0)
-    b3=$(hgb_calculate_backoff 3 1.0 64.0)
-    b4=$(hgb_calculate_backoff 4 1.0 64.0)
-    b5=$(hgb_calculate_backoff 5 1.0 64.0)
-    b6=$(hgb_calculate_backoff 6 1.0 64.0)
+    b1=$(hgb_calculate_backoff 1 1.0 64.0 fibonacci)
+    b2=$(hgb_calculate_backoff 2 1.0 64.0 fibonacci)
+    b3=$(hgb_calculate_backoff 3 1.0 64.0 fibonacci)
+    b4=$(hgb_calculate_backoff 4 1.0 64.0 fibonacci)
+    b5=$(hgb_calculate_backoff 5 1.0 64.0 fibonacci)
+    b6=$(hgb_calculate_backoff 6 1.0 64.0 fibonacci)
     python3 -c "
 assert 1.1 <= float('$b1') <= 1.5, f'b1={float(\"$b1\")}'
 assert 1.1 <= float('$b2') <= 1.5, f'b2={float(\"$b2\")}'
@@ -659,7 +713,7 @@ main() {
             hgb_fibonacci "${2:-1}"
             ;;
         calculate-backoff)
-            hgb_calculate_backoff "${2:-1}" "${3:-$HGB_CB_T0}" "${4:-$HGB_CB_TMAX}"
+            hgb_calculate_backoff "${2:-1}" "${3:-$HGB_CB_T0}" "${4:-$HGB_CB_TMAX}" "${5:-exponential}"
             ;;
         apply-backoff)
             hgb_apply_backoff "${2:-unknown}" "${3:-1}"
@@ -681,6 +735,12 @@ main() {
             ;;
         reset)
             hgb_cb_reset_skill "${2:-unknown}" "${3:-}"
+            ;;
+        record-memory)
+            hgb_cb_record_memory "${2:-unknown}" "${3:-0}" "${4:-0}" "${5:-0}" "${6:-}"
+            ;;
+        check-recursion)
+            hgb_cb_check_recursion "${2:-unknown}" "${3:-1}" "${4:-}" "${5:-0}" "${6:-}" "${7:-}"
             ;;
         --test|test)
             run_self_tests
