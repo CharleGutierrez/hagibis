@@ -220,11 +220,16 @@ impl GpuShmEmbeddingCache {
 
         let shm_path = shm_dir.join(format!("hgb_gpu_embedding_cache_{}.shm", session_id));
 
-        // Create or open the backing file
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
+        // Create or open the backing file with secure 0600 permissions
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+
+        let file = options
             .open(&shm_path)
             .map_err(|e| HgbError::Storage(format!("Failed to open SHM backing file {:?}: {}", shm_path, e)))?;
 
@@ -417,7 +422,11 @@ impl GpuShmEmbeddingCache {
 
 impl Drop for GpuShmEmbeddingCache {
     fn drop(&mut self) {
-        // Clean up temporary shm file if desired
+        // Explicitly close backing file handle before unlinking
+        if let Ok(mut lock) = self.shm_file.lock() {
+            let _ = lock.take();
+        }
+        // Unlink SHM backing file to prevent host RAM leakage
         let _ = std::fs::remove_file(&self.shm_path);
     }
 }

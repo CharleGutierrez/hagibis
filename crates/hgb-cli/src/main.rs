@@ -3722,6 +3722,20 @@ enum Commands {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Install global terminal cleanup hook to guarantee recovery on unexpected panic
+    // (guarantees disable_raw_mode and LeaveAlternateScreen execute even with panic = "abort")
+    let default_panic_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        let _ = crossterm::terminal::disable_raw_mode();
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            crossterm::event::DisableBracketedPaste,
+            crossterm::terminal::LeaveAlternateScreen,
+            crossterm::cursor::Show
+        );
+        default_panic_hook(panic_info);
+    }));
+
     // Systems-grade stack envelope (32MB): guarantees seamless parsing of 125+ sovereign subcommands & deep ASTs
     let builder = std::thread::Builder::new()
         .name("hgb-runtime".to_string())

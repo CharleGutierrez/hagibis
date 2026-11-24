@@ -56,17 +56,19 @@ fn alignUp(val: usize, alignment: usize) usize {
     return (val + alignment - 1) & ~(alignment - 1);
 }
 
-pub fn allocBytes(size: usize) ?[*]u8 {
+pub fn allocBytesAligned(size: usize, alignment: usize) ?[*]u8 {
     if (size == 0) return null;
     initHeapIfNeeded();
 
-    const aligned_payload = alignUp(size, ALIGNMENT);
-    const total_needed = aligned_payload + @sizeOf(BlockHeader);
+    const eff_align = if (alignment < ALIGNMENT) ALIGNMENT else alignment;
+    const aligned_payload = alignUp(size, eff_align);
 
-    // 1. Search free-list for a reusable block (First-Fit)
+    // 1. Search free-list for a reusable block (First-Fit) with proper alignment
     var curr = first_block;
     while (curr) |b| {
-        if (b.magic == MAGIC_BLOCK and b.is_free == 1 and b.size >= aligned_payload) {
+        const payload_ptr = @as([*]u8, @ptrCast(b)) + @sizeOf(BlockHeader);
+        const payload_addr = @intFromPtr(payload_ptr);
+        if (b.magic == MAGIC_BLOCK and b.is_free == 1 and (payload_addr % eff_align == 0) and b.size >= aligned_payload) {
             if (b.size >= aligned_payload + @sizeOf(BlockHeader) + 16) {
                 const remaining_size = b.size - @as(u32, @intCast(aligned_payload + @sizeOf(BlockHeader)));
                 const split_ptr = @as([*]u8, @ptrCast(b)) + @sizeOf(BlockHeader) + aligned_payload;
@@ -81,12 +83,17 @@ pub fn allocBytes(size: usize) ?[*]u8 {
                 b.next = new_block;
             }
             b.is_free = 0;
-            return @as([*]u8, @ptrCast(b)) + @sizeOf(BlockHeader);
+            return payload_ptr;
         }
         curr = b.next;
     }
 
-    // 2. Bump heap_top
+    // 2. Bump heap_top ensuring payload address is strictly aligned to eff_align
+    const header_size = @sizeOf(BlockHeader);
+    const candidate_payload = alignUp(heap_top + header_size, eff_align);
+    const block_addr = candidate_payload - header_size;
+    const total_needed = (block_addr - heap_top) + header_size + aligned_payload;
+
     if (is_wasm) {
         const current_bytes = @as(usize, @intCast(@wasmMemorySize(0))) * 65536;
         if (heap_top + total_needed > current_bytes) {
@@ -100,8 +107,7 @@ pub fn allocBytes(size: usize) ?[*]u8 {
         if (heap_top + total_needed > heap_start + host_heap_buf.len) return null;
     }
 
-    const block_addr = heap_top;
-    heap_top += total_needed;
+    heap_top = block_addr + header_size + aligned_payload;
 
     const new_b: *BlockHeader = @ptrFromInt(block_addr);
     new_b.* = BlockHeader{
@@ -121,7 +127,11 @@ pub fn allocBytes(size: usize) ?[*]u8 {
         last.next = new_b;
     }
 
-    return @as([*]u8, @ptrCast(new_b)) + @sizeOf(BlockHeader);
+    return @as([*]u8, @ptrCast(new_b)) + header_size;
+}
+
+pub fn allocBytes(size: usize) ?[*]u8 {
+    return allocBytesAligned(size, ALIGNMENT);
 }
 
 pub fn freeBytes(ptr: [*]u8, size: usize) void {
@@ -162,7 +172,6 @@ export fn wasm_free(ptr: ?[*]u8, size: usize) callconv(.C) void {
 
 /// Standard WebAssembly Component Model (WASI 0.2 / Preview2) Canonical ABI Allocator
 pub export fn cabi_realloc(old_ptr: ?[*]u8, old_size: usize, alignment: usize, new_size: usize) callconv(.C) ?[*]u8 {
-    _ = alignment;
     if (new_size == 0) {
         if (old_ptr) |p| {
             freeBytes(p, old_size);
@@ -170,12 +179,12 @@ pub export fn cabi_realloc(old_ptr: ?[*]u8, old_size: usize, alignment: usize, n
         return null;
     }
     if (old_ptr == null) {
-        return allocBytes(new_size);
+        return allocBytesAligned(new_size, alignment);
     }
     if (new_size <= old_size) {
         return old_ptr;
     }
-    const new_ptr = allocBytes(new_size) orelse return null;
+    const new_ptr = allocBytesAligned(new_size, alignment) orelse return null;
     const copy_len = if (old_size < new_size) old_size else new_size;
     if (copy_len > 0 and old_ptr != null) {
         @memcpy(new_ptr[0..copy_len], old_ptr.?[0..copy_len]);

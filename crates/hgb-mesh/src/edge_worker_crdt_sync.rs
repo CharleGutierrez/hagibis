@@ -235,6 +235,20 @@ impl EdgeWorkerCrdtSyncClient {
         nodes.elements()
     }
 
+    /// Prune tombstones from active nodes OR-Set older than minimum stable epoch ms
+    pub async fn prune_tombstones(&self, min_stable_epoch_ms: u64) -> usize {
+        let mut nodes = self.active_nodes.write().await;
+        nodes.prune_tombstones(min_stable_epoch_ms)
+    }
+
+    /// Prune causal event logs older than min_stable_lamport_clock watermark
+    pub async fn prune_event_logs(&self, min_stable_lamport_clock: u64) -> usize {
+        let mut logs = self.event_log.write().await;
+        let initial_len = logs.len();
+        logs.retain(|entry| entry.lamport_clock > min_stable_lamport_clock);
+        initial_len - logs.len()
+    }
+
     /// Initiates autonomous agent migration to Cloudflare Edge Worker
     pub async fn initiate_agent_migration_to_edge(
         &self,

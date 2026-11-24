@@ -1042,6 +1042,84 @@ impl VisualIdeServer {
         }))).into_response()
     }
 
+    /// Sanitizes terminal output by stripping unauthorized operating system command (OSC)
+    /// sequences (e.g. OSC 52 clipboard exfiltration, OSC 0/1/2 title spoofing) and
+    /// device control strings (DCS), while safely preserving ANSI color and formatting codes.
+    pub fn sanitize_terminal_output(input: &str) -> String {
+        let mut out = String::with_capacity(input.len());
+        let mut chars = input.chars().peekable();
+
+        while let Some(c) = chars.next() {
+            if c == '\x1b' {
+                match chars.peek() {
+                    Some(']') => {
+                        // OSC sequence: ESC ] ... (BEL | ESC \)
+                        chars.next(); // consume ']'
+                        while let Some(next_c) = chars.next() {
+                            if next_c == '\x07' {
+                                break; // BEL
+                            }
+                            if next_c == '\x1b' && chars.peek() == Some(&'\\') {
+                                chars.next(); // consume '\'
+                                break;
+                            }
+                        }
+                    }
+                    Some('P') => {
+                        // DCS sequence: ESC P ... ESC \
+                        chars.next(); // consume 'P'
+                        while let Some(next_c) = chars.next() {
+                            if next_c == '\x1b' && chars.peek() == Some(&'\\') {
+                                chars.next();
+                                break;
+                            }
+                        }
+                    }
+                    Some('_') | Some('^') => {
+                        // APC / PM sequence: ESC _ ... ESC \ or ESC ^ ... ESC \
+                        chars.next();
+                        while let Some(next_c) = chars.next() {
+                            if next_c == '\x1b' && chars.peek() == Some(&'\\') {
+                                chars.next();
+                                break;
+                            }
+                        }
+                    }
+                    Some('[') => {
+                        // CSI sequence: ESC [ ... final_byte
+                        // Strip dangerous terminal interrogation sequences (e.g. 6n, c, R)
+                        let mut csi_seq = String::from("\x1b[");
+                        chars.next(); // consume '['
+                        let mut is_unsafe_csi = false;
+                        while let Some(&next_c) = chars.peek() {
+                            chars.next();
+                            csi_seq.push(next_c);
+                            if next_c >= '@' && next_c <= '~' {
+                                if next_c == 'n' || next_c == 'c' || next_c == 'R' {
+                                    is_unsafe_csi = true;
+                                }
+                                break;
+                            }
+                        }
+                        if !is_unsafe_csi {
+                            out.push_str(&csi_seq);
+                        }
+                    }
+                    _ => {
+                        out.push(c);
+                    }
+                }
+            } else if c == '\x07' {
+                // Drop lone BEL character
+                continue;
+            } else {
+                out.push(c);
+            }
+        }
+
+        out
+    }
+
     async fn handle_terminal(State(state): State<Arc<Self>>, Json(payload): Json<TerminalPayload>) -> impl IntoResponse {
         let t0 = Instant::now();
         let dir = payload.working_dir.map(PathBuf::from).unwrap_or_else(|| state.workspace_root.clone());
@@ -1055,11 +1133,13 @@ impl VisualIdeServer {
         {
             Ok(output) => {
                 let elapsed = t0.elapsed().as_millis() as u64;
+                let raw_stdout = String::from_utf8_lossy(&output.stdout);
+                let raw_stderr = String::from_utf8_lossy(&output.stderr);
                 (StatusCode::OK, Json(serde_json::json!({
                     "command": payload.command,
                     "exit_code": output.status.code().unwrap_or(-1),
-                    "stdout": String::from_utf8_lossy(&output.stdout),
-                    "stderr": String::from_utf8_lossy(&output.stderr),
+                    "stdout": Self::sanitize_terminal_output(&raw_stdout),
+                    "stderr": Self::sanitize_terminal_output(&raw_stderr),
                     "duration_ms": elapsed
                 }))).into_response()
             }
@@ -3977,5 +4057,28 @@ mod tests {
     async fn test_wasm_kernel_health_reporting() {
         let resp = VisualIdeServer::handle_wasm_kernel_health().await.into_response();
         assert_eq!(resp.status(), axum::http::StatusCode::OK);
+    }
+
+    #[test]
+    fn test_sanitize_terminal_output_strips_osc_and_dcs() {
+        // OSC 52 clipboard exfiltration attack
+        let payload_osc = "normal text\x1b]52;c;ZXhmaWx0cmF0aW9u\x07more text";
+        let clean_osc = VisualIdeServer::sanitize_terminal_output(payload_osc);
+        assert_eq!(clean_osc, "normal textmore text");
+
+        // OSC window title spoofing with ST terminator
+        let payload_title = "hello\x1b]0;Spoofed Title\x1b\\world";
+        let clean_title = VisualIdeServer::sanitize_terminal_output(payload_title);
+        assert_eq!(clean_title, "helloworld");
+
+        // DCS device control string
+        let payload_dcs = "start\x1bP$q\"p\x1b\\finish";
+        let clean_dcs = VisualIdeServer::sanitize_terminal_output(payload_dcs);
+        assert_eq!(clean_dcs, "startfinish");
+
+        // Preserve legitimate ANSI colors
+        let payload_color = "\x1b[32mGreen\x1b[0m normal";
+        let clean_color = VisualIdeServer::sanitize_terminal_output(payload_color);
+        assert_eq!(clean_color, "\x1b[32mGreen\x1b[0m normal");
     }
 }

@@ -27,31 +27,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{NpuRouterError, Result};
 
-// ============================================================================
-// C LIBC CONSTANTS & RAW FFI BINDINGS
-// ============================================================================
-
-const PROT_READ: i32 = 0x1;
-const PROT_WRITE: i32 = 0x2;
-const MAP_SHARED: i32 = 0x01;
-const MAP_ANONYMOUS: i32 = 0x20;
-const MAP_LOCKED: i32 = 0x02000;
-const MAP_POPULATE: i32 = 0x08000;
-const MAP_FAILED: *mut std::ffi::c_void = !0 as *mut std::ffi::c_void;
-
-extern "C" {
-    fn mmap(
-        addr: *mut std::ffi::c_void,
-        length: usize,
-        prot: i32,
-        flags: i32,
-        fd: i32,
-        offset: i64,
-    ) -> *mut std::ffi::c_void;
-    fn munmap(addr: *mut std::ffi::c_void, length: usize) -> i32;
-    fn mlock(addr: *const std::ffi::c_void, len: usize) -> i32;
-    fn munlock(addr: *const std::ffi::c_void, len: usize) -> i32;
-}
+use libc::{
+    mlock, mmap, munlock, munmap, MAP_ANONYMOUS, MAP_FAILED, MAP_LOCKED, MAP_POPULATE,
+    MAP_SHARED, PROT_READ, PROT_WRITE,
+};
 
 /// Cache line size in bytes for modern x86_64 and ARM64 architectures
 pub const CACHE_LINE_SIZE: usize = 64;
@@ -208,7 +187,30 @@ unsafe fn flush_cache_range(start: *const u8, len: usize) {
         core::arch::x86_64::_mm_mfence();
     }
 
-    #[cfg(not(target_arch = "x86_64"))]
+    #[cfg(target_arch = "aarch64")]
+    {
+        let start_addr = start as usize;
+        let end_addr = start_addr + len;
+        let aligned_start = start_addr & !(CACHE_LINE_SIZE - 1);
+        let mut curr = aligned_start;
+
+        while curr < end_addr {
+            // Clean & Invalidate Data Cache by VA to Point of Coherency (PoC)
+            core::arch::asm!(
+                "dc civac, {x}",
+                x = in(reg) curr,
+                options(nostack, preserves_flags)
+            );
+            curr += CACHE_LINE_SIZE;
+        }
+        core::arch::asm!(
+            "dsb sy",
+            "isb",
+            options(nostack, preserves_flags)
+        );
+    }
+
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     {
         let _ = (start, len);
         fence(Ordering::SeqCst);
@@ -231,7 +233,30 @@ unsafe fn invalidate_cache_range(start: *const u8, len: usize) {
         core::arch::x86_64::_mm_mfence();
     }
 
-    #[cfg(not(target_arch = "x86_64"))]
+    #[cfg(target_arch = "aarch64")]
+    {
+        let start_addr = start as usize;
+        let end_addr = start_addr + len;
+        let aligned_start = start_addr & !(CACHE_LINE_SIZE - 1);
+        let mut curr = aligned_start;
+
+        while curr < end_addr {
+            // Invalidate Data Cache line by VA to Point of Coherency (PoC)
+            core::arch::asm!(
+                "dc civac, {x}",
+                x = in(reg) curr,
+                options(nostack, preserves_flags)
+            );
+            curr += CACHE_LINE_SIZE;
+        }
+        core::arch::asm!(
+            "dsb sy",
+            "isb",
+            options(nostack, preserves_flags)
+        );
+    }
+
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     {
         let _ = (start, len);
         fence(Ordering::SeqCst);

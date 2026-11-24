@@ -26,7 +26,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::os::unix::fs::OpenOptionsExt;
-use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
+use std::os::unix::io::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{fence, AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -183,11 +183,11 @@ struct io_uring_params {
     cq_off: io_cqring_offsets,
 }
 
-/// Linux kernel eventfd & io_uring event notification signaler
+/// Linux kernel eventfd & io_uring event notification signaler with OwnedFd RAII safety
 pub struct DualSandboxEventSignaler {
-    event_fd: RawFd,
-    io_uring_fd: Option<RawFd>,
-    owns_fds: bool,
+    owned_event_fd: Option<OwnedFd>,
+    borrowed_event_fd: Option<RawFd>,
+    owned_io_uring_fd: Option<OwnedFd>,
 }
 
 impl DualSandboxEventSignaler {
@@ -202,6 +202,7 @@ impl DualSandboxEventSignaler {
                     std::io::Error::last_os_error()
                 )));
             }
+            let owned_ev_fd = unsafe { OwnedFd::from_raw_fd(ev_fd) };
 
             // Attempt to initialize kernel io_uring
             let mut params: io_uring_params = unsafe { std::mem::zeroed() };
@@ -213,7 +214,7 @@ impl DualSandboxEventSignaler {
                 )
             };
 
-            let io_uring_fd = if uring_fd >= 0 {
+            let owned_io_uring_fd = if uring_fd >= 0 {
                 let ufd = uring_fd as RawFd;
                 // Register eventfd with io_uring if supported
                 let _ = unsafe {
@@ -225,15 +226,15 @@ impl DualSandboxEventSignaler {
                         1 as libc::c_uint,
                     )
                 };
-                Some(ufd)
+                Some(unsafe { OwnedFd::from_raw_fd(ufd) })
             } else {
                 None
             };
 
             Ok(Self {
-                event_fd: ev_fd,
-                io_uring_fd,
-                owns_fds: true,
+                owned_event_fd: Some(owned_ev_fd),
+                borrowed_event_fd: None,
+                owned_io_uring_fd,
             })
         }
         #[cfg(not(target_os = "linux"))]
@@ -242,23 +243,24 @@ impl DualSandboxEventSignaler {
         }
     }
 
-    /// Wrap an existing raw eventfd
+    /// Wrap an existing raw eventfd (borrowed ownership, will not close on drop)
     pub fn from_raw_eventfd(event_fd: RawFd) -> Self {
         Self {
-            event_fd,
-            io_uring_fd: None,
-            owns_fds: false,
+            owned_event_fd: None,
+            borrowed_event_fd: Some(event_fd),
+            owned_io_uring_fd: None,
         }
     }
 
     /// Send a notification signal via eventfd
     #[inline]
     pub fn notify(&self) {
-        if self.event_fd >= 0 {
+        let fd = self.raw_eventfd();
+        if fd >= 0 {
             let val: u64 = 1;
             unsafe {
                 libc::write(
-                    self.event_fd,
+                    fd,
                     &val as *const u64 as *const libc::c_void,
                     std::mem::size_of::<u64>(),
                 );
@@ -269,11 +271,12 @@ impl DualSandboxEventSignaler {
     /// Drain pending eventfd notification signals
     #[inline]
     pub fn drain(&self) {
-        if self.event_fd >= 0 {
+        let fd = self.raw_eventfd();
+        if fd >= 0 {
             let mut val: u64 = 0;
             unsafe {
                 libc::read(
-                    self.event_fd,
+                    fd,
                     &mut val as *mut u64 as *mut libc::c_void,
                     std::mem::size_of::<u64>(),
                 );
@@ -283,12 +286,13 @@ impl DualSandboxEventSignaler {
 
     /// Wait for a notification signal up to a timeout using poll
     pub fn wait_timeout(&self, timeout: Duration) -> bool {
-        if self.event_fd < 0 {
+        let fd = self.raw_eventfd();
+        if fd < 0 {
             return false;
         }
 
         let mut pfd = libc::pollfd {
-            fd: self.event_fd,
+            fd,
             events: libc::POLLIN,
             revents: 0,
         };
@@ -304,27 +308,16 @@ impl DualSandboxEventSignaler {
 
     /// Access the underlying raw eventfd
     pub fn raw_eventfd(&self) -> RawFd {
-        self.event_fd
+        if let Some(ref fd) = self.owned_event_fd {
+            fd.as_raw_fd()
+        } else {
+            self.borrowed_event_fd.unwrap_or(-1)
+        }
     }
 
     /// Whether io_uring integration is active
     pub fn is_io_uring_active(&self) -> bool {
-        self.io_uring_fd.is_some()
-    }
-}
-
-impl Drop for DualSandboxEventSignaler {
-    fn drop(&mut self) {
-        if self.owns_fds {
-            if self.event_fd >= 0 {
-                unsafe { libc::close(self.event_fd) };
-            }
-            if let Some(ufd) = self.io_uring_fd {
-                if ufd >= 0 {
-                    unsafe { libc::close(ufd) };
-                }
-            }
-        }
+        self.owned_io_uring_fd.is_some()
     }
 }
 

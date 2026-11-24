@@ -28,7 +28,15 @@ MAGENTA="\033[0;35m"
 RESET="\033[0m"
 
 # Default configuration
-FIRECRACKER_BIN="${FIRECRACKER_BIN:-/home/toshiba/.local/bin/firecracker}"
+if [ -z "${FIRECRACKER_BIN:-}" ]; then
+    if command -v firecracker >/dev/null 2>&1; then
+        FIRECRACKER_BIN="$(command -v firecracker)"
+    elif [ -x "${HOME}/.local/bin/firecracker" ]; then
+        FIRECRACKER_BIN="${HOME}/.local/bin/firecracker"
+    else
+        FIRECRACKER_BIN="firecracker"
+    fi
+fi
 RAM_JAIL_BASE="/dev/shm/hgb_fc_jails"
 CGROUP_BASE="/sys/fs/cgroup"
 TIMEOUT_SECS=30

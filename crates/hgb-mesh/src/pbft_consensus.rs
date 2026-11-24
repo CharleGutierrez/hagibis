@@ -24,7 +24,6 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use libp2p::identity::PublicKey;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use crate::error::{MeshError, Result};
 use crate::secure_transport::{compute_sha256, compute_sha256_hex, NodeIdentity};
@@ -256,67 +255,35 @@ impl CodeMutationAuditor {
             }
         }
 
-        // 6. Syntax validity audit (balanced delimiters)
-        let mut stack = Vec::new();
-        let mut in_string = false;
-        let mut in_char = false;
-        let mut escaped = false;
-        let mut tokens = 0;
-
-        for ch in proposal.patch_content.chars() {
-            tokens += 1;
-            if escaped {
-                escaped = false;
-                continue;
-            }
-            if ch == '\\' {
-                escaped = true;
-                continue;
-            }
-            if ch == '"' && !in_char {
-                in_string = !in_string;
-                continue;
-            }
-            if ch == '\'' && !in_string {
-                in_char = !in_char;
-                continue;
-            }
-            if in_string || in_char {
-                continue;
-            }
-
-            match ch {
-                '{' => stack.push('}'),
-                '(' => stack.push(')'),
-                '[' => stack.push(']'),
-                '}' | ')' | ']' => {
-                    if stack.pop() != Some(ch) {
-                        return MutationAuditOutcome {
-                            approved: false,
-                            reason: format!("Syntax error: unbalanced delimiter '{}'", ch),
-                            risk_score: 0.85,
-                            ast_token_count: tokens,
-                        };
+        // 6. Syntax validity audit (balanced delimiters via lexer tokenizer)
+        match proposal.patch_content.parse::<proc_macro2::TokenStream>() {
+            Ok(tokens) => {
+                fn count_tokens(stream: proc_macro2::TokenStream) -> usize {
+                    let mut count = 0;
+                    for tt in stream {
+                        count += 1;
+                        if let proc_macro2::TokenTree::Group(group) = tt {
+                            count += count_tokens(group.stream());
+                        }
                     }
+                    count
                 }
-                _ => {}
+                let token_count = count_tokens(tokens);
+                MutationAuditOutcome {
+                    approved: true,
+                    reason: "Independent cryptographic and syntax debate passed with zero violations".to_string(),
+                    risk_score: 0.0,
+                    ast_token_count: token_count,
+                }
             }
-        }
-
-        if !stack.is_empty() {
-            return MutationAuditOutcome {
-                approved: false,
-                reason: format!("Syntax error: unclosed delimiters remaining ({})", stack.len()),
-                risk_score: 0.85,
-                ast_token_count: tokens,
-            };
-        }
-
-        MutationAuditOutcome {
-            approved: true,
-            reason: "Independent cryptographic and syntax debate passed with zero violations".to_string(),
-            risk_score: 0.0,
-            ast_token_count: tokens,
+            Err(e) => {
+                MutationAuditOutcome {
+                    approved: false,
+                    reason: format!("Syntax error: unbalanced delimiters or invalid tokens ({})", e),
+                    risk_score: 0.85,
+                    ast_token_count: 0,
+                }
+            }
         }
     }
 }

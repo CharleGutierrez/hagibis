@@ -38,6 +38,7 @@ hmac = "0.12"
 hex = "0.4.3"
 qrcode = { workspace = true }
 tracing = { workspace = true }
+zeroize = "1.9.0"
 tracing-subscriber = { workspace = true }
 
 # New dependencies

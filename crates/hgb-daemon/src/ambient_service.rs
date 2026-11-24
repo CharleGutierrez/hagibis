@@ -52,12 +52,29 @@ impl DreamJournal {
 
     pub fn save(&self, path: impl AsRef<Path>) -> std::io::Result<()> {
         let p = path.as_ref();
-        if let Some(parent) = p.parent() {
-            fs::create_dir_all(parent)?;
-        }
+        let parent = p.parent().unwrap_or_else(|| Path::new("."));
+        fs::create_dir_all(parent)?;
+
         let json = serde_json::to_string_pretty(self)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
-        fs::write(p, json)
+
+        let file_name = p.file_name().and_then(|f| f.to_str()).unwrap_or("journal");
+        let tmp_path = parent.join(format!(".{}.tmp.{}", file_name, std::process::id()));
+
+        // Write and sync to temporary file in same filesystem
+        {
+            use std::io::Write;
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&tmp_path)?;
+            file.write_all(json.as_bytes())?;
+            file.sync_all()?;
+        }
+
+        // Atomically rename over destination file
+        fs::rename(tmp_path, p)
     }
 
     pub fn append_report(&mut self, report: &DreamCycleReport) {

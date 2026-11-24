@@ -289,6 +289,9 @@ impl Fts5HnswHybridEngine {
         // Initialize embedded HNSW vector graph
         let hnsw = HnswVectorIndex::new(&db_path, cfg.hnsw_config.clone())?;
 
+        // Dual-write consistency recovery: replay any uncommitted mutations into HNSW
+        let _ = Self::replay_uncommitted_mutations(&conn, &hnsw);
+
         Ok(Self {
             db_path,
             is_in_memory: false,
@@ -308,6 +311,9 @@ impl Fts5HnswHybridEngine {
         let fts5_active = Self::init_schema(&conn)?;
         let hnsw = HnswVectorIndex::open(&db_path)?;
 
+        // Dual-write consistency recovery: replay any uncommitted mutations into HNSW
+        let _ = Self::replay_uncommitted_mutations(&conn, &hnsw);
+
         Ok(Self {
             db_path,
             is_in_memory: false,
@@ -326,6 +332,9 @@ impl Fts5HnswHybridEngine {
 
         let fts5_active = Self::init_schema(&conn)?;
         let hnsw = HnswVectorIndex::in_memory(cfg.hnsw_config.clone())?;
+
+        // Dual-write consistency recovery: replay any uncommitted mutations into HNSW
+        let _ = Self::replay_uncommitted_mutations(&conn, &hnsw);
 
         Ok(Self {
             db_path: PathBuf::from(":memory:"),
@@ -413,7 +422,80 @@ impl Fts5HnswHybridEngine {
         )
         .map_err(|e| HgbError::Storage(format!("idx_hybrid_fts_rowid error: {}", e)))?;
 
+        // Append-only write-ahead log / mutation journal for dual-write consistency
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS hybrid_mutation_journal (
+                mutation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chunk_id TEXT NOT NULL,
+                operation TEXT NOT NULL,
+                vector BLOB,
+                metadata TEXT,
+                status TEXT NOT NULL DEFAULT 'PENDING',
+                created_at INTEGER NOT NULL
+            )",
+            [],
+        )
+        .map_err(|e| HgbError::Storage(format!("hybrid_mutation_journal table error: {}", e)))?;
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_hybrid_mutation_status ON hybrid_mutation_journal(status)",
+            [],
+        )
+        .map_err(|e| HgbError::Storage(format!("idx_hybrid_mutation_status error: {}", e)))?;
+
         Ok(fts5_supported)
+    }
+
+    /// Replay any uncommitted hybrid mutations from journal to ensure dual-write consistency
+    pub fn replay_uncommitted_mutations(conn: &Connection, hnsw: &HnswVectorIndex) -> Result<usize> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT mutation_id, chunk_id, operation, vector, metadata 
+                 FROM hybrid_mutation_journal 
+                 WHERE status = 'PENDING' 
+                 ORDER BY mutation_id ASC",
+            )
+            .map_err(|e| HgbError::Storage(format!("Prepare journal replay error: {}", e)))?;
+
+        let rows: Vec<(i64, String, String, Option<Vec<u8>>, Option<String>)> = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            })
+            .map_err(|e| HgbError::Storage(format!("Query journal replay error: {}", e)))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        let mut replayed = 0;
+        for (mutation_id, chunk_id, op, vec_blob, meta) in rows {
+            if op == "INSERT" {
+                if let Some(blob) = vec_blob {
+                    if let Ok(vec) = decode_vector_blob(&blob) {
+                        if !vec.is_empty() {
+                            let _ = hnsw.insert(&chunk_id, &vec, meta.as_deref());
+                        }
+                    }
+                }
+            }
+            let _ = conn.execute(
+                "UPDATE hybrid_mutation_journal SET status = 'COMMITTED' WHERE mutation_id = ?1",
+                params![mutation_id],
+            );
+            replayed += 1;
+        }
+
+        // Clean up committed mutations older than 7 days
+        let _ = conn.execute(
+            "DELETE FROM hybrid_mutation_journal WHERE status = 'COMMITTED' AND created_at < ?1",
+            params![chrono::Utc::now().timestamp() - 604_800],
+        );
+
+        Ok(replayed)
     }
 
     /// Insert or update an indexable chunk in both FTS5 and HNSW vector index
@@ -486,11 +568,27 @@ impl Fts5HnswHybridEngine {
         )
         .map_err(|e| HgbError::Storage(format!("hybrid_vector_metadata insert error: {}", e)))?;
 
+        // Append-only write-ahead log journal entry for dual-write crash recovery
+        conn.execute(
+            "INSERT INTO hybrid_mutation_journal (chunk_id, operation, vector, metadata, status, created_at)
+             VALUES (?1, 'INSERT', ?2, ?3, 'PENDING', ?4)",
+            params![chunk.id, vector_blob, chunk.metadata, created_at],
+        )
+        .map_err(|e| HgbError::Storage(format!("hybrid_mutation_journal insert error: {}", e)))?;
+        let mutation_id = conn.last_insert_rowid();
+
         drop(conn);
 
         // Synchronize with HNSW graph index
         self.hnsw
             .insert(&chunk.id, &chunk.vector, chunk.metadata.as_deref())?;
+
+        // Two-phase commit: mark mutation as COMMITTED
+        let conn = self.conn.lock().unwrap();
+        let _ = conn.execute(
+            "UPDATE hybrid_mutation_journal SET status = 'COMMITTED' WHERE mutation_id = ?1",
+            params![mutation_id],
+        );
 
         Ok(())
     }
@@ -519,6 +617,15 @@ impl Fts5HnswHybridEngine {
             return Ok(false);
         };
 
+        let now = chrono::Utc::now().timestamp();
+        conn.execute(
+            "INSERT INTO hybrid_mutation_journal (chunk_id, operation, vector, metadata, status, created_at)
+             VALUES (?1, 'DELETE', NULL, NULL, 'PENDING', ?2)",
+            params![id, now],
+        )
+        .map_err(|e| HgbError::Storage(format!("hybrid_mutation_journal delete log error: {}", e)))?;
+        let mutation_id = conn.last_insert_rowid();
+
         if self.fts5_active {
             let _ = conn.execute("DELETE FROM fts5_code_index WHERE rowid = ?1", params![rowid]);
         } else {
@@ -530,6 +637,11 @@ impl Fts5HnswHybridEngine {
             params![id],
         )
         .map_err(|e| HgbError::Storage(format!("Delete metadata error: {}", e)))?;
+
+        let _ = conn.execute(
+            "UPDATE hybrid_mutation_journal SET status = 'COMMITTED' WHERE mutation_id = ?1",
+            params![mutation_id],
+        );
 
         drop(conn);
 

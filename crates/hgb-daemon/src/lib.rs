@@ -5,6 +5,10 @@ pub mod remote_bot;
 pub mod mcp_sse_server;
 pub mod event_driven_pipeline_engine;
 pub mod firecracker_hardware_isolation;
+pub mod autonomous_loop_coordinator;
+pub use autonomous_loop_coordinator::{
+    AutonomousLease, AutonomousLoopCoordinator, LoopCoordinatorError, LoopSubsystem,
+};
 pub use server::{DaemonState, HagibisDaemon};
 pub use ambient_service::{AmbientDaemonService, DreamJournal, DreamJournalEntry};
 pub use event_driven_pipeline_engine::{

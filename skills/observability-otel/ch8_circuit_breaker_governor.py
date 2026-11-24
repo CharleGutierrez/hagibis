@@ -1760,14 +1760,16 @@ class AutonomicCircuitBreakerGovernor:
             mcp_tool_name="hgb_operator_unlock_circuit_breaker"
         )
 
-        # Strip write permissions on all locked paths (0444)
-        for p in locked_paths:
-            try:
-                path_obj = Path(p)
-                if path_obj.exists():
-                    os.chmod(path_obj, 0o444)
-            except OSError:
-                pass
+        # Strip write permissions on locked paths only if explicitly requested by HGB_ENFORCE_READONLY_LOCKOUT
+        # (Preserve developer workspace editability by default; failing patches are isolated in quarantine)
+        if os.environ.get("HGB_ENFORCE_READONLY_LOCKOUT") == "1":
+            for p in locked_paths:
+                try:
+                    path_obj = Path(p)
+                    if path_obj.exists():
+                        os.chmod(path_obj, 0o444)
+                except OSError:
+                    pass
 
         # Write lockout receipt to state directory and seal (0444)
         receipt_file = self.lockouts_dir / f"{lockout_id}.json"
@@ -2244,11 +2246,12 @@ class AutonomicCircuitBreakerGovernor:
                 locked_targets = []
                 if skill_path:
                     locked_targets.append(skill_path)
-                    # Strip write permissions (0444)
-                    try:
-                        os.chmod(skill_path, 0o444)
-                    except OSError:
-                        pass
+                    # Strip write permissions only if explicitly configured
+                    if os.environ.get("HGB_ENFORCE_READONLY_LOCKOUT") == "1":
+                        try:
+                            os.chmod(skill_path, 0o444)
+                        except OSError:
+                            pass
 
                 # Issue Cryptographic Ed25519 + BLAKE3 Lockout Receipt
                 lockout_receipt = self.issue_cryptographic_lockout_receipt(
@@ -2591,7 +2594,8 @@ class AutonomicCircuitBreakerGovernor:
                     copied_path = str(copied_target)
                     try:
                         os.chmod(copied_target, 0o444)
-                        os.chmod(src, 0o444)
+                        if os.environ.get("HGB_ENFORCE_READONLY_LOCKOUT") == "1":
+                            os.chmod(src, 0o444)
                     except OSError:
                         pass
                 elif src.is_dir():

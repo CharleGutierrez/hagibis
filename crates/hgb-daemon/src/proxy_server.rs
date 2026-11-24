@@ -589,7 +589,19 @@ async fn handle_anthropic_messages(
     Json(resp).into_response()
 }
 
-/// Creates Anthropic SSE event sequence
+struct TokioReceiverStream<T>(tokio::sync::mpsc::Receiver<T>);
+
+impl<T> Stream for TokioReceiverStream<T> {
+    type Item = T;
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.0.poll_recv(cx)
+    }
+}
+
+/// Creates Anthropic SSE event sequence with downstream disconnect detection
 fn create_anthropic_sse_stream(
     msg_id: String,
     model: String,
@@ -597,81 +609,102 @@ fn create_anthropic_sse_stream(
     prompt_tokens: usize,
     completion_tokens: usize,
 ) -> impl Stream<Item = std::result::Result<Event, Infallible>> {
-    let mut events = Vec::new();
+    let (tx, rx) = tokio::sync::mpsc::channel(16);
 
-    // 1. message_start
-    let msg_start_data = serde_json::json!({
-        "type": "message_start",
-        "message": {
-            "id": msg_id,
-            "type": "message",
-            "role": "assistant",
-            "model": model,
-            "content": [],
-            "stop_reason": null,
-            "stop_sequence": null,
-            "usage": {
-                "input_tokens": prompt_tokens,
-                "output_tokens": 1
-            }
-        }
-    });
-    events.push(Event::default().event("message_start").data(msg_start_data.to_string()));
-
-    // 2. content_block_start
-    let block_start_data = serde_json::json!({
-        "type": "content_block_start",
-        "index": 0,
-        "content_block": {
-            "type": "text",
-            "text": ""
-        }
-    });
-    events.push(Event::default().event("content_block_start").data(block_start_data.to_string()));
-
-    // 3. content_block_delta (stream in chunks)
-    let chunk_size = 40.max(full_text.len() / 8 + 1);
-    let chars: Vec<char> = full_text.chars().collect();
-    for chunk in chars.chunks(chunk_size) {
-        let chunk_str: String = chunk.iter().collect();
-        let delta_data = serde_json::json!({
-            "type": "content_block_delta",
-            "index": 0,
-            "delta": {
-                "type": "text_delta",
-                "text": chunk_str
+    tokio::spawn(async move {
+        // 1. message_start
+        let msg_start_data = serde_json::json!({
+            "type": "message_start",
+            "message": {
+                "id": msg_id,
+                "type": "message",
+                "role": "assistant",
+                "model": model,
+                "content": [],
+                "stop_reason": null,
+                "stop_sequence": null,
+                "usage": {
+                    "input_tokens": prompt_tokens,
+                    "output_tokens": 1
+                }
             }
         });
-        events.push(Event::default().event("content_block_delta").data(delta_data.to_string()));
-    }
-
-    // 4. content_block_stop
-    let block_stop_data = serde_json::json!({
-        "type": "content_block_stop",
-        "index": 0
-    });
-    events.push(Event::default().event("content_block_stop").data(block_stop_data.to_string()));
-
-    // 5. message_delta
-    let msg_delta_data = serde_json::json!({
-        "type": "message_delta",
-        "delta": {
-            "stop_reason": "end_turn",
-            "stop_sequence": null
-        },
-        "usage": {
-            "output_tokens": completion_tokens
+        if tx.send(Ok(Event::default().event("message_start").data(msg_start_data.to_string()))).await.is_err() {
+            return;
         }
-    });
-    events.push(Event::default().event("message_delta").data(msg_delta_data.to_string()));
 
-    // 6. message_stop
-    let msg_stop_data = serde_json::json!({
-        "type": "message_stop"
-    });
-    events.push(Event::default().event("message_stop").data(msg_stop_data.to_string()));
+        // 2. content_block_start
+        let block_start_data = serde_json::json!({
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "text",
+                "text": ""
+            }
+        });
+        if tx.send(Ok(Event::default().event("content_block_start").data(block_start_data.to_string()))).await.is_err() {
+            return;
+        }
 
-    stream::iter(events.into_iter().map(Ok))
+        // 3. content_block_delta (stream in chunks with client cancellation check)
+        let chunk_size = 40.max(full_text.len() / 8 + 1);
+        let chars: Vec<char> = full_text.chars().collect();
+        for chunk in chars.chunks(chunk_size) {
+            let chunk_str: String = chunk.iter().collect();
+            let delta_data = serde_json::json!({
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {
+                    "type": "text_delta",
+                    "text": chunk_str
+                }
+            });
+
+            tokio::select! {
+                _ = tx.closed() => {
+                    // Downstream client disconnected; abort task immediately
+                    return;
+                }
+                res = tx.send(Ok(Event::default().event("content_block_delta").data(delta_data.to_string()))) => {
+                    if res.is_err() {
+                        return;
+                    }
+                }
+            }
+        }
+
+        // 4. content_block_stop
+        let block_stop_data = serde_json::json!({
+            "type": "content_block_stop",
+            "index": 0
+        });
+        if tx.send(Ok(Event::default().event("content_block_stop").data(block_stop_data.to_string()))).await.is_err() {
+            return;
+        }
+
+        // 5. message_delta
+        let msg_delta_data = serde_json::json!({
+            "type": "message_delta",
+            "delta": {
+                "stop_reason": "end_turn",
+                "stop_sequence": null
+            },
+            "usage": {
+                "output_tokens": completion_tokens
+            }
+        });
+        if tx.send(Ok(Event::default().event("message_delta").data(msg_delta_data.to_string()))).await.is_err() {
+            return;
+        }
+
+        // 6. message_stop
+        let msg_stop_data = serde_json::json!({
+            "type": "message_stop"
+        });
+        let _ = tx.send(Ok(Event::default().event("message_stop").data(msg_stop_data.to_string()))).await;
+    });
+
+    TokioReceiverStream(rx)
 }
 
 /// POST /v1/chat/completions (OpenAI Protocol)
@@ -775,21 +808,52 @@ async fn handle_openai_chat_completions(
     Json(resp).into_response()
 }
 
-/// Creates OpenAI SSE event sequence
+/// Creates OpenAI SSE event sequence with downstream disconnect detection
 fn create_openai_sse_stream(
     id: String,
     model: String,
     full_text: String,
     created: u64,
 ) -> impl Stream<Item = std::result::Result<Event, Infallible>> {
-    let mut events = Vec::new();
+    let (tx, rx) = tokio::sync::mpsc::channel(16);
 
-    let chunk_size = 35.max(full_text.len() / 8 + 1);
-    let chars: Vec<char> = full_text.chars().collect();
+    tokio::spawn(async move {
+        let chunk_size = 35.max(full_text.len() / 8 + 1);
+        let chars: Vec<char> = full_text.chars().collect();
 
-    for chunk in chars.chunks(chunk_size) {
-        let chunk_str: String = chunk.iter().collect();
-        let chunk_data = serde_json::json!({
+        for chunk in chars.chunks(chunk_size) {
+            let chunk_str: String = chunk.iter().collect();
+            let chunk_data = serde_json::json!({
+                "id": id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {
+                            "content": chunk_str
+                        },
+                        "finish_reason": null
+                    }
+                ]
+            });
+
+            tokio::select! {
+                _ = tx.closed() => {
+                    // Downstream client disconnected; abort task immediately
+                    return;
+                }
+                res = tx.send(Ok(Event::default().data(chunk_data.to_string()))) => {
+                    if res.is_err() {
+                        return;
+                    }
+                }
+            }
+        }
+
+        // Final finish stop frame
+        let stop_data = serde_json::json!({
             "id": id,
             "object": "chat.completion.chunk",
             "created": created,
@@ -797,34 +861,18 @@ fn create_openai_sse_stream(
             "choices": [
                 {
                     "index": 0,
-                    "delta": {
-                        "content": chunk_str
-                    },
-                    "finish_reason": null
+                    "delta": {},
+                    "finish_reason": "stop"
                 }
             ]
         });
-        events.push(Event::default().data(chunk_data.to_string()));
-    }
-
-    // Final finish stop frame
-    let stop_data = serde_json::json!({
-        "id": id,
-        "object": "chat.completion.chunk",
-        "created": created,
-        "model": model,
-        "choices": [
-            {
-                "index": 0,
-                "delta": {},
-                "finish_reason": "stop"
-            }
-        ]
+        if tx.send(Ok(Event::default().data(stop_data.to_string()))).await.is_err() {
+            return;
+        }
+        let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
     });
-    events.push(Event::default().data(stop_data.to_string()));
-    events.push(Event::default().data("[DONE]"));
 
-    stream::iter(events.into_iter().map(Ok))
+    TokioReceiverStream(rx)
 }
 
 /// Launch the Proxy Server in background or current task

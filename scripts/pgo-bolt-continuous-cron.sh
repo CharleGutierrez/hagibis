@@ -24,7 +24,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." 2>/dev/null && pwd || echo "/media/toshiba/Lexar/hagibis")"
+WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." 2>/dev/null && pwd || pwd)"
 cd "$WORKSPACE_ROOT"
 
 # Configuration Defaults (overridable via environment)
@@ -35,6 +35,14 @@ SHADOW_BUILD_DIR="${SHADOW_BUILD_DIR:-/tmp/hgb_pgo_shadow}"
 TELEMETRY_BRIDGE_JSON="${TELEMETRY_BRIDGE_JSON:-/tmp/hgb_microvm_dynamic_allocation.json}"
 TELEMETRY_BRIDGE_PY="${WORKSPACE_ROOT}/skills/observability-otel/telemetry_governor_bridge.py"
 HGB_TELEMETRY_OVERRIDE="${HGB_TELEMETRY_OVERRIDE:-}"
+
+# Guarantee single-instance execution via flock
+LOCKFILE="${HGB_CRON_LOCK:-/tmp/hgb_pgo_cron.lock}"
+exec 200>"$LOCKFILE"
+if ! flock -n 200; then
+    echo -e "\033[33m⚠ [CRON-WARN] Another continuous PGO cron instance is currently active. Exiting.\033[0m" >&2
+    exit 0
+fi
 
 ICACHE_MISS_THRESHOLD_PCT="${ICACHE_MISS_THRESHOLD_PCT:-12.0}"
 P99_LATENCY_THRESHOLD_MS="${P99_LATENCY_THRESHOLD_MS:-180.0}"

@@ -2050,6 +2050,7 @@ dependencies = [
  "uuid",
  "wasmtime",
  "wat 1.0.0",
+ "zeroize",
 ]
 
 [[package]]
@@ -2101,9 +2102,11 @@ dependencies = [
  "chrono",
  "hgb-core",
  "libp2p",
+ "proc-macro2",
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "syn 2.0.119",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
@@ -2145,6 +2148,7 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "tokio-tungstenite 0.21.0",
+ "tracing",
  "unicode-width 0.2.0",
  "uuid",
 ]
@@ -2159,6 +2163,7 @@ dependencies = [
  "hex",
  "hgb-core",
  "hgb-storage",
+ "libc",
  "memmap2",
  "rayon",
  "rusqlite",

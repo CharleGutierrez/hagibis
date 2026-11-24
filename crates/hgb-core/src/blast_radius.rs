@@ -156,10 +156,22 @@ impl BlastRadiusRadar {
         symbols
     }
 
-    /// Recursively find all source code files in a directory
-    fn collect_source_files(&self, dir: &Path, files: &mut Vec<PathBuf>) {
+    /// Recursively find all source code files in a directory safely avoiding symlink loops
+    fn collect_source_files(&self, dir: &Path, files: &mut Vec<PathBuf>, visited: &mut HashSet<PathBuf>) {
+        if let Ok(canonical) = dir.canonicalize() {
+            if !visited.insert(canonical) {
+                return;
+            }
+        }
+
         if let Ok(entries) = fs::read_dir(dir) {
             for entry in entries.flatten() {
+                let Ok(file_type) = entry.file_type() else { continue; };
+                if file_type.is_symlink() {
+                    // Skip symlinks to prevent circular directory recursion and stack overflow
+                    continue;
+                }
+
                 let path = entry.path();
                 let file_name = entry.file_name().to_string_lossy().to_string();
 
@@ -167,9 +179,9 @@ impl BlastRadiusRadar {
                     continue;
                 }
 
-                if path.is_dir() {
-                    self.collect_source_files(&path, files);
-                } else if path.is_file() {
+                if file_type.is_dir() {
+                    self.collect_source_files(&path, files, visited);
+                } else if file_type.is_file() {
                     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
                     if ["rs", "ts", "js", "py", "go", "cpp", "c", "h"].contains(&ext) {
                         files.push(path);
@@ -204,9 +216,10 @@ impl BlastRadiusRadar {
             }
         }
 
-        // 2. Discover all source files across the workspace
+        // 2. Discover all source files across the workspace safely avoiding symlink loops
         let mut all_sources = Vec::new();
-        self.collect_source_files(&self.workspace_root, &mut all_sources);
+        let mut visited = HashSet::new();
+        self.collect_source_files(&self.workspace_root, &mut all_sources, &mut visited);
 
         let mut call_sites = Vec::new();
         let mut dependent_files_set = HashSet::new();

@@ -990,6 +990,27 @@ impl GitRollbackCircuitBreaker {
         let target = &incident.rollback_target_commit;
         let dir = &self.config.working_directory;
 
+        // Safeguard uncommitted changes via git stash before destructive rollback
+        let stash_commit = Command::new("git")
+            .args(["stash", "create"])
+            .current_dir(dir)
+            .output()
+            .ok()
+            .and_then(|o| {
+                let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                if s.is_empty() { None } else { Some(s) }
+            });
+
+        let stash_msg = if let Some(ref commit_id) = stash_commit {
+            let _ = Command::new("git")
+                .args(["stash", "store", "-m", &format!("pre-rollback-backup-{}", incident.incident_id), commit_id])
+                .current_dir(dir)
+                .output();
+            format!("PRE-ROLLBACK BACKUP: Stashed uncommitted changes into commit {}\n", commit_id)
+        } else {
+            String::new()
+        };
+
         // Perform real git hard reset to rollback target commit
         let output = Command::new("git")
             .arg("reset")
@@ -1002,10 +1023,10 @@ impl GitRollbackCircuitBreaker {
             Ok(out) => {
                 let stdout = String::from_utf8_lossy(&out.stdout).to_string();
                 let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-                let combined = format!("STDOUT:\n{}\nSTDERR:\n{}", stdout, stderr);
+                let combined = format!("{}STDOUT:\n{}\nSTDERR:\n{}", stash_msg, stdout, stderr);
                 (combined, out.status.success())
             }
-            Err(e) => (format!("Failed to spawn git: {}", e), false),
+            Err(e) => (format!("{}Failed to spawn git: {}", stash_msg, e), false),
         };
 
         // Query current HEAD

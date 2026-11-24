@@ -22,11 +22,13 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." 2>/dev/null && pwd || echo "/media/toshiba/Lexar/hagibis")"
+WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." 2>/dev/null && pwd || pwd)"
 
 # Compiler & Workspace Environment
-export LIBRARY_PATH="/home/toshiba/lib:${LIBRARY_PATH:-}"
-export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-/home/toshiba/.cargo-target-hagibis}"
+if [ -d "${HOME}/lib" ]; then
+    export LIBRARY_PATH="${HOME}/lib:${LIBRARY_PATH:-}"
+fi
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-${HOME}/.cargo-target-hagibis}"
 
 # Governance & Telemetry Defaults
 HGB_STATE_DIR="${HGB_STATE_DIR:-${HOME}/.hagibis}"

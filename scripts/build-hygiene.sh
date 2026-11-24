@@ -30,11 +30,8 @@ LOCAL_TARGET_DIR="$WORKSPACE_ROOT/target"
 TMP_TARGET_DIR="/tmp/cargo-target"
 HOME_TARGET_DIR="$HOME/.cargo-target-hagibis"
 
-# Sccache directory & cache configuration
-SCCACHE_DIR="${SCCACHE_DIR:-/media/toshiba/Lexar/sccache}"
-if [ ! -d "/media/toshiba/Lexar" ]; then
-    SCCACHE_DIR="${HOME}/.cache/sccache"
-fi
+# Sccache directory & cache configuration (default to fast local NVMe/SSD)
+SCCACHE_DIR="${SCCACHE_DIR:-${HOME}/.cache/sccache}"
 export SCCACHE_DIR
 export SCCACHE_CACHE_SIZE="${SCCACHE_CACHE_SIZE:-10G}"
 

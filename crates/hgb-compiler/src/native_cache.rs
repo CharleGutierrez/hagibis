@@ -157,9 +157,16 @@ pub struct PrewarmedModule {
     pub tier: ExecutionTier,
     pub source_sha256: [u8; 32],
     pub hit_count: Arc<AtomicU64>,
-    pub last_accessed: Instant,
+    pub last_accessed_ms: Arc<AtomicU64>,
     pub size_bytes: usize,
     _mmap: Option<Arc<Mmap>>,
+}
+
+/// Thread-safe in-memory cache container combining entries and LRU order
+#[derive(Default)]
+struct InMemoryCache {
+    entries: HashMap<String, PrewarmedModule>,
+    lru_order: VecDeque<String>,
 }
 
 /// Performance telemetry for the execution cache.
@@ -179,8 +186,7 @@ pub struct CacheStats {
 pub struct NativeExecutionCache {
     cache_dir: PathBuf,
     max_memory_entries: usize,
-    in_memory: Arc<RwLock<HashMap<String, PrewarmedModule>>>,
-    lru_order: Arc<RwLock<VecDeque<String>>>,
+    in_memory: Arc<RwLock<InMemoryCache>>,
     in_memory_hits: AtomicU64,
     mmap_disk_hits: AtomicU64,
     compilation_misses: AtomicU64,
@@ -204,8 +210,7 @@ impl NativeExecutionCache {
         Ok(Self {
             cache_dir: dir,
             max_memory_entries: max_entries,
-            in_memory: Arc::new(RwLock::new(HashMap::new())),
-            lru_order: Arc::new(RwLock::new(VecDeque::new())),
+            in_memory: Arc::new(RwLock::new(InMemoryCache::default())),
             in_memory_hits: AtomicU64::new(0),
             mmap_disk_hits: AtomicU64::new(0),
             compilation_misses: AtomicU64::new(0),
@@ -213,6 +218,15 @@ impl NativeExecutionCache {
             last_deserialization_ns: AtomicU64::new(0),
             last_compilation_ns: AtomicU64::new(0),
         })
+    }
+
+    /// Current timestamp in milliseconds since UNIX epoch.
+    #[inline]
+    fn current_time_ms() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64
     }
 
     /// Compute SHA-256 digest of arbitrary bytes.
@@ -230,12 +244,12 @@ impl NativeExecutionCache {
         format!("{}_{}", hex::encode(source_sha256), tier.as_str())
     }
 
-    /// Query in-memory pre-warmed cache (<1µs path).
+    /// Query in-memory pre-warmed cache (<1µs path) with concurrent lock-free reads.
     pub fn get_in_memory(&self, key: &str) -> Option<Module> {
-        let mut map = self.in_memory.write().unwrap();
-        if let Some(entry) = map.get_mut(key) {
+        let cache = self.in_memory.read().unwrap();
+        if let Some(entry) = cache.entries.get(key) {
             entry.hit_count.fetch_add(1, Ordering::Relaxed);
-            entry.last_accessed = Instant::now();
+            entry.last_accessed_ms.store(Self::current_time_ms(), Ordering::Relaxed);
             self.in_memory_hits.fetch_add(1, Ordering::Relaxed);
             Some(entry.module.clone())
         } else {
@@ -243,7 +257,7 @@ impl NativeExecutionCache {
         }
     }
 
-    /// Insert compiled module into in-memory LRU cache.
+    /// Insert compiled module into in-memory LRU cache using a single unified lock.
     pub fn insert_in_memory(
         &self,
         key: String,
@@ -253,31 +267,30 @@ impl NativeExecutionCache {
         size_bytes: usize,
         mmap: Option<Arc<Mmap>>,
     ) {
-        let mut map = self.in_memory.write().unwrap();
-        let mut lru = self.lru_order.write().unwrap();
+        let mut cache = self.in_memory.write().unwrap();
 
         // Evict if over capacity
-        while map.len() >= self.max_memory_entries {
-            if let Some(oldest_key) = lru.pop_front() {
-                map.remove(&oldest_key);
+        while cache.entries.len() >= self.max_memory_entries {
+            if let Some(oldest_key) = cache.lru_order.pop_front() {
+                cache.entries.remove(&oldest_key);
             } else {
                 break;
             }
         }
 
-        map.insert(
+        cache.entries.insert(
             key.clone(),
             PrewarmedModule {
                 module,
                 tier,
                 source_sha256,
                 hit_count: Arc::new(AtomicU64::new(1)),
-                last_accessed: Instant::now(),
+                last_accessed_ms: Arc::new(AtomicU64::new(Self::current_time_ms())),
                 size_bytes,
                 _mmap: mmap,
             },
         );
-        lru.push_back(key);
+        cache.lru_order.push_back(key);
     }
 
     /// Load precompiled module from disk using zero-copy memory mapping (`Mmap`).
@@ -451,7 +464,7 @@ impl NativeExecutionCache {
 
     /// Retrieve cache statistics.
     pub fn stats(&self) -> CacheStats {
-        let in_memory_entries = self.in_memory.read().unwrap().len();
+        let in_memory_entries = self.in_memory.read().unwrap().entries.len();
         CacheStats {
             in_memory_hits: self.in_memory_hits.load(Ordering::Relaxed),
             mmap_disk_hits: self.mmap_disk_hits.load(Ordering::Relaxed),
@@ -467,10 +480,9 @@ impl NativeExecutionCache {
     /// Clear in-memory entries and remove disk cache files.
     pub fn clear(&self) -> Result<(), CacheError> {
         {
-            let mut map = self.in_memory.write().unwrap();
-            let mut lru = self.lru_order.write().unwrap();
-            map.clear();
-            lru.clear();
+            let mut cache = self.in_memory.write().unwrap();
+            cache.entries.clear();
+            cache.lru_order.clear();
         }
         if self.cache_dir.exists() {
             for entry in fs::read_dir(&self.cache_dir)? {

@@ -149,22 +149,38 @@ impl GeminiOAuthManager {
         None
     }
 
-    /// Save tokens to disk with restricted 0o600 permissions
+    /// Save tokens to disk with atomic, restricted 0o600 permissions
     pub fn save_tokens(tokens: &GeminiOAuthTokens) -> Result<()> {
         let path = Self::token_file_path();
         if let Some(parent) = path.parent() {
             let _ = fs::create_dir_all(parent);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = fs::set_permissions(parent, fs::Permissions::from_mode(0o700));
+            }
         }
         let json = serde_json::to_string_pretty(tokens)
             .map_err(|e| HgbError::Serialization(format!("Failed to serialize OAuth tokens: {e}")))?;
 
-        fs::write(&path, json)
-            .map_err(|e| HgbError::Io(e))?;
-
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+            use std::io::Write;
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&path)
+                .map_err(HgbError::Io)?;
+            file.write_all(json.as_bytes()).map_err(HgbError::Io)?;
+            file.sync_all().map_err(HgbError::Io)?;
+        }
+
+        #[cfg(not(unix))]
+        {
+            fs::write(&path, json).map_err(HgbError::Io)?;
         }
 
         Ok(())

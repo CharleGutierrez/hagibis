@@ -18,8 +18,24 @@ __pycache__/
 *.a
 *.o
 *.so
+*.wasm.o
+scripts/execve_shim.so
 .zig-cache/
 zig-out/
 .cargo/
 **/crates/*/.cargo/
 skills/vector-lancedb/failing_ast_snapshots/
+
+# Profiling and Binary Optimization Artifacts (PGO/BOLT)
+*.profraw
+*.profdata
+perf.data*
+bolt.log
+/tmp/cargo-target
+/tmp/hgb_*
+/dev/shm/hgb_*
+
+# Web Worker & Node Artifacts
+node_modules/
+dist/
+.wrangler/

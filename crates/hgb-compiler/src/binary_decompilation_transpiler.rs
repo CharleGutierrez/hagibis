@@ -235,7 +235,13 @@ pub enum TranspilerError {
 
     #[error("Rust wrapper generation error: {0}")]
     RustGenerationError(String),
+
+    #[error("Maximum recursion / expression depth exceeded ({depth} > {max})")]
+    RecursionDepthExceeded { depth: usize, max: usize },
 }
+
+/// Maximum permitted AST / control-flow expression recursion depth to prevent stack exhaustion
+pub const MAX_RECURSION_DEPTH: usize = 128;
 
 /// Compute Shannon entropy of a byte slice (0.0 to 8.0 bits per byte).
 pub fn compute_shannon_entropy(data: &[u8]) -> f32 {
@@ -1440,6 +1446,7 @@ impl CfgBuilder {
         leaders.insert(0usize, 0u32); // Block 0 starts at offset 0
 
         let mut offset = 0;
+        let mut block_depth = 0usize;
         let mut calls_map: HashMap<usize, Vec<String>> = HashMap::new();
         let mut branches: Vec<(usize, BranchCondition, Option<usize>)> = Vec::new(); // (source_offset, condition, target_offset)
 
@@ -1451,6 +1458,13 @@ impl CfgBuilder {
             match op {
                 // block (0x02), loop (0x03), if (0x04)
                 0x02 | 0x03 | 0x04 => {
+                    block_depth += 1;
+                    if block_depth > MAX_RECURSION_DEPTH {
+                        return Err(TranspilerError::RecursionDepthExceeded {
+                            depth: block_depth,
+                            max: MAX_RECURSION_DEPTH,
+                        });
+                    }
                     // Skip blocktype (1 byte or LEB128)
                     if offset < code.len() {
                         offset += 1;
@@ -1499,6 +1513,7 @@ impl CfgBuilder {
 
                 // end (0x0B)
                 0x0B => {
+                    block_depth = block_depth.saturating_sub(1);
                     leaders.insert(offset, 0);
                 }
 

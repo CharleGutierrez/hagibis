@@ -13,6 +13,11 @@ LLVM_BOLT ?= $(shell command -v llvm-bolt 2>/dev/null || find /usr/lib/llvm-*/bi
 # Relocation preservation flags required for LLVM BOLT post-link transformations
 BOLT_RELOC_FLAGS ?= -Clink-arg=-Wl,--emit-relocs
 
+# Shared compilation caching via sccache if available
+ifneq ($(shell command -v sccache 2>/dev/null),)
+export RUSTC_WRAPPER ?= sccache
+endif
+
 # Preload execution shim if present to enable seamless execution across VFAT mounts
 ifneq ($(wildcard scripts/execve_shim.so),)
 export LD_PRELOAD := $(CURDIR)/scripts/execve_shim.so:$(LD_PRELOAD)
@@ -466,9 +471,6 @@ pgo-bolt-masterclass:
 	@if [ -f "scripts/pgo-bolt-masterclass-automation.sh" ]; then \
 		chmod +x scripts/pgo-bolt-masterclass-automation.sh; \
 		bash scripts/pgo-bolt-masterclass-automation.sh all; \
-	elif [ -f "scripts/pgo_bolt_masterclass_automation.sh" ]; then \
-		chmod +x scripts/pgo_bolt_masterclass_automation.sh; \
-		bash scripts/pgo_bolt_masterclass_automation.sh all; \
 	else \
 		echo "ERROR: pgo-bolt-masterclass-automation.sh script not found!" >&2; \
 		exit 1; \
@@ -484,9 +486,6 @@ pgo-bolt-masterclass-ci:
 	@if [ -f "scripts/pgo-bolt-masterclass-automation.sh" ]; then \
 		chmod +x scripts/pgo-bolt-masterclass-automation.sh; \
 		bash scripts/pgo-bolt-masterclass-automation.sh all --ci --verify; \
-	elif [ -f "scripts/pgo_bolt_masterclass_automation.sh" ]; then \
-		chmod +x scripts/pgo_bolt_masterclass_automation.sh; \
-		bash scripts/pgo_bolt_masterclass_automation.sh all --ci --verify; \
 	else \
 		echo "ERROR: pgo-bolt-masterclass-automation.sh script not found!" >&2; \
 		exit 1; \

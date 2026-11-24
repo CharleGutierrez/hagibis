@@ -991,7 +991,14 @@ impl DistributedSwarmOrchestrator {
     async fn perform_worker_recycle(worker: &LocalWorkerSlot) {
         let slot_shm_dir = Path::new("/dev/shm").join(format!("hgb_worker_slot_{}", worker.slot_id));
         if slot_shm_dir.exists() {
-            let _ = std::fs::remove_dir_all(&slot_shm_dir);
+            if let Err(e) = std::fs::remove_dir_all(&slot_shm_dir) {
+                tracing::warn!(
+                    slot_id = worker.slot_id,
+                    path = %slot_shm_dir.display(),
+                    error = %e,
+                    "Failed to remove worker slot shm dir during recycling; potential shared memory leak"
+                );
+            }
         }
         worker.mark_recycled().await;
     }

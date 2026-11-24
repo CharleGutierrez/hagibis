@@ -666,56 +666,142 @@ impl DaemonState {
 
     /// Collect real-time telemetry snapshot for Cockpit PWA HUD
     pub async fn collect_hud_telemetry(&self) -> CockpitHudTelemetry {
-        // 1. CPU Frequencies in MHz
-        let mut cpu_frequencies_mhz = Vec::new();
-        #[cfg(target_os = "linux")]
-        {
-            if let Ok(entries) = std::fs::read_dir("/sys/devices/system/cpu") {
-                let mut cpu_dirs = Vec::new();
-                for entry in entries.flatten() {
-                    let file_name = entry.file_name().to_string_lossy().to_string();
-                    if file_name.starts_with("cpu") && file_name[3..].chars().all(|c| c.is_ascii_digit()) {
-                        if let Ok(num) = file_name[3..].parse::<usize>() {
-                            cpu_dirs.push((num, entry.path()));
+        // Collect Linux sysfs telemetry off the async reactor thread via spawn_blocking
+        let (cpu_frequencies_mhz, thermal_curve, battery_draw_w, mglru_pressure) = tokio::task::spawn_blocking(move || {
+            // 1. CPU Frequencies in MHz
+            let mut cpu_frequencies_mhz = Vec::new();
+            #[cfg(target_os = "linux")]
+            {
+                if let Ok(entries) = std::fs::read_dir("/sys/devices/system/cpu") {
+                    let mut cpu_dirs = Vec::new();
+                    for entry in entries.flatten() {
+                        let file_name = entry.file_name().to_string_lossy().to_string();
+                        if file_name.starts_with("cpu") && file_name[3..].chars().all(|c| c.is_ascii_digit()) {
+                            if let Ok(num) = file_name[3..].parse::<usize>() {
+                                cpu_dirs.push((num, entry.path()));
+                            }
+                        }
+                    }
+                    cpu_dirs.sort_by_key(|k| k.0);
+                    for (_, path) in cpu_dirs {
+                        let cur_freq = path.join("cpufreq/scaling_cur_freq");
+                        if let Ok(val) = std::fs::read_to_string(&cur_freq) {
+                            if let Ok(khz) = val.trim().parse::<u32>() {
+                                cpu_frequencies_mhz.push(khz / 1000);
+                            }
                         }
                     }
                 }
-                cpu_dirs.sort_by_key(|k| k.0);
-                for (_, path) in cpu_dirs {
-                    let cur_freq = path.join("cpufreq/scaling_cur_freq");
-                    if let Ok(val) = std::fs::read_to_string(&cur_freq) {
-                        if let Ok(khz) = val.trim().parse::<u32>() {
-                            cpu_frequencies_mhz.push(khz / 1000);
-                        }
-                    }
-                }
-            }
-            if cpu_frequencies_mhz.is_empty() {
-                if let Ok(cpuinfo) = std::fs::read_to_string("/proc/cpuinfo") {
-                    for line in cpuinfo.lines() {
-                        if line.starts_with("cpu MHz") {
-                            if let Some(val_str) = line.split(':').nth(1) {
-                                if let Ok(mhz) = val_str.trim().parse::<f32>() {
-                                    cpu_frequencies_mhz.push(mhz as u32);
+                if cpu_frequencies_mhz.is_empty() {
+                    if let Ok(cpuinfo) = std::fs::read_to_string("/proc/cpuinfo") {
+                        for line in cpuinfo.lines() {
+                            if line.starts_with("cpu MHz") {
+                                if let Some(val_str) = line.split(':').nth(1) {
+                                    if let Ok(mhz) = val_str.trim().parse::<f32>() {
+                                        cpu_frequencies_mhz.push(mhz as u32);
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
-        }
-        if cpu_frequencies_mhz.is_empty() {
-            cpu_frequencies_mhz = vec![2400, 2400, 2400, 2400];
-        }
+            if cpu_frequencies_mhz.is_empty() {
+                cpu_frequencies_mhz = vec![2400, 2400, 2400, 2400];
+            }
 
-        // 2. WASM Memory in MB
+            // 2. Thermal Curve in Celsius
+            let mut thermal_curve = Vec::new();
+            #[cfg(target_os = "linux")]
+            {
+                if let Ok(entries) = std::fs::read_dir("/sys/class/thermal") {
+                    let mut zone_dirs = Vec::new();
+                    for entry in entries.flatten() {
+                        let file_name = entry.file_name().to_string_lossy().to_string();
+                        if file_name.starts_with("thermal_zone") {
+                            if let Ok(num) = file_name["thermal_zone".len()..].parse::<usize>() {
+                                zone_dirs.push((num, entry.path()));
+                            }
+                        }
+                    }
+                    zone_dirs.sort_by_key(|k| k.0);
+                    for (_, path) in zone_dirs {
+                        let temp_file = path.join("temp");
+                        if let Ok(val) = std::fs::read_to_string(&temp_file) {
+                            if let Ok(mc) = val.trim().parse::<f32>() {
+                                thermal_curve.push((mc / 1000.0).max(0.0));
+                            }
+                        }
+                    }
+                }
+            }
+            if thermal_curve.is_empty() {
+                thermal_curve = vec![42.0, 43.5, 41.8, 44.2];
+            }
+
+            // 3. Battery Draw in Watts
+            let mut battery_draw_w: f32 = 0.0;
+            #[cfg(target_os = "linux")]
+            {
+                if let Ok(entries) = std::fs::read_dir("/sys/class/power_supply") {
+                    for entry in entries.flatten() {
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        if name.starts_with("BAT") {
+                            let power_file = entry.path().join("power_now");
+                            if let Ok(p_str) = std::fs::read_to_string(&power_file) {
+                                if let Ok(u_watts) = p_str.trim().parse::<f32>() {
+                                    battery_draw_w = u_watts / 1_000_000.0;
+                                    break;
+                                }
+                            }
+                            let current_file = entry.path().join("current_now");
+                            let voltage_file = entry.path().join("voltage_now");
+                            if let (Ok(c_str), Ok(v_str)) = (std::fs::read_to_string(&current_file), std::fs::read_to_string(&voltage_file)) {
+                                if let (Ok(u_amps), Ok(u_volts)) = (c_str.trim().parse::<f32>(), v_str.trim().parse::<f32>()) {
+                                    battery_draw_w = (u_amps * u_volts) / 1_000_000_000_000.0;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if battery_draw_w <= 0.0 {
+                battery_draw_w = 14.5;
+            }
+
+            // 4. MGLRU Memory Pressure
+            let mut mglru_pressure = "nominal".to_string();
+            #[cfg(target_os = "linux")]
+            {
+                if let Ok(psi) = std::fs::read_to_string("/proc/pressure/memory") {
+                    if let Some(first_line) = psi.lines().next() {
+                        if let Some(avg10) = first_line.split("avg10=").nth(1).and_then(|s| s.split_whitespace().next()) {
+                            if let Ok(val) = avg10.parse::<f32>() {
+                                if val > 15.0 {
+                                    mglru_pressure = "critical".to_string();
+                                } else if val > 5.0 {
+                                    mglru_pressure = "elevated".to_string();
+                                } else {
+                                    mglru_pressure = "nominal".to_string();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            (cpu_frequencies_mhz, thermal_curve, battery_draw_w, mglru_pressure)
+        }).await.unwrap_or_else(|_| (vec![2400, 2400, 2400, 2400], vec![42.0, 43.5, 41.8, 44.2], 14.5, "nominal".to_string()));
+
+        // WASM Memory in MB
         let wasm_memory_mb = {
             let pool_status = self.wasm_hot_pool.status();
             let wasm_bytes: usize = pool_status.cached_modules.iter().map(|m| m.size_bytes).sum();
             ((wasm_bytes as f64) / (1024.0 * 1024.0)).max(4.2)
         };
 
-        // 3. Active MCP Tools
+        // Active MCP Tools
         let mut active_mcp_tools = Vec::new();
         for t in self.mcp_orchestrator.list_aggregated_tools().await {
             active_mcp_tools.push(t.namespaced_name);
@@ -728,87 +814,6 @@ impl DaemonState {
                 "wasm_eval".to_string(),
                 "git_checkpoint".to_string(),
             ];
-        }
-
-        // 4. Thermal Curve in Celsius
-        let mut thermal_curve = Vec::new();
-        #[cfg(target_os = "linux")]
-        {
-            if let Ok(entries) = std::fs::read_dir("/sys/class/thermal") {
-                let mut zone_dirs = Vec::new();
-                for entry in entries.flatten() {
-                    let file_name = entry.file_name().to_string_lossy().to_string();
-                    if file_name.starts_with("thermal_zone") {
-                        if let Ok(num) = file_name["thermal_zone".len()..].parse::<usize>() {
-                            zone_dirs.push((num, entry.path()));
-                        }
-                    }
-                }
-                zone_dirs.sort_by_key(|k| k.0);
-                for (_, path) in zone_dirs {
-                    let temp_file = path.join("temp");
-                    if let Ok(val) = std::fs::read_to_string(&temp_file) {
-                        if let Ok(mc) = val.trim().parse::<f32>() {
-                            thermal_curve.push((mc / 1000.0).max(0.0));
-                        }
-                    }
-                }
-            }
-        }
-        if thermal_curve.is_empty() {
-            thermal_curve = vec![42.0, 43.5, 41.8, 44.2];
-        }
-
-        // 5. Battery Draw in Watts
-        let mut battery_draw_w: f32 = 0.0;
-        #[cfg(target_os = "linux")]
-        {
-            if let Ok(entries) = std::fs::read_dir("/sys/class/power_supply") {
-                for entry in entries.flatten() {
-                    let name = entry.file_name().to_string_lossy().to_string();
-                    if name.starts_with("BAT") {
-                        let power_file = entry.path().join("power_now");
-                        if let Ok(p_str) = std::fs::read_to_string(&power_file) {
-                            if let Ok(u_watts) = p_str.trim().parse::<f32>() {
-                                battery_draw_w = u_watts / 1_000_000.0;
-                                break;
-                            }
-                        }
-                        let current_file = entry.path().join("current_now");
-                        let voltage_file = entry.path().join("voltage_now");
-                        if let (Ok(c_str), Ok(v_str)) = (std::fs::read_to_string(&current_file), std::fs::read_to_string(&voltage_file)) {
-                            if let (Ok(u_amps), Ok(u_volts)) = (c_str.trim().parse::<f32>(), v_str.trim().parse::<f32>()) {
-                                battery_draw_w = (u_amps * u_volts) / 1_000_000_000_000.0;
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        if battery_draw_w <= 0.0 {
-            battery_draw_w = 14.5;
-        }
-
-        // 6. MGLRU Memory Pressure
-        let mut mglru_pressure = "nominal".to_string();
-        #[cfg(target_os = "linux")]
-        {
-            if let Ok(psi) = std::fs::read_to_string("/proc/pressure/memory") {
-                if let Some(first_line) = psi.lines().next() {
-                    if let Some(avg10) = first_line.split("avg10=").nth(1).and_then(|s| s.split_whitespace().next()) {
-                        if let Ok(val) = avg10.parse::<f32>() {
-                            if val > 15.0 {
-                                mglru_pressure = "critical".to_string();
-                            } else if val > 5.0 {
-                                mglru_pressure = "elevated".to_string();
-                            } else {
-                                mglru_pressure = "nominal".to_string();
-                            }
-                        }
-                    }
-                }
-            }
         }
 
         // 7. Active Task Count

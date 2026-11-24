@@ -35,7 +35,13 @@ pub fn build(b: *std.Build) void {
     wasm_lib.rdynamic = true;
     wasm_lib.import_symbols = true; // Retain undefined extern symbols for host WASI-NN and syscall imports
     wasm_lib.export_memory = true; // Expose WebAssembly linear memory for host tensor zero-copy access
-    wasm_lib.max_memory = 512 * 65536; // 32 MiB maximum memory limit
+    // Configurable maximum linear memory pages (64 KiB per page, default 4096 = 256 MiB)
+    const max_memory_pages = b.option(
+        usize,
+        "max_memory_pages",
+        "Maximum WebAssembly linear memory pages (64 KiB each, default: 4096 = 256 MiB)",
+    ) orelse 4096;
+    wasm_lib.max_memory = max_memory_pages * 65536;
 
     // Export memory and functions
     b.installArtifact(wasm_lib);

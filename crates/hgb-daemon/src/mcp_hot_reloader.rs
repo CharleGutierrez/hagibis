@@ -206,7 +206,7 @@ impl McpHotReloader {
             let sessions = sse.sessions.read().await;
             let mut sent = 0;
             for tx in sessions.values() {
-                if tx.send(event.clone()).is_ok() {
+                if tx.try_send(event.clone()).is_ok() {
                     sent += 1;
                 }
             }

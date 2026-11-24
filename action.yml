@@ -121,10 +121,24 @@ runs:
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
         fi
 
+    - name: Setup sccache compiler cache
+      shell: bash
+      run: |
+        if command -v sccache &> /dev/null; then
+          export RUSTC_WRAPPER=sccache
+          export SCCACHE_DIR="$HOME/.cache/sccache"
+          mkdir -p "$SCCACHE_DIR"
+          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+          echo "SCCACHE_DIR=$SCCACHE_DIR" >> "$GITHUB_ENV"
+        fi
+
     - name: Build Hagibis Engine Binary
       shell: bash
       run: |
         if ! command -v hgb &> /dev/null; then
+          if command -v sccache &> /dev/null; then
+            export RUSTC_WRAPPER=sccache
+          fi
           cargo build --release -p hgb-cli
           mkdir -p "$HOME/.cargo/bin"
           cp target/release/hgb "$HOME/.cargo/bin/hgb"
@@ -245,11 +259,9 @@ runs:
         CI_MODE: 'true'
       run: |
         echo "::group::Executing Hagibis Masterclass PGO + BOLT Super-Optimization"
-        chmod +x scripts/pgo-bolt-masterclass-automation.sh scripts/pgo_bolt_masterclass_automation.sh 2>/dev/null || true
+        chmod +x scripts/pgo-bolt-masterclass-automation.sh 2>/dev/null || true
         if [ -f "scripts/pgo-bolt-masterclass-automation.sh" ]; then
           bash scripts/pgo-bolt-masterclass-automation.sh all --ci --iterations "$ITERATIONS"
-        elif [ -f "scripts/pgo_bolt_masterclass_automation.sh" ]; then
-          bash scripts/pgo_bolt_masterclass_automation.sh all --ci --iterations "$ITERATIONS"
         fi
         echo "optimized=true" >> "$GITHUB_OUTPUT"
         echo "::endgroup::"

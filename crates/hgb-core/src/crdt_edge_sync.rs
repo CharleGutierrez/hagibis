@@ -224,6 +224,21 @@ impl<T: std::hash::Hash + Eq + Clone> OrSet<T> {
             self.remove_set.insert(tag.clone());
         }
     }
+
+    /// Prune tombstones for removed elements whose lamport timestamp is <= min_stable_lamport_ts
+    pub fn prune_tombstones(&mut self, min_stable_lamport_ts: u64) -> usize {
+        let mut pruned = 0;
+        self.add_set.retain(|(tag, _)| {
+            if tag.lamport_ts <= min_stable_lamport_ts && self.remove_set.contains(tag) {
+                pruned += 1;
+                false
+            } else {
+                true
+            }
+        });
+        self.remove_set.retain(|tag| tag.lamport_ts > min_stable_lamport_ts);
+        pruned
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -397,6 +412,14 @@ impl CrdtSyncDocument {
             total_skills_active: curr_skills,
             merged_clock: self.vector_clock.clock.clone(),
         }
+    }
+
+    /// Prune tombstones across all sub-documents up to the specified stable Lamport timestamp watermark
+    pub fn prune_tombstones(&mut self, min_stable_lamport_ts: u64) -> usize {
+        let p1 = self.adrs.prune_tombstones(min_stable_lamport_ts);
+        let p2 = self.skills.prune_tombstones(min_stable_lamport_ts);
+        let p3 = self.vector_embeddings.prune_tombstones(min_stable_lamport_ts);
+        p1 + p2 + p3
     }
 
     // -------------------------------------------------------------------------

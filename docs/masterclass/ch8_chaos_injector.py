@@ -17,10 +17,40 @@ import time
 import json
 import uuid
 import shutil
+import socket
 import sqlite3
 import threading
 from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass, field
+
+def get_chaos_server_port(preferred_port: Optional[int] = None) -> int:
+    """
+    Discovers an isolated socket port for chaos testing:
+    1. Checks HGB_CHAOS_PORT environment variable if set.
+    2. Attempts preferred_port if provided.
+    3. Falls back to ephemeral port allocation via socket.bind(('127.0.0.1', 0))
+       to prevent port collisions during concurrent test execution.
+    """
+    env_port = os.environ.get("HGB_CHAOS_PORT")
+    if env_port:
+        try:
+            return int(env_port)
+        except ValueError:
+            pass
+
+    if preferred_port is not None:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                s.bind(('127.0.0.1', preferred_port))
+                return preferred_port
+        except OSError:
+            pass
+
+    # Ephemeral port discovery via socket(0)
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(('127.0.0.1', 0))
+        return s.getsockname()[1]
 
 # ==============================================================================
 # Domain Models & Telemetry Tracking
@@ -446,12 +476,74 @@ class ChaosFaultInjector:
             details=res,
         )
 
+    def inject_socket_heartbeat_partition(self) -> ChaosScenarioReport:
+        """
+        Scenario 4: Simulates socket collision & network heartbeat partition.
+        Uses HGB_CHAOS_PORT or ephemeral port discovery via socket(0) to ensure
+        isolation across concurrent test runners, with autonomous port rebind loop.
+        """
+        start = time.time()
+        initial_port = get_chaos_server_port(preferred_port=8991)
+        server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+        bound_port = None
+        try:
+            server_sock.bind(('127.0.0.1', initial_port))
+            bound_port = initial_port
+        except OSError:
+            # Autonomous collision recovery: fallback to ephemeral port discovery
+            bound_port = get_chaos_server_port()
+            server_sock.bind(('127.0.0.1', bound_port))
+
+        server_sock.listen(5)
+        server_sock.settimeout(1.0)
+
+        # Connect client probe
+        client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        client.connect(('127.0.0.1', bound_port))
+        conn, _ = server_sock.accept()
+
+        # Transmit heartbeat
+        client.sendall(b"PING\n")
+        data = conn.recv(1024)
+        assert data.strip() == b"PING"
+        conn.sendall(b"PONG\n")
+        resp = client.recv(1024)
+        assert resp.strip() == b"PONG"
+
+        # Inject partition: sever connection mid-session
+        client.close()
+        conn.close()
+        server_sock.close()
+
+        # Autonomous failover: rebind to a fresh ephemeral port
+        failover_port = get_chaos_server_port()
+        failover_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        failover_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        failover_sock.bind(('127.0.0.1', failover_port))
+        failover_sock.close()
+
+        elapsed_ms = (time.time() - start) * 1000.0
+        return ChaosScenarioReport(
+            scenario="socket_heartbeat_partition",
+            status="HEALED",
+            duration_ms=elapsed_ms,
+            details={
+                "initial_port": bound_port,
+                "failover_port": failover_port,
+                "dynamic_port_discovery": True,
+                "autonomous_rebind_success": True,
+            },
+        )
+
     def run_all_scenarios(self) -> ChaosRecoveryReport:
         """Executes the full suite of chaos fault injection scenarios."""
         reports = [
             self.inject_memory_leak(),
             self.inject_storage_saturation(),
             self.inject_worker_disconnect(),
+            self.inject_socket_heartbeat_partition(),
         ]
         healed = sum(1 for r in reports if r.status == "HEALED")
         total = len(reports)

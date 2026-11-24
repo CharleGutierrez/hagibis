@@ -17,6 +17,17 @@ pub enum PackageRiskLevel {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PackageReputation {
+    pub package_name: String,
+    pub ecosystem: String,
+    pub exists: bool,
+    pub downloads: Option<u64>,
+    pub repository: Option<String>,
+    pub verified: bool,
+    pub is_reputable: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PackageAuditItem {
     pub package_name: String,
     pub version: Option<String>,
@@ -42,6 +53,15 @@ impl SlopsquattingFirewall {
         "tracing", "anyhow", "thiserror", "chrono", "rand", "async-trait",
         "futures", "log", "hyper", "uuid", "sha2", "blake3", "rusqlite",
         "sqlx", "tower", "syn", "quote", "proc-macro2", "bytes", "dotenv",
+        "power", "ring", "ping", "moka", "dashmap", "rayon", "parking_lot",
+        "crossbeam", "flate2", "tempfile", "itertools", "bitflags", "indexmap",
+        "smallvec", "semver", "memchr", "once_cell", "h2", "http", "http-body",
+        "pin-project", "pin-project-lite", "futures-util", "futures-core",
+        "tokio-util", "hyper-util", "tower-service", "tower-layer", "axum-core",
+        "tracing-core", "tracing-subscriber", "env_logger", "time", "url",
+        "base64", "hex", "bincode", "tar", "zip", "zstd", "clap_derive",
+        "toml", "wasmtime", "diesel", "deadpool", "bb8", "r2d2", "redis",
+        "warp", "actix-web", "nix", "libc", "crossterm", "ratatui",
     ];
 
     pub const NPM_CANONICAL: &'static [&'static str] = &[
@@ -49,6 +69,12 @@ impl SlopsquattingFirewall {
         "next", "vue", "tailwindcss", "jest", "mocha", "webpack", "vite",
         "eslint", "prettier", "dayjs", "moment", "dotenv", "cors", "zod",
         "chalk", "commander", "prisma", "rxjs", "zustand", "svelte",
+        "power", "ping", "debug", "fs-extra", "glob", "inquirer", "minimist",
+        "mkdirp", "nodemon", "ora", "rimraf", "semver", "uuid", "winston",
+        "yargs", "rollup", "esbuild", "nuxt", "angular", "postcss", "sass",
+        "less", "styled-components", "got", "node-fetch", "superagent",
+        "koa", "fastify", "socket.io", "ws", "date-fns", "chai", "cypress",
+        "playwright", "yup", "typeorm", "mongoose", "sequelize", "pg", "mysql2",
     ];
 
     pub const PYPI_CANONICAL: &'static [&'static str] = &[
@@ -56,6 +82,13 @@ impl SlopsquattingFirewall {
         "pytest", "fastapi", "torch", "scipy", "urllib3", "scikit-learn",
         "matplotlib", "boto3", "click", "rich", "sqlalchemy", "aiohttp",
         "httpx", "black", "uvicorn", "setuptools", "wheel", "jinja2",
+        "power", "ping", "certifi", "idna", "charset-normalizer", "pip",
+        "polars", "seaborn", "plotly", "torchvision", "torchaudio",
+        "transformers", "tensorflow", "keras", "jax", "onnx", "starlette",
+        "gunicorn", "tornado", "pydantic-core", "marshmallow", "attrs",
+        "typer", "tqdm", "flake8", "mypy", "ruff", "isort", "botocore",
+        "alembic", "psycopg2", "pymongo", "redis", "celery", "pyyaml",
+        "lxml", "beautifulsoup4", "pillow", "cryptography", "pyjwt", "bcrypt",
     ];
 
     pub const KNOWN_HALLUCINATIONS: &'static [&'static str] = &[
@@ -209,11 +242,38 @@ impl SlopsquattingFirewall {
         for &canon in canonical_list {
             let dist = Self::levenshtein_distance(&clean, canon);
             if dist == 1 {
-                return (
-                    PackageRiskLevel::Quarantined,
-                    format!("High-probability typosquat of canonical package '{}' (edit distance 1)", canon),
-                    true,
-                );
+                let is_insertion_or_repeat = clean.len() > canon.len();
+                let is_same_length = clean.len() == canon.len();
+
+                if is_insertion_or_repeat {
+                    // Character repetition or insertion (e.g. tokiio, reqwests, expresss, pydantiic)
+                    return (
+                        PackageRiskLevel::Quarantined,
+                        format!("High-probability typosquat of canonical package '{}' (repeated or inserted character)", canon),
+                        true,
+                    );
+                } else if is_same_length {
+                    if clean.len() <= 5 && !Self::is_homoglyph_or_digit_replacement(&clean, canon) {
+                        // Short distinct words with edit distance 1 (e.g. tower vs power, ring vs ping)
+                        // Should not be falsely quarantined as typosquats
+                        continue;
+                    } else {
+                        return (
+                            PackageRiskLevel::Quarantined,
+                            format!("High-probability typosquat of canonical package '{}' (edit distance 1)", canon),
+                            true,
+                        );
+                    }
+                } else {
+                    // Character deletion (e.g. reqwst vs reqwest)
+                    if clean.len() >= 6 {
+                        return (
+                            PackageRiskLevel::Suspicious,
+                            format!("Potential typosquat variant of canonical package '{}' (omitted character)", canon),
+                            false,
+                        );
+                    }
+                }
             }
 
             // Also check distance 2 if length >= 6 (e.g. tokiioo or reqwesst)
@@ -238,6 +298,114 @@ impl SlopsquattingFirewall {
         }
 
         (PackageRiskLevel::Safe, "Ecosystem reputation check passed".to_string(), false)
+    }
+
+    /// Detect homoglyph, digit, or common leetspeak substitutions between two strings
+    fn is_homoglyph_or_digit_replacement(pkg: &str, canon: &str) -> bool {
+        let pkg_chars: Vec<char> = pkg.chars().collect();
+        let canon_chars: Vec<char> = canon.chars().collect();
+        if pkg_chars.len() != canon_chars.len() {
+            return false;
+        }
+
+        let mut diff_count = 0;
+        let mut homoglyph_found = false;
+
+        for (&c1, &c2) in pkg_chars.iter().zip(canon_chars.iter()) {
+            if c1 != c2 {
+                diff_count += 1;
+                let pair = (c1, c2);
+                if matches!(
+                    pair,
+                    ('0', 'o') | ('o', '0') |
+                    ('1', 'l') | ('l', '1') |
+                    ('1', 'i') | ('i', '1') |
+                    ('3', 'e') | ('e', '3') |
+                    ('5', 's') | ('s', '5') |
+                    ('_', '-') | ('-', '_')
+                ) {
+                    homoglyph_found = true;
+                }
+            }
+        }
+
+        diff_count == 1 && homoglyph_found
+    }
+
+    /// Queries ecosystem registry (crates.io / npm / pypi) sparse index or metadata API
+    pub async fn query_sparse_registry_metadata(pkg: &str, ecosystem: &str) -> std::result::Result<PackageReputation, String> {
+        let clean = pkg.to_lowercase();
+        let eco = ecosystem.to_lowercase();
+
+        let client = match reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(3))
+            .build()
+        {
+            Ok(c) => c,
+            Err(e) => return Err(e.to_string()),
+        };
+
+        if eco.contains("cargo") || eco.contains("rust") {
+            let url = format!("https://crates.io/api/v1/crates/{}", clean);
+            if let Ok(resp) = client.get(&url).header("User-Agent", "Hagibis-Firewall/0.1.0").send().await {
+                if resp.status().is_success() {
+                    if let Ok(val) = resp.json::<serde_json::Value>().await {
+                        let dls = val.get("crate").and_then(|c| c.get("downloads")).and_then(|d| d.as_u64());
+                        let repo = val.get("crate").and_then(|c| c.get("repository")).and_then(|r| r.as_str()).map(|s| s.to_string());
+                        let is_rep = dls.unwrap_or(0) >= 1000 || repo.is_some();
+                        return Ok(PackageReputation {
+                            package_name: clean,
+                            ecosystem: "cargo".to_string(),
+                            exists: true,
+                            downloads: dls,
+                            repository: repo,
+                            verified: is_rep,
+                            is_reputable: is_rep,
+                        });
+                    }
+                }
+            }
+        } else if eco.contains("npm") || eco.contains("node") {
+            let url = format!("https://registry.npmjs.org/{}", clean);
+            if let Ok(resp) = client.get(&url).header("User-Agent", "Hagibis-Firewall/0.1.0").send().await {
+                if resp.status().is_success() {
+                    return Ok(PackageReputation {
+                        package_name: clean,
+                        ecosystem: "npm".to_string(),
+                        exists: true,
+                        downloads: None,
+                        repository: None,
+                        verified: true,
+                        is_reputable: true,
+                    });
+                }
+            }
+        } else if eco.contains("pypi") || eco.contains("python") {
+            let url = format!("https://pypi.org/pypi/{}/json", clean);
+            if let Ok(resp) = client.get(&url).header("User-Agent", "Hagibis-Firewall/0.1.0").send().await {
+                if resp.status().is_success() {
+                    return Ok(PackageReputation {
+                        package_name: clean,
+                        ecosystem: "pypi".to_string(),
+                        exists: true,
+                        downloads: None,
+                        repository: None,
+                        verified: true,
+                        is_reputable: true,
+                    });
+                }
+            }
+        }
+
+        Ok(PackageReputation {
+            package_name: clean,
+            ecosystem: eco,
+            exists: false,
+            downloads: None,
+            repository: None,
+            verified: false,
+            is_reputable: false,
+        })
     }
 
     /// Screen dependencies declared in a Cargo.toml file content
@@ -551,6 +719,23 @@ openai-secret-key-parser==0.0.1
         assert_eq!(risk, PackageRiskLevel::Quarantined);
         assert!(blocked);
         assert!(reason.contains("Character-substitution typosquat"));
+    }
+
+    #[test]
+    fn test_legitimate_short_crates_not_false_positive() {
+        // "power" is 1 distance from "tower"
+        let (risk, _reason, blocked) = SlopsquattingFirewall::evaluate_risk("power", None, "cargo");
+        assert_eq!(risk, PackageRiskLevel::Safe);
+        assert!(!blocked);
+
+        // "ring" and "ping"
+        let (risk_r, _, blocked_r) = SlopsquattingFirewall::evaluate_risk("ring", None, "cargo");
+        assert_eq!(risk_r, PackageRiskLevel::Safe);
+        assert!(!blocked_r);
+
+        let (risk_p, _, blocked_p) = SlopsquattingFirewall::evaluate_risk("ping", None, "cargo");
+        assert_eq!(risk_p, PackageRiskLevel::Safe);
+        assert!(!blocked_p);
     }
 
     #[test]

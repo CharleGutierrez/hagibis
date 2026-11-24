@@ -12,7 +12,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." 2>/dev/null && pwd || echo "/media/toshiba/Lexar/hagibis")"
+WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." 2>/dev/null && pwd || pwd)"
 KERNEL_DIR="$WORKSPACE_ROOT/crates/hgb-wasm-kernel"
 CACHE_DIR="${WASM_CACHE_DIR:-/media/toshiba/Lexar/scratch/wasm_cache}"
 

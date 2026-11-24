@@ -3,6 +3,7 @@ use std::fs::OpenOptions;
 use memmap2::MmapMut;
 use std::collections::HashMap;
 use std::sync::Mutex;
+use tracing::info;
 
 /// 1. Memory Multi-Tiering Engine (NVMe to RAM to VRAM streaming)
 pub trait MemoryTieringEngine {
@@ -27,8 +28,8 @@ impl MultiTierMemory {
 
 impl MemoryTieringEngine for MultiTierMemory {
     fn stream_weights(&self, model_id: &str) -> Result<(), Box<dyn Error>> {
-        println!("Streaming weights for {} from NVMe ({}) -> RAM ({}MB) -> VRAM ({}MB)", 
-                 model_id, self.nvme_path, self.ram_cache_size_mb, self.vram_alloc_mb);
+        info!("Streaming weights for {} from NVMe ({}) -> RAM ({}MB) -> VRAM ({}MB)", 
+              model_id, self.nvme_path, self.ram_cache_size_mb, self.vram_alloc_mb);
         
         let swap_path = std::path::Path::new(&self.nvme_path);
         if let Some(parent) = swap_path.parent() {
@@ -54,7 +55,7 @@ impl MemoryTieringEngine for MultiTierMemory {
             mmap.flush()?;
         }
         
-        println!("Successfully established zero-copy memory tiering for file: {:?}", swap_path);
+        info!("Successfully established zero-copy memory tiering for file: {:?}", swap_path);
         
         Ok(())
     }
@@ -96,14 +97,14 @@ impl MoEStreamer for DynamicMoE {
                 let id = loaded.remove(pos);
                 loaded.push(id);
             }
-            println!("Expert {} is already loaded.", expert_id);
+            info!("Expert {} is already loaded.", expert_id);
             return Ok(());
         }
 
         while loaded.len() >= self.max_active_experts && !loaded.is_empty() {
             let evicted = loaded.remove(0);
             map.remove(&evicted);
-            println!("Evicted MoE expert: {}", evicted);
+            info!("Evicted MoE expert: {}", evicted);
         }
 
         let path = std::path::Path::new(&self.base_dir).join(format!("{}.expert", expert_id));
@@ -128,7 +129,7 @@ impl MoEStreamer for DynamicMoE {
         map.insert(expert_id.to_string(), mmap);
         loaded.push(expert_id.to_string());
 
-        println!("Loaded MoE expert: {} into memory-mapped buffer at {:?}", expert_id, path);
+        info!("Loaded MoE expert: {} into memory-mapped buffer at {:?}", expert_id, path);
         Ok(())
     }
 }
@@ -151,7 +152,7 @@ impl HardwareAdapter for AutoAdapter {
         let arch = std::env::consts::ARCH;
         let os = std::env::consts::OS;
         let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
-        println!("Probing hardware... Found {} cores on {}/{} environment. Adapting execution graph.", cores, os, arch);
+        info!("Probing hardware... Found {} cores on {}/{} environment. Adapting execution graph.", cores, os, arch);
         Ok(format!("Adapted to optimal hardware configuration ({} cores)", cores))
     }
 }

@@ -710,6 +710,7 @@ pub struct EphemeralMicrovmJail {
     pub cgroup_mgr: Option<CgroupV2Manager>,
     pub symbol_table: HashMap<String, SymbolEntry>,
     pub generation: u64,
+    pub tap_device: Option<String>,
     pub is_torn_down: AtomicBool,
 }
 
@@ -754,11 +755,40 @@ impl EphemeralMicrovmJail {
             cgroup_mgr,
             symbol_table: HashMap::new(),
             generation: 1,
+            tap_device: None,
             is_torn_down: AtomicBool::new(false),
         })
     }
 
-    /// Teardown instance, terminate child process (SIGTERM -> SIGKILL), wipe cgroups and /dev/shm directory
+    /// Deletes a TAP network device using `ip link delete`
+    pub fn delete_tap_interface(tap_name: &str) {
+        if tap_name.is_empty() {
+            return;
+        }
+        let _ = Command::new("ip")
+            .args(["link", "delete", tap_name])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+
+    /// Sweeps and unlinks all dangling `tap_hgb_*` or `hgb_tap_*` interfaces left from aborted processes
+    pub fn sweep_dangling_tap_devices() -> usize {
+        let mut swept = 0;
+        let sys_net = Path::new("/sys/class/net");
+        if let Ok(entries) = fs::read_dir(sys_net) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.starts_with("tap_hgb_") || name.starts_with("hgb_tap_") {
+                    Self::delete_tap_interface(&name);
+                    swept += 1;
+                }
+            }
+        }
+        swept
+    }
+
+    /// Teardown instance, terminate child process (SIGTERM -> SIGKILL), wipe cgroups, TAP interfaces and /dev/shm directory
     pub fn teardown(&mut self) -> Result<(), String> {
         if self.is_torn_down.swap(true, Ordering::SeqCst) {
             self.status = JailStatus::Terminated;
@@ -805,6 +835,11 @@ impl EphemeralMicrovmJail {
         // 4. Wipe ephemeral jail directory in RAM
         if self.jail_dir.exists() {
             let _ = fs::remove_dir_all(&self.jail_dir);
+        }
+
+        // 5. Cleanup TAP network interface if allocated
+        if let Some(ref tap) = self.tap_device.take() {
+            Self::delete_tap_interface(tap);
         }
 
         Ok(())
@@ -857,6 +892,9 @@ impl FirecrackerHardwareRunner {
         let socket_dir = Self::determine_socket_dir();
         let _ = fs::create_dir_all(&socket_dir);
         let _ = fs::create_dir_all(DEFAULT_VOLATILE_JAIL_BASE);
+
+        // Sweeps dangling TAP devices left by killed processes
+        let _ = EphemeralMicrovmJail::sweep_dangling_tap_devices();
 
         Self {
             jails: Arc::new(RwLock::new(HashMap::new())),

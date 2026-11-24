@@ -172,6 +172,47 @@ impl<T: std::hash::Hash + Eq + Clone> OrSet<T> {
 
         changed
     }
+
+    /// Prune tombstones for removed elements with timestamps up to `min_stable_epoch_ms`.
+    /// When `min_stable_epoch_ms` is 0, prunes all tags present in `remove_set`.
+    pub fn prune_tombstones(&mut self, min_stable_epoch_ms: u64) -> usize {
+        let mut pruned = 0;
+        let mut tags_to_prune = Vec::new();
+
+        self.add_set.retain(|_elem, tags| {
+            tags.retain(|tag| {
+                if self.remove_set.contains(tag) {
+                    let is_eligible = if min_stable_epoch_ms == 0 {
+                        true
+                    } else {
+                        // Tag format: {node_id}-{timestamp_nanos}-{uuid}
+                        tag.split('-')
+                            .nth(1)
+                            .and_then(|ts_str| ts_str.parse::<u128>().ok())
+                            .map(|nanos| (nanos / 1_000_000) as u64 <= min_stable_epoch_ms)
+                            .unwrap_or(true)
+                    };
+
+                    if is_eligible {
+                        tags_to_prune.push(tag.clone());
+                        pruned += 1;
+                        false
+                    } else {
+                        true
+                    }
+                } else {
+                    true
+                }
+            });
+            !tags.is_empty()
+        });
+
+        for tag in tags_to_prune {
+            self.remove_set.remove(&tag);
+        }
+
+        pruned
+    }
 }
 
 // ==============================================================================

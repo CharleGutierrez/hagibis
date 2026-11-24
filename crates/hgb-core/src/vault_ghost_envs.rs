@@ -9,6 +9,7 @@ use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use std::collections::HashMap;
+use zeroize::Zeroize;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -81,7 +82,7 @@ impl VaultGhostEnvs {
     /// BLAKE3 keyed XOF stream cipher + fresh 96-bit nonce + HMAC-SHA256 authentication tag
     pub fn seal_secrets(&self, passphrase: &str) -> GhostVaultSeal {
         let serialized = serde_json::to_vec(&self.secrets).unwrap_or_default();
-        let (enc_key, mac_key) = Self::derive_subkeys(passphrase);
+        let (mut enc_key, mut mac_key) = Self::derive_subkeys(passphrase);
         let nonce = Self::generate_random_96bit_nonce();
 
         // Stream XOR encryption using BLAKE3 XOF keyed with enc_key and bound to fresh nonce
@@ -100,6 +101,7 @@ impl VaultGhostEnvs {
                 *byte ^= key_byte;
             }
         }
+        stream_chunk.zeroize();
 
         // Authenticated Associated Data MAC generation over version, nonce, entry count, and ciphertext
         let vault_version = 2u32;
@@ -112,6 +114,9 @@ impl VaultGhostEnvs {
         mac.update(&(encrypted.len() as u64).to_be_bytes());
         mac.update(&encrypted);
         let auth_tag = mac.finalize().into_bytes().to_vec();
+
+        enc_key.zeroize();
+        mac_key.zeroize();
 
         let cipher_hash = blake3::hash(&encrypted).to_hex().to_string();
 
@@ -127,10 +132,12 @@ impl VaultGhostEnvs {
 
     /// Decrypts a sealed vault into memory after verifying cryptographic MAC authentication tag
     pub fn unseal_vault(seal: &GhostVaultSeal, passphrase: &str) -> Result<HashMap<String, String>, String> {
-        let (enc_key, mac_key) = Self::derive_subkeys(passphrase);
+        let (mut enc_key, mut mac_key) = Self::derive_subkeys(passphrase);
 
         // Enforce 96-bit nonce requirement
         if seal.nonce.len() != 12 {
+            enc_key.zeroize();
+            mac_key.zeroize();
             return Err(format!(
                 "Integrity violation: Expected 96-bit (12-byte) nonce, got {} bytes",
                 seal.nonce.len()
@@ -139,6 +146,8 @@ impl VaultGhostEnvs {
 
         // Enforce 256-bit authentication tag requirement
         if seal.auth_tag.len() != 32 {
+            enc_key.zeroize();
+            mac_key.zeroize();
             return Err(format!(
                 "Integrity violation: Expected 256-bit (32-byte) auth tag, got {} bytes",
                 seal.auth_tag.len()
@@ -147,7 +156,11 @@ impl VaultGhostEnvs {
 
         // Verify AEAD HMAC-SHA256 tag before performing ANY unsealing or deserialization
         let mut mac = HmacSha256::new_from_slice(&mac_key)
-            .map_err(|e| format!("HMAC initialization failed: {e}"))?;
+            .map_err(|e| {
+                enc_key.zeroize();
+                mac_key.zeroize();
+                format!("HMAC initialization failed: {e}")
+            })?;
         mac.update(b"HAGIBIS_AEAD_V2");
         mac.update(&seal.vault_version.to_be_bytes());
         mac.update(&seal.nonce);
@@ -155,7 +168,11 @@ impl VaultGhostEnvs {
         mac.update(&(seal.encrypted_payload.len() as u64).to_be_bytes());
         mac.update(&seal.encrypted_payload);
 
-        mac.verify_slice(&seal.auth_tag).map_err(|_| {
+        let verify_result = mac.verify_slice(&seal.auth_tag);
+        mac_key.zeroize();
+
+        verify_result.map_err(|_| {
+            enc_key.zeroize();
             "AEAD integrity verification failed: ciphertext is altered, truncated, corrupted, or wrong passphrase provided".to_string()
         })?;
 
@@ -165,6 +182,7 @@ impl VaultGhostEnvs {
         xof.update(&seal.nonce);
         xof.update(b"payload:");
         let mut reader = xof.finalize_xof();
+        enc_key.zeroize();
 
         let mut decrypted = seal.encrypted_payload.clone();
         let mut stream_chunk = [0u8; 64];
@@ -175,9 +193,12 @@ impl VaultGhostEnvs {
                 *byte ^= key_byte;
             }
         }
+        stream_chunk.zeroize();
 
-        serde_json::from_slice(&decrypted)
-            .map_err(|e| format!("Vault payload deserialization failed: {}", e))
+        let result: Result<HashMap<String, String>, String> = serde_json::from_slice(&decrypted)
+            .map_err(|e| format!("Vault payload deserialization failed: {}", e));
+        decrypted.zeroize();
+        result
     }
 
     /// Audits the on-disk `.env` content to verify no real secrets leaked to disk
@@ -231,6 +252,15 @@ impl VaultGhostEnvs {
             lines.push(format!("{}=<GHOST_ENCRYPTED_VAULT_ENABLED>", key));
         }
         lines.join("\n")
+    }
+}
+
+impl Drop for VaultGhostEnvs {
+    fn drop(&mut self) {
+        for (_k, v) in self.secrets.iter_mut() {
+            v.zeroize();
+        }
+        self.secrets.clear();
     }
 }
 

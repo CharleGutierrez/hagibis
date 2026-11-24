@@ -177,10 +177,21 @@ impl TelemetryWebSocketHub {
             let _ = socket.send(Message::Text(json)).await;
         }
 
-        // Stream continuous telemetry updates
-        while let Ok(packet) = rx.recv().await {
-            if let Ok(json) = serde_json::to_string(&packet) {
-                if socket.send(Message::Text(json)).await.is_err() {
+        // Stream continuous telemetry updates with backpressure and lag recovery
+        loop {
+            match rx.recv().await {
+                Ok(packet) => {
+                    if let Ok(json) = serde_json::to_string(&packet) {
+                        if socket.send(Message::Text(json)).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                    tracing::warn!("Telemetry client lagged behind; skipped {} broadcast packets", skipped);
+                    continue;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                     break;
                 }
             }

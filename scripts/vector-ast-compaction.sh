@@ -39,6 +39,14 @@ MAX_DEAD_RATIO_PCT="${MAX_DEAD_RATIO_PCT:-15.0}"
 MAX_IDLE_LOAD="${MAX_IDLE_LOAD:-4.0}"
 MIN_INTERVAL_SECS="${MIN_INTERVAL_SECS:-300}"
 
+# Guarantee single-instance execution via flock
+LOCKFILE="${HGB_COMPACTION_LOCK:-/tmp/hgb_compaction.lock}"
+exec 200>"$LOCKFILE"
+if ! flock -n 200; then
+    echo -e "\033[33m⚠ [COMPACT-WARN] Another vector AST compaction process is already active. Exiting.\033[0m" >&2
+    exit 0
+fi
+
 # ANSI Colors
 RED="\033[31m"
 GREEN="\033[32m"

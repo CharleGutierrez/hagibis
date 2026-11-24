@@ -657,7 +657,7 @@ impl DynamicMcpRegistry {
 
             let sessions = sse_state.sessions.read().await;
             for (session_id, tx) in sessions.iter() {
-                if tx.send(event.clone()).is_ok() {
+                if tx.try_send(event.clone()).is_ok() {
                     sse_state
                         .total_streamed_events
                         .fetch_add(1, Ordering::Relaxed);

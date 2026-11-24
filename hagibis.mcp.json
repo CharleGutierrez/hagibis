@@ -46,7 +46,8 @@
       },
       "required": [
         "binary_path"
-      ]
+      ],
+      "scope": "compiler"
     },
     "hagibis_vectorize_codebase": {
       "description": "Chunk AST functions and structs, generate normalized dense embeddings, store into LanceDB-compatible vector table, and execute semantic cosine similarity queries against reconstructed codebases",
@@ -101,7 +102,8 @@
           "type": "integer",
           "default": 5
         }
-      }
+      },
+      "scope": "storage"
     },
     "hagibis_microvm_sandbox_run": {
       "description": "Provision isolated execution environment using Firecracker MicroVM harness or WASM sandbox, capturing stdout, stderr, exit code, and execution trace safely without host risk",
@@ -135,7 +137,8 @@
       },
       "required": [
         "binary_path"
-      ]
+      ],
+      "scope": "microvm"
     },
     "hgb_compiler_self_heal_ast": {
       "description": "Autonomous closed-loop AST compiler error localization, surgical token slicing, deterministic patch synthesis, and speculative verification with atomic SnapshotRollbackGuard rollback guarantees",
@@ -188,7 +191,8 @@
         "diagnostic_code",
         "error_message",
         "error_line"
-      ]
+      ],
+      "scope": "compiler"
     },
     "hgb_microvm_spinup": {
       "description": "Spin up an isolated Firecracker microVM instance with configurable memory_mb, vcpu_count, rootfs/kernel images, and snapshot caching",
@@ -229,7 +233,8 @@
           "type": "string",
           "description": "Optional explicit unique identifier for the microVM instance"
         }
-      }
+      },
+      "scope": "microvm"
     },
     "hgb_microvm_execute": {
       "description": "Dispatch untrusted code execution or command payload to an active Firecracker microVM instance or isolated sandbox",
@@ -265,7 +270,8 @@
           "type": "object",
           "description": "Optional key-value environment variable overrides"
         }
-      }
+      },
+      "scope": "microvm"
     },
     "hgb_microvm_terminate": {
       "description": "Safely shut down, pause, or clean up an active Firecracker microVM instance, releasing cgroups and memory",
@@ -290,7 +296,8 @@
           "description": "Force immediate termination (SIGKILL) bypassing graceful guest shutdown",
           "default": false
         }
-      }
+      },
+      "scope": "microvm"
     },
     "hgb_wasm_kernel_invoke": {
       "description": "Execute a sandboxed WebAssembly kernel with strict memory limits and Cranelift fuel budget",
@@ -322,7 +329,8 @@
           "type": "object",
           "description": "JSON arguments or parameters passed into the WASM kernel invocation"
         }
-      }
+      },
+      "scope": "compiler"
     },
     "hgb_wasm_kernel_stream": {
       "description": "Stream real-time execution events, fuel consumption telemetry, and stdout/stderr chunks from a sandboxed WebAssembly kernel over SSE / JSON-RPC",
@@ -359,7 +367,8 @@
           "description": "Streaming chunk buffer size in bytes",
           "default": 4096
         }
-      }
+      },
+      "scope": "compiler"
     },
     "hgb_mmap_vector_search": {
       "description": "Zero-copy memory-mapped (mmap) vector similarity search across code symbols and documentation in <50 microseconds using AVX2 SIMD dot-product and cosine distance without heap allocations",
@@ -389,7 +398,8 @@
           "type": "string",
           "description": "Optional custom path to vector_index.mmap"
         }
-      }
+      },
+      "scope": "storage"
     },
     "hgb_semantic_cache_stats": {
       "description": "Inspect semantic response cache metrics including hit count, miss count, hit ratio, saved tokens, memory usage, and cached entry count",
@@ -399,7 +409,8 @@
           "description": "Include per-tool breakdown of cached entries",
           "default": false
         }
-      }
+      },
+      "scope": "storage"
     },
     "hgb_semantic_cache_purge": {
       "description": "Purge expired entries or clear specific tool namespaces from the SIMD semantic response cache",
@@ -413,7 +424,8 @@
           "description": "Purge all cached responses across all tools",
           "default": false
         }
-      }
+      },
+      "scope": "storage"
     },
     "hgb_mcp_mesh_broadcast": {
       "description": "Broadcasts a task, prompt, or context update across all federated models (Ollama, Claude, GPT-4o, Sovereign) in the MCP native mesh",
@@ -436,7 +448,8 @@
           "type": "object",
           "description": "Optional metadata payload map"
         }
-      }
+      },
+      "scope": "compiler"
     },
     "hgb_mcp_mesh_nodes": {
       "description": "Queries active AI model nodes in the federated MCP mesh, their context capacities, real-time latencies, and shared tool registries",
@@ -450,7 +463,8 @@
           "type": "string",
           "description": "Optional provider filter (ollama, anthropic, openai, sovereign)"
         }
-      }
+      },
+      "scope": "mesh"
     },
     "hgb_zig_kernel_hot_reload": {
       "description": "Triggers dynamic compilation, bounds validation, and zero-downtime hot-reloading of Zig compute primitives (bpe_tokenizer, cosine_distance, kalman_filter, matrix_vector_product)",
@@ -469,7 +483,8 @@
           "description": "Memory ceiling in MB (16, 32, or 64 MB)",
           "default": 32
         }
-      }
+      },
+      "scope": "core"
     },
     "hgb_firecracker_spawn": {
       "description": "Spawn a hardware-isolated Firecracker microVM jail (or Landlock CoW sandbox) with vCPU and memory limits for untrusted code execution",
@@ -502,7 +517,8 @@
           "description": "Enable instantaneous snapshot-based resume (<10ms spin-up)",
           "default": false
         }
-      }
+      },
+      "scope": "microvm"
     },
     "hgb_microvm_snapshot_prewarm": {
       "description": "Pre-boot and cache base Firecracker microVM template snapshot state in /dev/shm for instantaneous <10ms agent sandboxing",
@@ -530,7 +546,8 @@
           "description": "Snapshot generation timeout in seconds",
           "default": 60
         }
-      }
+      },
+      "scope": "microvm"
     },
     "hgb_firecracker_exec": {
       "description": "Execute a command safely inside an active Firecracker microVM jail or isolated sandbox, returning stdout, stderr, exit code, and memory metrics",
@@ -553,7 +570,8 @@
           "type": "object",
           "description": "Optional environment variables map"
         }
-      }
+      },
+      "scope": "microvm"
     },
     "hgb_firecracker_destroy": {
       "description": "Cleanly tear down a Firecracker microVM jail, unmount overlay filesystems, release cgroups, and free allocated memory",
@@ -563,7 +581,8 @@
           "description": "Target microVM jail identifier to terminate",
           "required": true
         }
-      }
+      },
+      "scope": "microvm"
     },
     "hgb_storage_context_store": {
       "description": "Persist context documents, code snippets, or embeddings into Hagibis's local SQLite WAL database with FTS5 lexical indexing and vector search",
@@ -587,7 +606,8 @@
           "type": "object",
           "description": "Optional JSON metadata attributes"
         }
-      }
+      },
+      "scope": "storage"
     },
     "hgb_storage_context_query": {
       "description": "Query Hagibis context memory using hybrid FTS5 full-text lexical search and SIMD cosine vector similarity scoring",
@@ -607,7 +627,8 @@
           "description": "Maximum number of results to return",
           "default": 5
         }
-      }
+      },
+      "scope": "storage"
     },
     "hgb_p2p_swarm_discover": {
       "description": "Discover active peer nodes, available MCP tools, load scores, and hardware capabilities across the decentralized P2P development mesh",
@@ -621,7 +642,8 @@
           "description": "Stale peer timeout threshold in seconds",
           "default": 15
         }
-      }
+      },
+      "scope": "mesh"
     },
     "hgb_p2p_context_sync": {
       "description": "Synchronize context graphs and query vector shards across multiple developer machines seamlessly with BLAKE3 verification",
@@ -661,7 +683,8 @@
           "type": "string",
           "description": "Content string when storing context node"
         }
-      }
+      },
+      "scope": "mesh"
     },
     "hgb_p2p_tool_delegate": {
       "description": "Delegate MCP tool execution (WASM execution, speculative inference, compilation) to optimal remote peer in the P2P swarm based on real-time load score",
@@ -685,7 +708,8 @@
           "description": "Delegation execution timeout in milliseconds",
           "default": 10000
         }
-      }
+      },
+      "scope": "mesh"
     },
     "hgb_ollama_pipeline_accelerate": {
       "description": "Direct local Ollama pipeline acceleration: zero-latency embedding generation and speculative drafting with dynabook hardware optimizations",
@@ -716,7 +740,8 @@
           "description": "Maximum tokens to generate",
           "default": 256
         }
-      }
+      },
+      "scope": "core"
     },
     "hgb_ollama_mutation_vector_sync": {
       "description": "Incremental file mutation vector pipeline: chunks files, invalidates via BLAKE3 hashes, and syncs/queries SQLite vector database (.hgb/ollama_mutation_vectors.db)",
@@ -751,7 +776,8 @@
           "type": "string",
           "description": "Optional path to SQLite vector database"
         }
-      }
+      },
+      "scope": "storage"
     },
     "hgb_self_healing_diagnose": {
       "description": "Autonomous compiler diagnostic interception, AST repair (Rust E0308/E0425/E0433/E0596, Zig, Python), speculative RAM CoW sandboxing (/dev/shm), and First-Green verification",
@@ -788,7 +814,8 @@
           "description": "Commit candidate patch to workspace disk upon First-Green verification",
           "default": true
         }
-      }
+      },
+      "scope": "compiler"
     },
     "hgb_pgo_tune_pass": {
       "description": "Autonomous Profile-Guided Optimization (PGO) pass: detects latency regression and build slowdowns, collects binary profiles, and executes scripts/pgo-optimize.sh in the background with cooldown guards",
@@ -822,7 +849,8 @@
           "description": "Target binary to profile ('hgb', 'hgbd', 'all')",
           "default": "all"
         }
-      }
+      },
+      "scope": "compiler"
     },
     "hgb_auto_patch_bottleneck": {
       "description": "Autonomous performance bottleneck optimizer: discovers hotspot functions and applies zero-overhead optimizations (capacity preallocation, #[inline(always)], buffered I/O, SIMD vectorization) verified First-Green in /dev/shm",
@@ -859,7 +887,8 @@
           "description": "Atomically commit verified optimization to physical workspace disk",
           "default": true
         }
-      }
+      },
+      "scope": "compiler"
     },
     "hgb_self_healing_compile": {
       "description": "Autonomous First-Green compilation loop: executes build/checks in RAM CoW overlay sandbox, intercepts diagnostics, and heals AST syntax errors before disk commit",
@@ -883,7 +912,8 @@
           "description": "Maximum autonomous repair iterations",
           "default": 3
         }
-      }
+      },
+      "scope": "compiler"
     },
     "ollama_speculative_generate": {
       "description": "Speculative Decoding LLM inference using fast draft model (qwen2.5-coder:1.5b) validated by sovereign target model (phi3:3.8b) with zero-failure fallback",
@@ -901,7 +931,8 @@
           "type": "string",
           "description": "Optional heavy target model (default: phi3:3.8b)"
         }
-      }
+      },
+      "scope": "core"
     },
     "hgb_mcp_mesh_route": {
       "description": "Route and load-balance context requests across the distributed MCP mesh (Local Ollama, MicroVM sandbox, WASM Edge, or P2P swarm) with hardware telemetry guidance and strict privacy boundary enforcement",
@@ -937,11 +968,13 @@
           "description": "Maximum latency budget in milliseconds",
           "default": 10000
         }
-      }
+      },
+      "scope": "mesh"
     },
     "hgb_mcp_mesh_status": {
       "description": "Retrieve live telemetry, registered backends, active load scores, and request dispatch statistics from the Distributed MCP Multi-Agent Mesh Router",
-      "parameters": {}
+      "parameters": {},
+      "scope": "mesh"
     },
     "ollama_task_split": {
       "description": "Autonomous task complexity evaluator routing prompts between sub-second draft models (1.5B) and deep reasoning models (3.8B/7B)",
@@ -951,7 +984,8 @@
           "description": "Prompt or code task to evaluate",
           "required": true
         }
-      }
+      },
+      "scope": "core"
     },
     "hgb_mcp_run_tests": {
       "description": "Execute cargo test asynchronously with real-time diagnostic parsing (extracting compilation errors E0308, E0425, test assertion panics, and stack traces)",
@@ -969,7 +1003,8 @@
           "description": "Execute tests in release mode",
           "default": false
         }
-      }
+      },
+      "scope": "core"
     },
     "hgb_mcp_read_patch": {
       "description": "Read patch file from .hgb/patches/ or filesystem path, returning metadata, target files, line additions/deletions, and raw unified diff",
@@ -979,7 +1014,8 @@
           "description": "Patch filename in .hgb/patches/ or relative/absolute path",
           "required": true
         }
-      }
+      },
+      "scope": "compiler"
     },
     "hgb_mcp_apply_patch": {
       "description": "Atomically validate and apply unified diff. If dry_run is true, tests inside RAM CoW OverlaySandbox in /dev/shm. If real, atomically applies to workspace files, verifies syntax, and records timeline checkpoint in .hgb/timelines/",
@@ -994,7 +1030,8 @@
           "description": "Dry run verification inside RAM CoW sandbox without modifying disk",
           "default": false
         }
-      }
+      },
+      "scope": "compiler"
     },
     "hgb_mcp_sandbox_exec": {
       "description": "Execute untrusted code (Rust, Zig, Bash, Python) inside isolated ephemeral sandbox (Landlock LSM /dev/shm CoW or Firecracker microVM), measuring duration, memory, and blast radius",
@@ -1025,11 +1062,13 @@
           "description": "Attempt hardware-isolated Firecracker microVM (/dev/kvm) if available",
           "default": false
         }
-      }
+      },
+      "scope": "microvm"
     },
     "hgb_daemon_telemetry": {
       "description": "Return live Hagibis daemon health, uptime, active models, dynatune thermal/power state, vector mesh status, and memory stats",
-      "parameters": {}
+      "parameters": {},
+      "scope": "diagnostics"
     },
     "hgb_filesystem_tree": {
       "description": "Generate compact ASCII and JSON directory tree of workspace files with sizes, line counts, and git modified status",
@@ -1048,7 +1087,8 @@
           "description": "Include git modified/staged status for each file",
           "default": true
         }
-      }
+      },
+      "scope": "core"
     },
     "hgb_code_skeleton": {
       "description": "Extract AST signatures of large files using syn-based CodeSkeletonizer (reducing prompt context token consumption by >70% while preserving structs, traits, and method interfaces)",
@@ -1065,7 +1105,8 @@
           "type": "string",
           "description": "Optional file extension override (rs, py, ts, zig, go)"
         }
-      }
+      },
+      "scope": "core"
     },
     "hgb_time_machine_rollback": {
       "description": "Atomically roll back the entire workspace to a specific cryptographic checkpoint snapshot or latest checkpoint with zero data loss",
@@ -1074,7 +1115,8 @@
           "type": "string",
           "description": "Target checkpoint snapshot ID (defaults to most recent checkpoint)"
         }
-      }
+      },
+      "scope": "core"
     },
     "hgb_undo": {
       "description": "Instant atomic 1-key undo: reverts workspace changes back to the immediately preceding checkpoint",
@@ -1084,7 +1126,8 @@
           "description": "Number of checkpoints to undo (default: 1)",
           "default": 1
         }
-      }
+      },
+      "scope": "core"
     },
     "hgb_vault_get_secret": {
       "description": "Access AEAD-encrypted API keys and ghost envs safely without putting credentials into plaintext prompts",
@@ -1102,7 +1145,8 @@
           "type": "string",
           "description": "Optional custom path to .env.vault file"
         }
-      }
+      },
+      "scope": "storage"
     },
     "hgb_vault_set_secret": {
       "description": "Store API key or credential securely inside AEAD-encrypted ghost vault (.hgb/.env.vault) with fresh 96-bit nonce and HMAC-SHA256 authentication tag",
@@ -1125,7 +1169,8 @@
           "type": "string",
           "description": "Optional custom path to .env.vault file"
         }
-      }
+      },
+      "scope": "storage"
     },
     "hgb_cdp_tweak_sync": {
       "description": "Live DevTools Click-to-Source sync: bridges browser DOM element tweaks directly back into source JSX, TSX, Vue, or HTML files with surgical line replacements",
@@ -1163,7 +1208,8 @@
           "description": "Commit verified tweak directly to disk",
           "default": true
         }
-      }
+      },
+      "scope": "mesh"
     },
     "hgb_mirage_mock": {
       "description": "Spin up synthetic mock backends or execute simulated calls for Stripe, GitHub, Resend, and Auth0 using ApiMirageEngine",
@@ -1192,7 +1238,8 @@
           "description": "Port to bind when starting mock server",
           "default": 8089
         }
-      }
+      },
+      "scope": "core"
     },
     "hgb_baas_graduate": {
       "description": "Auto-generate Supabase/Neon PostgreSQL DDL + RLS security policies + TypeScript SDK from in-memory prototypes using BaasGraduateEngine",
@@ -1215,7 +1262,8 @@
           "description": "BaaS cloud platform target",
           "default": "supabase"
         }
-      }
+      },
+      "scope": "core"
     },
     "hgb_mobile_teleport": {
       "description": "Generate instant terminal ANSI QR code and PWA manifest scaffolding for mobile device live preview teleportation",
@@ -1229,7 +1277,8 @@
           "type": "string",
           "description": "Optional Progressive Web App name"
         }
-      }
+      },
+      "scope": "core"
     },
     "hgb_figma_sync": {
       "description": "Bi-directional Figma design token extraction and React/Tailwind component synchronization",
@@ -1243,7 +1292,8 @@
           "type": "string",
           "description": "Optional inline Figma REST JSON payload"
         }
-      }
+      },
+      "scope": "mesh"
     },
     "hgb_git_micro_commit": {
       "description": "Atomically stage verified files and create conventional micro-commits with rollback safety",
@@ -1257,7 +1307,8 @@
           "type": "string",
           "description": "Optional single file path or target directory to stage"
         }
-      }
+      },
+      "scope": "core"
     },
     "hgb_agentic_bisect": {
       "description": "Autonomous binary search across Git revisions to isolate regression culprits and generate root-cause analysis",
@@ -1277,7 +1328,8 @@
           "description": "Automated verification test command (e.g. 'cargo test', 'npm test')",
           "required": true
         }
-      }
+      },
+      "scope": "core"
     },
     "hgb_nightshift": {
       "description": "Dispatch autonomous 4-stage night-shift swarm pipeline in an isolated git worktree branch",
@@ -1291,7 +1343,8 @@
           "type": "string",
           "description": "Base git branch (defaults to 'main')"
         }
-      }
+      },
+      "scope": "core"
     },
     "hgb_desktop_drive": {
       "description": "OS-level desktop window sentry and mouse/keyboard action dispatcher",
@@ -1313,7 +1366,8 @@
           "type": "string",
           "description": "Optional text to type or key name to press"
         }
-      }
+      },
+      "scope": "core"
     },
     "hgb_viral_og": {
       "description": "Generate high-CTR dynamic SVG OpenGraph launch cards, Twitter/X meta tags, and Next.js edge route code",
@@ -1335,7 +1389,8 @@
           "type": "string",
           "description": "Optional author Twitter/X handle"
         }
-      }
+      },
+      "scope": "core"
     },
     "hgb_system_health": {
       "description": "Real-time system telemetry: CPU temperature, CPU frequency, active governor, EPP, battery percentage, RAM free/used, and MGLRU active indicator",
@@ -1345,7 +1400,8 @@
           "description": "Include per-core frequency and power supply uevent metrics",
           "default": false
         }
-      }
+      },
+      "scope": "compiler"
     },
     "hgb_hardware_tune": {
       "description": "Safely tune system hardware governors, EPP, MGLRU, and concurrency with strict thermal safeguards and SQLite audit logging",
@@ -1376,7 +1432,8 @@
           "type": "integer",
           "description": "Explicit CPU concurrency execution worker limit (1-32)"
         }
-      }
+      },
+      "scope": "core"
     },
     "hgb_cgroup_control": {
       "description": "Inspect and adjust cgroup v2 resource limits (/sys/fs/cgroup/cpu.max, /sys/fs/cgroup/memory.max, /sys/fs/cgroup/memory.current) for sandboxed tasks",
@@ -1402,7 +1459,8 @@
           "type": "string",
           "description": "Memory limit bytes or 'max' for memory.max (e.g. '536870912')"
         }
-      }
+      },
+      "scope": "core"
     },
     "hgb_microvm_status": {
       "description": "Inspect Firecracker microVM hardware virtualization support (/dev/kvm presence, Firecracker binary, active jail count, and kernel/rootfs images)",
@@ -1412,7 +1470,8 @@
           "description": "Include kernel/rootfs paths, jail directory listings, and active process stats",
           "default": false
         }
-      }
+      },
+      "scope": "microvm"
     },
     "hgb_wasm_wit_exec": {
       "description": "Execute sandboxed WebAssembly WIT tasks directly through Wasmtime with fuel metering, capability routing, and resilient native fallback",
@@ -1442,7 +1501,8 @@
           "description": "Instruction fuel limit for sandboxed execution (default: 10000000)",
           "default": 10000000
         }
-      }
+      },
+      "scope": "compiler"
     },
     "hgb_self_healing_ci": {
       "description": "Autonomous self-healing CI/CD loop: executes cargo check/test in sandbox, extracts compiler diagnostics, synthesizes surgical diffs, verifies in CoW sandbox, and applies fix",
@@ -1474,7 +1534,8 @@
           "description": "Atomically apply verified First-Green patch to disk",
           "default": true
         }
-      }
+      },
+      "scope": "compiler"
     },
     "hgb_hot_reload_component": {
       "description": "Zero-downtime component hot-reloading: dynamically refreshes WASM plugins, pre-warmed WasmHotPool caches, model weights, or daemon configuration",
@@ -1499,7 +1560,8 @@
           "description": "Force eviction and re-compilation of cached modules",
           "default": true
         }
-      }
+      },
+      "scope": "core"
     },
     "hgb_p2p_mcp_swarm_delegate": {
       "description": "Delegate subtasks dynamically across P2P MCP mesh peers with BLAKE3 content-addressed cached state exchange",
@@ -1518,7 +1580,8 @@
           "type": "string",
           "description": "Optional cryptographic BLAKE3 content hash of preceding step result"
         }
-      }
+      },
+      "scope": "mesh"
     },
     "hgb_wasm_pgo_tier_up": {
       "description": "Trigger Cranelift profile-guided JIT compilation (OptLevel::SpeedAndSize + SIMD) and hot-swap into WasmHotPool",
@@ -1538,7 +1601,8 @@
           "description": "Force immediate Cranelift compilation without waiting for threshold",
           "default": false
         }
-      }
+      },
+      "scope": "compiler"
     },
     "hgb_distributed_scheduler_dispatch": {
       "description": "Dispatch a multi-stage, dual-tier task graph across the distributed WebAssembly and MicroVM edge mesh with intelligent load sharding, failover, and BLAKE3 provenance",
@@ -1614,7 +1678,8 @@
           },
           "required": true
         }
-      }
+      },
+      "scope": "compiler"
     },
     "hgb_distributed_node_status": {
       "description": "Inspect distributed edge mesh topology, active worker nodes, CPU cores, available RAM, active microVMs/WASM instances, supported tiers, and load scores",
@@ -1624,7 +1689,8 @@
           "description": "Include stale peer nodes in status report",
           "default": false
         }
-      }
+      },
+      "scope": "core"
     },
     "hgb_distributed_node_register": {
       "description": "Manually register a peer daemon or worker edge node into the distributed microVM and WASM scheduler mesh",
@@ -1663,7 +1729,8 @@
           "description": "Initial load score rating for peer node",
           "default": 0.1
         }
-      }
+      },
+      "scope": "core"
     },
     "hgb_wasm_plugin_inject": {
       "description": "Synthesize or dynamically inject signed WebAssembly / Zig plugin into WasmHotPool without daemon restart",
@@ -1693,7 +1760,8 @@
           "type": "string",
           "description": "Description of synthesized tool capability"
         }
-      }
+      },
+      "scope": "compiler"
     },
     "hgb_hardware_telemetry_status": {
       "description": "Inspect real-time Linux hardware telemetry (CPU package temperature \u00b0C, battery drain rate in mW, memory pressure PSI) and dynamic LLM generation / WASM pacing status",
@@ -1703,7 +1771,8 @@
           "description": "Force fresh reading of Linux sysfs, procfs PSI, and Dynatune socket",
           "default": true
         }
-      }
+      },
+      "scope": "diagnostics"
     },
     "hgb_multitenant_wasm_execute": {
       "description": "Execute polyglot untrusted code (WASM, WAT, JavaScript, Python) securely inside the multi-tenant WebAssembly sandbox with strict fuel/gas caps, memory quotas, and streaming output",
@@ -1727,7 +1796,8 @@
           "type": "integer",
           "description": "Optional CPU instruction gas budget cap (default: 15,000,000 instructions)"
         }
-      }
+      },
+      "scope": "compiler"
     },
     "index_codebase_memory": {
       "description": "Recursively scans, extracts symbols/functions, chunks, computes IEEE-754 semantic embeddings, and stores codebase chunks into persistent Vector MCP Memory Mesh",
@@ -1758,7 +1828,8 @@
           "description": "Memory namespace to isolate indexed codebase",
           "default": "codebase"
         }
-      }
+      },
+      "scope": "core"
     },
     "semantic_memory_search": {
       "description": "Queries the persistent Vector MCP Memory Mesh using hybrid semantic vector similarity (HNSW / SIMD cosine) and lexical SQLite FTS5 matching",
@@ -1793,7 +1864,8 @@
           },
           "description": "Optional dense f32 embedding vector for direct vector query"
         }
-      }
+      },
+      "scope": "core"
     },
     "recall_developer_context": {
       "description": "Retrieves long-term developer context, learned habits, architectural rules, past fix patterns, and debugging sessions from persistent memory",
@@ -1811,7 +1883,8 @@
           "description": "Maximum number of context memories to recall",
           "default": 5
         }
-      }
+      },
+      "scope": "core"
     },
     "update_long_term_memory": {
       "description": "Records a new persistent long-term memory insight, developer habit, command outcome, or fix pattern into the Vector MCP Memory Mesh",
@@ -1847,7 +1920,8 @@
           "description": "Target memory namespace",
           "default": "default"
         }
-      }
+      },
+      "scope": "core"
     },
     "hgb_vector_lancedb_query": {
       "description": "Execute embedded LanceDB zero-copy columnar vector and hybrid semantic queries with SIMD cosine/L2/dot distance, metadata predicate filtering, and partition pruning",
@@ -1895,7 +1969,8 @@
           "type": "string",
           "description": "Optional custom path to .lance directory"
         }
-      }
+      },
+      "scope": "storage"
     },
     "hgb_vector_lancedb_upsert": {
       "description": "Upsert vector records into embedded LanceDB columnar storage with atomic commit logging, memory-mapped binary persistence, and IVF centroid updating",
@@ -1946,7 +2021,8 @@
           "type": "string",
           "description": "Optional custom path to .lance directory"
         }
-      }
+      },
+      "scope": "storage"
     },
     "hgb_trajectory_semantic_search": {
       "description": "Sub-millisecond semantic retrieval of past agent execution trajectories, error resolutions, and decision paths blending SQLite CDC records with LanceDB columnar vector indexing",
@@ -1995,7 +2071,8 @@
       },
       "required": [
         "query_text"
-      ]
+      ],
+      "scope": "core"
     },
     "hgb_microvm_hotplug_wasm": {
       "description": "Dynamically hot-plug a WASM module or guest kernel patch directly into a running Firecracker microVM memory space without rebooting",
@@ -2022,7 +2099,8 @@
         "vm_id",
         "module_name",
         "wasm_base64_or_wat"
-      ]
+      ],
+      "scope": "compiler"
     },
     "hgb_autonomic_healer_tick": {
       "description": "Execute one evaluation tick of the real-time autonomic closed-loop healer, sampling hardware thermal and memory pressure metrics and applying thread shedding or workload migration",
@@ -2032,7 +2110,8 @@
           "description": "Force immediate telemetry sampling and decision evaluation",
           "default": true
         }
-      }
+      },
+      "scope": "compiler"
     },
     "hgb_wasi_component_verify_and_swap": {
       "description": "Cryptographically verify and hot-swap an active WASI 0.2 component using Ed25519 signature attestation with zero-downtime rollback",
@@ -2049,7 +2128,8 @@
       "required": [
         "component_name",
         "envelope_base64"
-      ]
+      ],
+      "scope": "compiler"
     },
     "hgb_mesh_dispatch_workload": {
       "description": "Dispatch heavy distributed workloads (embedding generation, large-scale compilation, data scraping, WASM batch execution) across the Raft microVM mesh with strict sandbox isolation",
@@ -2093,7 +2173,8 @@
       "required": [
         "workload_kind",
         "payload"
-      ]
+      ],
+      "scope": "compiler"
     },
     "hgb_mesh_cluster_topology": {
       "description": "Inspect live cluster node topology, CPU cores, RAM capacities, KVM/GPU acceleration flags, active microVMs, and Raft consensus health",
@@ -2103,7 +2184,8 @@
           "description": "Include active task leases and load balancing scores",
           "default": false
         }
-      }
+      },
+      "scope": "mesh"
     },
     "hgb_rl_reward_ledger_status": {
       "description": "Query local reinforcement learning reward ledger, multi-objective score deltas (latency, memory RSS, errors), and PGO self-compilation trigger readiness",
@@ -2113,7 +2195,8 @@
           "description": "Number of recent optimization episodes to inspect",
           "default": 10
         }
-      }
+      },
+      "scope": "mesh"
     },
     "hgb_gpu_tensor_ann_search": {
       "description": "GPU tensor and SIMD accelerated approximate nearest neighbor (ANN) vector search over LanceDB with zero-copy POSIX /dev/shm caching",
@@ -2135,7 +2218,8 @@
       },
       "required": [
         "query_text"
-      ]
+      ],
+      "scope": "core"
     },
     "hgb_holographic_control_steer": {
       "description": "Dispatch real-time bidirectional steering command to the WebGL/WebSocket Holographic Control Room (pause, resume, inspect VM memory, fork agent branch, steer prompt)",
@@ -2159,7 +2243,8 @@
       },
       "required": [
         "action"
-      ]
+      ],
+      "scope": "core"
     },
     "hgb_pgo_hotswap_trigger": {
       "description": "Trigger localized Profile-Guided Optimization (PGO) + ThinLTO background compilation and zero-downtime atomic binary hot-swap based on dynatune workload hotspot telemetry",
@@ -2174,7 +2259,8 @@
           "description": "Execute validation dry-run cycle without replacing production binaries",
           "default": false
         }
-      }
+      },
+      "scope": "compiler"
     },
     "hgb_pgo_hotswap_status": {
       "description": "Query autonomous PGO hot-swap daemon status, active binary version, active connection count, and subsystem hotness scores",
@@ -2184,7 +2270,8 @@
           "description": "Include full subsystem hotness score rankings",
           "default": false
         }
-      }
+      },
+      "scope": "compiler"
     },
     "hgb_swarm_mesh_dispatch": {
       "description": "Decompose and dispatch a multi-agent task across ephemeral Firecracker microVMs, freestanding JIT Wasm microkernels, and MCP containerized workers",
@@ -2232,7 +2319,8 @@
       "required": [
         "task_id",
         "shards"
-      ]
+      ],
+      "scope": "compiler"
     },
     "hgb_swarm_mesh_pods": {
       "description": "Inspect active swarm execution pods, runtime isolation tiers, and instruction fuel metrics across the decentralized mesh",
@@ -2242,7 +2330,8 @@
           "description": "Include pod allocation timestamps and active shard IDs",
           "default": false
         }
-      }
+      },
+      "scope": "mesh"
     },
     "hgb_intent_history_retrieve": {
       "description": "Sub-millisecond semantic retrieval over historical executions, code fixes, and compiler error resolutions stored in LanceDB + SQLite WAL",
@@ -2259,7 +2348,8 @@
       },
       "required": [
         "query_intent"
-      ]
+      ],
+      "scope": "core"
     },
     "hgb_intent_prompt_enrich": {
       "description": "Pre-prompt contextual history injection: automatically vectorizes prompt intent and prepends exact historical solutions and prior error-to-fix patterns before code generation",
@@ -2271,7 +2361,8 @@
       },
       "required": [
         "prompt"
-      ]
+      ],
+      "scope": "core"
     },
     "hgb_swarm_fabric_offload": {
       "description": "Dispatch heavy tasks (vector searches, Wasm microkernels, Firecracker jails) to optimal peer nodes across the secure WireGuard/P2P execution fabric",
@@ -2308,7 +2399,8 @@
         "task_id",
         "kind",
         "payload"
-      ]
+      ],
+      "scope": "mesh"
     },
     "hgb_swarm_fabric_peers": {
       "description": "List discovered peer nodes, capacities (KVM, GPU, Wasm instances, RAM), and real-time load across the distributed swarm mesh",
@@ -2318,7 +2410,8 @@
           "description": "Include fitness scores and heartbeat age",
           "default": false
         }
-      }
+      },
+      "scope": "mesh"
     },
     "hgb_reflection_finetune_ingest": {
       "description": "Convert a successful self-healing bug fix trace into an instruction-tuning pair and trigger local quantized LoRA fine-tuning for sidecar models",
@@ -2360,7 +2453,8 @@
         "failing_code",
         "patch",
         "diff"
-      ]
+      ],
+      "scope": "core"
     },
     "hgb_reflection_finetune_status": {
       "description": "Inspect local quantized LoRA adapter bundle, trained sample counts, cumulative loss, and GGUF artifact checksum",
@@ -2370,7 +2464,8 @@
           "description": "Export dataset to JSONL format",
           "default": false
         }
-      }
+      },
+      "scope": "core"
     },
     "hgb_dynatune_natural_language_optimize": {
       "description": "Autonomously parse a natural language system tuning directive (e.g. 'optimize my system thermal profile for a 4-hour compile workload'), match historical telemetry in LanceDB, and execute kernel governor / MGLRU sysctl adjustments",
@@ -2382,7 +2477,8 @@
       },
       "required": [
         "prompt"
-      ]
+      ],
+      "scope": "diagnostics"
     },
     "hgb_zerocopy_ipc_bench": {
       "description": "Execute a zero-copy POSIX shared memory (/dev/shm) IPC transfer benchmark between CLI and daemon, measuring multi-GB/s throughput and sub-microsecond latency",
@@ -2397,7 +2493,8 @@
           "description": "Number of roundtrip iterations (default: 50)",
           "default": 50
         }
-      }
+      },
+      "scope": "diagnostics"
     },
     "hgb_swarm_consensus_status": {
       "description": "Query distributed swarm consensus state, term, quorum, and cluster nodes across multi-node Firecracker fabrics",
@@ -2407,7 +2504,8 @@
           "description": "Include log entry count and node descriptors",
           "default": false
         }
-      }
+      },
+      "scope": "mesh"
     },
     "hgb_swarm_pod_spawn": {
       "description": "Dynamically spawn a sandboxed Firecracker agent pod on the optimal cluster node via distributed consensus",
@@ -2439,7 +2537,8 @@
       "required": [
         "pod_id",
         "agent_id"
-      ]
+      ],
+      "scope": "mesh"
     },
     "hgb_shm_uring_bench": {
       "description": "Benchmark zero-copy io_uring shared-memory ring buffer throughput and latency between host and Zig/WASM guests",
@@ -2449,7 +2548,8 @@
           "description": "Number of columnar sensor records to transfer (default: 100)",
           "default": 100
         }
-      }
+      },
+      "scope": "diagnostics"
     },
     "hgb_fused_vector_graph_query": {
       "description": "Execute hardware-accelerated fused query joining Knowledge Graph hops, SIMD vector similarity, and relational filters",
@@ -2477,7 +2577,8 @@
           "description": "Maximum items to return",
           "default": 5
         }
-      }
+      },
+      "scope": "storage"
     },
     "hgb_self_healing_pgo_trigger": {
       "description": "Autonomously trigger PGO re-profiling and zero-downtime hot-swap for latency regressions or hotpath spikes",
@@ -2494,7 +2595,8 @@
       "required": [
         "subsystem",
         "observed_latency_ms"
-      ]
+      ],
+      "scope": "compiler"
     },
     "hgb_p2p_raft_mesh_status": {
       "description": "Query distributed P2P Raft mesh status, term, leader, quorum health, and replicated LanceDB vector memories",
@@ -2504,7 +2606,8 @@
           "description": "Include full node telemetry list and log entry count",
           "default": true
         }
-      }
+      },
+      "scope": "mesh"
     },
     "hgb_p2p_raft_workflow_dispatch": {
       "description": "Dispatch a multi-step collaborative agent workflow DAG across peer nodes in the distributed Raft cluster",
@@ -2523,7 +2626,8 @@
       "required": [
         "title",
         "steps"
-      ]
+      ],
+      "scope": "compiler"
     },
     "hgb_hybrid_inference_generate": {
       "description": "Execute pure-Rust quantized LLM inference (Llama-3/Phi-3) with automatic Dynatune CPU thermal/battery governor scaling",
@@ -2541,7 +2645,8 @@
       },
       "required": [
         "prompt"
-      ]
+      ],
+      "scope": "core"
     },
     "hgb_evolutionary_self_heal_trigger": {
       "description": "Engage autonomous evolutionary loop: untangle audit -> local LLM patch -> Firecracker microVM test -> PGO benchmark -> zero-downtime hot-reload",
@@ -2565,7 +2670,8 @@
       "required": [
         "target_file",
         "diagnostic_details"
-      ]
+      ],
+      "scope": "compiler"
     },
     "hgb_grpc_swarm_dispatch": {
       "description": "Dispatch heavy workloads (vector indexing, fine-tuning, heavy Wasm compilation) across multi-node gRPC swarm",
@@ -2594,7 +2700,8 @@
       "required": [
         "task_id",
         "workload_type"
-      ]
+      ],
+      "scope": "compiler"
     },
     "hgb_vulkan_rag_search": {
       "description": "Execute GPU/NPU-accelerated local vector similarity retrieval using direct Vulkan/DRM render nodes",
@@ -2616,7 +2723,8 @@
           "description": "Cosine similarity cutoff",
           "default": 0.5
         }
-      }
+      },
+      "scope": "core"
     },
     "hgb_agentic_self_compile": {
       "description": "Dynamically synthesize and compile freestanding Zig/Rust skills with Firecracker microVM safety checks and hot-reload",
@@ -2640,7 +2748,8 @@
       "required": [
         "skill_name",
         "description"
-      ]
+      ],
+      "scope": "core"
     },
     "hgb_predictive_prefetch_anticipate": {
       "description": "Ingest telemetry, evaluate Markov transition probabilities, and trigger proactive microVM pre-warming and vector cache preloading",
@@ -2653,7 +2762,8 @@
       },
       "required": [
         "event_name"
-      ]
+      ],
+      "scope": "core"
     },
     "hgb_neural_bus_stream": {
       "description": "Stream vectors, AST graphs, or multimodal blobs across skills via shared-memory zero-copy ring buffer",
@@ -2675,7 +2785,8 @@
       },
       "required": [
         "bus_id"
-      ]
+      ],
+      "scope": "core"
     },
     "hgb_ebpf_telemetry_intercept": {
       "description": "Intercept Linux kernel syscall latency, page faults, and thermal throttles via eBPF and trigger autonomic healing",
@@ -2685,7 +2796,8 @@
           "description": "Execute governor shift or Firecracker microVM migration if threshold is exceeded",
           "default": true
         }
-      }
+      },
+      "scope": "diagnostics"
     },
     "hgb_webrtc_swarm_federate": {
       "description": "Decompose coding workflows across distributed Hagibis nodes over WebRTC/libp2p and achieve LanceDB vector consensus",
@@ -2704,7 +2816,8 @@
       "required": [
         "parent_task_id",
         "task_prompt"
-      ]
+      ],
+      "scope": "mesh"
     },
     "hgb_microvm_swarm_offload": {
       "description": "Dynamic offloading of compilation or vector indexing workloads across peer microVM swarms via libp2p GossipSub mesh (/hgb/microvm-swarm/1.0.0)",
@@ -2743,7 +2856,8 @@
       "required": [
         "workload_category",
         "payload"
-      ]
+      ],
+      "scope": "microvm"
     },
     "hgb_wasm_live_hotswap": {
       "description": "Sub-millisecond zero-downtime hot-patching of WASM compute subroutines with linear memory persistence across module updates",
@@ -2767,7 +2881,8 @@
       "required": [
         "module_id",
         "new_wasm_bytes"
-      ]
+      ],
+      "scope": "compiler"
     },
     "hgb_adaptive_rag_query": {
       "description": "Thermal-guided adaptive quantization vector search across LanceDB, dynamically shifting between FP32, INT8, and 1-bit binary Hamming distance",
@@ -2796,7 +2911,8 @@
       },
       "required": [
         "query_vector"
-      ]
+      ],
+      "scope": "core"
     },
     "hgb_meta_skill_evolve": {
       "description": "Autonomous meta-skill synthesizer that invents novel Zig/Rust plugins, creates WIT interfaces, compiles WASM bytecode, verifies safety in Firecracker, and registers skills dynamically",
@@ -2820,7 +2936,8 @@
       "required": [
         "skill_name",
         "intent_description"
-      ]
+      ],
+      "scope": "core"
     },
     "hgb_graph_vector_multi_hop_query": {
       "description": "Multi-hop Graph RAG query combining LanceDB vector search with AST syntactic property graph traversal (calls, defines, implements, imports, references) to prevent structural hallucinations",
@@ -2848,7 +2965,8 @@
       },
       "required": [
         "query_text"
-      ]
+      ],
+      "scope": "storage"
     },
     "hgb_daemon_wasm_hot_reload": {
       "description": "Sub-millisecond zero-downtime hot-reloading of WebAssembly worker components in running daemon worker threads with optional linear memory state preservation",
@@ -2872,7 +2990,8 @@
       "required": [
         "component_id",
         "wat_or_wasm_base64"
-      ]
+      ],
+      "scope": "compiler"
     },
     "hgb_predictive_dynatune_optimize": {
       "description": "Closed-loop predictive governor evaluation and sysctl/PGO tuning using thermal slope projections (dT/dt) and memory stall pressure",
@@ -2890,7 +3009,8 @@
       },
       "required": [
         "workload_category"
-      ]
+      ],
+      "scope": "diagnostics"
     },
     "hgb_mcp_swarm_negotiate": {
       "description": "Multi-agent role-based task proposal, bidding, and consensus execution across federated daemon cluster nodes over MCP",
@@ -2909,7 +3029,8 @@
       "required": [
         "action",
         "payload"
-      ]
+      ],
+      "scope": "mesh"
     },
     "hgb_federated_microvm_dispatch": {
       "description": "Dispatches heavy compilation, AST transforms, or LLM fine-tuning to the most resource-efficient node in the Federated MicroVM Mesh across local network or cloud spot instances with automatic local fallback",
@@ -2943,7 +3064,8 @@
       "required": [
         "workload_type",
         "source_code"
-      ]
+      ],
+      "scope": "compiler"
     },
     "hgb_autonomous_compiler_loop": {
       "description": "Executes an autonomous closed-loop performance cycle: analyzes hotspot telemetry, rewrites source code with SIMD/stack optimizations, re-runs PGO profiling, hot-swaps the Wasm module with zero downtime, and benchmarks verified speedup",
@@ -2961,7 +3083,8 @@
       },
       "required": [
         "tool_id"
-      ]
+      ],
+      "scope": "compiler"
     },
     "hgb_episodic_memory_recall": {
       "description": "Queries the real-time Episodic Memory Graph in LanceDB and SQLite, retrieving past debugging thoughts, error diagnostics, and working patch resolutions across any codebase",
@@ -2983,7 +3106,8 @@
       },
       "required": [
         "query_text"
-      ]
+      ],
+      "scope": "core"
     },
     "hgb_webgpu_cockpit_control": {
       "description": "Broadcasts topology updates or sends human-in-the-loop steering commands (spawn_microvm, trigger_pgo, pause, resume) to the hardware-accelerated WebGPU Desktop Cockpit",
@@ -3001,7 +3125,8 @@
       },
       "required": [
         "command"
-      ]
+      ],
+      "scope": "core"
     },
     "hgb_dynatune_governor_shift": {
       "description": "Exposes dynatune hardware metrics (thermal, battery, PSI memory pressure) directly into hgb-daemon, programmatically shifting CPU governor to performance, downscaling if thermal limits approach 78\u00b0C, and tuning MGLRU memory compaction",
@@ -3030,7 +3155,8 @@
       "required": [
         "workload_id",
         "category"
-      ]
+      ],
+      "scope": "diagnostics"
     },
     "hgb_wasm_component_mesh_execute": {
       "description": "Compiles, cryptographically verifies with Blake3, streams across nodes, and executes sandboxed Wasm component model micro-agents in microseconds with zero memory footprint penalty",
@@ -3062,7 +3188,8 @@
       "required": [
         "skill_name",
         "function_name"
-      ]
+      ],
+      "scope": "compiler"
     },
     "hgb_memory_consolidation_trigger": {
       "description": "Coordinates dual-tier SQLite WAL mmap transactional storage and LanceDB SIMD vector indexing, triggering asynchronous consolidation that distills intermediate thoughts into knowledge graph nodes and prunes stale traces",
@@ -3084,7 +3211,8 @@
       },
       "required": [
         "action"
-      ]
+      ],
+      "scope": "core"
     },
     "hgb_bolt_optimize_binary": {
       "description": "Orchestrates LLVM BOLT post-link binary optimization on hgb and hgbd ELF binaries: records perf branch profiles, runs perf2bolt, reorders basic blocks (ext-tsp) and functions (cdsort), and cuts critical loop latency by 10-18%",
@@ -3105,7 +3233,8 @@
           "default": "cdsort"
         }
       },
-      "required": []
+      "required": [],
+      "scope": "compiler"
     },
     "hgb_self_healing_stacktrace_patch": {
       "description": "Wires autonomous self-healing into CLI test runners and OTel traces: intercepts stack traces, queries episodic vector memory for historical fixes, synthesizes patches, and verifies inside a Firecracker microVM snapshot before hot-patching",
@@ -3146,7 +3275,8 @@
         "error_class",
         "stacktrace",
         "failing_command"
-      ]
+      ],
+      "scope": "compiler"
     },
     "hgb_cluster_mesh_offload": {
       "description": "Dispatches heavy computational workloads (batch embeddings, LanceDB vector search, crate compilation) across a secure WireGuard/mTLS mesh to idle Firecracker microVMs on remote cluster peers with automatic failover",
@@ -3169,7 +3299,8 @@
       "required": [
         "task_kind",
         "payload"
-      ]
+      ],
+      "scope": "mesh"
     },
     "hgb_neural_hardware_pipeline": {
       "description": "Executes zero-serialization in-memory neural embedding and stacktrace anomaly classification accelerated by SIMD AVX2/FMA/GPU with direct POSIX shared memory projection into WASM guests",
@@ -3188,7 +3319,8 @@
       "required": [
         "action",
         "text_input"
-      ]
+      ],
+      "scope": "core"
     },
     "hgb_vibe_code_mutation_loop": {
       "description": "Autonomous vibe-coding loop: intercepts OpenTelemetry regression spans, synthesizes AST source mutations, executes tests inside isolated Firecracker microVMs, analyzes BOLT profile layouts, and hot-swaps running modules",
@@ -3213,7 +3345,8 @@
         "anomaly_kind",
         "target_component",
         "diagnostic_text"
-      ]
+      ],
+      "scope": "core"
     },
     "hgb_universal_mcp_gateway": {
       "description": "Universal dynamic MCP router: discovers, sandboxes, and spawns MCP tools on-demand as isolated WASM or MicroVM processes based on incoming agent intent, with autonomous LRU idle process reaping",
@@ -3235,7 +3368,8 @@
       },
       "required": [
         "action"
-      ]
+      ],
+      "scope": "core"
     },
     "hgb_telemetry_hud_cockpit": {
       "description": "Streams high-frequency real-time WebSocket telemetry (CPU temp, frequencies, dynatune governor, MGLRU, microVM states, cluster mesh peers, and live agent thoughts) to the WebGPU Desktop Cockpit PWA",
@@ -3248,7 +3382,8 @@
       },
       "required": [
         "action"
-      ]
+      ],
+      "scope": "diagnostics"
     },
     "hgb_distributed_microvm_swarm": {
       "description": "Cluster node coordinator for distributed microVM swarms: dynamically schedules, provisions, and supervises Firecracker microVMs or remote Wasm runners across edge/cluster nodes over libp2p/gRPC with multivariate fitness scoring and automatic failover",
@@ -3308,7 +3443,8 @@
       },
       "required": [
         "action"
-      ]
+      ],
+      "scope": "microvm"
     },
     "hgb_hierarchical_multimodal_rag": {
       "description": "Multi-tier hierarchical memory pipeline: Hot tier in-memory quantized HNSW vector index (<1ms), Warm tier LZSS-compressed SQLite checkpoints, and Cold tier BLAKE3 content-addressed multi-modal store indexing visual assets, diagrams, and perceptual hashes",
@@ -3362,7 +3498,8 @@
       },
       "required": [
         "action"
-      ]
+      ],
+      "scope": "core"
     },
     "hgb_ebpf_autonomous_sentinel": {
       "description": "Sub-microsecond eBPF tracepoint sentinel for autonomous self-healing: intercepts syscalls, socket transactions, and file I/O in real time, detects cyclic infinite loops, memory violations (SIGSEGV), and spinlock stalls, and triggers instant sandbox restart or hot-patching",
@@ -3403,7 +3540,8 @@
       "required": [
         "action",
         "target_id"
-      ]
+      ],
+      "scope": "core"
     },
     "hgb_wasi_cloudflare_edge_sync": {
       "description": "Turnkey Cloudflare Workers and WASI Component Model edge gateway coordinator: validates wrangler.toml and _routes.json bindings, verifies KV telemetry caching (HAGIBIS_EDGE_KV), synchronizes D1 task journaling (HAGIBIS_D1_DB), and manages HMAC token auth",
@@ -3437,7 +3575,8 @@
       },
       "required": [
         "action"
-      ]
+      ],
+      "scope": "compiler"
     },
     "hgb_epoll_circuit_breaker": {
       "description": "Autonomous epoll and eventfd edge-triggered circuit breaker engine: captures microVM and WASM panics, OOMs, and SLA latency spikes with <1\u00b5s trip times, synthesizes AST candidate patches via LLM/MCP runner, verifies them in isolated Firecracker sandboxes, and executes zero-downtime hot swaps",
@@ -3470,7 +3609,8 @@
       },
       "required": [
         "action"
-      ]
+      ],
+      "scope": "diagnostics"
     },
     "hgb_synapse_unified_query": {
       "description": "Unified Synapse query planner: performs zero-copy memory-mapped joins between structured relational SQLite state and LanceDB SIMD vector KNN searches, backed by custom SQLite scalar functions and Reciprocal Rank Fusion (RRF) with FTS5 lexical ranking",
@@ -3505,7 +3645,8 @@
           "description": "Sparse lexical BM25 weight in Reciprocal Rank Fusion (default: 0.3)",
           "default": 0.3
         }
-      }
+      },
+      "scope": "core"
     },
     "hgb_hardware_adaptive_scheduler": {
       "description": "Hardware-aware dynamic execution strategy shifter and dynamic compiler scheduler: monitors CPU temperature, battery discharge rate, and PSI memory pressure via dynatune, dynamically throttles microVM cgroup v2 quotas, adjusts CPU scaling governors, meters WASM instruction fuel, and schedules automated PGO/BOLT recompilations",
@@ -3544,7 +3685,8 @@
       },
       "required": [
         "action"
-      ]
+      ],
+      "scope": "core"
     },
     "hgb_p2p_swarm_mesh": {
       "description": "Distributed P2P MCP Swarm mesh coordinator: federates AI agent tools across local daemon nodes and Cloudflare Workers over Kademlia DHT XOR routing, BLAKE3 cryptographic attestation, mDNS discovery, and multi-criteria capacity scoring for transparent remote task offloading",
@@ -3582,7 +3724,8 @@
       },
       "required": [
         "action"
-      ]
+      ],
+      "scope": "mesh"
     },
     "hgb_wit_type_validator": {
       "description": "Compile-time verified agent workflow validator: strictly parses WebAssembly Interface Types (WIT) worlds, interfaces, records, and variants, validates agent tool call arguments at runtime, and instantly emits rich WitBoundaryTrap diagnostics with corrective guidance before state corruption occurs",
@@ -3612,7 +3755,8 @@
       },
       "required": [
         "action"
-      ]
+      ],
+      "scope": "core"
     },
     "hgb_dynatune_kernel_coordinator": {
       "description": "Deep integration with sibling dynatune crate: queries live thermal, RAM, and battery state, calculates optimal thread pool allocations for heavy LLM / compilation workloads, and pins thread CPU affinity",
@@ -3658,7 +3802,8 @@
       },
       "required": [
         "action"
-      ]
+      ],
+      "scope": "diagnostics"
     },
     "hgb_hybrid_execution_router": {
       "description": "Unified hybrid execution router: evaluates risk score of code payloads, auto-routes between Tier 1 instant WASM sandbox (<1ms) and Tier 2 isolated Firecracker MicroVM jail with snapshot acceleration",
@@ -3694,7 +3839,8 @@
       "required": [
         "task_id",
         "code"
-      ]
+      ],
+      "scope": "core"
     },
     "hgb_autonomous_vector_feedback_healer": {
       "description": "Autonomous vector feedback healing loop: embeds task failure diagnostics into 128-dim vectors, searches past verified resolutions in LanceDB Synapse fabric, synthesizes AST patches, and auto-commits on green pass",
@@ -3738,7 +3884,8 @@
         "error_class",
         "error_message",
         "failing_code"
-      ]
+      ],
+      "scope": "compiler"
     },
     "hgb_edge_tunnel_control_plane": {
       "description": "Edge-to-core unified control plane: encrypted tunnel bridging Cloudflare Worker edge (worker/index.ts) with local workstation daemon, enabling transparent offload of heavy compute with HMAC/BLAKE3 anti-replay security",
@@ -3768,7 +3915,8 @@
       },
       "required": [
         "action"
-      ]
+      ],
+      "scope": "mesh"
     },
     "hgb_masterclass_simulation_test_gate": {
       "description": "Interactive and self-testing masterclass CI/CD test gate: validates live crate boundaries, kernel telemetry, hybrid routers, and vector loops against all 8 masterclass chapters with zero documentation drift",
@@ -3783,7 +3931,8 @@
           "description": "Validate 8 ReportLab chapters headlessly",
           "default": true
         }
-      }
+      },
+      "scope": "compiler"
     },
     "hgb_self_evolving_loop_trigger": {
       "description": "Execute an autonomous self-evolving reinforcement cycle: inspects bare-metal telemetry (dynatune_telemetry.py / sysfs), detects performance anomalies, synthesizes invariant patch in ephemeral worktree, compiles workspace via cargo, runs chaos injection suite (ch8_chaos_injector.py), and autonomously rolls back on regression or deploys to production",
@@ -3813,7 +3962,8 @@
           "description": "Autonomously deploy to production on First-Green pass",
           "default": true
         }
-      }
+      },
+      "scope": "core"
     },
     "hgb_self_evolving_loop_status": {
       "description": "Query current state, history, active deployed patches, rollbacks, and latest telemetry evaluation of the self-evolving agent reinforcement loop",
@@ -3828,7 +3978,8 @@
           "description": "Include real-time telemetry snapshot in status response",
           "default": true
         }
-      }
+      },
+      "scope": "core"
     },
     "hgb_rig_agent_orchestrate": {
       "description": "Execute multi-turn ReAct cognitive reasoning loop via Rig agent framework with dynamic MCP tool routing, autonomic hardware thermal governor, and multi-provider fallback",
@@ -3862,7 +4013,8 @@
       },
       "required": [
         "prompt"
-      ]
+      ],
+      "scope": "core"
     },
     "hgb_self_heal_absorb_patch": {
       "description": "Absorb speculative candidate patch, verify compilation and test integrity, and delete stale .patch file strictly enforcing ARCH-003 zero dead patch invariant",
@@ -3885,7 +4037,8 @@
           "description": "Delete patch file after successful absorption",
           "default": true
         }
-      }
+      },
+      "scope": "compiler"
     },
     "hgb_hardware_thermal_sentry": {
       "description": "Inspect bare-metal hardware thermal state, governor profiles, PSI memory pressure, and enforce autonomous governor downscaling or cooling pauses",
@@ -3900,7 +4053,8 @@
           "description": "Automatically downscale to powersave if threshold breached",
           "default": true
         }
-      }
+      },
+      "scope": "core"
     },
     "hgb_zero_copy_vector_federation": {
       "description": "Execute sub-millisecond zero-copy vector similarity search across memory-mapped LanceDB files and federate queries across worker edge deployments and local nodes",
@@ -3935,7 +4089,8 @@
           "description": "Federate search across Cloudflare Worker edge mesh",
           "default": true
         }
-      }
+      },
+      "scope": "storage"
     },
     "hgb_agent_orchestrator_rig": {
       "description": "Execute DAG workflows, dispatch multi-agent cognitive teams, and assign specialized agent roles with autonomic hardware-coupled cognitive loops from skills/agent-orchestrator-rig",
@@ -4063,7 +4218,8 @@
       },
       "required": [
         "action"
-      ]
+      ],
+      "scope": "core"
     },
     "hgb_vector_lancedb_manage": {
       "description": "Manage embedded LanceDB-compatible vector tables, execute SIMD-accelerated similarity queries, and perform columnar fragment compaction and cache maintenance from skills/vector-lancedb",
@@ -4151,7 +4307,8 @@
       "required": [
         "operation",
         "table_name"
-      ]
+      ],
+      "scope": "storage"
     },
     "hgb_microvm_firecracker_orchestrate": {
       "description": "Orchestrate hardware-isolated Firecracker microVMs with dynamic seccomp syscall filtering, cgroups v2 resource capping, and detailed execution tracing from skills/microvm-firecracker",
@@ -4257,7 +4414,8 @@
       },
       "required": [
         "action"
-      ]
+      ],
+      "scope": "microvm"
     },
     "hgb_operator_unlock_circuit_breaker": {
       "description": "Cryptographically unlock an enterprise circuit breaker permanently locked in PERM_TRIPPED_CRYPTOLOCKED due to flapping or repeated AST compiler faults. Requires valid Ed25519 operator signature over the single-use nonce challenge and restores write permissions.",
@@ -4299,7 +4457,8 @@
         "nonce",
         "operator_public_key",
         "ed25519_signature"
-      ]
+      ],
+      "scope": "diagnostics"
     },
     "hagibis_cve_rfc_query": {
       "description": "Sub-millisecond semantic search over indexed CVE databases, RFC specifications, and codebase topologies using LanceDB-compatible vector memory with attention-weighted ranking and citation anchors",
@@ -4359,7 +4518,8 @@
       },
       "required": [
         "query"
-      ]
+      ],
+      "scope": "core"
     },
     "hagibis_ingest_knowledge_document": {
       "description": "Ingest structured CVE security advisories, RFC protocol specifications, or codebase topologies into the LanceDB-compatible semantic vector index with 64-byte aligned columnar persistence",
@@ -4592,7 +4752,8 @@
       },
       "required": [
         "doc_type"
-      ]
+      ],
+      "scope": "mesh"
     },
     "hgb_read_system_logs": {
       "description": "Reads system logs (.hgb/dream_journal.json, .hgb/*.log, /proc/loadavg, or journald if available) with line limits, severity filters (ERROR, WARN, INFO), and secret redaction",
@@ -4623,7 +4784,8 @@
           "description": "Redact API keys, tokens, and credentials (default: true)",
           "default": true
         }
-      }
+      },
+      "scope": "core"
     },
     "hgb_query_lancedb_vector_store": {
       "description": "Queries LanceDB vector store (crates/hgb-storage/src/lancedb_vector_engine.rs) taking query string and top_k, returning matching chunks with cosine similarity scores",
@@ -4658,7 +4820,8 @@
       },
       "required": [
         "query"
-      ]
+      ],
+      "scope": "storage"
     },
     "hgb_execute_build": {
       "description": "Executes sandboxed build commands (cargo check, cargo build, zig build) with configurable timeout, returns exit code, stdout, stderr, and parsed JSON error diagnostics",
@@ -4695,7 +4858,8 @@
       },
       "required": [
         "command"
-      ]
+      ],
+      "scope": "core"
     },
     "hgb_ingest_otel_telemetry": {
       "description": "Ingests real-time OpenTelemetry metrics (CPU usage, thermal temperature, memory PSI pressure, circuit breaker trip counters) from skills/observability-otel/ and /proc/pressure/memory directly into a structured telemetry report",
@@ -4719,7 +4883,37 @@
           "description": "Include circuit breaker trip counters and state (default: true)",
           "default": true
         }
-      }
+      },
+      "scope": "diagnostics"
+    },
+    "hgb_resolve_tool_schemas": {
+      "scope": "core",
+      "description": "On-demand MCP tool schema resolver: dynamically loads full parameter schemas for tools in requested scope(s) or by name to prevent LLM context window bloat",
+      "parameters": {
+        "scopes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "core",
+              "compiler",
+              "storage",
+              "diagnostics",
+              "microvm",
+              "mesh"
+            ]
+          },
+          "description": "Semantic scopes to resolve"
+        },
+        "tool_names": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Optional list of specific tool names to resolve"
+        }
+      },
+      "required": []
     }
   },
   "mcpServers": {
@@ -5213,6 +5407,210 @@
       "command": "uvx",
       "args": [
         "homeassistant-mcp"
+      ]
+    }
+  },
+  "scopes": {
+    "core": {
+      "description": "Essential agent execution, environment, lifecycle, and filesystem operations",
+      "tool_count": 61,
+      "tools": [
+        "hagibis_cve_rfc_query",
+        "hgb_adaptive_rag_query",
+        "hgb_agent_orchestrator_rig",
+        "hgb_agentic_bisect",
+        "hgb_agentic_self_compile",
+        "hgb_baas_graduate",
+        "hgb_cgroup_control",
+        "hgb_code_skeleton",
+        "hgb_desktop_drive",
+        "hgb_distributed_node_register",
+        "hgb_distributed_node_status",
+        "hgb_ebpf_autonomous_sentinel",
+        "hgb_episodic_memory_recall",
+        "hgb_execute_build",
+        "hgb_filesystem_tree",
+        "hgb_git_micro_commit",
+        "hgb_gpu_tensor_ann_search",
+        "hgb_hardware_adaptive_scheduler",
+        "hgb_hardware_thermal_sentry",
+        "hgb_hardware_tune",
+        "hgb_hierarchical_multimodal_rag",
+        "hgb_holographic_control_steer",
+        "hgb_hot_reload_component",
+        "hgb_hybrid_execution_router",
+        "hgb_hybrid_inference_generate",
+        "hgb_intent_history_retrieve",
+        "hgb_intent_prompt_enrich",
+        "hgb_mcp_run_tests",
+        "hgb_memory_consolidation_trigger",
+        "hgb_meta_skill_evolve",
+        "hgb_mirage_mock",
+        "hgb_mobile_teleport",
+        "hgb_neural_bus_stream",
+        "hgb_neural_hardware_pipeline",
+        "hgb_nightshift",
+        "hgb_ollama_pipeline_accelerate",
+        "hgb_predictive_prefetch_anticipate",
+        "hgb_read_system_logs",
+        "hgb_reflection_finetune_ingest",
+        "hgb_reflection_finetune_status",
+        "hgb_resolve_tool_schemas",
+        "hgb_rig_agent_orchestrate",
+        "hgb_self_evolving_loop_status",
+        "hgb_self_evolving_loop_trigger",
+        "hgb_synapse_unified_query",
+        "hgb_time_machine_rollback",
+        "hgb_trajectory_semantic_search",
+        "hgb_undo",
+        "hgb_universal_mcp_gateway",
+        "hgb_vibe_code_mutation_loop",
+        "hgb_viral_og",
+        "hgb_vulkan_rag_search",
+        "hgb_webgpu_cockpit_control",
+        "hgb_wit_type_validator",
+        "hgb_zig_kernel_hot_reload",
+        "index_codebase_memory",
+        "ollama_speculative_generate",
+        "ollama_task_split",
+        "recall_developer_context",
+        "semantic_memory_search",
+        "update_long_term_memory"
+      ]
+    },
+    "compiler": {
+      "description": "WASM, JIT compilation, Cranelift, AST analysis, mutation, and verification",
+      "tool_count": 40,
+      "tools": [
+        "hagibis_decompile_binary",
+        "hgb_auto_patch_bottleneck",
+        "hgb_autonomic_healer_tick",
+        "hgb_autonomous_compiler_loop",
+        "hgb_autonomous_vector_feedback_healer",
+        "hgb_bolt_optimize_binary",
+        "hgb_compiler_self_heal_ast",
+        "hgb_daemon_wasm_hot_reload",
+        "hgb_distributed_scheduler_dispatch",
+        "hgb_evolutionary_self_heal_trigger",
+        "hgb_federated_microvm_dispatch",
+        "hgb_grpc_swarm_dispatch",
+        "hgb_masterclass_simulation_test_gate",
+        "hgb_mcp_apply_patch",
+        "hgb_mcp_mesh_broadcast",
+        "hgb_mcp_read_patch",
+        "hgb_mesh_dispatch_workload",
+        "hgb_microvm_hotplug_wasm",
+        "hgb_multitenant_wasm_execute",
+        "hgb_p2p_raft_workflow_dispatch",
+        "hgb_pgo_hotswap_status",
+        "hgb_pgo_hotswap_trigger",
+        "hgb_pgo_tune_pass",
+        "hgb_self_heal_absorb_patch",
+        "hgb_self_healing_ci",
+        "hgb_self_healing_compile",
+        "hgb_self_healing_diagnose",
+        "hgb_self_healing_pgo_trigger",
+        "hgb_self_healing_stacktrace_patch",
+        "hgb_swarm_mesh_dispatch",
+        "hgb_system_health",
+        "hgb_wasi_cloudflare_edge_sync",
+        "hgb_wasi_component_verify_and_swap",
+        "hgb_wasm_component_mesh_execute",
+        "hgb_wasm_kernel_invoke",
+        "hgb_wasm_kernel_stream",
+        "hgb_wasm_live_hotswap",
+        "hgb_wasm_pgo_tier_up",
+        "hgb_wasm_plugin_inject",
+        "hgb_wasm_wit_exec"
+      ]
+    },
+    "storage": {
+      "description": "LanceDB, SQLite, CRDT synchronization, vector embeddings, and compaction",
+      "tool_count": 16,
+      "tools": [
+        "hagibis_vectorize_codebase",
+        "hgb_fused_vector_graph_query",
+        "hgb_graph_vector_multi_hop_query",
+        "hgb_mmap_vector_search",
+        "hgb_ollama_mutation_vector_sync",
+        "hgb_query_lancedb_vector_store",
+        "hgb_semantic_cache_purge",
+        "hgb_semantic_cache_stats",
+        "hgb_storage_context_query",
+        "hgb_storage_context_store",
+        "hgb_vault_get_secret",
+        "hgb_vault_set_secret",
+        "hgb_vector_lancedb_manage",
+        "hgb_vector_lancedb_query",
+        "hgb_vector_lancedb_upsert",
+        "hgb_zero_copy_vector_federation"
+      ]
+    },
+    "diagnostics": {
+      "description": "Telemetry, OpenTelemetry, profiling, benchmarks, and circuit breaker governance",
+      "tool_count": 13,
+      "tools": [
+        "hgb_daemon_telemetry",
+        "hgb_dynatune_governor_shift",
+        "hgb_dynatune_kernel_coordinator",
+        "hgb_dynatune_natural_language_optimize",
+        "hgb_ebpf_telemetry_intercept",
+        "hgb_epoll_circuit_breaker",
+        "hgb_hardware_telemetry_status",
+        "hgb_ingest_otel_telemetry",
+        "hgb_operator_unlock_circuit_breaker",
+        "hgb_predictive_dynatune_optimize",
+        "hgb_shm_uring_bench",
+        "hgb_telemetry_hud_cockpit",
+        "hgb_zerocopy_ipc_bench"
+      ]
+    },
+    "microvm": {
+      "description": "Hardware-enforced Firecracker isolation, jailer, Landlock LSM, and fuzzing",
+      "tool_count": 13,
+      "tools": [
+        "hagibis_microvm_sandbox_run",
+        "hgb_distributed_microvm_swarm",
+        "hgb_firecracker_destroy",
+        "hgb_firecracker_exec",
+        "hgb_firecracker_spawn",
+        "hgb_mcp_sandbox_exec",
+        "hgb_microvm_execute",
+        "hgb_microvm_firecracker_orchestrate",
+        "hgb_microvm_snapshot_prewarm",
+        "hgb_microvm_spinup",
+        "hgb_microvm_status",
+        "hgb_microvm_swarm_offload",
+        "hgb_microvm_terminate"
+      ]
+    },
+    "mesh": {
+      "description": "P2P federation, PBFT consensus, edge CRDT sync, and multi-agent swarm networking",
+      "tool_count": 23,
+      "tools": [
+        "hagibis_ingest_knowledge_document",
+        "hgb_cdp_tweak_sync",
+        "hgb_cluster_mesh_offload",
+        "hgb_edge_tunnel_control_plane",
+        "hgb_figma_sync",
+        "hgb_mcp_mesh_nodes",
+        "hgb_mcp_mesh_route",
+        "hgb_mcp_mesh_status",
+        "hgb_mcp_swarm_negotiate",
+        "hgb_mesh_cluster_topology",
+        "hgb_p2p_context_sync",
+        "hgb_p2p_mcp_swarm_delegate",
+        "hgb_p2p_raft_mesh_status",
+        "hgb_p2p_swarm_discover",
+        "hgb_p2p_swarm_mesh",
+        "hgb_p2p_tool_delegate",
+        "hgb_rl_reward_ledger_status",
+        "hgb_swarm_consensus_status",
+        "hgb_swarm_fabric_offload",
+        "hgb_swarm_fabric_peers",
+        "hgb_swarm_mesh_pods",
+        "hgb_swarm_pod_spawn",
+        "hgb_webrtc_swarm_federate"
       ]
     }
   }

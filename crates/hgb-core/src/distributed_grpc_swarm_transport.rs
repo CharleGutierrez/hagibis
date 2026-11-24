@@ -299,7 +299,7 @@ impl GrpcSwarmTransport {
             return Err(HgbError::Execution("Packet smaller than header size".into()));
         }
 
-        let header = unsafe { *(packet.as_ptr() as *const SwarmRpcHeader) };
+        let header = unsafe { std::ptr::read_unaligned(packet.as_ptr() as *const SwarmRpcHeader) };
         if header.magic != SWARM_RPC_MAGIC {
             return Err(HgbError::Execution(format!("Invalid magic header: {:x}", header.magic)));
         }

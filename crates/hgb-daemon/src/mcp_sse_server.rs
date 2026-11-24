@@ -16,7 +16,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use tokio::sync::mpsc::{self, UnboundedSender};
+use tokio::sync::mpsc::{self, Sender};
 use tokio::sync::RwLock;
 
 use axum::extract::{Query, Request, State};
@@ -146,7 +146,7 @@ pub struct McpSseServerStatus {
 /// Shared internal state for the MCP SSE server
 pub struct McpSseState {
     pub workspace_root: PathBuf,
-    pub sessions: Arc<RwLock<HashMap<String, UnboundedSender<Event>>>>,
+    pub sessions: Arc<RwLock<HashMap<String, Sender<Event>>>>,
     pub total_connections: AtomicU64,
     pub total_messages: AtomicU64,
     pub total_streamed_events: AtomicU64,
@@ -220,13 +220,22 @@ impl McpSseState {
         *guard = Some(reg);
     }
 
-    /// Emit an SSE event to a specific session
+    /// Emit an SSE event to a specific session with backpressure protection
     pub async fn emit_to_session(&self, session_id: &str, event: Event) -> bool {
         let sessions = self.sessions.read().await;
         if let Some(tx) = sessions.get(session_id) {
-            if tx.send(event).is_ok() {
-                self.total_streamed_events.fetch_add(1, Ordering::Relaxed);
-                return true;
+            match tx.try_send(event) {
+                Ok(_) => {
+                    self.total_streamed_events.fetch_add(1, Ordering::Relaxed);
+                    return true;
+                }
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    tracing::warn!("SSE session {} channel full, dropping event due to slow consumer backpressure", session_id);
+                    return false;
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => {
+                    return false;
+                }
             }
         }
         false
@@ -337,12 +346,12 @@ async fn handle_sse_connect(
     State(state): State<Arc<McpSseState>>,
 ) -> Sse<impl Stream<Item = std::result::Result<Event, Infallible>>> {
     let session_id = uuid::Uuid::new_v4().to_string();
-    let (tx, rx) = mpsc::unbounded_channel::<Event>();
+    let (tx, rx) = mpsc::channel::<Event>(256);
 
     // Initial endpoint announcement per MCP SSE spec
     let endpoint_data = format!("/message?sessionId={}", session_id);
     let initial_event = Event::default().event("endpoint").data(endpoint_data);
-    let _ = tx.send(initial_event);
+    let _ = tx.try_send(initial_event);
 
     state.total_connections.fetch_add(1, Ordering::Relaxed);
     state.total_streamed_events.fetch_add(1, Ordering::Relaxed);

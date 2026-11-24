@@ -538,12 +538,22 @@ impl TensorDimensions {
         self.0.len()
     }
 
-    pub fn total_elements(&self) -> usize {
+    /// Safely computes total elements using checked multiplication to prevent integer overflow
+    pub fn total_elements_checked(&self) -> Option<usize> {
         if self.0.is_empty() {
-            0
+            Some(0)
         } else {
-            self.0.iter().product()
+            self.0.iter().try_fold(1usize, |acc, &d| acc.checked_mul(d))
         }
+    }
+
+    /// Safely computes total required buffer bytes for a given element size
+    pub fn total_bytes_checked(&self, element_size: usize) -> Option<usize> {
+        self.total_elements_checked()?.checked_mul(element_size)
+    }
+
+    pub fn total_elements(&self) -> usize {
+        self.total_elements_checked().unwrap_or(usize::MAX)
     }
 
     pub fn as_u32_vec(&self) -> Vec<u32> {
@@ -729,21 +739,27 @@ impl GpuComputePipelineDescriptor {
     /// Preset: High-performance General Matrix Multiplication (GEMM) shader pipeline
     pub fn gemm_pipeline(name: &str, m: u32, k: u32, n: u32) -> Self {
         let dummy_spv = format!("VULKAN_SPIRV_GEMM_COMPUTE_{}x{}x{}", m, k, n).into_bytes();
+        let b0 = (m as usize).checked_mul(k as usize).and_then(|v| v.checked_mul(4)).unwrap_or(usize::MAX);
+        let b1 = (k as usize).checked_mul(n as usize).and_then(|v| v.checked_mul(4)).unwrap_or(usize::MAX);
+        let b2 = (m as usize).checked_mul(n as usize).and_then(|v| v.checked_mul(4)).unwrap_or(usize::MAX);
         Self::new(name, GpuShaderFormat::SpirV, dummy_spv, "main")
             .with_workgroup_size(16, 16, 1)
-            .with_binding(0, GpuBindingType::ReadOnlyStorageBuffer, (m * k * 4) as usize)
-            .with_binding(1, GpuBindingType::ReadOnlyStorageBuffer, (k * n * 4) as usize)
-            .with_binding(2, GpuBindingType::StorageBuffer, (m * n * 4) as usize)
+            .with_binding(0, GpuBindingType::ReadOnlyStorageBuffer, b0)
+            .with_binding(1, GpuBindingType::ReadOnlyStorageBuffer, b1)
+            .with_binding(2, GpuBindingType::StorageBuffer, b2)
     }
 
     /// Preset: Dense vector embedding projection shader pipeline
     pub fn embedding_projection_pipeline(name: &str, in_dim: u32, out_dim: u32) -> Self {
         let dummy_spv = format!("VULKAN_SPIRV_EMBED_PROJECTION_{}->{}", in_dim, out_dim).into_bytes();
+        let b0 = (in_dim as usize).checked_mul(4).unwrap_or(usize::MAX);
+        let b1 = (in_dim as usize).checked_mul(out_dim as usize).and_then(|v| v.checked_mul(4)).unwrap_or(usize::MAX);
+        let b2 = (out_dim as usize).checked_mul(4).unwrap_or(usize::MAX);
         Self::new(name, GpuShaderFormat::SpirV, dummy_spv, "embed_project")
             .with_workgroup_size(64, 1, 1)
-            .with_binding(0, GpuBindingType::ReadOnlyStorageBuffer, (in_dim * 4) as usize)
-            .with_binding(1, GpuBindingType::ReadOnlyStorageBuffer, (in_dim * out_dim * 4) as usize)
-            .with_binding(2, GpuBindingType::StorageBuffer, (out_dim * 4) as usize)
+            .with_binding(0, GpuBindingType::ReadOnlyStorageBuffer, b0)
+            .with_binding(1, GpuBindingType::ReadOnlyStorageBuffer, b1)
+            .with_binding(2, GpuBindingType::StorageBuffer, b2)
     }
 
     /// Preset: Element-wise vector activation shader pipeline

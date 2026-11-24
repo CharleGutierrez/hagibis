@@ -17,11 +17,13 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." 2>/dev/null && pwd || echo "/media/toshiba/Lexar/hagibis")"
+WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." 2>/dev/null && pwd || pwd)"
 cd "$WORKSPACE_ROOT"
 
 # Ensure environment variables for Rust / Cargo compilation
-export LIBRARY_PATH="/home/toshiba/lib:${LIBRARY_PATH:-}"
+if [ -d "${HOME}/lib" ]; then
+    export LIBRARY_PATH="${HOME}/lib:${LIBRARY_PATH:-}"
+fi
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-/tmp/target}"
 
 JSON_LOG=""

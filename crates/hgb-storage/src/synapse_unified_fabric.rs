@@ -30,7 +30,7 @@ use std::fs;
 use std::marker::PhantomData;
 use std::os::raw::c_int;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 use std::time::Instant;
 
 use rusqlite::ffi;
@@ -729,11 +729,86 @@ pub struct SynapticFabric {
     inner: Arc<SynapticFabricInner>,
 }
 
+/// RAII guard wrapping a pooled SQLite connection or a writer fallback guard
+pub struct PooledReader<'a> {
+    conn: Option<Connection>,
+    pool: &'a Mutex<Vec<Connection>>,
+    fallback_writer: Option<MutexGuard<'a, Connection>>,
+}
+
+impl<'a> std::ops::Deref for PooledReader<'a> {
+    type Target = Connection;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        if let Some(ref c) = self.conn {
+            c
+        } else if let Some(ref w) = self.fallback_writer {
+            w
+        } else {
+            unreachable!("PooledReader has neither connection nor writer fallback")
+        }
+    }
+}
+
+impl<'a> Drop for PooledReader<'a> {
+    fn drop(&mut self) {
+        if let Some(conn) = self.conn.take() {
+            if let Ok(mut pool) = self.pool.lock() {
+                if pool.len() < 16 {
+                    pool.push(conn);
+                }
+            }
+        }
+    }
+}
+
 struct SynapticFabricInner {
-    db_conn: Mutex<Connection>,
+    pub db_conn: Mutex<Connection>,
+    reader_pool: Mutex<Vec<Connection>>,
+    sqlite_path: Option<PathBuf>,
     vector_engine: Arc<RwLock<LanceDbVectorEngine>>,
     config: SynapseConfig,
     _temp_dir: Option<PathBuf>,
+}
+
+impl SynapticFabricInner {
+    pub fn acquire_reader(&self) -> Result<PooledReader<'_>> {
+        let mut pool = self.reader_pool.lock().unwrap();
+        if let Some(conn) = pool.pop() {
+            Ok(PooledReader {
+                conn: Some(conn),
+                pool: &self.reader_pool,
+                fallback_writer: None,
+            })
+        } else if let Some(ref path) = self.sqlite_path {
+            let conn = Connection::open_with_flags(
+                path,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            )
+            .or_else(|_| Connection::open(path))
+            .map_err(|e| HgbError::Storage(format!("Reader connection open failed: {}", e)))?;
+
+            SynapticFabric::init_reader_connection(&conn, &self.vector_engine)?;
+
+            Ok(PooledReader {
+                conn: Some(conn),
+                pool: &self.reader_pool,
+                fallback_writer: None,
+            })
+        } else {
+            drop(pool);
+            let writer = self
+                .db_conn
+                .lock()
+                .map_err(|e| HgbError::Execution(format!("db_conn lock poisoned: {}", e)))?;
+            Ok(PooledReader {
+                conn: None,
+                pool: &self.reader_pool,
+                fallback_writer: Some(writer),
+            })
+        }
+    }
 }
 
 impl Drop for SynapticFabricInner {
@@ -769,6 +844,8 @@ impl SynapticFabric {
 
         let inner = SynapticFabricInner {
             db_conn: Mutex::new(conn),
+            reader_pool: Mutex::new(Vec::new()),
+            sqlite_path: None,
             vector_engine: arc_engine,
             config,
             _temp_dir: Some(temp_dir),
@@ -794,6 +871,18 @@ impl SynapticFabric {
         let conn = Connection::open(&sqlite_file).map_err(|e| HgbError::Storage(e.to_string()))?;
         Self::init_sqlite_connection(&conn, &arc_engine)?;
 
+        // Pre-warm reader pool connections for concurrent WAL reads
+        let mut readers = Vec::new();
+        for _ in 0..4 {
+            if let Ok(r_conn) = Connection::open_with_flags(
+                &sqlite_file,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            ) {
+                let _ = Self::init_reader_connection(&r_conn, &arc_engine);
+                readers.push(r_conn);
+            }
+        }
+
         let config = SynapseConfig {
             dimension,
             default_metric: DistanceMetric::Cosine,
@@ -803,6 +892,8 @@ impl SynapticFabric {
 
         let inner = SynapticFabricInner {
             db_conn: Mutex::new(conn),
+            reader_pool: Mutex::new(readers),
+            sqlite_path: Some(sqlite_file),
             vector_engine: arc_engine,
             config,
             _temp_dir: None,
@@ -811,6 +902,27 @@ impl SynapticFabric {
         Ok(Self {
             inner: Arc::new(inner),
         })
+    }
+
+    /// Initializes read-only connections with SIMD vector functions and virtual tables
+    fn init_reader_connection(
+        conn: &Connection,
+        vector_engine: &Arc<RwLock<LanceDbVectorEngine>>,
+    ) -> Result<()> {
+        let _ = conn.execute_batch(
+            "PRAGMA query_only = ON;
+             PRAGMA synchronous = NORMAL;
+             PRAGMA temp_store = MEMORY;
+             PRAGMA cache_size = -32000;
+             PRAGMA mmap_size = 268435456;",
+        );
+        let _ = register_synapse_sql_functions(conn);
+        let _ = conn.create_module(
+            "synapse_vector_knn",
+            eponymous_only_module::<SynapseVectorKnnTab>(),
+            Some(Arc::clone(vector_engine)),
+        );
+        Ok(())
     }
 
     /// Initializes high-performance PRAGMAs, tables, custom scalar functions, and virtual tables
@@ -1116,11 +1228,7 @@ impl SynapticFabric {
     // ========================================================================
 
     pub fn get_relational_record(&self, id: &str) -> Result<Option<RelationalRecord>> {
-        let conn = self
-            .inner
-            .db_conn
-            .lock()
-            .map_err(|e| HgbError::Execution(format!("db_conn lock poisoned: {}", e)))?;
+        let conn = self.inner.acquire_reader()?;
 
         conn.query_row(
             "SELECT id, session_id, content, category, metadata_json, created_at FROM relational_records WHERE id = ?1",
@@ -1141,11 +1249,7 @@ impl SynapticFabric {
     }
 
     pub fn get_agent_checkpoint(&self, checkpoint_id: &str) -> Result<Option<AgentCheckpoint>> {
-        let conn = self
-            .inner
-            .db_conn
-            .lock()
-            .map_err(|e| HgbError::Execution(format!("db_conn lock poisoned: {}", e)))?;
+        let conn = self.inner.acquire_reader()?;
 
         conn.query_row(
             "SELECT checkpoint_id, session_id, actor_id, step_index, state_hash, payload_json, created_at FROM agent_checkpoints WHERE checkpoint_id = ?1",
@@ -1168,11 +1272,7 @@ impl SynapticFabric {
     }
 
     pub fn get_execution_trace(&self, trace_id: &str) -> Result<Option<ExecutionTraceRecord>> {
-        let conn = self
-            .inner
-            .db_conn
-            .lock()
-            .map_err(|e| HgbError::Execution(format!("db_conn lock poisoned: {}", e)))?;
+        let conn = self.inner.acquire_reader()?;
 
         conn.query_row(
             "SELECT trace_id, session_id, tool_name, input_json, output_json, status, duration_ms, created_at FROM execution_trace WHERE trace_id = ?1",
@@ -1243,11 +1343,7 @@ impl SynapticFabric {
             .collect();
 
         // 2. Lexical FTS5 search
-        let conn = self
-            .inner
-            .db_conn
-            .lock()
-            .map_err(|e| HgbError::Execution(format!("db_conn lock error: {}", e)))?;
+        let conn = self.inner.acquire_reader()?;
 
         // Sanitize search tokens for FTS5
         let sanitized = query_text
@@ -1379,12 +1475,7 @@ impl SynapseQueryPlanner {
 
     /// Explains the SQLite query plan using `EXPLAIN QUERY PLAN`
     pub fn explain_plan(&self, sql: &str) -> Result<Vec<String>> {
-        let conn = self
-            .fabric
-            .inner
-            .db_conn
-            .lock()
-            .map_err(|e| HgbError::Execution(format!("db_conn lock error: {}", e)))?;
+        let conn = self.fabric.inner.acquire_reader()?;
 
         let explain_sql = format!("EXPLAIN QUERY PLAN {}", sql);
         let mut steps = Vec::new();
@@ -1419,12 +1510,7 @@ impl SynapseQueryPlanner {
         category: Option<&str>,
     ) -> Result<Vec<RelationalVectorJoinRow>> {
         let query_blob = encode_f32_slice_to_bytes(query_vec);
-        let conn = self
-            .fabric
-            .inner
-            .db_conn
-            .lock()
-            .map_err(|e| HgbError::Execution(format!("db_conn lock error: {}", e)))?;
+        let conn = self.fabric.inner.acquire_reader()?;
 
         let sql = r#"
             SELECT r.id, r.session_id, r.content, v.score, r.category
@@ -1469,12 +1555,7 @@ impl SynapseQueryPlanner {
     where
         F: FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<T>,
     {
-        let conn = self
-            .fabric
-            .inner
-            .db_conn
-            .lock()
-            .map_err(|e| HgbError::Execution(format!("db_conn lock error: {}", e)))?;
+        let conn = self.fabric.inner.acquire_reader()?;
 
         let mut stmt = conn
             .prepare(sql)
