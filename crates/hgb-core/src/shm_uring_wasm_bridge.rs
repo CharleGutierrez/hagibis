@@ -26,19 +26,19 @@ pub const HEADER_CACHE_ALIGNMENT: usize = 64;
 
 /// 64-byte cacheline-aligned io_uring-style shared memory ring header
 #[repr(C, align(64))]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 pub struct UringShmHeader {
     pub magic: u64,
     pub version: u32,
     pub ring_entries: u32,
-    pub sq_head: u32,
-    pub sq_tail: u32,
-    pub cq_head: u32,
-    pub cq_tail: u32,
+    pub sq_head: AtomicU32,
+    pub sq_tail: AtomicU32,
+    pub cq_head: AtomicU32,
+    pub cq_tail: AtomicU32,
     pub flags: u32,
     pub ring_mask: u32,
-    pub total_submitted: u64,
-    pub total_completed: u64,
+    pub total_submitted: AtomicU64,
+    pub total_completed: AtomicU64,
     pub _reserved: [u8; 16],
 }
 
@@ -154,14 +154,14 @@ impl ShmUringWasmBridge {
                 magic: URING_SHM_MAGIC,
                 version: 1,
                 ring_entries: entries as u32,
-                sq_head: 0,
-                sq_tail: 0,
-                cq_head: 0,
-                cq_tail: 0,
+                sq_head: AtomicU32::new(0),
+                sq_tail: AtomicU32::new(0),
+                cq_head: AtomicU32::new(0),
+                cq_tail: AtomicU32::new(0),
                 flags: 0,
                 ring_mask,
-                total_submitted: 0,
-                total_completed: 0,
+                total_submitted: AtomicU64::new(0),
+                total_completed: AtomicU64::new(0),
                 _reserved: [0u8; 16],
             };
             let slice: &[u8] = unsafe {
@@ -188,7 +188,14 @@ impl ShmUringWasmBridge {
 
         let header_ptr = mmap.as_mut_ptr() as *mut UringShmHeader;
         unsafe {
-            let tail = (*header_ptr).sq_tail;
+            let tail = (*header_ptr).sq_tail.load(Ordering::Acquire);
+            let head = (*header_ptr).sq_head.load(Ordering::Acquire);
+
+            // Ring buffer full check: tail - head >= capacity
+            if tail.wrapping_sub(head) >= (*header_ptr).ring_entries {
+                return Err(HgbError::Execution("Ring buffer is full".into()));
+            }
+
             let mask = (*header_ptr).ring_mask;
             let slot = (tail & mask) as usize;
 
@@ -203,9 +210,9 @@ impl ShmUringWasmBridge {
                 user_data,
             };
 
-            fence(Ordering::Release);
-            (*header_ptr).sq_tail = tail.wrapping_add(1);
-            (*header_ptr).total_submitted += 1;
+            // Release ordering ensures entry payload is visible before tail update
+            (*header_ptr).sq_tail.store(tail.wrapping_add(1), Ordering::Release);
+            (*header_ptr).total_submitted.fetch_add(1, Ordering::Relaxed);
         }
 
         Ok(user_data)
@@ -217,8 +224,8 @@ impl ShmUringWasmBridge {
         let header_ptr = mmap.as_mut_ptr() as *mut UringShmHeader;
 
         unsafe {
-            let head = (*header_ptr).cq_head;
-            let tail = (*header_ptr).cq_tail;
+            let head = (*header_ptr).cq_head.load(Ordering::Acquire);
+            let tail = (*header_ptr).cq_tail.load(Ordering::Acquire);
 
             if head == tail {
                 return Ok(None); // Empty queue
@@ -230,11 +237,11 @@ impl ShmUringWasmBridge {
             let cq_offset = HEADER_CACHE_ALIGNMENT + sq_size + slot * std::mem::size_of::<UringCompletionEntry>();
             let cqe_ptr = mmap.as_ptr().add(cq_offset) as *const UringCompletionEntry;
 
-            fence(Ordering::Acquire);
             let entry = *cqe_ptr;
 
-            (*header_ptr).cq_head = head.wrapping_add(1);
-            (*header_ptr).total_completed += 1;
+            // Release ordering ensures CQ entry read is completed before head update
+            (*header_ptr).cq_head.store(head.wrapping_add(1), Ordering::Release);
+            (*header_ptr).total_completed.fetch_add(1, Ordering::Relaxed);
 
             Ok(Some(entry))
         }
@@ -246,9 +253,9 @@ impl ShmUringWasmBridge {
         let header_ptr = mmap.as_mut_ptr() as *mut UringShmHeader;
 
         unsafe {
-            let sq_head = (*header_ptr).sq_head;
-            let sq_tail = (*header_ptr).sq_tail;
-            let count = sq_tail.saturating_sub(sq_head) as usize;
+            let sq_head = (*header_ptr).sq_head.load(Ordering::Acquire);
+            let sq_tail = (*header_ptr).sq_tail.load(Ordering::Acquire);
+            let count = sq_tail.wrapping_sub(sq_head) as usize;
 
             if count == 0 {
                 return Ok(0);
@@ -269,7 +276,7 @@ impl ShmUringWasmBridge {
                 wasm_buffer[dest_offset..dest_offset + record_size].copy_from_slice(src_bytes);
 
                 // Produce completion entry in CQ
-                let cq_tail = (*header_ptr).cq_tail;
+                let cq_tail = (*header_ptr).cq_tail.load(Ordering::Acquire);
                 let cq_slot = (cq_tail & (*header_ptr).ring_mask) as usize;
                 let sq_size = self.entries_count * std::mem::size_of::<UringSubmissionEntry>();
                 let cq_offset = HEADER_CACHE_ALIGNMENT + sq_size + cq_slot * std::mem::size_of::<UringCompletionEntry>();
@@ -280,11 +287,10 @@ impl ShmUringWasmBridge {
                     res: 0, // Success
                     flags: 0,
                 };
-                (*header_ptr).cq_tail = cq_tail.wrapping_add(1);
+                (*header_ptr).cq_tail.store(cq_tail.wrapping_add(1), Ordering::Release);
             }
 
-            fence(Ordering::Release);
-            (*header_ptr).sq_head = sq_head.wrapping_add(copy_count as u32);
+            (*header_ptr).sq_head.store(sq_head.wrapping_add(copy_count as u32), Ordering::Release);
 
             Ok(total_copy_bytes)
         }
@@ -364,5 +370,26 @@ mod tests {
         assert_eq!(bench.entries_processed, 50);
         assert!(bench.zero_copy_verified);
         assert!(bench.throughput_gb_s > 0.0);
+    }
+
+    #[test]
+    fn test_ring_buffer_full_rejection() {
+        let ring_name = format!("test_full_{}", uuid::Uuid::new_v4());
+        let capacity = 16;
+        let bridge = ShmUringWasmBridge::create_or_open(&ring_name, Some(capacity)).unwrap();
+
+        let rec = ColumnarSensorRecord::new(1, 1, 1.0);
+        // Fill the ring to capacity
+        for _ in 0..capacity {
+            assert!(bridge.submit_sensor_record(&rec).is_ok());
+        }
+
+        // Submitting when full must return Ring buffer is full error
+        let res = bridge.submit_sensor_record(&rec);
+        assert!(res.is_err());
+        match res {
+            Err(HgbError::Execution(msg)) => assert_eq!(msg, "Ring buffer is full"),
+            other => panic!("Expected Ring buffer is full error, got {:?}", other),
+        }
     }
 }

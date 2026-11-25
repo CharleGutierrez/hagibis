@@ -483,4 +483,31 @@ mod tests {
 
         let _ = fs::remove_dir_all(&temp_dir);
     }
+
+    #[test]
+    fn test_blast_radius_circular_symlink_protection() {
+        let temp_dir = std::env::temp_dir().join(format!("blast_symlink_test_{}", uuid::Uuid::new_v4().simple()));
+        let _ = fs::create_dir_all(&temp_dir);
+
+        let sub_dir = temp_dir.join("src");
+        fs::create_dir_all(&sub_dir).unwrap();
+
+        let file_a = sub_dir.join("main.rs");
+        fs::write(&file_a, "pub fn entrypoint() {}").unwrap();
+
+        // Create a circular directory symlink pointing back to temp_dir
+        #[cfg(unix)]
+        {
+            let loop_link = sub_dir.join("recursive_loop");
+            let _ = std::os::unix::fs::symlink(&temp_dir, &loop_link);
+        }
+
+        let radar = BlastRadiusRadar::new(&temp_dir);
+        let report = radar.analyze(&[PathBuf::from("src/main.rs")]).unwrap();
+
+        assert_eq!(report.target_files, vec!["src/main.rs"]);
+        assert!(report.modified_symbols.iter().any(|s| s.name == "entrypoint"));
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
 }

@@ -70,6 +70,12 @@ echo " Content Hash: ${CONTENT_HASH}"
 echo "======================================================================"
 
 if command -v zig >/dev/null 2>&1; then
+    ZIG_VER=$(zig version 2>/dev/null || echo "")
+    if [[ ! "$ZIG_VER" =~ ^0\.13\. ]]; then
+        echo "[WASM-KERNEL-BUILD] Error: Zig version 0.13.x required, found '$ZIG_VER'." >&2
+        echo "Please install Zig 0.13.0 or ensure ~/.cargo/bin/zig points to Zig 0.13.0." >&2
+        exit 1
+    fi
     cd "$KERNEL_DIR"
     zig build -Doptimize=ReleaseSmall --summary all
     

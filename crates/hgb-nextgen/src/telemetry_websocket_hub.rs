@@ -188,7 +188,7 @@ impl TelemetryWebSocketHub {
                     }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                    tracing::warn!("Telemetry client lagged behind; skipped {} broadcast packets", skipped);
+                    tracing::debug!("Telemetry client lagged behind; skipped {} broadcast packets", skipped);
                     continue;
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => {
@@ -347,5 +347,31 @@ mod tests {
 
         let (broadcasts, _) = hub.stats();
         assert_eq!(broadcasts, 1);
+    }
+
+    #[tokio::test]
+    async fn test_telemetry_websocket_hub_lag_resilience() {
+        let hub = Arc::new(TelemetryWebSocketHub::new(18999));
+        let mut rx = hub.broadcast_tx.subscribe();
+
+        // Broadcast more packets than channel capacity (128) without reading
+        for i in 0..150 {
+            let mut packet = TelemetryBroadcastPacket::default();
+            packet.cpu_freq_mhz = 2000 + i;
+            let _ = hub.broadcast_update(packet).await.unwrap();
+        }
+
+        // The receiver should experience Lagged, but then continue receiving without panic or disconnection
+        match rx.recv().await {
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                assert!(skipped > 0);
+            }
+            Ok(_) => panic!("Expected Lagged error due to slow consumer"),
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => panic!("Channel should not be closed"),
+        }
+
+        // Subsequent read after lagging recovers immediately
+        let post_lag = rx.recv().await.expect("receive latest after lag recovery");
+        assert!(post_lag.cpu_freq_mhz >= 2020);
     }
 }

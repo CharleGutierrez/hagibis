@@ -233,6 +233,16 @@ impl GpuShmEmbeddingCache {
             .open(&shm_path)
             .map_err(|e| HgbError::Storage(format!("Failed to open SHM backing file {:?}: {}", shm_path, e)))?;
 
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(metadata) = file.metadata() {
+                let mut perms = metadata.permissions();
+                perms.set_mode(0o600);
+                let _ = std::fs::set_permissions(&shm_path, perms);
+            }
+        }
+
         // Calculate required allocation size: header (128 bytes) + slots * (64 + vector_dim * 4)
         let slot_size = CACHELINE_ALIGNMENT_BYTES + vector_dim * std::mem::size_of::<f32>();
         let total_file_size = 128 + capacity * slot_size;
@@ -515,6 +525,29 @@ mod tests {
         assert_eq!(stats.active_stored_vectors, 1);
         assert!(stats.total_queries >= 3);
         assert!(stats.total_hits >= 2);
+    }
+
+    #[test]
+    fn test_gpu_shm_embedding_cache_drop_unlinks_file() {
+        let session_id = format!("drop_test_{}", uuid::Uuid::new_v4().simple());
+        let shm_path = {
+            let cache = GpuShmEmbeddingCache::new(&session_id, 4, 8).unwrap();
+            let path = cache.shm_path.clone();
+            assert!(path.exists(), "SHM file should exist while cache is alive");
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let meta = std::fs::metadata(&path).expect("metadata");
+                let mode = meta.permissions().mode();
+                assert_eq!(mode & 0o777, 0o600, "SHM file permissions must be 0600");
+            }
+
+            path
+            // cache is dropped here
+        };
+
+        assert!(!shm_path.exists(), "SHM file must be unlinked upon GpuShmEmbeddingCache drop");
     }
 }
 

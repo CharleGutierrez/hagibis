@@ -58,11 +58,11 @@ impl DreamJournal {
         let json = serde_json::to_string_pretty(self)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
 
-        let file_name = p.file_name().and_then(|f| f.to_str()).unwrap_or("journal");
-        let tmp_path = parent.join(format!(".{}.tmp.{}", file_name, std::process::id()));
+        // Generate temporary file in same directory using format!("{}.tmp.{}", path, pid)
+        let tmp_path = PathBuf::from(format!("{}.tmp.{}", p.display(), std::process::id()));
 
-        // Write and sync to temporary file in same filesystem
-        {
+        // Write and sync to temporary file in same directory to prevent data corruption on crash
+        let write_res = (|| -> std::io::Result<()> {
             use std::io::Write;
             let mut file = fs::OpenOptions::new()
                 .write(true)
@@ -71,10 +71,30 @@ impl DreamJournal {
                 .open(&tmp_path)?;
             file.write_all(json.as_bytes())?;
             file.sync_all()?;
+            Ok(())
+        })();
+
+        if let Err(e) = write_res {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(e);
         }
 
-        // Atomically rename over destination file
-        fs::rename(tmp_path, p)
+        // Atomically rename temporary file over destination file
+        if let Err(e) = fs::rename(&tmp_path, p) {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(e);
+        }
+
+        Ok(())
+    }
+
+    /// Asynchronously save dream journal atomically via spawn_blocking to prevent Tokio reactor blocking
+    pub async fn save_async(&self, path: impl AsRef<Path>) -> std::io::Result<()> {
+        let journal = self.clone();
+        let p = path.as_ref().to_path_buf();
+        tokio::task::spawn_blocking(move || journal.save(p))
+            .await
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?
     }
 
     pub fn append_report(&mut self, report: &DreamCycleReport) {
@@ -308,6 +328,31 @@ mod tests {
         let greeting = loaded.morning_greeting();
         assert!(greeting.contains("Good morning"));
         assert!(greeting.contains("97.4%"));
+    }
+
+    #[tokio::test]
+    async fn test_dream_journal_save_async_atomic() {
+        let tmp = TestDir::new();
+        let journal_path = tmp.0.join("dream_journal_async.json");
+
+        let mut journal = DreamJournal::default();
+        journal.total_cycles = 42;
+        journal.total_dpo_pairs = 1337;
+
+        journal.save_async(&journal_path).await.expect("save_async succeeds");
+        assert!(journal_path.exists());
+
+        // Verify loaded contents
+        let loaded = DreamJournal::load(&journal_path);
+        assert_eq!(loaded.total_cycles, 42);
+        assert_eq!(loaded.total_dpo_pairs, 1337);
+
+        // Ensure no lingering tmp files in parent directory
+        let entries = fs::read_dir(&tmp.0).unwrap();
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            assert!(!name.contains(".tmp"), "temporary file leaked: {}", name);
+        }
     }
 
     #[test]

@@ -1260,7 +1260,7 @@ mod tests {
         let session_id = "test-session-uuid".to_string();
 
         // Register session channel
-        let (tx, mut rx) = mpsc::unbounded_channel::<Event>();
+        let (tx, mut rx) = mpsc::channel::<Event>(256);
         {
             let mut sess = state.sessions.write().await;
             sess.insert(session_id.clone(), tx);
@@ -1410,7 +1410,7 @@ mod tests {
 
         // Register session channel
         let session_id = "test-session-cache-uuid".to_string();
-        let (tx, mut rx) = mpsc::unbounded_channel::<Event>();
+        let (tx, mut rx) = mpsc::channel::<Event>(256);
         {
             let mut sess = state.sessions.write().await;
             sess.insert(session_id.clone(), tx);

@@ -760,6 +760,41 @@ impl EphemeralMicrovmJail {
         })
     }
 
+    /// Creates and configures a TAP network interface (e.g. `tap_hgb_<id>`) for microVM networking
+    pub fn create_tap_interface(&mut self, tap_name: &str) -> std::io::Result<String> {
+        if tap_name.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "TAP interface name cannot be empty",
+            ));
+        }
+
+        // ip tuntap add mode tap <tap_name>
+        let status = Command::new("ip")
+            .args(["tuntap", "add", "mode", "tap", tap_name])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+
+        match status {
+            Ok(s) if s.success() => {
+                // ip link set <tap_name> up
+                let _ = Command::new("ip")
+                    .args(["link", "set", tap_name, "up"])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
+                self.tap_device = Some(tap_name.to_string());
+                Ok(tap_name.to_string())
+            }
+            Ok(s) => Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("Failed to create TAP device '{}', exit code: {:?}", tap_name, s.code()),
+            )),
+            Err(e) => Err(e),
+        }
+    }
+
     /// Deletes a TAP network device using `ip link delete`
     pub fn delete_tap_interface(tap_name: &str) {
         if tap_name.is_empty() {
@@ -1411,5 +1446,21 @@ impl FirecrackerHardwareRunner {
     pub async fn list_jails(&self) -> Vec<JailInfo> {
         let lock = self.jails.read().await;
         lock.values().map(|j| j.to_jail_info()).collect()
+    }
+
+    /// Perform an initialization cleanup sweep of any dangling TAP network devices and stale microVM jails
+    pub fn initialize_system_cleanup() -> usize {
+        EphemeralMicrovmJail::sweep_dangling_tap_devices()
+    }
+}
+
+impl Drop for FirecrackerHardwareRunner {
+    fn drop(&mut self) {
+        if let Ok(mut lock) = self.jails.try_write() {
+            for (_, mut jail) in lock.drain() {
+                let _ = jail.teardown();
+            }
+        }
+        let _ = EphemeralMicrovmJail::sweep_dangling_tap_devices();
     }
 }

@@ -1031,7 +1031,7 @@ impl HagibisDaemon {
         }
     }
 
-    /// Cleanly remove socket and PID lockfile, and purge temporary /dev/shm sandboxes
+    /// Cleanly remove socket and PID lockfile, purge temporary /dev/shm sandboxes, and sweep dangling TAP devices
     pub fn cleanup_resources(socket_path: &Path, pid_path: &Path) {
         if socket_path.exists() {
             let _ = std::fs::remove_file(socket_path);
@@ -1040,11 +1040,15 @@ impl HagibisDaemon {
             let _ = std::fs::remove_file(pid_path);
         }
         Self::purge_shm_sandboxes();
+        crate::firecracker_hardware_isolation::EphemeralMicrovmJail::sweep_dangling_tap_devices();
     }
 
     pub async fn run(&self) -> Result<()> {
         let socket_path = &self.state.socket_path;
         let pid_path = Self::pid_path(socket_path);
+
+        // Sweeps dangling TAP devices left from any previous aborted microVM runs
+        crate::firecracker_hardware_isolation::EphemeralMicrovmJail::sweep_dangling_tap_devices();
 
         if socket_path.exists() {
             match tokio::net::UnixStream::connect(socket_path).await {

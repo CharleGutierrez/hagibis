@@ -4,7 +4,7 @@
 //! (`.hgb/pipelines/*.toml` / `.hgb/pipelines/*.json`). Automatically triggers multi-step
 //! autonomous pipelines when subscribed event conditions match on the `EventBusStore`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -18,8 +18,94 @@ use hgb_core::Result;
 use hgb_storage::{EventBusStore, SystemEventRecord};
 
 // ============================================================================
-// Pipeline Declarative Schema
+// Pipeline Declarative Schema & Reentrancy Guards
 // ============================================================================
+
+/// Maximum hop depth permitted in recursive or cascading declarative pipeline triggers
+pub const MAX_PIPELINE_HOPS: u32 = 8;
+
+/// Execution context tracking causality, reentrancy guards, and recursion depth
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PipelineExecutionContext {
+    /// Unique correlation ID linking all cascading events originating from a root event
+    pub correlation_id: String,
+    /// Current recursion/cascade hop depth (0 for root trigger)
+    pub hop_depth: u32,
+    /// History of trigger hashes in the causal chain for cycle detection
+    pub trigger_chain: Vec<String>,
+}
+
+impl PipelineExecutionContext {
+    /// Create a new root context for an event, extracting any existing correlation context from payload
+    pub fn new_root(event: &SystemEventRecord) -> Self {
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&event.payload_json) {
+            let cid = val
+                .get("_correlation_id")
+                .or_else(|| val.get("correlation_id"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| event.event_id.clone());
+
+            let hop = val
+                .get("_hop_depth")
+                .or_else(|| val.get("hop_depth"))
+                .and_then(|v| v.as_u64())
+                .map(|n| n as u32)
+                .unwrap_or(0);
+
+            let chain = val
+                .get("_trigger_chain")
+                .or_else(|| val.get("trigger_chain"))
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            Self {
+                correlation_id: cid,
+                hop_depth: hop,
+                trigger_chain: chain,
+            }
+        } else {
+            Self {
+                correlation_id: event.event_id.clone(),
+                hop_depth: 0,
+                trigger_chain: Vec::new(),
+            }
+        }
+    }
+
+    /// Derives next-hop child context for a pipeline trigger, or None if bound exceeded or cycle detected
+    pub fn next_hop(&self, trigger_hash: &str) -> Option<Self> {
+        if self.hop_depth >= MAX_PIPELINE_HOPS {
+            return None;
+        }
+        if self.has_cycle(trigger_hash) {
+            return None;
+        }
+        let mut new_chain = self.trigger_chain.clone();
+        new_chain.push(trigger_hash.to_string());
+        Some(Self {
+            correlation_id: self.correlation_id.clone(),
+            hop_depth: self.hop_depth + 1,
+            trigger_chain: new_chain,
+        })
+    }
+
+    /// Check if trigger hash already exists in current causality chain
+    pub fn has_cycle(&self, trigger_hash: &str) -> bool {
+        self.trigger_chain.iter().any(|h| h == trigger_hash)
+    }
+
+    /// Computes trigger hash representing pipeline + trigger event type
+    pub fn compute_trigger_hash(pipeline_name: &str, event_type: &str) -> String {
+        let input = format!("{}:{}", pipeline_name, event_type);
+        blake3::hash(input.as_bytes()).to_hex()[..16].to_string()
+    }
+}
 
 /// Declarative pipeline definition parsed from TOML or JSON
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -109,11 +195,17 @@ pub struct PipelineExecutionReport {
     pub pipeline_name: String,
     pub trigger_event_id: String,
     pub trigger_event_type: String,
+    #[serde(default)]
+    pub correlation_id: Option<String>,
+    #[serde(default)]
+    pub hop_depth: u32,
     pub started_at: i64,
     pub completed_at: i64,
     pub duration_ms: u64,
     pub success: bool,
     pub steps: Vec<StepExecutionReport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 // ============================================================================
@@ -276,6 +368,7 @@ pub struct EventDrivenPipelineEngine {
     event_bus: Arc<EventBusStore>,
     history: Arc<RwLock<Vec<PipelineExecutionReport>>>,
     is_running: Arc<AtomicBool>,
+    active_chains: Arc<RwLock<HashSet<(String, String)>>>,
 }
 
 impl EventDrivenPipelineEngine {
@@ -287,6 +380,7 @@ impl EventDrivenPipelineEngine {
             event_bus,
             history: Arc::new(RwLock::new(Vec::new())),
             is_running: Arc::new(AtomicBool::new(false)),
+            active_chains: Arc::new(RwLock::new(HashSet::new())),
         }
     }
 
@@ -383,14 +477,107 @@ impl EventDrivenPipelineEngine {
         pipeline: &DeclarativePipeline,
         event: &SystemEventRecord,
     ) -> Result<PipelineExecutionReport> {
+        let ctx = PipelineExecutionContext::new_root(event);
+        self.execute_pipeline_with_context(pipeline, event, &ctx).await
+    }
+
+    /// Executes a single declarative multi-step pipeline with causality and reentrancy tracking
+    pub async fn execute_pipeline_with_context(
+        &self,
+        pipeline: &DeclarativePipeline,
+        event: &SystemEventRecord,
+        ctx: &PipelineExecutionContext,
+    ) -> Result<PipelineExecutionReport> {
         let start_time = Instant::now();
         let started_at = Utc::now().timestamp_millis();
+        let trigger_hash = PipelineExecutionContext::compute_trigger_hash(&pipeline.name, &event.event_type);
+
+        // 1. Guard against maximum hop depth breach (MAX_PIPELINE_HOPS = 8)
+        if ctx.hop_depth >= MAX_PIPELINE_HOPS {
+            let err_msg = format!(
+                "Pipeline '{}' rejected: hop depth {} exceeded MAX_PIPELINE_HOPS ({})",
+                pipeline.name, ctx.hop_depth, MAX_PIPELINE_HOPS
+            );
+            tracing::warn!("{}", err_msg);
+            let report = PipelineExecutionReport {
+                pipeline_name: pipeline.name.clone(),
+                trigger_event_id: event.event_id.clone(),
+                trigger_event_type: event.event_type.clone(),
+                correlation_id: Some(ctx.correlation_id.clone()),
+                hop_depth: ctx.hop_depth,
+                started_at,
+                completed_at: Utc::now().timestamp_millis(),
+                duration_ms: start_time.elapsed().as_millis() as u64,
+                success: false,
+                steps: Vec::new(),
+                error: Some(err_msg),
+            };
+            self.record_history(report.clone()).await;
+            return Ok(report);
+        }
+
+        // 2. Guard against recursive causality cycle in the trigger chain
+        if ctx.has_cycle(&trigger_hash) {
+            let err_msg = format!(
+                "Pipeline '{}' rejected: causal cycle detected for trigger hash '{}' in correlation '{}'",
+                pipeline.name, trigger_hash, ctx.correlation_id
+            );
+            tracing::warn!("{}", err_msg);
+            let report = PipelineExecutionReport {
+                pipeline_name: pipeline.name.clone(),
+                trigger_event_id: event.event_id.clone(),
+                trigger_event_type: event.event_type.clone(),
+                correlation_id: Some(ctx.correlation_id.clone()),
+                hop_depth: ctx.hop_depth,
+                started_at,
+                completed_at: Utc::now().timestamp_millis(),
+                duration_ms: start_time.elapsed().as_millis() as u64,
+                success: false,
+                steps: Vec::new(),
+                error: Some(err_msg),
+            };
+            self.record_history(report.clone()).await;
+            return Ok(report);
+        }
+
+        // 3. Guard against active concurrent/reentrant execution of same pipeline in same correlation
+        let chain_key = (ctx.correlation_id.clone(), trigger_hash.clone());
+        {
+            let mut active = self.active_chains.write().await;
+            if active.contains(&chain_key) {
+                let err_msg = format!(
+                    "Pipeline '{}' rejected: active reentrant execution detected for correlation '{}'",
+                    pipeline.name, ctx.correlation_id
+                );
+                tracing::warn!("{}", err_msg);
+                let report = PipelineExecutionReport {
+                    pipeline_name: pipeline.name.clone(),
+                    trigger_event_id: event.event_id.clone(),
+                    trigger_event_type: event.event_type.clone(),
+                    correlation_id: Some(ctx.correlation_id.clone()),
+                    hop_depth: ctx.hop_depth,
+                    started_at,
+                    completed_at: Utc::now().timestamp_millis(),
+                    duration_ms: start_time.elapsed().as_millis() as u64,
+                    success: false,
+                    steps: Vec::new(),
+                    error: Some(err_msg),
+                };
+                self.record_history(report.clone()).await;
+                return Ok(report);
+            }
+            active.insert(chain_key.clone());
+        }
+
+        // Child context for downstream actions
+        let child_ctx = ctx.next_hop(&trigger_hash).unwrap_or_else(|| ctx.clone());
+
         let mut step_reports = Vec::new();
         let mut all_succeeded = true;
 
         for step in &pipeline.steps {
             let step_start = Instant::now();
-            let (step_success, output, err_str) = self.execute_step(step, event).await;
+            let (step_success, output, err_str) = self.execute_step(step, event, &child_ctx).await;
 
             let step_duration = step_start.elapsed().as_millis() as u64;
             step_reports.push(StepExecutionReport {
@@ -410,6 +597,12 @@ impl EventDrivenPipelineEngine {
             }
         }
 
+        // Remove active chain entry upon completion
+        {
+            let mut active = self.active_chains.write().await;
+            active.remove(&chain_key);
+        }
+
         let completed_at = Utc::now().timestamp_millis();
         let total_duration = start_time.elapsed().as_millis() as u64;
 
@@ -417,26 +610,31 @@ impl EventDrivenPipelineEngine {
             pipeline_name: pipeline.name.clone(),
             trigger_event_id: event.event_id.clone(),
             trigger_event_type: event.event_type.clone(),
+            correlation_id: Some(ctx.correlation_id.clone()),
+            hop_depth: ctx.hop_depth,
             started_at,
             completed_at,
             duration_ms: total_duration,
             success: all_succeeded,
             steps: step_reports,
+            error: None,
         };
 
         // Mark the event as processed upon pipeline handling
         let _ = self.event_bus.mark_processed(&event.event_id);
 
-        // Record into history ring buffer (capped at 500 reports)
-        {
-            let mut h_lock = self.history.write().await;
-            if h_lock.len() >= 500 {
-                h_lock.remove(0);
-            }
-            h_lock.push(report.clone());
-        }
+        self.record_history(report.clone()).await;
 
         Ok(report)
+    }
+
+    /// Records report into bounded history ring buffer (capped at 500 reports)
+    async fn record_history(&self, report: PipelineExecutionReport) {
+        let mut h_lock = self.history.write().await;
+        if h_lock.len() >= 500 {
+            h_lock.remove(0);
+        }
+        h_lock.push(report);
     }
 
     /// Executes an individual workflow step
@@ -444,6 +642,7 @@ impl EventDrivenPipelineEngine {
         &self,
         step: &PipelineStep,
         event: &SystemEventRecord,
+        ctx: &PipelineExecutionContext,
     ) -> (bool, String, Option<String>) {
         match step.action.as_str() {
             "log" => {
@@ -452,8 +651,35 @@ impl EventDrivenPipelineEngine {
                     .get("message")
                     .and_then(|m| m.as_str())
                     .unwrap_or("Event pipeline log step executed");
-                let rendered = self.interpolate_template(msg, event);
+                let rendered = self.interpolate_template(msg, event, ctx);
                 (true, rendered, None)
+            }
+
+            "emit_event" | "publish_event" => {
+                let target_event_type = step
+                    .params
+                    .get("event_type")
+                    .and_then(|e| e.as_str())
+                    .unwrap_or("PipelineDerivedEvent");
+
+                let mut payload_map = match step.params.get("payload") {
+                    Some(serde_json::Value::Object(map)) => map.clone(),
+                    _ => serde_json::Map::new(),
+                };
+
+                // Propagate correlation and incremented hop depth into emitted event payload
+                payload_map.insert("_correlation_id".to_string(), serde_json::Value::String(ctx.correlation_id.clone()));
+                payload_map.insert("_hop_depth".to_string(), serde_json::json!(ctx.hop_depth));
+                payload_map.insert("_trigger_chain".to_string(), serde_json::json!(ctx.trigger_chain));
+
+                let payload_str = serde_json::to_string(&payload_map).unwrap_or_else(|_| "{}".to_string());
+                match self.event_bus.append_raw(target_event_type, &payload_str) {
+                    Ok(rec) => {
+                        let msg = format!("Emitted event '{}' ({}) at hop {}", target_event_type, rec.event_id, ctx.hop_depth);
+                        (true, msg, None)
+                    }
+                    Err(e) => (false, String::new(), Some(format!("Failed to emit event: {}", e))),
+                }
             }
 
             "governor_throttle" | "power_governor" => {
@@ -493,17 +719,22 @@ impl EventDrivenPipelineEngine {
 
             "command" | "exec" => {
                 let cmd_str = match step.params.get("command").and_then(|c| c.as_str()) {
-                    Some(c) => self.interpolate_template(c, event),
+                    Some(c) => self.interpolate_template(c, event, ctx),
                     None => {
                         return (false, String::new(), Some("Missing 'command' param".into()));
                     }
                 };
 
                 let timeout_duration = std::time::Duration::from_millis(step.timeout_ms);
+                let corr_id = ctx.correlation_id.clone();
+                let hop_str = ctx.hop_depth.to_string();
+
                 let exec_res = tokio::time::timeout(timeout_duration, async {
                     let mut cmd = tokio::process::Command::new("sh");
                     cmd.arg("-c")
                         .arg(&cmd_str)
+                        .env("HGB_CORRELATION_ID", &corr_id)
+                        .env("HGB_PIPELINE_HOP", &hop_str)
                         .current_dir(&self.workspace_root);
                     cmd.output().await
                 })
@@ -540,16 +771,26 @@ impl EventDrivenPipelineEngine {
         }
     }
 
-    /// Dispatches an event through all matching pipelines
+    /// Dispatches an event through all matching pipelines with root context
     pub async fn dispatch_event(
         &self,
         event: &SystemEventRecord,
+    ) -> Result<Vec<PipelineExecutionReport>> {
+        let ctx = PipelineExecutionContext::new_root(event);
+        self.dispatch_event_with_context(event, ctx).await
+    }
+
+    /// Dispatches an event through all matching pipelines with explicit execution context
+    pub async fn dispatch_event_with_context(
+        &self,
+        event: &SystemEventRecord,
+        ctx: PipelineExecutionContext,
     ) -> Result<Vec<PipelineExecutionReport>> {
         let matching = self.evaluate_event(event).await;
         let mut reports = Vec::new();
 
         for pipeline in matching {
-            let rep = self.execute_pipeline(&pipeline, event).await?;
+            let rep = self.execute_pipeline_with_context(&pipeline, event, &ctx).await?;
             reports.push(rep);
         }
 
@@ -569,7 +810,7 @@ impl EventDrivenPipelineEngine {
                         let _ = engine.dispatch_event(&event).await;
                     }
                     Err(broadcast::error::RecvError::Lagged(missed)) => {
-                        eprintln!("[hgb-daemon] Event pipeline listener lagged by {} events", missed);
+                        tracing::debug!("[hgb-daemon] Event pipeline listener lagged by {} events", missed);
                     }
                     Err(broadcast::error::RecvError::Closed) => {
                         break;
@@ -584,13 +825,20 @@ impl EventDrivenPipelineEngine {
         self.is_running.store(false, Ordering::SeqCst);
     }
 
-    /// Replaces variables in a string template with event attributes
-    fn interpolate_template(&self, template: &str, event: &SystemEventRecord) -> String {
+    /// Replaces variables in a string template with event attributes and execution context
+    fn interpolate_template(
+        &self,
+        template: &str,
+        event: &SystemEventRecord,
+        ctx: &PipelineExecutionContext,
+    ) -> String {
         template
             .replace("${event_id}", &event.event_id)
             .replace("${event_type}", &event.event_type)
             .replace("${sequence}", &event.sequence.to_string())
             .replace("${created_at}", &event.created_at.to_string())
+            .replace("${correlation_id}", &ctx.correlation_id)
+            .replace("${hop_depth}", &ctx.hop_depth.to_string())
     }
 
     /// Returns recent execution history
@@ -829,5 +1077,141 @@ params = { message = "Tool finished execution" }
         assert_eq!(rep.steps.len(), 2); // but step 2 still executed due to continue_on_error = true!
         assert!(!rep.steps[0].success);
         assert!(rep.steps[1].success);
+    }
+
+    #[tokio::test]
+    async fn test_max_pipeline_hops_rejection() {
+        let store = Arc::new(EventBusStore::in_memory().expect("in-memory event store"));
+        let engine = EventDrivenPipelineEngine::new(".", store.clone());
+
+        let pipeline = DeclarativePipeline {
+            name: "infinite_cascade_guard_test".into(),
+            description: "Test hop limit bound".into(),
+            enabled: true,
+            priority: 100,
+            trigger: PipelineTrigger {
+                event_type: "CascadePing".into(),
+                condition: None,
+                filter: None,
+            },
+            steps: vec![
+                PipelineStep {
+                    id: "step_log".into(),
+                    name: None,
+                    action: "log".into(),
+                    params: serde_json::json!({ "message": "Cascade hop ${hop_depth}" }),
+                    continue_on_error: false,
+                    timeout_ms: 1000,
+                },
+            ],
+        };
+
+        engine.register_pipeline(pipeline).await;
+
+        // Dispatched event has reached MAX_PIPELINE_HOPS (8)
+        let event = store.append_raw(
+            "CascadePing",
+            &format!(r#"{{"_correlation_id":"corr-123","_hop_depth":{}}}"#, MAX_PIPELINE_HOPS)
+        ).unwrap();
+
+        let reports = engine.dispatch_event(&event).await.unwrap();
+        assert_eq!(reports.len(), 1);
+        let rep = &reports[0];
+        assert!(!rep.success, "Should fail when hop bound is reached");
+        assert!(rep.error.as_ref().unwrap().contains("MAX_PIPELINE_HOPS"));
+        assert_eq!(rep.hop_depth, MAX_PIPELINE_HOPS);
+    }
+
+    #[tokio::test]
+    async fn test_pipeline_cycle_detection() {
+        let store = Arc::new(EventBusStore::in_memory().expect("in-memory event store"));
+        let engine = EventDrivenPipelineEngine::new(".", store.clone());
+
+        let pipeline = DeclarativePipeline {
+            name: "cyclic_workflow".into(),
+            description: "Test cycle detection".into(),
+            enabled: true,
+            priority: 100,
+            trigger: PipelineTrigger {
+                event_type: "CycleLoopEvent".into(),
+                condition: None,
+                filter: None,
+            },
+            steps: vec![
+                PipelineStep {
+                    id: "log_step".into(),
+                    name: None,
+                    action: "log".into(),
+                    params: serde_json::json!({ "message": "Cycle step" }),
+                    continue_on_error: false,
+                    timeout_ms: 1000,
+                },
+            ],
+        };
+
+        engine.register_pipeline(pipeline).await;
+
+        let trigger_hash = PipelineExecutionContext::compute_trigger_hash("cyclic_workflow", "CycleLoopEvent");
+        let payload = serde_json::json!({
+            "_correlation_id": "corr-cycle-456",
+            "_hop_depth": 2,
+            "_trigger_chain": [trigger_hash],
+        });
+
+        let event = store.append_raw("CycleLoopEvent", &payload.to_string()).unwrap();
+        let reports = engine.dispatch_event(&event).await.unwrap();
+        assert_eq!(reports.len(), 1);
+        let rep = &reports[0];
+        assert!(!rep.success, "Should fail due to cycle detection");
+        assert!(rep.error.as_ref().unwrap().contains("cycle detected"));
+    }
+
+    #[tokio::test]
+    async fn test_emit_event_step_with_context_propagation() {
+        let store = Arc::new(EventBusStore::in_memory().expect("in-memory event store"));
+        let engine = EventDrivenPipelineEngine::new(".", store.clone());
+
+        let pipeline = DeclarativePipeline {
+            name: "emitter_workflow".into(),
+            description: "Test emit_event action".into(),
+            enabled: true,
+            priority: 100,
+            trigger: PipelineTrigger {
+                event_type: "TriggerEmitter".into(),
+                condition: None,
+                filter: None,
+            },
+            steps: vec![
+                PipelineStep {
+                    id: "step_emit".into(),
+                    name: None,
+                    action: "emit_event".into(),
+                    params: serde_json::json!({
+                        "event_type": "EmittedFromPipeline",
+                        "payload": { "data": "hello" }
+                    }),
+                    continue_on_error: false,
+                    timeout_ms: 1000,
+                },
+            ],
+        };
+
+        engine.register_pipeline(pipeline).await;
+
+        let root_event = store.append_raw("TriggerEmitter", r#"{"_correlation_id":"corr-emit-789"}"#).unwrap();
+        let reports = engine.dispatch_event(&root_event).await.unwrap();
+        assert_eq!(reports.len(), 1);
+        assert!(reports[0].success);
+
+        // Verify the emitted event exists in event store and contains propagated context
+        let events = store.get_events_by_type("EmittedFromPipeline", 10).unwrap();
+        assert_eq!(events.len(), 1);
+        let emitted = &events[0];
+        assert_eq!(emitted.event_type, "EmittedFromPipeline");
+
+        let val: serde_json::Value = serde_json::from_str(&emitted.payload_json).unwrap();
+        assert_eq!(val["_correlation_id"], "corr-emit-789");
+        assert_eq!(val["_hop_depth"], 1);
+        assert!(val["_trigger_chain"].as_array().unwrap().len() >= 1);
     }
 }

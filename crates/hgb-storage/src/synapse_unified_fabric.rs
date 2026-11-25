@@ -832,8 +832,21 @@ impl SynapticFabric {
         let vector_engine = LanceDbVectorEngine::create(&temp_dir, dimension, DistanceMetric::Cosine)?;
         let arc_engine = Arc::new(RwLock::new(vector_engine));
 
-        let conn = Connection::open_in_memory().map_err(|e| HgbError::Storage(e.to_string()))?;
+        let sqlite_file = temp_dir.join("sqlite.db");
+        let conn = Connection::open(&sqlite_file).map_err(|e| HgbError::Storage(e.to_string()))?;
         Self::init_sqlite_connection(&conn, &arc_engine)?;
+
+        // Pre-warm reader pool connections for concurrent WAL reads
+        let mut readers = Vec::new();
+        for _ in 0..4 {
+            if let Ok(r_conn) = Connection::open_with_flags(
+                &sqlite_file,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            ) {
+                let _ = Self::init_reader_connection(&r_conn, &arc_engine);
+                readers.push(r_conn);
+            }
+        }
 
         let config = SynapseConfig {
             dimension,
@@ -844,8 +857,8 @@ impl SynapticFabric {
 
         let inner = SynapticFabricInner {
             db_conn: Mutex::new(conn),
-            reader_pool: Mutex::new(Vec::new()),
-            sqlite_path: None,
+            reader_pool: Mutex::new(readers),
+            sqlite_path: Some(sqlite_file),
             vector_engine: arc_engine,
             config,
             _temp_dir: Some(temp_dir),
@@ -1037,6 +1050,11 @@ impl SynapticFabric {
     /// Access the configured dimension
     pub fn dimension(&self) -> usize {
         self.inner.config.dimension
+    }
+
+    /// Acquire a pooled read-only SQLite connection for concurrent queries in WAL mode
+    pub fn acquire_reader(&self) -> Result<PooledReader<'_>> {
+        self.inner.acquire_reader()
     }
 
     // ========================================================================
@@ -1596,7 +1614,7 @@ mod tests {
     #[test]
     fn test_custom_sql_vector_functions() {
         let fabric = SynapticFabric::in_memory(4).expect("Failed to create fabric");
-        let conn = fabric.inner.db_conn.lock().unwrap();
+        let conn = fabric.acquire_reader().unwrap();
 
         let v1 = vec![1.0f32, 0.0, 0.0, 0.0];
         let v2 = vec![0.0f32, 1.0, 0.0, 0.0];
@@ -1820,7 +1838,7 @@ mod tests {
             .insert_conversation_message(&m2, Some(&[0.0, 0.5, 0.5, 0.0]))
             .expect("insert m2");
 
-        let conn = fabric.inner.db_conn.lock().unwrap();
+        let conn = fabric.acquire_reader().unwrap();
         let fts_hits: Vec<String> = conn
             .prepare("SELECT id FROM synapse_fts WHERE synapse_fts MATCH 'performance OR wal' ORDER BY rank")
             .and_then(|mut stmt| {
@@ -1933,5 +1951,58 @@ mod tests {
         // Test with_f32_slice over byte slice
         let res = with_f32_slice(&bytes, |slice| slice[0]);
         assert_eq!(res.unwrap(), 0.5f32);
+    }
+
+    #[test]
+    fn test_concurrent_readers_during_wal_write() {
+        let fabric = Arc::new(SynapticFabric::in_memory(4).expect("fabric"));
+
+        // Seed some initial records
+        for i in 0..10 {
+            let rec = RelationalRecord::new(
+                format!("initial-{}", i),
+                "seed-sess",
+                format!("Record data payload {}", i),
+            );
+            fabric
+                .insert_relational_record(&rec, Some(&[0.1, 0.2, 0.3, 0.4]))
+                .expect("insert seed");
+        }
+
+        let mut reader_handles = Vec::new();
+        // Launch 8 concurrent reader threads querying while writes occur
+        for r_id in 0..8 {
+            let fabric_reader = Arc::clone(&fabric);
+            reader_handles.push(std::thread::spawn(move || {
+                for iter in 0..20 {
+                    let reader = fabric_reader.acquire_reader().expect("acquire reader");
+                    let mut count: i64 = 0;
+                    reader
+                        .query_row("SELECT COUNT(*) FROM relational_records", [], |row| {
+                            count = row.get(0)?;
+                            Ok(())
+                        })
+                        .expect("query count");
+                    assert!(count >= 10);
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+            }));
+        }
+
+        // Concurrently perform inserts
+        for i in 10..20 {
+            let rec = RelationalRecord::new(
+                format!("writer-{}", i),
+                "write-sess",
+                format!("Writer data payload {}", i),
+            );
+            fabric
+                .insert_relational_record(&rec, Some(&[0.5, 0.6, 0.7, 0.8]))
+                .expect("concurrent insert");
+        }
+
+        for h in reader_handles {
+            h.join().expect("Reader thread panicked");
+        }
     }
 }

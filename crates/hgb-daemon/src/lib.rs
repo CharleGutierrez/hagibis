@@ -13,7 +13,8 @@ pub use server::{DaemonState, HagibisDaemon};
 pub use ambient_service::{AmbientDaemonService, DreamJournal, DreamJournalEntry};
 pub use event_driven_pipeline_engine::{
     evaluate_condition, DeclarativePipeline, EventDrivenPipelineEngine,
-    PipelineExecutionReport, PipelineStep, PipelineTrigger, StepExecutionReport,
+    PipelineExecutionContext, PipelineExecutionReport, PipelineStep, PipelineTrigger,
+    StepExecutionReport, MAX_PIPELINE_HOPS,
 };
 pub use mcp_sse_server::{
     McpSseServer, McpSseServerStatus, McpSseState, DEFAULT_MCP_SSE_PORT,

@@ -151,15 +151,35 @@ pub enum CacheError {
 }
 
 /// Pre-warmed compiled module held in in-memory cache.
-#[derive(Clone)]
 pub struct PrewarmedModule {
     pub module: Module,
     pub tier: ExecutionTier,
     pub source_sha256: [u8; 32],
-    pub hit_count: Arc<AtomicU64>,
-    pub last_accessed_ms: Arc<AtomicU64>,
+    pub hit_count: AtomicU64,
+    pub last_accessed: AtomicU64,
     pub size_bytes: usize,
     _mmap: Option<Arc<Mmap>>,
+}
+
+impl Clone for PrewarmedModule {
+    fn clone(&self) -> Self {
+        Self {
+            module: self.module.clone(),
+            tier: self.tier,
+            source_sha256: self.source_sha256,
+            hit_count: AtomicU64::new(self.hit_count.load(Ordering::Relaxed)),
+            last_accessed: AtomicU64::new(self.last_accessed.load(Ordering::Relaxed)),
+            size_bytes: self.size_bytes,
+            _mmap: self._mmap.clone(),
+        }
+    }
+}
+
+impl PrewarmedModule {
+    #[inline]
+    pub fn last_accessed_ms(&self) -> u64 {
+        self.last_accessed.load(Ordering::Relaxed)
+    }
 }
 
 /// Thread-safe in-memory cache container combining entries and LRU order
@@ -167,6 +187,13 @@ pub struct PrewarmedModule {
 struct InMemoryCache {
     entries: HashMap<String, PrewarmedModule>,
     lru_order: VecDeque<String>,
+}
+
+impl InMemoryCache {
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.lru_order.clear();
+    }
 }
 
 /// Performance telemetry for the execution cache.
@@ -249,7 +276,7 @@ impl NativeExecutionCache {
         let cache = self.in_memory.read().unwrap();
         if let Some(entry) = cache.entries.get(key) {
             entry.hit_count.fetch_add(1, Ordering::Relaxed);
-            entry.last_accessed_ms.store(Self::current_time_ms(), Ordering::Relaxed);
+            entry.last_accessed.store(Self::current_time_ms(), Ordering::Relaxed);
             self.in_memory_hits.fetch_add(1, Ordering::Relaxed);
             Some(entry.module.clone())
         } else {
@@ -284,8 +311,8 @@ impl NativeExecutionCache {
                 module,
                 tier,
                 source_sha256,
-                hit_count: Arc::new(AtomicU64::new(1)),
-                last_accessed_ms: Arc::new(AtomicU64::new(Self::current_time_ms())),
+                hit_count: AtomicU64::new(1),
+                last_accessed: AtomicU64::new(Self::current_time_ms()),
                 size_bytes,
                 _mmap: mmap,
             },
@@ -618,5 +645,41 @@ mod tests {
         let res = cache.load_from_disk_mmap(&engine, &key, &source_sha, ExecutionTier::Tier0Interpreted);
         assert!(res.is_err());
         assert_eq!(cache.stats().invalidations, 1);
+    }
+
+    #[test]
+    fn test_concurrent_in_memory_reads() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create tempdir");
+        let cache = Arc::new(NativeExecutionCache::new(temp_dir.path(), 10).expect("Failed to create cache"));
+
+        let engine = Engine::default();
+        let wasm_wat = "(module (func (export \"nop\")))";
+        let wasm_bytes = wat::parse_str(wasm_wat).unwrap();
+
+        let _ = cache
+            .get_or_compile(&engine, &wasm_bytes, ExecutionTier::Tier0Interpreted)
+            .unwrap();
+
+        let source_sha = NativeExecutionCache::compute_sha256(&wasm_bytes);
+        let key = NativeExecutionCache::cache_key(&source_sha, ExecutionTier::Tier0Interpreted);
+
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let cache_clone = Arc::clone(&cache);
+            let key_clone = key.clone();
+            handles.push(std::thread::spawn(move || {
+                for _ in 0..50 {
+                    let m = cache_clone.get_in_memory(&key_clone);
+                    assert!(m.is_some());
+                }
+            }));
+        }
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let stats = cache.stats();
+        assert_eq!(stats.in_memory_hits, 400);
     }
 }

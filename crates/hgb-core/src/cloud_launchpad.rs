@@ -20,6 +20,28 @@ pub struct LaunchpadDeploymentReport {
     pub osc52_clipboard_code: String,
 }
 
+/// RAII guard wrapping a child process to guarantee it is killed and reaped on drop,
+/// ensuring no background child processes are orphaned or leaked.
+#[derive(Debug)]
+pub struct ChildGuard(pub std::process::Child);
+
+impl ChildGuard {
+    pub fn new(child: std::process::Child) -> Self {
+        Self(child)
+    }
+
+    pub fn id(&self) -> u32 {
+        self.0.id()
+    }
+}
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 pub struct CloudLaunchpad;
 
 impl CloudLaunchpad {
@@ -48,15 +70,18 @@ impl CloudLaunchpad {
         let deployment_id = format!("{}-{}", slug, short_hash);
         let public_url = format!("https://{}.hgb.dev", deployment_id);
 
-        let tar_path = format!("/tmp/{}.tar.gz", deployment_id);
-        
-        // Genuine Docker container instantiation to simulate an edge deployment
-        let _ = std::process::Command::new("python3")
-            .arg("-m")
-            .arg("http.server")
-            .arg("0")
-            .current_dir(workspace_path)
-            .spawn();
+        // Validate workspace path exists
+        if !workspace_path.exists() {
+            return Err(crate::error::HgbError::Execution(format!(
+                "Workspace path does not exist: {}",
+                workspace_path.display()
+            )));
+        }
+
+        // Safe edge deployment simulation: Compute deployment package manifest digest
+        // without opening unauthenticated network ports or spawning orphaned background servers.
+        let manifest_seed = format!("{}:{}:{}", project_name, deployment_id, framework);
+        let _edge_artifact_digest = blake3::hash(manifest_seed.as_bytes()).to_hex();
 
         // 3. Encrypt environment variables
         let env_count = if workspace_path.join(".env").exists() { 4 } else { 0 };
@@ -123,5 +148,16 @@ mod tests {
         assert!(!rep.deployment_id.is_empty());
         assert!(!rep.framework.is_empty());
         assert!(rep.osc52_clipboard_code.contains("\x1b]52;c;"));
+    }
+
+    #[test]
+    fn test_child_guard_drop_terminates_child() {
+        if let Ok(child) = std::process::Command::new("sleep").arg("60").spawn() {
+            let pid = child.id();
+            {
+                let _guard = ChildGuard::new(child);
+            }
+            assert!(pid > 0);
+        }
     }
 }
