@@ -980,6 +980,7 @@ impl InteractiveCommandCatalog {
 
     /// Interactive terminal UI using ratatui & crossterm
     pub fn run_interactive() -> io::Result<Option<String>> {
+        crate::repl::install_terminal_panic_hook();
         enable_raw_mode()?;
         let mut stdout_handle = stdout();
         execute!(stdout_handle, EnterAlternateScreen, cursor::Hide)?;

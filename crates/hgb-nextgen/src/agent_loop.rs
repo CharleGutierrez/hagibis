@@ -1,11 +1,83 @@
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
-use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::fs;
 use tokio::sync::Mutex;
+
+pub const MAX_CONSUMED_TOKENS: usize = 5000;
+pub const CONSUMED_TOKEN_TTL_SECS: u64 = 86400; // 24 hours
+
+/// Bounded FIFO and TTL-evicting tracker for consumed approval tokens to prevent unbounded memory growth
+#[derive(Debug, Clone)]
+pub struct ConsumedTokenTracker {
+    tokens: HashMap<String, Instant>,
+    order: VecDeque<String>,
+    max_capacity: usize,
+    ttl: Duration,
+}
+
+impl ConsumedTokenTracker {
+    pub fn new(max_capacity: usize, ttl: Duration) -> Self {
+        Self {
+            tokens: HashMap::new(),
+            order: VecDeque::new(),
+            max_capacity,
+            ttl,
+        }
+    }
+
+    /// Prune tokens exceeding TTL from the front of the FIFO queue
+    pub fn prune_expired(&mut self) {
+        let now = Instant::now();
+        while let Some(front) = self.order.front() {
+            if let Some(inserted_at) = self.tokens.get(front) {
+                if now.duration_since(*inserted_at) >= self.ttl {
+                    let old_token = self.order.pop_front().unwrap();
+                    self.tokens.remove(&old_token);
+                    continue;
+                }
+            } else {
+                self.order.pop_front();
+                continue;
+            }
+            break;
+        }
+    }
+
+    pub fn contains(&mut self, token: &str) -> bool {
+        self.prune_expired();
+        self.tokens.contains_key(token)
+    }
+
+    pub fn insert(&mut self, token: String) {
+        self.prune_expired();
+        if self.tokens.contains_key(&token) {
+            return;
+        }
+        while self.tokens.len() >= self.max_capacity {
+            if let Some(oldest) = self.order.pop_front() {
+                self.tokens.remove(&oldest);
+            } else {
+                break;
+            }
+        }
+        let now = Instant::now();
+        self.tokens.insert(token.clone(), now);
+        self.order.push_back(token);
+    }
+
+    pub fn len(&self) -> usize {
+        self.tokens.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.tokens.is_empty()
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDefinition {
@@ -88,7 +160,7 @@ pub struct ChatMessageItem {
 pub struct AgentLoopEngine {
     workspace_root: PathBuf,
     pending_approvals: Arc<Mutex<HashMap<String, PendingToolApproval>>>,
-    consumed_tokens: Arc<Mutex<HashSet<String>>>,
+    consumed_tokens: Arc<Mutex<ConsumedTokenTracker>>,
     auto_approve_session: Arc<AtomicBool>,
 }
 
@@ -97,7 +169,10 @@ impl AgentLoopEngine {
         Self {
             workspace_root,
             pending_approvals: Arc::new(Mutex::new(HashMap::new())),
-            consumed_tokens: Arc::new(Mutex::new(HashSet::new())),
+            consumed_tokens: Arc::new(Mutex::new(ConsumedTokenTracker::new(
+                MAX_CONSUMED_TOKENS,
+                Duration::from_secs(CONSUMED_TOKEN_TTL_SECS),
+            ))),
             auto_approve_session: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -246,7 +321,16 @@ impl AgentLoopEngine {
                     }
                 };
 
-                let full_path = self.resolve_path(path_str);
+                let full_path = match self.resolve_path(path_str) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        return ToolResult {
+                            call_id: call.id.clone(),
+                            output: format!("Path resolution error: {}", e),
+                            is_error: true,
+                        };
+                    }
+                };
                 match fs::read_to_string(&full_path).await {
                     Ok(content) => {
                         let start = call.arguments.get("start_line").and_then(|v| v.as_u64()).map(|n| n as usize);
@@ -301,7 +385,16 @@ impl AgentLoopEngine {
                     }
                 };
 
-                let full_path = self.resolve_path(path_str);
+                let full_path = match self.resolve_path(path_str) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        return ToolResult {
+                            call_id: call.id.clone(),
+                            output: format!("Path resolution error: {}", e),
+                            is_error: true,
+                        };
+                    }
+                };
                 if let Some(parent) = full_path.parent() {
                     let _ = fs::create_dir_all(parent).await;
                 }
@@ -352,7 +445,16 @@ impl AgentLoopEngine {
                     }
                 };
 
-                let full_path = self.resolve_path(path_str);
+                let full_path = match self.resolve_path(path_str) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        return ToolResult {
+                            call_id: call.id.clone(),
+                            output: format!("Path resolution error: {}", e),
+                            is_error: true,
+                        };
+                    }
+                };
                 match fs::read_to_string(&full_path).await {
                     Ok(content) => {
                         if !content.contains(old_snippet) {
@@ -442,7 +544,16 @@ impl AgentLoopEngine {
 
             "list_dir" => {
                 let rel_path = call.arguments.get("path").and_then(|v| v.as_str()).unwrap_or(".");
-                let full = self.resolve_path(rel_path);
+                let full = match self.resolve_path(rel_path) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        return ToolResult {
+                            call_id: call.id.clone(),
+                            output: format!("Path resolution error: {}", e),
+                            is_error: true,
+                        };
+                    }
+                };
 
                 match fs::read_dir(&full).await {
                     Ok(mut entries) => {
@@ -529,7 +640,10 @@ impl AgentLoopEngine {
             .or_else(|| call.arguments.get("target_file"))
             .and_then(|v| v.as_str())
             .map(|p| {
-                let full = self.resolve_path(p);
+                let full = match self.resolve_path(p) {
+                    Ok(path) => path,
+                    Err(_) => self.workspace_root.join(p),
+                };
                 let path_bytes = full.to_string_lossy().as_bytes().to_vec();
                 let mut hasher = sha2::Sha256::new();
                 sha2::Digest::update(&mut hasher, &path_bytes);
@@ -549,46 +663,43 @@ impl AgentLoopEngine {
         };
 
         let mut lock = self.pending_approvals.lock().await;
-        // Index by server-generated token and model call_id for lookup compatibility
+        // Index strictly by server-generated cryptographically random approval token
         lock.insert(approval_token.clone(), pending.clone());
-        if !lock.contains_key(&call.id) {
-            lock.insert(call.id.clone(), pending.clone());
-        }
 
         pending
     }
 
-    /// Handles a user response to an approval request with single-consumption enforcement
-    pub async fn resolve_approval(&self, token_or_id: &str, approved: bool, allow_all: bool) -> Result<ToolResult, String> {
+    /// Handles a user response to an approval request with high-entropy token requirement and single-consumption enforcement
+    pub async fn resolve_approval(&self, token: &str, approved: bool, allow_all: bool) -> Result<ToolResult, String> {
+        // Enforce high-entropy token requirement: reject predictable model call.ids
+        if !token.starts_with("appr_") {
+            return Err(format!(
+                "Security violation: Approval requires a high-entropy server-generated token ('appr_<uuid>'), got '{}'",
+                token
+            ));
+        }
+
         // Enforce single-use: reject if token was already consumed
         {
-            let consumed = self.consumed_tokens.lock().await;
-            if consumed.contains(token_or_id) {
+            let mut consumed = self.consumed_tokens.lock().await;
+            if consumed.contains(token) {
                 return Err(format!(
                     "Approval token '{}' has already been consumed (single-use enforcement violation)",
-                    token_or_id
+                    token
                 ));
             }
         }
 
         let pending = {
             let mut lock = self.pending_approvals.lock().await;
-            // Remove matching approval
-            let item = lock.remove(token_or_id);
-            if let Some(ref p) = item {
-                // Remove alternate key mappings
-                lock.remove(&p.approval_token);
-                lock.remove(&p.call_id);
-            }
-            item.ok_or_else(|| format!("Approval token or call ID '{}' not found or invalid", token_or_id))?
+            lock.remove(token)
+                .ok_or_else(|| format!("Approval token '{}' not found or invalid", token))?
         };
 
-        // Mark token and original call_id as consumed immediately
+        // Mark high-entropy token as consumed immediately
         {
             let mut consumed = self.consumed_tokens.lock().await;
             consumed.insert(pending.approval_token.clone());
-            consumed.insert(pending.call_id.clone());
-            consumed.insert(token_or_id.to_string());
         }
 
         // Verify payload immutability against original registered hash
@@ -672,9 +783,112 @@ Guidelines:
         None
     }
 
-    fn resolve_path(&self, rel: &str) -> PathBuf {
-        let clean = Path::new(rel.trim_start_matches('/'));
-        self.workspace_root.join(clean)
+    /// Resolve and canonicalize relative path safely within workspace root.
+    /// Strictly blocks `../` path traversal, absolute path escape attempts, and symlink escapes.
+    /// If target does not exist yet (e.g. for write), verifies lowest existing ancestor resolves within workspace root.
+    pub fn resolve_path(&self, rel: &str) -> Result<PathBuf, String> {
+        let canonical_root = self
+            .workspace_root
+            .canonicalize()
+            .unwrap_or_else(|_| self.workspace_root.clone());
+
+        if rel.is_empty() || rel == "." || rel == "/" {
+            return Ok(self.workspace_root.clone());
+        }
+
+        let path = Path::new(rel);
+
+        // Reject Windows drive prefix / volume prefixes
+        for comp in path.components() {
+            if let Component::Prefix(_) = comp {
+                return Err(format!("Prefix components not allowed in path: '{}'", rel));
+            }
+        }
+
+        // If path is absolute, check if it is within workspace_root
+        let rel_path = if path.is_absolute() {
+            if let Ok(inside) = path.strip_prefix(&canonical_root) {
+                inside
+            } else if let Ok(inside) = path.strip_prefix(&self.workspace_root) {
+                inside
+            } else {
+                return Err(format!(
+                    "Path traversal attempt detected: absolute path '{}' is outside workspace root",
+                    rel
+                ));
+            }
+        } else {
+            path
+        };
+
+        // Lexical normalization of components to strictly block `../` escapes
+        let mut normalized = PathBuf::new();
+        for component in rel_path.components() {
+            match component {
+                Component::Prefix(_) => {
+                    return Err(format!("Prefix components not allowed in path: '{}'", rel));
+                }
+                Component::RootDir => {
+                    continue;
+                }
+                Component::CurDir => {
+                    continue;
+                }
+                Component::ParentDir => {
+                    if !normalized.pop() {
+                        return Err(format!(
+                            "Path traversal attempt detected: path '{}' escapes workspace root",
+                            rel
+                        ));
+                    }
+                }
+                Component::Normal(c) => {
+                    normalized.push(c);
+                }
+            }
+        }
+
+        let candidate = self.workspace_root.join(&normalized);
+
+        // Filesystem canonicalization check: verify target or existing ancestor resolves within workspace root
+        if candidate.exists() {
+            let canonical_cand = candidate
+                .canonicalize()
+                .map_err(|e| format!("Failed to canonicalize path '{}': {}", candidate.display(), e))?;
+            if !canonical_cand.starts_with(&canonical_root) {
+                return Err(format!(
+                    "Path traversal attempt detected: path '{}' escapes workspace root via symlink",
+                    rel
+                ));
+            }
+            Ok(candidate)
+        } else {
+            // Target file does not exist yet; verify lowest existing ancestor directory
+            let mut ancestor = candidate.as_path();
+            while !ancestor.exists() {
+                match ancestor.parent() {
+                    Some(p) => ancestor = p,
+                    None => break,
+                }
+            }
+            if ancestor.exists() {
+                let canonical_ancestor = ancestor
+                    .canonicalize()
+                    .map_err(|e| format!("Failed to canonicalize ancestor '{}': {}", ancestor.display(), e))?;
+                if !canonical_ancestor.starts_with(&canonical_root) {
+                    return Err(format!(
+                        "Path traversal attempt detected: ancestor of '{}' escapes workspace root",
+                        rel
+                    ));
+                }
+            } else {
+                return Err(format!(
+                    "Path traversal attempt detected: no existing ancestor found within workspace root for '{}'",
+                    rel
+                ));
+            }
+            Ok(candidate)
+        }
     }
 }
 
@@ -765,6 +979,12 @@ mod tests {
         assert_eq!(pending.session_id, "session-xyz");
         assert_eq!(pending.payload_hash.len(), 64);
 
+        // Verify predictable model call_id CANNOT resolve approval
+        let predict_result = engine.resolve_approval(&call.id, true, false).await;
+        assert!(predict_result.is_err(), "Predictable model call.id must not resolve approval");
+        let predict_err = predict_result.unwrap_err();
+        assert!(predict_err.contains("Security violation") || predict_err.contains("high-entropy"));
+
         // 2. Resolve with server-generated token
         let result = engine.resolve_approval(&pending.approval_token, true, false).await.unwrap();
         assert!(!result.is_error);
@@ -779,5 +999,91 @@ mod tests {
         // 4. Arbitrary unapproved or forged token must fail
         let fake_result = engine.resolve_approval("appr_fake_unregistered_token", true, false).await;
         assert!(fake_result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_agent_resolve_path_traversal_blocked() {
+        let dir = tempdir().unwrap();
+        let engine = AgentLoopEngine::new(dir.path().to_path_buf());
+
+        // 1. Direct resolve_path tests
+        assert!(engine.resolve_path("../../etc/passwd").is_err());
+        assert!(engine.resolve_path("../../../shadow").is_err());
+        assert!(engine.resolve_path("sub/../../escaped").is_err());
+        assert!(engine.resolve_path("/etc/passwd").is_err());
+        assert!(engine.resolve_path("a/b/../../../../outside").is_err());
+
+        // Valid relative paths
+        assert!(engine.resolve_path("valid/sub/file.txt").is_ok());
+        assert!(engine.resolve_path("./valid/../valid/file.txt").is_ok());
+        assert!(engine.resolve_path("").is_ok());
+        assert!(engine.resolve_path(".").is_ok());
+
+        // 2. Tool calls blocked
+        let read_call = ToolCall {
+            id: "t1".to_string(),
+            name: "file_read".to_string(),
+            arguments: serde_json::json!({ "path": "../../etc/passwd" }),
+        };
+        let res_read = engine.execute_tool(&read_call).await;
+        assert!(res_read.is_error);
+        assert!(res_read.output.contains("Path resolution error"));
+
+        let write_call = ToolCall {
+            id: "t2".to_string(),
+            name: "file_write".to_string(),
+            arguments: serde_json::json!({
+                "path": "../../../escaped_write.txt",
+                "content": "malicious"
+            }),
+        };
+        let res_write = engine.execute_tool(&write_call).await;
+        assert!(res_write.is_error);
+        assert!(res_write.output.contains("Path resolution error"));
+
+        let patch_call = ToolCall {
+            id: "t3".to_string(),
+            name: "file_patch".to_string(),
+            arguments: serde_json::json!({
+                "path": "../../escaped_patch.txt",
+                "old_snippet": "a",
+                "new_snippet": "b"
+            }),
+        };
+        let res_patch = engine.execute_tool(&patch_call).await;
+        assert!(res_patch.is_error);
+        assert!(res_patch.output.contains("Path resolution error"));
+
+        let list_call = ToolCall {
+            id: "t4".to_string(),
+            name: "list_dir".to_string(),
+            arguments: serde_json::json!({ "path": "../../" }),
+        };
+        let res_list = engine.execute_tool(&list_call).await;
+        assert!(res_list.is_error);
+        assert!(res_list.output.contains("Path resolution error"));
+    }
+
+    #[tokio::test]
+    async fn test_consumed_tokens_tracker_bounding_and_ttl() {
+        let mut tracker = ConsumedTokenTracker::new(5, Duration::from_millis(50));
+
+        // Insert 5 tokens
+        for i in 0..5 {
+            tracker.insert(format!("appr_token_{}", i));
+        }
+        assert_eq!(tracker.len(), 5);
+        assert!(tracker.contains("appr_token_0"));
+
+        // Insert 6th token -> FIFO evicts oldest ("appr_token_0")
+        tracker.insert("appr_token_5".to_string());
+        assert_eq!(tracker.len(), 5);
+        assert!(!tracker.contains("appr_token_0"));
+        assert!(tracker.contains("appr_token_5"));
+
+        // Test TTL eviction
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        assert!(!tracker.contains("appr_token_1"));
+        assert_eq!(tracker.len(), 0);
     }
 }

@@ -444,7 +444,7 @@ impl VisualIdeServer {
         Self {
             port,
             workspace_root,
-            auth_token: None,
+            auth_token: Some(uuid::Uuid::new_v4().to_string()),
             lsp,
             semantic_index,
             dap,
@@ -591,7 +591,10 @@ impl VisualIdeServer {
                 Arc::new(self.clone()),
                 Self::auth_middleware,
             ))
-            .layer(axum::middleware::from_fn(Self::cors_middleware))
+            .layer(axum::middleware::from_fn_with_state(
+                Arc::new(self.clone()),
+                Self::cors_middleware,
+            ))
             .with_state(Arc::new(self.clone()));
 
         let addr = SocketAddr::from(([127, 0, 0, 1], self.port));
@@ -602,23 +605,130 @@ impl VisualIdeServer {
         Ok(())
     }
 
+    pub fn is_restricted_ssrf_ip(ip: std::net::IpAddr) -> bool {
+        match ip {
+            std::net::IpAddr::V4(ipv4) => {
+                let octets = ipv4.octets();
+                // Loopback (127.0.0.0/8)
+                ipv4.is_loopback()
+                // RFC1918 Private ranges:
+                // 10.0.0.0/8
+                || octets[0] == 10
+                // 172.16.0.0/12 (172.16.0.0 - 172.31.255.255)
+                || (octets[0] == 172 && (16..=31).contains(&octets[1]))
+                // 192.168.0.0/16
+                || (octets[0] == 192 && octets[1] == 168)
+                // Link-local / Cloud metadata (169.254.0.0/16, including 169.254.169.254)
+                || (octets[0] == 169 && octets[1] == 254)
+                // Broadcast / Unspecified / Special
+                || ipv4.is_broadcast()
+                || ipv4.is_unspecified()
+                // Shared address space CGNAT (100.64.0.0/10)
+                || (octets[0] == 100 && (64..=127).contains(&octets[1]))
+            }
+            std::net::IpAddr::V6(ipv6) => {
+                // Loopback (::1)
+                ipv6.is_loopback()
+                // Unspecified (::)
+                || ipv6.is_unspecified()
+                // Unique local address (fc00::/7)
+                || ((ipv6.segments()[0] & 0xfe00) == 0xfc00)
+                // Link-local unicast (fe80::/10)
+                || ((ipv6.segments()[0] & 0xffc0) == 0xfe80)
+                // IPv4-mapped IPv6
+                || if let Some(ipv4) = ipv6.to_ipv4_mapped() {
+                    Self::is_restricted_ssrf_ip(std::net::IpAddr::V4(ipv4))
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
+    pub fn is_allowed_origin(origin: &str, server_port: u16) -> bool {
+        let Ok(parsed) = reqwest::Url::parse(origin) else {
+            return false;
+        };
+        if parsed.scheme() != "http" && parsed.scheme() != "https" {
+            return false;
+        }
+        match parsed.host_str() {
+            Some("127.0.0.1") | Some("localhost") | Some("[::1]") | Some("::1") => {
+                if let Some(port) = parsed.port() {
+                    port == server_port || server_port == 0
+                } else {
+                    true
+                }
+            }
+            _ => false,
+        }
+    }
+
+    pub fn inject_security_headers(headers: &mut axum::http::HeaderMap) {
+        headers.insert(
+            "Content-Security-Policy",
+            "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: ws: wss:;".parse().unwrap(),
+        );
+        headers.insert("X-Content-Type-Options", "nosniff".parse().unwrap());
+        headers.insert("X-Frame-Options", "DENY".parse().unwrap());
+    }
+
     async fn cors_middleware(
+        State(state): State<Arc<Self>>,
         req: axum::extract::Request,
         next: axum::middleware::Next,
     ) -> axum::response::Response {
         use axum::http::Method;
+        let origin_header = req.headers().get("origin").and_then(|h| h.to_str().ok()).map(|s| s.to_string());
+
         if req.method() == Method::OPTIONS {
+            if let Some(ref origin) = origin_header {
+                if !Self::is_allowed_origin(origin, state.port) {
+                    let mut resp = axum::response::Response::new(axum::body::Body::from("Forbidden: Invalid CORS Origin"));
+                    *resp.status_mut() = StatusCode::FORBIDDEN;
+                    Self::inject_security_headers(resp.headers_mut());
+                    return resp;
+                }
+            }
+
             let mut resp = axum::response::Response::new(axum::body::Body::empty());
             let headers = resp.headers_mut();
-            headers.insert("Access-Control-Allow-Origin", "*".parse().unwrap());
+            if let Some(ref origin) = origin_header {
+                if let Ok(val) = origin.parse() {
+                    headers.insert("Access-Control-Allow-Origin", val);
+                }
+            }
             headers.insert("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE".parse().unwrap());
-            headers.insert("Access-Control-Allow-Headers", "*".parse().unwrap());
+            headers.insert("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Hgb-Token, Accept, Origin, X-Requested-With".parse().unwrap());
+            headers.insert("Access-Control-Allow-Credentials", "true".parse().unwrap());
+            headers.insert("Access-Control-Max-Age", "86400".parse().unwrap());
+            Self::inject_security_headers(headers);
             return resp;
         }
+
+        // For non-OPTIONS requests with Origin header: reject arbitrary/untrusted origins
+        if let Some(ref origin) = origin_header {
+            if !Self::is_allowed_origin(origin, state.port) {
+                let mut resp = axum::response::Response::new(axum::body::Body::from("Forbidden: Invalid CORS Origin"));
+                *resp.status_mut() = StatusCode::FORBIDDEN;
+                Self::inject_security_headers(resp.headers_mut());
+                return resp;
+            }
+        }
+
         let mut response = next.run(req).await;
         let headers = response.headers_mut();
-        headers.insert("Access-Control-Allow-Origin", "*".parse().unwrap());
+        if let Some(ref origin) = origin_header {
+            if Self::is_allowed_origin(origin, state.port) {
+                if let Ok(val) = origin.parse() {
+                    headers.insert("Access-Control-Allow-Origin", val);
+                }
+            }
+        }
         headers.insert("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE".parse().unwrap());
+        headers.insert("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Hgb-Token, Accept, Origin, X-Requested-With".parse().unwrap());
+        headers.insert("Access-Control-Allow-Credentials", "true".parse().unwrap());
+        Self::inject_security_headers(headers);
         response
     }
 
@@ -827,44 +937,160 @@ impl VisualIdeServer {
         }
     }
 
-    async fn handle_get_file(Query(query): Query<FileQuery>) -> impl IntoResponse {
-        match fs::read_to_string(&query.path).await {
+    pub fn verify_contained_path(&self, requested_path: &Path) -> Result<PathBuf, String> {
+        let canonical_root = self.workspace_root.canonicalize()
+            .unwrap_or_else(|_| self.workspace_root.clone());
+
+        let resolved_target = if requested_path.is_relative() {
+            canonical_root.join(requested_path)
+        } else {
+            requested_path.to_path_buf()
+        };
+
+        // Lexically normalize components to eliminate .. and .
+        let mut normalized = PathBuf::new();
+        for comp in resolved_target.components() {
+            match comp {
+                std::path::Component::Prefix(prefix) => normalized.push(std::path::Component::Prefix(prefix)),
+                std::path::Component::RootDir => normalized.push(std::path::Component::RootDir),
+                std::path::Component::CurDir => {},
+                std::path::Component::ParentDir => {
+                    normalized.pop();
+                }
+                std::path::Component::Normal(c) => normalized.push(c),
+            }
+        }
+
+        if normalized.exists() {
+            let canonical = normalized.canonicalize()
+                .map_err(|e| format!("Path canonicalization failed: {}", e))?;
+            if canonical.starts_with(&canonical_root) {
+                Ok(canonical)
+            } else {
+                Err(format!(
+                    "Path traversal forbidden: {:?} resolves to {:?} outside workspace root {:?}",
+                    requested_path, canonical, canonical_root
+                ))
+            }
+        } else {
+            // For new files/folders that don't exist yet, check that canonical ancestor lies inside workspace_root
+            let mut ancestor = normalized.clone();
+            let mut sub_parts = Vec::new();
+            while !ancestor.exists() {
+                if let Some(name) = ancestor.file_name() {
+                    sub_parts.push(name.to_os_string());
+                }
+                if let Some(parent) = ancestor.parent() {
+                    if parent == ancestor {
+                        break;
+                    }
+                    ancestor = parent.to_path_buf();
+                } else {
+                    break;
+                }
+            }
+
+            let canonical_ancestor = ancestor.canonicalize()
+                .map_err(|e| format!("Parent canonicalization failed: {}", e))?;
+
+            if !canonical_ancestor.starts_with(&canonical_root) {
+                return Err(format!(
+                    "Path traversal forbidden: parent {:?} is outside workspace root {:?}",
+                    ancestor, canonical_root
+                ));
+            }
+
+            let mut final_path = canonical_ancestor;
+            for part in sub_parts.into_iter().rev() {
+                final_path.push(part);
+            }
+
+            if final_path.starts_with(&canonical_root) {
+                Ok(final_path)
+            } else {
+                Err(format!(
+                    "Path traversal forbidden: {:?} resolves outside workspace root {:?}",
+                    requested_path, canonical_root
+                ))
+            }
+        }
+    }
+
+    async fn handle_get_file(
+        State(state): State<Arc<Self>>,
+        Query(query): Query<FileQuery>,
+    ) -> impl IntoResponse {
+        let target = match state.verify_contained_path(Path::new(&query.path)) {
+            Ok(p) => p,
+            Err(e) => return (StatusCode::FORBIDDEN, e).into_response(),
+        };
+        match fs::read_to_string(&target).await {
             Ok(content) => (StatusCode::OK, content).into_response(),
             Err(e) => (StatusCode::NOT_FOUND, format!("Error reading file: {}", e)).into_response(),
         }
     }
 
-    async fn handle_save_file(Json(payload): Json<SavePayload>) -> impl IntoResponse {
-        match fs::write(&payload.path, payload.content).await {
+    async fn handle_save_file(
+        State(state): State<Arc<Self>>,
+        Json(payload): Json<SavePayload>,
+    ) -> impl IntoResponse {
+        let target = match state.verify_contained_path(Path::new(&payload.path)) {
+            Ok(p) => p,
+            Err(e) => return (StatusCode::FORBIDDEN, e).into_response(),
+        };
+        match fs::write(&target, payload.content).await {
             Ok(_) => (StatusCode::OK, Json(serde_json::json!({ "status": "saved", "path": payload.path }))).into_response(),
             Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error writing file: {}", e)).into_response(),
         }
     }
 
-    async fn handle_create_file(Json(payload): Json<CreatePayload>) -> impl IntoResponse {
-        let p = Path::new(&payload.path);
-        if let Some(parent) = p.parent() {
+    async fn handle_create_file(
+        State(state): State<Arc<Self>>,
+        Json(payload): Json<CreatePayload>,
+    ) -> impl IntoResponse {
+        let target = match state.verify_contained_path(Path::new(&payload.path)) {
+            Ok(p) => p,
+            Err(e) => return (StatusCode::FORBIDDEN, e).into_response(),
+        };
+        if let Some(parent) = target.parent() {
             let _ = fs::create_dir_all(parent).await;
         }
-        match fs::write(p, "").await {
+        match fs::write(&target, "").await {
             Ok(_) => (StatusCode::OK, Json(serde_json::json!({ "status": "created", "path": payload.path }))).into_response(),
             Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error creating file: {}", e)).into_response(),
         }
     }
 
-    async fn handle_create_folder(Json(payload): Json<CreatePayload>) -> impl IntoResponse {
-        match fs::create_dir_all(&payload.path).await {
+    async fn handle_create_folder(
+        State(state): State<Arc<Self>>,
+        Json(payload): Json<CreatePayload>,
+    ) -> impl IntoResponse {
+        let target = match state.verify_contained_path(Path::new(&payload.path)) {
+            Ok(p) => p,
+            Err(e) => return (StatusCode::FORBIDDEN, e).into_response(),
+        };
+        match fs::create_dir_all(&target).await {
             Ok(_) => (StatusCode::OK, Json(serde_json::json!({ "status": "folder_created", "path": payload.path }))).into_response(),
             Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error creating folder: {}", e)).into_response(),
         }
     }
 
-    async fn handle_delete_entry(Json(payload): Json<CreatePayload>) -> impl IntoResponse {
-        let p = Path::new(&payload.path);
-        let res = if p.is_dir() {
-            fs::remove_dir_all(p).await
+    async fn handle_delete_entry(
+        State(state): State<Arc<Self>>,
+        Json(payload): Json<CreatePayload>,
+    ) -> impl IntoResponse {
+        let target = match state.verify_contained_path(Path::new(&payload.path)) {
+            Ok(p) => p,
+            Err(e) => return (StatusCode::FORBIDDEN, e).into_response(),
+        };
+        let canonical_root = state.workspace_root.canonicalize().unwrap_or_else(|_| state.workspace_root.clone());
+        if target == canonical_root {
+            return (StatusCode::FORBIDDEN, "Cannot delete workspace root directory".to_string()).into_response();
+        }
+        let res = if target.is_dir() {
+            fs::remove_dir_all(&target).await
         } else {
-            fs::remove_file(p).await
+            fs::remove_file(&target).await
         };
         match res {
             Ok(_) => (StatusCode::OK, Json(serde_json::json!({ "status": "deleted", "path": payload.path }))).into_response(),
@@ -872,8 +1098,19 @@ impl VisualIdeServer {
         }
     }
 
-    async fn handle_rename_entry(Json(payload): Json<RenamePayload>) -> impl IntoResponse {
-        match fs::rename(&payload.old_path, &payload.new_path).await {
+    async fn handle_rename_entry(
+        State(state): State<Arc<Self>>,
+        Json(payload): Json<RenamePayload>,
+    ) -> impl IntoResponse {
+        let old_target = match state.verify_contained_path(Path::new(&payload.old_path)) {
+            Ok(p) => p,
+            Err(e) => return (StatusCode::FORBIDDEN, format!("Invalid old_path: {}", e)).into_response(),
+        };
+        let new_target = match state.verify_contained_path(Path::new(&payload.new_path)) {
+            Ok(p) => p,
+            Err(e) => return (StatusCode::FORBIDDEN, format!("Invalid new_path: {}", e)).into_response(),
+        };
+        match fs::rename(&old_target, &new_target).await {
             Ok(_) => (StatusCode::OK, Json(serde_json::json!({ "status": "renamed", "path": payload.new_path }))).into_response(),
             Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error renaming entry: {}", e)).into_response(),
         }
@@ -1496,50 +1733,110 @@ impl VisualIdeServer {
         for word in payload.prompt.split_whitespace() {
             if let Some(rest) = word.strip_prefix("@file:").or_else(|| word.strip_prefix("@File:")) {
                 let target = rest.trim_matches(|c| c == ',' || c == '.' || c == ';' || c == ')' || c == ']' || c == '"' || c == '\'');
-                let p = if Path::new(target).is_absolute() {
-                    PathBuf::from(target)
-                } else {
-                    state.workspace_root.join(target)
-                };
-                if let Ok(content) = fs::read_to_string(&p).await {
-                    let file_ctx = format!("\n[File Context: {}]:\n```\n{}\n```\n", target, content);
-                    expanded = expanded.replace(word, &file_ctx);
-                    sources.push(format!("File Context ({})", target));
+                if let Ok(p) = state.verify_contained_path(Path::new(target)) {
+                    if let Ok(content) = fs::read_to_string(&p).await {
+                        let file_ctx = format!("\n[File Context: {}]:\n```\n{}\n```\n", target, content);
+                        expanded = expanded.replace(word, &file_ctx);
+                        sources.push(format!("File Context ({})", target));
+                    }
                 }
             } else if let Some(rest) = word.strip_prefix("@folder:").or_else(|| word.strip_prefix("@Folder:")) {
                 let target = rest.trim_matches(|c| c == ',' || c == '.' || c == ';' || c == ')' || c == ']' || c == '"' || c == '\'');
-                let p = if Path::new(target).is_absolute() {
-                    PathBuf::from(target)
-                } else {
-                    state.workspace_root.join(target)
-                };
-                if let Ok(mut entries) = fs::read_dir(&p).await {
-                    let mut listing = Vec::new();
-                    while let Ok(Some(entry)) = entries.next_entry().await {
-                        let name = entry.file_name().to_string_lossy().to_string();
-                        let is_dir = entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false);
-                        if is_dir { listing.push(format!("{}/", name)); } else { listing.push(name); }
-                        if listing.len() >= 30 { break; }
+                if let Ok(p) = state.verify_contained_path(Path::new(target)) {
+                    if let Ok(mut entries) = fs::read_dir(&p).await {
+                        let mut listing = Vec::new();
+                        while let Ok(Some(entry)) = entries.next_entry().await {
+                            let name = entry.file_name().to_string_lossy().to_string();
+                            let is_dir = entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false);
+                            if is_dir { listing.push(format!("{}/", name)); } else { listing.push(name); }
+                            if listing.len() >= 30 { break; }
+                        }
+                        let folder_ctx = format!("\n[Folder Listing: {} ({} items)]:\n{}\n", target, listing.len(), listing.join("\n"));
+                        expanded = expanded.replace(word, &folder_ctx);
+                        sources.push(format!("Folder Listing ({})", target));
                     }
-                    let folder_ctx = format!("\n[Folder Listing: {} ({} items)]:\n{}\n", target, listing.len(), listing.join("\n"));
-                    expanded = expanded.replace(word, &folder_ctx);
-                    sources.push(format!("Folder Listing ({})", target));
                 }
             } else if let Some(rest) = word.strip_prefix("@web:").or_else(|| word.strip_prefix("@Web:")) {
-                let url = rest.trim_matches(|c| c == ',' || c == ';' || c == ')' || c == ']' || c == '"' || c == '\'');
-                let client = reqwest::Client::new();
-                if let Ok(resp) = client.get(url).timeout(std::time::Duration::from_secs(6)).send().await {
-                    if let Ok(body) = resp.text().await {
-                        let clean_text = if body.contains("<body") {
-                            body.split("<body").nth(1).unwrap_or(&body)
-                                .chars().filter(|&c| c != '<' && c != '>').take(2500).collect::<String>()
-                        } else {
-                            body.chars().take(2500).collect::<String>()
-                        };
-                        let web_ctx = format!("\n[Web Resource: {}]:\n```\n{}\n```\n", url, clean_text);
-                        expanded = expanded.replace(word, &web_ctx);
-                        sources.push(format!("Web Resource ({})", url));
+                let url_str = rest.trim_matches(|c| c == ',' || c == ';' || c == ')' || c == ']' || c == '"' || c == '\'');
+                
+                // Parse URL and validate scheme
+                let parsed_url = match reqwest::Url::parse(url_str) {
+                    Ok(u) => u,
+                    Err(_) => continue,
+                };
+                if parsed_url.scheme() != "http" && parsed_url.scheme() != "https" {
+                    continue;
+                }
+
+                // Parse host and validate against SSRF
+                let host_str = match parsed_url.host_str() {
+                    Some(h) => h,
+                    None => continue,
+                };
+
+                // Reject localhost and local names immediately
+                if host_str.eq_ignore_ascii_case("localhost")
+                    || host_str.ends_with(".localhost")
+                    || host_str.ends_with(".local")
+                    || host_str.ends_with(".internal")
+                {
+                    continue;
+                }
+
+                let port = parsed_url.port_or_known_default().unwrap_or(80);
+                let lookup_target = format!("{}:{}", host_str, port);
+                let Ok(resolved_addrs) = tokio::net::lookup_host(&lookup_target).await else {
+                    continue;
+                };
+
+                let mut is_blocked = false;
+                let mut has_addr = false;
+                for addr in resolved_addrs {
+                    has_addr = true;
+                    if Self::is_restricted_ssrf_ip(addr.ip()) {
+                        is_blocked = true;
+                        break;
                     }
+                }
+
+                if is_blocked || !has_addr {
+                    continue;
+                }
+
+                let client = match reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(6))
+                    .redirect(reqwest::redirect::Policy::none())
+                    .build()
+                {
+                    Ok(c) => c,
+                    Err(_) => continue,
+                };
+
+                if let Ok(mut resp) = client.get(parsed_url.as_str()).send().await {
+                    let mut body_bytes = Vec::new();
+                    const MAX_WEB_BYTES: usize = 256 * 1024; // Cap read at 256 KB
+                    while let Ok(Some(chunk)) = resp.chunk().await {
+                        let remaining = MAX_WEB_BYTES.saturating_sub(body_bytes.len());
+                        if remaining == 0 {
+                            break;
+                        }
+                        let take_len = chunk.len().min(remaining);
+                        body_bytes.extend_from_slice(&chunk[..take_len]);
+                        if body_bytes.len() >= MAX_WEB_BYTES {
+                            break;
+                        }
+                    }
+
+                    let body = String::from_utf8_lossy(&body_bytes);
+                    let clean_text = if body.contains("<body") {
+                        body.split("<body").nth(1).unwrap_or(&body)
+                            .chars().filter(|&c| c != '<' && c != '>').take(2500).collect::<String>()
+                    } else {
+                        body.chars().take(2500).collect::<String>()
+                    };
+                    let web_ctx = format!("\n[Web Resource: {}]:\n```\n{}\n```\n", url_str, clean_text);
+                    expanded = expanded.replace(word, &web_ctx);
+                    sources.push(format!("Web Resource ({})", url_str));
                 }
             }
         }
@@ -2802,8 +3099,12 @@ impl VisualIdeServer {
                             Json(serde_json::json!({
                                 "type": "tool_approval_required",
                                 "call_id": pending.call_id,
+                                "approval_id": pending.approval_token,
+                                "approval_token": pending.approval_token,
                                 "tool": pending.tool_name,
+                                "tool_name": pending.tool_name,
                                 "arguments": pending.arguments,
+                                "tool_arguments": serde_json::to_string_pretty(&pending.arguments).unwrap_or_default(),
                                 "description": pending.description,
                                 "thought": resp.replace(&format!("```tool_call\n{}\n```", serde_json::to_string_pretty(&call.arguments).unwrap_or_default()), "").trim()
                             })),
@@ -3662,6 +3963,8 @@ pub struct AgentStepRequest {
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct AgentApproveRequest {
     #[serde(alias = "approval_id")]
+    #[serde(alias = "approval_token")]
+    #[serde(alias = "token")]
     pub call_id: String,
     #[serde(alias = "allow")]
     pub approved: bool,
@@ -3867,17 +4170,20 @@ mod tests {
 
     #[tokio::test]
     async fn test_visual_ide_file_creation_and_deletion() {
-        let tmp = tempfile::NamedTempFile::new().unwrap();
-        let file_path = tmp.path().with_extension("test_create.txt").to_string_lossy().to_string();
+        let tmp = tempfile::tempdir().unwrap();
+        let server = Arc::new(VisualIdeServer::new(4176, tmp.path().to_path_buf()));
+        let file_path = tmp.path().join("test_create.txt").to_string_lossy().to_string();
 
-        let _ = VisualIdeServer::handle_create_file(Json(CreatePayload {
+        let create_resp = VisualIdeServer::handle_create_file(State(server.clone()), Json(CreatePayload {
             path: file_path.clone(),
-        })).await;
+        })).await.into_response();
+        assert_eq!(create_resp.status(), StatusCode::OK);
         assert!(std::path::Path::new(&file_path).exists());
 
-        let _ = VisualIdeServer::handle_delete_entry(Json(CreatePayload {
+        let del_resp = VisualIdeServer::handle_delete_entry(State(server), Json(CreatePayload {
             path: file_path.clone(),
-        })).await;
+        })).await.into_response();
+        assert_eq!(del_resp.status(), StatusCode::OK);
         assert!(!std::path::Path::new(&file_path).exists());
     }
 
@@ -4080,5 +4386,169 @@ mod tests {
         let payload_color = "\x1b[32mGreen\x1b[0m normal";
         let clean_color = VisualIdeServer::sanitize_terminal_output(payload_color);
         assert_eq!(clean_color, "\x1b[32mGreen\x1b[0m normal");
+    }
+
+    #[tokio::test]
+    async fn test_path_traversal_elimination() {
+        let tmp = tempfile::tempdir().unwrap();
+        let server = Arc::new(VisualIdeServer::new(4177, tmp.path().to_path_buf()));
+
+        // 1. Relative traversal ../../etc/passwd must be rejected with 403 FORBIDDEN
+        let get_resp = VisualIdeServer::handle_get_file(
+            State(server.clone()),
+            Query(FileQuery {
+                path: "../../etc/passwd".to_string(),
+            }),
+        ).await.into_response();
+        assert_eq!(get_resp.status(), StatusCode::FORBIDDEN);
+
+        // 2. Absolute path traversal /etc/passwd outside workspace must be rejected with 403 FORBIDDEN
+        let save_resp = VisualIdeServer::handle_save_file(
+            State(server.clone()),
+            Json(SavePayload {
+                path: "/etc/passwd".to_string(),
+                content: "malicious".to_string(),
+            }),
+        ).await.into_response();
+        assert_eq!(save_resp.status(), StatusCode::FORBIDDEN);
+
+        // 3. New file creation with traversal ../outside.txt must be rejected with 403 FORBIDDEN
+        let create_resp = VisualIdeServer::handle_create_file(
+            State(server.clone()),
+            Json(CreatePayload {
+                path: "../outside.txt".to_string(),
+            }),
+        ).await.into_response();
+        assert_eq!(create_resp.status(), StatusCode::FORBIDDEN);
+
+        // 4. Folder creation traversal must be rejected with 403 FORBIDDEN
+        let folder_resp = VisualIdeServer::handle_create_folder(
+            State(server.clone()),
+            Json(CreatePayload {
+                path: "../../malicious_folder".to_string(),
+            }),
+        ).await.into_response();
+        assert_eq!(folder_resp.status(), StatusCode::FORBIDDEN);
+
+        // 5. Delete entry traversal must be rejected with 403 FORBIDDEN
+        let del_resp = VisualIdeServer::handle_delete_entry(
+            State(server.clone()),
+            Json(CreatePayload {
+                path: "/etc/shadow".to_string(),
+            }),
+        ).await.into_response();
+        assert_eq!(del_resp.status(), StatusCode::FORBIDDEN);
+
+        // 6. Rename entry with traversal in either old or new path must be rejected with 403 FORBIDDEN
+        let rename_resp = VisualIdeServer::handle_rename_entry(
+            State(server.clone()),
+            Json(RenamePayload {
+                old_path: "valid.txt".to_string(),
+                new_path: "../../evil.txt".to_string(),
+            }),
+        ).await.into_response();
+        assert_eq!(rename_resp.status(), StatusCode::FORBIDDEN);
+
+        // 7. Verify valid paths within workspace succeed
+        let valid_file = tmp.path().join("safe.txt");
+        let valid_path_str = valid_file.to_string_lossy().to_string();
+        let create_ok = VisualIdeServer::handle_create_file(
+            State(server.clone()),
+            Json(CreatePayload {
+                path: valid_path_str.clone(),
+            }),
+        ).await.into_response();
+        assert_eq!(create_ok.status(), StatusCode::OK);
+
+        let save_ok = VisualIdeServer::handle_save_file(
+            State(server.clone()),
+            Json(SavePayload {
+                path: valid_path_str.clone(),
+                content: "hello sovereign world".to_string(),
+            }),
+        ).await.into_response();
+        assert_eq!(save_ok.status(), StatusCode::OK);
+
+        let get_ok = VisualIdeServer::handle_get_file(
+            State(server.clone()),
+            Query(FileQuery {
+                path: valid_path_str,
+            }),
+        ).await.into_response();
+        assert_eq!(get_ok.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_strict_cors_and_security_headers() {
+        // Allowed origins
+        assert!(VisualIdeServer::is_allowed_origin("http://127.0.0.1:4173", 4173));
+        assert!(VisualIdeServer::is_allowed_origin("http://localhost:4173", 4173));
+        assert!(VisualIdeServer::is_allowed_origin("http://[::1]:4173", 4173));
+
+        // Rejected origins
+        assert!(!VisualIdeServer::is_allowed_origin("http://attacker.com", 4173));
+        assert!(!VisualIdeServer::is_allowed_origin("https://evil.com", 4173));
+        assert!(!VisualIdeServer::is_allowed_origin("http://127.0.0.1.attacker.com", 4173));
+        assert!(!VisualIdeServer::is_allowed_origin("http://localhost.evil.com", 4173));
+        assert!(!VisualIdeServer::is_allowed_origin("http://127.0.0.1:9999", 4173)); // Port mismatch
+        assert!(!VisualIdeServer::is_allowed_origin("null", 4173));
+
+        // Check security headers injection
+        let mut headers = axum::http::HeaderMap::new();
+        VisualIdeServer::inject_security_headers(&mut headers);
+        assert_eq!(
+            headers.get("Content-Security-Policy").unwrap(),
+            "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: ws: wss:;"
+        );
+        assert_eq!(headers.get("X-Content-Type-Options").unwrap(), "nosniff");
+        assert_eq!(headers.get("X-Frame-Options").unwrap(), "DENY");
+    }
+
+    #[test]
+    fn test_ssrf_ip_ranges() {
+        use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+        // Loopback rejected
+        assert!(VisualIdeServer::is_restricted_ssrf_ip(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))));
+        assert!(VisualIdeServer::is_restricted_ssrf_ip(IpAddr::V4(Ipv4Addr::new(127, 10, 20, 30))));
+        assert!(VisualIdeServer::is_restricted_ssrf_ip(IpAddr::V6(Ipv6Addr::LOCALHOST)));
+
+        // RFC1918 Private ranges rejected
+        assert!(VisualIdeServer::is_restricted_ssrf_ip(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))));
+        assert!(VisualIdeServer::is_restricted_ssrf_ip(IpAddr::V4(Ipv4Addr::new(172, 16, 0, 1))));
+        assert!(VisualIdeServer::is_restricted_ssrf_ip(IpAddr::V4(Ipv4Addr::new(172, 31, 255, 254))));
+        assert!(VisualIdeServer::is_restricted_ssrf_ip(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))));
+
+        // Cloud metadata rejected
+        assert!(VisualIdeServer::is_restricted_ssrf_ip(IpAddr::V4(Ipv4Addr::new(169, 254, 169, 254))));
+        assert!(VisualIdeServer::is_restricted_ssrf_ip(IpAddr::V4(Ipv4Addr::new(169, 254, 1, 1))));
+
+        // Broadcast / Unspecified rejected
+        assert!(VisualIdeServer::is_restricted_ssrf_ip(IpAddr::V4(Ipv4Addr::BROADCAST)));
+        assert!(VisualIdeServer::is_restricted_ssrf_ip(IpAddr::V4(Ipv4Addr::UNSPECIFIED)));
+
+        // Public IPs allowed
+        assert!(!VisualIdeServer::is_restricted_ssrf_ip(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))));
+        assert!(!VisualIdeServer::is_restricted_ssrf_ip(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1))));
+        assert!(!VisualIdeServer::is_restricted_ssrf_ip(IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34))));
+    }
+
+    #[test]
+    fn test_auth_token_generation_and_override() {
+        let server = VisualIdeServer::new(4173, PathBuf::from("."));
+        assert!(server.auth_token.is_some(), "Default VisualIdeServer must generate an auth token");
+        let token = server.auth_token.unwrap();
+        assert!(!token.is_empty());
+        assert!(uuid::Uuid::parse_str(&token).is_ok(), "Token must be a valid UUID");
+
+        // Explicit override
+        let custom_server = VisualIdeServer::new(4173, PathBuf::from("."))
+            .with_auth_token(Some("custom-secret".to_string()));
+        assert_eq!(custom_server.auth_token, Some("custom-secret".to_string()));
+
+        // Explicit None override
+        let unauth_server = VisualIdeServer::new(4173, PathBuf::from("."))
+            .with_auth_token(None);
+        assert_eq!(unauth_server.auth_token, None);
     }
 }

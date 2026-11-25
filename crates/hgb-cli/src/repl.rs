@@ -19,6 +19,27 @@ pub enum ReadlineResult {
     Interrupted,
 }
 
+static PANIC_HOOK_INIT: std::sync::Once = std::sync::Once::new();
+
+/// Installs a terminal panic hook that restores the terminal (disabling raw mode,
+/// leaving alternate screen, showing cursor, and disabling bracketed paste) if a panic occurs.
+/// Uses `std::sync::Once` to guarantee it is only installed once across the process.
+pub fn install_terminal_panic_hook() {
+    PANIC_HOOK_INIT.call_once(|| {
+        let prev_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |panic_info| {
+            let _ = crossterm::terminal::disable_raw_mode();
+            let _ = crossterm::execute!(
+                std::io::stdout(),
+                crossterm::terminal::LeaveAlternateScreen,
+                crossterm::cursor::Show,
+                crossterm::event::DisableBracketedPaste
+            );
+            prev_hook(panic_info);
+        }));
+    });
+}
+
 /// RAII Guard ensuring raw terminal mode and bracketed paste are safely restored on drop
 pub struct RawModeGuard {
     active: bool,
@@ -26,6 +47,7 @@ pub struct RawModeGuard {
 
 impl RawModeGuard {
     pub fn enter() -> io::Result<Self> {
+        install_terminal_panic_hook();
         enable_raw_mode()?;
         let _ = crossterm::execute!(io::stdout(), crossterm::event::EnableBracketedPaste);
         Ok(Self { active: true })
@@ -6007,5 +6029,12 @@ mod tests {
         assert_eq!(cursor_row, end_row);
         assert!(cursor_col > 0);
         assert!(output_text.contains("\r\n... "));
+    }
+
+    #[test]
+    fn test_install_terminal_panic_hook_idempotent() {
+        // Can be called multiple times safely without panic or deadlock
+        install_terminal_panic_hook();
+        install_terminal_panic_hook();
     }
 }

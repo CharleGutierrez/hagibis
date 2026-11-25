@@ -1466,6 +1466,8 @@ impl Drop for TerminalCleanupGuard {
 
 /// Run the interactive Cockpit TUI event loop on the current terminal
 pub async fn run_cockpit_tui() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    crate::repl::install_terminal_panic_hook();
+
     // 1. Enable raw mode and switch to alternate screen
     enable_raw_mode()?;
     let mut stdout = stdout();

@@ -3723,18 +3723,8 @@ enum Commands {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Install global terminal cleanup hook to guarantee recovery on unexpected panic
-    // (guarantees disable_raw_mode and LeaveAlternateScreen execute even with panic = "abort")
-    let default_panic_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |panic_info| {
-        let _ = crossterm::terminal::disable_raw_mode();
-        let _ = crossterm::execute!(
-            std::io::stdout(),
-            crossterm::event::DisableBracketedPaste,
-            crossterm::terminal::LeaveAlternateScreen,
-            crossterm::cursor::Show
-        );
-        default_panic_hook(panic_info);
-    }));
+    // (guarantees disable_raw_mode, LeaveAlternateScreen, Show cursor, and DisableBracketedPaste execute even with panic = "abort")
+    repl::install_terminal_panic_hook();
 
     // Systems-grade stack envelope (32MB): guarantees seamless parsing of 125+ sovereign subcommands & deep ASTs
     let builder = std::thread::Builder::new()
@@ -3812,17 +3802,14 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             })
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")));
 
-        let active_token = if let Some(t) = token {
-            Some(t)
+        let mut server = hgb_nextgen::VisualIdeServer::new(port, target_dir.clone());
+        if let Some(t) = token {
+            server = server.with_auth_token(Some(t));
         } else if generate_token {
             let gen = format!("hgb-{}", &uuid::Uuid::new_v4().to_string().replace("-", "")[..24]);
-            Some(gen)
-        } else {
-            None
-        };
-
-        let server = hgb_nextgen::VisualIdeServer::new(port, target_dir.clone())
-            .with_auth_token(active_token.clone());
+            server = server.with_auth_token(Some(gen));
+        }
+        let active_token = server.auth_token.clone();
 
         tokio::spawn(async move {
             if let Err(e) = server.run().await {

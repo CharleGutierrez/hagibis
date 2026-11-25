@@ -11,7 +11,7 @@ pub mod cockpit_tui;
 
 pub use canvas::{ChatCanvas, ToolCallCard, ToolCardStatus};
 pub use client::HgbClient;
-pub use repl::HagibisRepl;
+pub use repl::{install_terminal_panic_hook, HagibisRepl, RawModeGuard};
 pub use menu::InteractiveCommandCatalog;
 pub use desktop_ide::{DesktopIdeLauncher, DesktopLaunchConfig, DesktopLaunchReport};
 pub use init_vibe::{AppScaffolder, FrameworkType, ScaffoldReport, VibeOnboardingEngine, VibeOnboardingReport};
