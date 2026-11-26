@@ -21,7 +21,7 @@ WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." 2>/dev/null && pwd || pwd)"
 cd "$WORKSPACE_ROOT"
 
 # Ensure environment variables for Rust / Cargo compilation
-if [ -d "${HOME}/lib" ]; then
+if [ -n "${HOME:-}" ] && [ -d "${HOME}/lib" ]; then
     export LIBRARY_PATH="${HOME}/lib:${LIBRARY_PATH:-}"
 fi
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-/tmp/target}"
@@ -41,7 +41,7 @@ RUN_TEST_SUITE=false
 LLM_MODEL="${LLM_MODEL:-deepseek-coder}"
 LLM_PROVIDER="${LLM_PROVIDER:-auto}"
 CIRCUIT_BREAKER_FILE="${CIRCUIT_BREAKER_FILE:-/tmp/hgb_healer_circuit_breaker.json}"
-HGB_STATE_DIR="${HGB_STATE_DIR:-${HOME}/.hagibis}"
+HGB_STATE_DIR="${HGB_STATE_DIR:-${HOME:-/tmp}/.hagibis}"
 HGB_FINGERPRINT_STATE="${HGB_FINGERPRINT_STATE:-${HGB_STATE_DIR}/healer_fingerprints.json}"
 HGB_QUARANTINE_DIR="${HGB_QUARANTINE_DIR:-${HGB_STATE_DIR}/quarantine}"
 HGB_AUDIT_DIR="${HGB_AUDIT_DIR:-${WORKSPACE_ROOT}/.hgb/audit_trail}"
@@ -998,7 +998,7 @@ run_static_analysis_audit_engine() {
     # 1. Run clippy with json output if available
     local clippy_json="/tmp/hgb_clippy_$$.json"
     if [ -d "$target_path" ]; then
-        cargo clippy --workspace --message-format=json --target-dir /tmp/target 2>/dev/null > "$clippy_json" || true
+        cargo clippy --workspace --message-format=json --target-dir "$CARGO_TARGET_DIR" 2>/dev/null > "$clippy_json" || true
     fi
 
     # 2. Run AST / Pattern Security Analyzer
@@ -1604,7 +1604,13 @@ if [ -z "$JSON_LOG" ] && [ -z "$RAW_LOG" ] && [ -z "$TARGET_FILE" ]; then
     rm -f "$JSON_LOG" "$RAW_LOG"
 
     set +e
-    cargo check --message-format=json --manifest-path "$WORKSPACE_ROOT/Cargo.toml" > "$JSON_LOG" 2> "$RAW_LOG"
+    mkdir -p "$CARGO_TARGET_DIR"
+    local lock_file="${CARGO_TARGET_DIR}/.healer_build.lock"
+    if command -v flock >/dev/null 2>&1; then
+        flock -x "$lock_file" cargo check --message-format=json --target-dir "$CARGO_TARGET_DIR" --manifest-path "$WORKSPACE_ROOT/Cargo.toml" > "$JSON_LOG" 2> "$RAW_LOG"
+    else
+        cargo check --message-format=json --target-dir "$CARGO_TARGET_DIR" --manifest-path "$WORKSPACE_ROOT/Cargo.toml" > "$JSON_LOG" 2> "$RAW_LOG"
+    fi
     CHECK_EXIT=$?
     set -e
 
@@ -1786,7 +1792,13 @@ for i in "${!DIAGNOSTIC_FILES[@]}"; do
         # Speculative verification
         log_info "Running speculative verification on healed source (attempt #${ATTEMPT})..."
         set +e
-        cargo check --message-format=json --manifest-path "$WORKSPACE_ROOT/Cargo.toml" > /tmp/hgb_verify.json 2>&1
+        mkdir -p "$CARGO_TARGET_DIR"
+        local lock_file="${CARGO_TARGET_DIR}/.healer_build.lock"
+        if command -v flock >/dev/null 2>&1; then
+            flock -x "$lock_file" cargo check --message-format=json --target-dir "$CARGO_TARGET_DIR" --manifest-path "$WORKSPACE_ROOT/Cargo.toml" > /tmp/hgb_verify.json 2>&1
+        else
+            cargo check --message-format=json --target-dir "$CARGO_TARGET_DIR" --manifest-path "$WORKSPACE_ROOT/Cargo.toml" > /tmp/hgb_verify.json 2>&1
+        fi
         V_EXIT=$?
         set -e
 

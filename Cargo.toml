@@ -64,3 +64,6 @@ opt-level = 0
 debug = false
 codegen-units = 16
 
+[patch.crates-io]
+wat = { path = "crates/wat" }
+

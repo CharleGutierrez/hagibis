@@ -1325,3 +1325,222 @@ impl SecureWasmInstance {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mpsc_ring_buffer::{
+        MpscRingBuffer, MpscRingElementHeader, FLAG_CHECKSUM_ADLER32,
+    };
+    use std::sync::Arc;
+    use std::thread;
+
+    #[test]
+    fn test_spsc_ring_buffer_push_pop_fifo() {
+        let capacity = 8u32;
+        let element_size = 64u32;
+        let cap_bytes = 1024 * 1024u64;
+        let ring = SpscRingBuffer::new(capacity, element_size, 100, cap_bytes)
+            .expect("create SPSC ring buffer");
+
+        assert!(ring.is_empty());
+        assert!(!ring.is_full());
+        assert_eq!(ring.ring_available(), 0);
+        assert_eq!(ring.ring_remaining_capacity(), capacity);
+
+        // Pop on empty should return RingEmpty
+        assert_eq!(ring.try_pop().unwrap_err(), AbiError::RingEmpty);
+
+        // Push 5 items
+        for i in 0..5u64 {
+            let payload = format!("spsc_msg_{}", i).into_bytes();
+            let hdr = SpscRingElementHeader::new(0, payload.len() as u32, 0, i * 10, 0);
+            let seq = ring.try_push(hdr, &payload).expect("push must succeed");
+            assert_eq!(seq, i);
+        }
+
+        assert_eq!(ring.ring_available(), 5);
+        assert!(!ring.is_empty());
+
+        // Pop 5 items and verify strict FIFO ordering
+        for i in 0..5u64 {
+            let (hdr, payload) = ring.try_pop().expect("pop must succeed");
+            assert_eq!(hdr.sequence_number, i);
+            assert_eq!(hdr.timestamp_ns, i * 10);
+            assert_eq!(payload, format!("spsc_msg_{}", i).into_bytes());
+        }
+
+        assert!(ring.is_empty());
+        assert_eq!(ring.try_pop().unwrap_err(), AbiError::RingEmpty);
+    }
+
+    #[test]
+    fn test_spsc_ring_buffer_overflow_backpressure() {
+        let capacity = 4u32;
+        let element_size = 32u32;
+        let cap_bytes = 1024 * 1024u64;
+        let ring = SpscRingBuffer::new(capacity, element_size, 101, cap_bytes)
+            .expect("create SPSC ring buffer");
+
+        // Fill ring to capacity
+        for i in 0..capacity as u64 {
+            let payload = i.to_le_bytes();
+            let hdr = SpscRingElementHeader::new(0, payload.len() as u32, 0, i, 0);
+            ring.try_push(hdr, &payload).expect("push must succeed");
+        }
+
+        assert!(ring.is_full());
+        assert_eq!(ring.ring_remaining_capacity(), 0);
+
+        // 5th push must fail with RingFull backpressure error
+        let extra_payload = b"overflow";
+        let extra_hdr = SpscRingElementHeader::new(0, extra_payload.len() as u32, 0, 999, 0);
+        match ring.try_push(extra_hdr, extra_payload) {
+            Err(AbiError::RingFull { capacity: c }) => assert_eq!(c, 4),
+            other => panic!("Expected RingFull error, got {:?}", other),
+        }
+
+        // Dequeue one item
+        let (hdr, data) = ring.try_pop().expect("pop must succeed");
+        assert_eq!(hdr.sequence_number, 0);
+        assert_eq!(data, 0u64.to_le_bytes());
+
+        // Now push must succeed
+        ring.try_push(extra_hdr, extra_payload)
+            .expect("push must succeed after slot is freed");
+
+        assert!(ring.is_full());
+    }
+
+    #[test]
+    fn test_spsc_ring_buffer_payload_size_overflow() {
+        let capacity = 4u32;
+        let element_size = 16u32;
+        let cap_bytes = 1024 * 1024u64;
+        let ring = SpscRingBuffer::new(capacity, element_size, 102, cap_bytes)
+            .expect("create SPSC ring buffer");
+
+        let oversize_payload = vec![0x42u8; 32]; // > 16 bytes
+        let hdr = SpscRingElementHeader::new(0, oversize_payload.len() as u32, 0, 1, 0);
+        match ring.try_push(hdr, &oversize_payload) {
+            Err(AbiError::BufferOverflow { needed, capacity }) => {
+                assert_eq!(needed, 32);
+                assert_eq!(capacity, 16);
+            }
+            other => panic!("Expected BufferOverflow, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_mpsc_ring_buffer_push_pop_fifo() {
+        let capacity = 8u32;
+        let element_size = 64u32;
+        let ring_id = 200u64;
+        let ring = MpscRingBuffer::new(capacity, element_size, ring_id)
+            .expect("create MPSC ring buffer");
+
+        assert!(ring.is_empty());
+        assert_eq!(ring.available(), 0);
+        assert_eq!(ring.try_pop().unwrap_err(), AbiError::RingEmpty);
+
+        for i in 0..6u64 {
+            let payload = format!("mpsc_msg_{}", i).into_bytes();
+            let hdr = MpscRingElementHeader::new(0, 1, payload.len() as u32, FLAG_CHECKSUM_ADLER32, i * 5, 0);
+            let ticket = ring.try_push(hdr, &payload).expect("mpsc push failed");
+            assert_eq!(ticket, i);
+        }
+
+        assert_eq!(ring.available(), 6);
+        assert!(!ring.is_empty());
+
+        for i in 0..6u64 {
+            let (hdr, payload) = ring.try_pop().expect("mpsc pop failed");
+            assert_eq!(hdr.sequence_number, i);
+            assert!(hdr.timestamp_ns > 0);
+            assert_eq!(payload, format!("mpsc_msg_{}", i).into_bytes());
+        }
+
+        assert!(ring.is_empty());
+        assert_eq!(ring.try_pop().unwrap_err(), AbiError::RingEmpty);
+    }
+
+    #[test]
+    fn test_mpsc_ring_buffer_overflow_backpressure() {
+        let capacity = 4u32;
+        let element_size = 32u32;
+        let ring_id = 201u64;
+        let ring = MpscRingBuffer::new(capacity, element_size, ring_id)
+            .expect("create MPSC ring buffer");
+
+        for i in 0..capacity as u64 {
+            let payload = i.to_le_bytes();
+            let hdr = MpscRingElementHeader::new(0, 1, payload.len() as u32, FLAG_CHECKSUM_ADLER32, i, 0);
+            ring.try_push(hdr, &payload).expect("push failed");
+        }
+
+        assert!(ring.is_full());
+        assert_eq!(ring.remaining_capacity(), 0);
+
+        let extra_payload = b"mpsc_full";
+        let extra_hdr = MpscRingElementHeader::new(0, 1, extra_payload.len() as u32, FLAG_CHECKSUM_ADLER32, 99, 0);
+        match ring.try_push(extra_hdr, extra_payload) {
+            Err(AbiError::RingFull { capacity: c }) => assert_eq!(c, 4),
+            other => panic!("Expected RingFull, got {:?}", other),
+        }
+
+        let (hdr, _) = ring.try_pop().expect("pop succeeds");
+        assert_eq!(hdr.sequence_number, 0);
+
+        ring.try_push(extra_hdr, extra_payload)
+            .expect("subsequent push succeeds after pop");
+    }
+
+    #[test]
+    fn test_mpsc_ring_buffer_concurrent_producers() {
+        let capacity = 64u32;
+        let element_size = 32u32;
+        let ring = Arc::new(MpscRingBuffer::new(capacity, element_size, 202).expect("create MPSC ring"));
+
+        let num_producers = 4;
+        let items_per_producer = 50;
+        let mut handles = Vec::new();
+
+        for prod_id in 0..num_producers {
+            let ring_clone = Arc::clone(&ring);
+            handles.push(thread::spawn(move || {
+                for i in 0..items_per_producer {
+                    let payload = format!("p{}_{}", prod_id, i).into_bytes();
+                    let hdr = MpscRingElementHeader::new(0, prod_id as u64, payload.len() as u32, FLAG_CHECKSUM_ADLER32, i as u64, 0);
+                    loop {
+                        match ring_clone.try_push(hdr, &payload) {
+                            Ok(_) => break,
+                            Err(AbiError::RingFull { .. }) => thread::yield_now(),
+                            Err(e) => panic!("Push failed: {:?}", e),
+                        }
+                    }
+                }
+            }));
+        }
+
+        let total_items = num_producers * items_per_producer;
+        let mut popped = 0;
+        while popped < total_items {
+            match ring.try_pop() {
+                Ok((hdr, payload)) => {
+                    assert!(hdr.payload_length > 0);
+                    assert!(!payload.is_empty());
+                    popped += 1;
+                }
+                Err(AbiError::RingEmpty) => thread::yield_now(),
+                Err(e) => panic!("Pop failed: {:?}", e),
+            }
+        }
+
+        for h in handles {
+            h.join().expect("join producer");
+        }
+
+        assert_eq!(popped, total_items);
+        assert!(ring.is_empty());
+    }
+}

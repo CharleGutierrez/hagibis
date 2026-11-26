@@ -29,6 +29,9 @@ use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
+#[cfg(unix)]
+use std::os::unix::io::AsRawFd;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -66,6 +69,9 @@ pub enum HealerError {
 
     #[error("Target file does not exist: {0}")]
     FileNotFound(PathBuf),
+
+    #[error("Compiler lease acquisition failed for {path}: {reason}")]
+    CompilerLeaseFailed { path: PathBuf, reason: String },
 
     #[error("Generic healer error: {0}")]
     Generic(String),
@@ -957,6 +963,175 @@ pub struct VerificationReport {
     pub verification_ms: u64,
 }
 
+// ==============================================================================
+// 7b. Compiler Lease Arbiter & Advisory Mutual Exclusion
+// ==============================================================================
+
+#[cfg(unix)]
+fn acquire_flock(file: &std::fs::File, non_blocking: bool) -> io::Result<bool> {
+    let fd = file.as_raw_fd();
+    let mut flag = libc::LOCK_EX;
+    if non_blocking {
+        flag |= libc::LOCK_NB;
+    }
+    let res = unsafe { libc::flock(fd, flag) };
+    if res == 0 {
+        Ok(true)
+    } else {
+        let err = io::Error::last_os_error();
+        if err.raw_os_error() == Some(libc::EWOULDBLOCK) || err.raw_os_error() == Some(libc::EAGAIN) {
+            Ok(false)
+        } else {
+            Err(err)
+        }
+    }
+}
+
+#[cfg(unix)]
+fn release_flock(file: &std::fs::File) -> io::Result<()> {
+    let fd = file.as_raw_fd();
+    let res = unsafe { libc::flock(fd, libc::LOCK_UN) };
+    if res == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+#[cfg(not(unix))]
+fn acquire_flock(_file: &std::fs::File, _non_blocking: bool) -> io::Result<bool> {
+    Ok(true)
+}
+
+#[cfg(not(unix))]
+fn release_flock(_file: &std::fs::File) -> io::Result<()> {
+    Ok(())
+}
+
+/// Advisory Compiler Lease Arbiter ensuring compiler healing and verification runs
+/// acquire a lease lock before running cargo check/build, preventing directory corruption.
+#[derive(Debug, Clone)]
+pub struct CompilerLeaseArbiter {
+    lock_path: PathBuf,
+}
+
+#[derive(Debug)]
+pub struct CompilerLeaseGuard {
+    file: std::fs::File,
+    path: PathBuf,
+}
+
+impl CompilerLeaseGuard {
+    pub fn lock_path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for CompilerLeaseGuard {
+    fn drop(&mut self) {
+        let _ = release_flock(&self.file);
+    }
+}
+
+impl CompilerLeaseArbiter {
+    /// Resolves default lease lock path based on HGB_COMPILER_LEASE_LOCK, CARGO_TARGET_DIR, or /tmp/target
+    pub fn resolve_default_lock_path() -> PathBuf {
+        if let Ok(p) = std::env::var("HGB_COMPILER_LEASE_LOCK") {
+            if !p.trim().is_empty() {
+                return PathBuf::from(p);
+            }
+        }
+        if let Ok(target_dir) = std::env::var("CARGO_TARGET_DIR") {
+            if !target_dir.trim().is_empty() {
+                return PathBuf::from(target_dir).join(".healer_build.lock");
+            }
+        }
+        PathBuf::from("/tmp/target/.healer_build.lock")
+    }
+
+    pub fn new(lock_path: impl Into<PathBuf>) -> Self {
+        Self {
+            lock_path: lock_path.into(),
+        }
+    }
+
+    pub fn lock_path(&self) -> &Path {
+        &self.lock_path
+    }
+
+    /// Acquires an advisory lease lock on the build directory with a timeout retry loop.
+    pub fn acquire(&self, timeout: Option<std::time::Duration>) -> HealerResult<CompilerLeaseGuard> {
+        if let Some(parent) = self.lock_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&self.lock_path)?;
+
+        let timeout_duration = timeout.unwrap_or(std::time::Duration::from_secs(30));
+        let start = Instant::now();
+        let retry_delay = std::time::Duration::from_millis(50);
+
+        loop {
+            match acquire_flock(&file, true) {
+                Ok(true) => {
+                    use std::io::Write;
+                    let info = format!(
+                        "pid={}:timestamp={}\n",
+                        std::process::id(),
+                        chrono::Utc::now().to_rfc3339()
+                    );
+                    let _ = file.set_len(0);
+                    let _ = file.write_all(info.as_bytes());
+                    let _ = file.sync_data();
+
+                    return Ok(CompilerLeaseGuard {
+                        file,
+                        path: self.lock_path.clone(),
+                    });
+                }
+                Ok(false) => {
+                    if start.elapsed() >= timeout_duration {
+                        return Err(HealerError::CompilerLeaseFailed {
+                            path: self.lock_path.clone(),
+                            reason: format!(
+                                "Timeout ({:?}) waiting for advisory build lease lock. Another compiler healing/build loop is active.",
+                                timeout_duration
+                            ),
+                        });
+                    }
+                    std::thread::sleep(retry_delay);
+                }
+                Err(e) => {
+                    return Err(HealerError::CompilerLeaseFailed {
+                        path: self.lock_path.clone(),
+                        reason: e.to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    /// Executes closure while holding the advisory lease lock.
+    pub fn execute_with_lease<F, R>(&self, f: F) -> HealerResult<R>
+    where
+        F: FnOnce() -> HealerResult<R>,
+    {
+        let _guard = self.acquire(None)?;
+        f()
+    }
+}
+
+impl Default for CompilerLeaseArbiter {
+    fn default() -> Self {
+        Self::new(Self::resolve_default_lock_path())
+    }
+}
+
 pub struct FirstGreenVerifier;
 
 impl FirstGreenVerifier {
@@ -998,15 +1173,48 @@ impl FirstGreenVerifier {
         }
     }
 
-    /// Verifies workspace crate compilation via cargo check
+    /// Verifies workspace crate compilation via cargo check under advisory lease lock
     pub fn verify_workspace_crate(
         workspace_root: &Path,
         crate_name: Option<&str>,
     ) -> HealerResult<VerificationReport> {
+        let _lease = CompilerLeaseArbiter::default().acquire(Some(std::time::Duration::from_secs(60)))?;
         let start = Instant::now();
 
         let mut cmd = Command::new("cargo");
         cmd.arg("check").arg("--message-format=json");
+        cmd.current_dir(workspace_root);
+
+        if let Some(pkg) = crate_name {
+            cmd.arg("-p").arg(pkg);
+        }
+
+        let output = cmd.output()?;
+        let exit_code = output.status.code().unwrap_or(-1);
+        let first_green = output.status.success();
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let duration = start.elapsed().as_millis() as u64;
+
+        Ok(VerificationReport {
+            first_green,
+            exit_code,
+            stdout,
+            stderr,
+            verification_ms: duration,
+        })
+    }
+
+    /// Verifies workspace crate compilation via cargo build under advisory lease lock
+    pub fn verify_workspace_build(
+        workspace_root: &Path,
+        crate_name: Option<&str>,
+    ) -> HealerResult<VerificationReport> {
+        let _lease = CompilerLeaseArbiter::default().acquire(Some(std::time::Duration::from_secs(120)))?;
+        let start = Instant::now();
+
+        let mut cmd = Command::new("cargo");
+        cmd.arg("build").arg("--message-format=json");
         cmd.current_dir(workspace_root);
 
         if let Some(pkg) = crate_name {
@@ -1091,6 +1299,7 @@ impl RemediationCertificate {
 pub struct ClosedLoopCompilerHealer {
     workspace_root: PathBuf,
     mcp_bridge_active: AtomicBool,
+    lease_arbiter: CompilerLeaseArbiter,
 }
 
 impl ClosedLoopCompilerHealer {
@@ -1098,7 +1307,20 @@ impl ClosedLoopCompilerHealer {
         Self {
             workspace_root: workspace_root.into(),
             mcp_bridge_active: AtomicBool::new(true),
+            lease_arbiter: CompilerLeaseArbiter::default(),
         }
+    }
+
+    pub fn with_lease_arbiter(workspace_root: impl Into<PathBuf>, arbiter: CompilerLeaseArbiter) -> Self {
+        Self {
+            workspace_root: workspace_root.into(),
+            mcp_bridge_active: AtomicBool::new(true),
+            lease_arbiter: arbiter,
+        }
+    }
+
+    pub fn lease_arbiter(&self) -> &CompilerLeaseArbiter {
+        &self.lease_arbiter
     }
 
     pub fn is_mcp_bridge_active(&self) -> bool {
@@ -1107,6 +1329,14 @@ impl ClosedLoopCompilerHealer {
 
     pub fn set_mcp_bridge_active(&self, active: bool) {
         self.mcp_bridge_active.store(active, Ordering::SeqCst);
+    }
+
+    pub fn verify_workspace(&self, crate_name: Option<&str>) -> HealerResult<VerificationReport> {
+        FirstGreenVerifier::verify_workspace_crate(&self.workspace_root, crate_name)
+    }
+
+    pub fn verify_workspace_build(&self, crate_name: Option<&str>) -> HealerResult<VerificationReport> {
+        FirstGreenVerifier::verify_workspace_build(&self.workspace_root, crate_name)
     }
 
     /// Full closed loop: diagnose, slice AST, acquire rollback guard, synthesize patch,
@@ -1461,5 +1691,35 @@ pub fn run_cluster() -> String {
         // Test serialization to JSON string
         let serialized = serde_json::to_string_pretty(&tool_spec).unwrap();
         assert!(serialized.contains("hgb_compiler_self_heal_ast"));
+    }
+
+    #[test]
+    fn test_compiler_lease_arbiter_mutual_exclusion() {
+        let temp = tempdir().unwrap();
+        let lock_path = temp.path().join(".healer_build.lock");
+        let arbiter = CompilerLeaseArbiter::new(&lock_path);
+
+        // Acquire first lease
+        let guard1 = arbiter.acquire(Some(std::time::Duration::from_millis(200))).unwrap();
+        assert!(lock_path.exists());
+        assert_eq!(guard1.lock_path(), lock_path.as_path());
+
+        // Attempt second lease with short timeout -> should fail with CompilerLeaseFailed
+        let res2 = arbiter.acquire(Some(std::time::Duration::from_millis(50)));
+        assert!(res2.is_err());
+        match res2 {
+            Err(HealerError::CompilerLeaseFailed { path, reason }) => {
+                assert_eq!(path, lock_path);
+                assert!(reason.contains("Timeout"));
+            }
+            other => panic!("Expected CompilerLeaseFailed, got: {:?}", other),
+        }
+
+        // Drop first guard
+        drop(guard1);
+
+        // Third attempt should now succeed immediately
+        let guard3 = arbiter.acquire(Some(std::time::Duration::from_millis(200))).unwrap();
+        assert_eq!(guard3.lock_path(), lock_path.as_path());
     }
 }

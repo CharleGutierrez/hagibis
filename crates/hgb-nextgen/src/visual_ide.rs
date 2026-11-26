@@ -1359,16 +1359,35 @@ impl VisualIdeServer {
 
     async fn handle_terminal(State(state): State<Arc<Self>>, Json(payload): Json<TerminalPayload>) -> impl IntoResponse {
         let t0 = Instant::now();
-        let dir = payload.working_dir.map(PathBuf::from).unwrap_or_else(|| state.workspace_root.clone());
+        let dir = if let Some(ref wd) = payload.working_dir {
+            if wd.trim().is_empty() {
+                state.workspace_root.clone()
+            } else {
+                match state.verify_contained_path(Path::new(wd)) {
+                    Ok(p) => p,
+                    Err(e) => return (StatusCode::FORBIDDEN, format!("Working directory traversal forbidden: {}", e)).into_response(),
+                }
+            }
+        } else {
+            state.workspace_root.clone()
+        };
 
-        match tokio::process::Command::new("bash")
-            .arg("-c")
+        let mut cmd = tokio::process::Command::new("bash");
+        cmd.arg("-c")
             .arg(&payload.command)
-            .current_dir(dir)
-            .output()
-            .await
-        {
-            Ok(output) => {
+            .current_dir(&dir)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true);
+
+        let child = match cmd.spawn() {
+            Ok(c) => c,
+            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to spawn command: {}", e)).into_response(),
+        };
+
+        const TERMINAL_TIMEOUT_SECS: u64 = 60;
+        match tokio::time::timeout(std::time::Duration::from_secs(TERMINAL_TIMEOUT_SECS), child.wait_with_output()).await {
+            Ok(Ok(output)) => {
                 let elapsed = t0.elapsed().as_millis() as u64;
                 let raw_stdout = String::from_utf8_lossy(&output.stdout);
                 let raw_stderr = String::from_utf8_lossy(&output.stderr);
@@ -1380,7 +1399,20 @@ impl VisualIdeServer {
                     "duration_ms": elapsed
                 }))).into_response()
             }
-            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+            Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Process execution error: {}", e)).into_response(),
+            Err(_) => {
+                (
+                    StatusCode::REQUEST_TIMEOUT,
+                    Json(serde_json::json!({
+                        "command": payload.command,
+                        "exit_code": -1,
+                        "stdout": "",
+                        "stderr": format!("Command execution timed out after {} seconds", TERMINAL_TIMEOUT_SECS),
+                        "duration_ms": t0.elapsed().as_millis() as u64,
+                        "timed_out": true
+                    }))
+                ).into_response()
+            }
         }
     }
 
@@ -4550,5 +4582,25 @@ mod tests {
         let unauth_server = VisualIdeServer::new(4173, PathBuf::from("."))
             .with_auth_token(None);
         assert_eq!(unauth_server.auth_token, None);
+    }
+
+    #[test]
+    fn test_verify_contained_path_confinement() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let server = VisualIdeServer::new(4173, temp_dir.path().to_path_buf());
+
+        // Valid relative path within root
+        let valid_rel = server.verify_contained_path(Path::new("src/main.rs"));
+        assert!(valid_rel.is_ok());
+
+        // Path traversal attempts
+        let traversal_parent = server.verify_contained_path(Path::new("../outside.txt"));
+        assert!(traversal_parent.is_err(), "Must reject ../ traversal");
+
+        let traversal_etc = server.verify_contained_path(Path::new("/etc/passwd"));
+        assert!(traversal_etc.is_err(), "Must reject arbitrary root filesystem targeting");
+
+        let traversal_nested = server.verify_contained_path(Path::new("subdir/../../secret.key"));
+        assert!(traversal_nested.is_err(), "Must reject nested traversal outside root");
     }
 }

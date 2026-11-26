@@ -17,9 +17,9 @@ Pillar C Enhancement & Cryptographic State Signing in the Self-Healing Loop:
      - PERM_TRIPPED: Permanently tripped due to repeated identical AST failures.
      - PERM_TRIPPED_CRYPTOLOCKED: Permanently tripped and cryptographically locked due to flapping compilation
        oscillations (e.g. alternating between 2 errors) or 3 consecutive identical failures.
-       All target file write permissions stripped (0444 read-only). Cryptographically signed lockout receipt
-       issued using Ed25519 + BLAKE3. Enforces permanent lockout until an authorized human operator provides a
-       valid signed MCP unlock payload (hgb_operator_unlock_circuit_breaker) via hagibis.mcp.json.
+       Failing patches are quarantined into self.quarantine_dir without altering workspace source file permissions.
+       Cryptographically signed lockout receipt issued using Ed25519 + BLAKE3. Enforces permanent lockout until an
+       authorized human operator provides a valid signed MCP unlock payload (hgb_operator_unlock_circuit_breaker) via hagibis.mcp.json.
   3. Fibonacci Reinforcement Backoff Dampening:
      delay = min(max_backoff, base_delay * fib(iteration)) + uniform_jitter(0.1, 0.5)
      where fib(1)=1, fib(2)=1, fib(3)=2, fib(4)=3, fib(5)=5, fib(6)=8, fib(7)=13, fib(8)=21...
@@ -1760,16 +1760,33 @@ class AutonomicCircuitBreakerGovernor:
             mcp_tool_name="hgb_operator_unlock_circuit_breaker"
         )
 
-        # Strip write permissions on locked paths only if explicitly requested by HGB_ENFORCE_READONLY_LOCKOUT
-        # (Preserve developer workspace editability by default; failing patches are isolated in quarantine)
-        if os.environ.get("HGB_ENFORCE_READONLY_LOCKOUT") == "1":
+        # Safe Patch Quarantining:
+        # Do NOT chmod 0444 on source files (preserving developer workspace editability).
+        # Instead, quarantine failing patch file(s) into self.quarantine_dir, log the cryptographic lockout event,
+        # and record the locked status in receipt_file / circuit breaker state without altering workspace source file permissions.
+        quarantined_files: List[str] = []
+        if locked_paths:
             for p in locked_paths:
                 try:
                     path_obj = Path(p)
                     if path_obj.exists():
-                        os.chmod(path_obj, 0o444)
-                except OSError:
-                    pass
+                        dest_dir = self.quarantine_dir / skill_id / lockout_id
+                        dest_dir.mkdir(parents=True, exist_ok=True)
+                        if path_obj.is_file():
+                            copied_target = dest_dir / path_obj.name
+                            shutil.copy2(path_obj, copied_target)
+                            quarantined_files.append(str(copied_target))
+                        elif path_obj.is_dir():
+                            copied_target = dest_dir / path_obj.name
+                            shutil.copytree(path_obj, copied_target, dirs_exist_ok=True)
+                            quarantined_files.append(str(copied_target))
+                except Exception as ex:
+                    sys.stderr.write(f"[WARN] Failed to quarantine locked path {p}: {ex}\n")
+
+        sys.stderr.write(
+            f"[CIRCUIT-BREAKER] Cryptographic lockout issued for [{skill_id}] (Lockout ID: {lockout_id}). "
+            f"Failing patch quarantined into {self.quarantine_dir}. Workspace source file permissions unaltered.\n"
+        )
 
         # Write lockout receipt to state directory and seal (0444)
         receipt_file = self.lockouts_dir / f"{lockout_id}.json"
@@ -1798,6 +1815,8 @@ class AutonomicCircuitBreakerGovernor:
         rec.lockout_receipt = receipt.to_dict()
         rec.is_quarantined = True
         rec.quarantine_reason = reason
+        if quarantined_files:
+            rec.quarantine_path = str(self.quarantine_dir / skill_id / lockout_id)
         self._persist_registry()
 
         return receipt
@@ -1818,7 +1837,7 @@ class AutonomicCircuitBreakerGovernor:
         """
         Executes an authorized human operator unlock using Ed25519 signature verification.
         Resets circuit breaker from PERM_TRIPPED_CRYPTOLOCKED to CLOSED and restores
-        file permissions to 0644.
+        mutation permissions (preserving developer file permissions).
         """
         rec = self._get_or_create_skill(skill_id)
 
@@ -2085,7 +2104,7 @@ class AutonomicCircuitBreakerGovernor:
                 False,
                 f"BLOCKED: PERM_TRIPPED_CRYPTOLOCKED. Permanent cryptographic lockout active for [{skill_id}] "
                 f"(Lockout ID: {rec.lockout_id}). Flapping compilation oscillation was detected. "
-                f"Mutating permissions permanently locked (0444). Signed human operator MCP unlock "
+                f"Failing patch quarantined into {self.quarantine_dir}. Signed human operator MCP unlock "
                 f"(hgb_operator_unlock_circuit_breaker via hagibis.mcp.json) required."
             )
 
@@ -2246,12 +2265,6 @@ class AutonomicCircuitBreakerGovernor:
                 locked_targets = []
                 if skill_path:
                     locked_targets.append(skill_path)
-                    # Strip write permissions only if explicitly configured
-                    if os.environ.get("HGB_ENFORCE_READONLY_LOCKOUT") == "1":
-                        try:
-                            os.chmod(skill_path, 0o444)
-                        except OSError:
-                            pass
 
                 # Issue Cryptographic Ed25519 + BLAKE3 Lockout Receipt
                 lockout_receipt = self.issue_cryptographic_lockout_receipt(
@@ -2594,8 +2607,6 @@ class AutonomicCircuitBreakerGovernor:
                     copied_path = str(copied_target)
                     try:
                         os.chmod(copied_target, 0o444)
-                        if os.environ.get("HGB_ENFORCE_READONLY_LOCKOUT") == "1":
-                            os.chmod(src, 0o444)
                     except OSError:
                         pass
                 elif src.is_dir():

@@ -36,9 +36,9 @@ pub use mcp_tool_synthesizer::{
 };
 pub use live_closed_loop_compiler_healer::{
     AstContextSlice, AstContextSlicer, AstPatchSynthesizer, ClosedLoopCompilerHealer,
-    CompilerDiagnostic, DiagnosticParser, FirstGreenVerifier, HealerError,
-    McpBridgePipedDiagnostic, PatchStrategy, PatchSynthesisResult,
-    RemediationCertificate, SnapshotRollbackGuard, VerificationReport,
+    CompilerDiagnostic, CompilerLeaseArbiter, CompilerLeaseGuard, DiagnosticParser,
+    FirstGreenVerifier, HealerError, McpBridgePipedDiagnostic, PatchStrategy,
+    PatchSynthesisResult, RemediationCertificate, SnapshotRollbackGuard, VerificationReport,
 };
 pub use cryptographic_patch_attestation::{
     AttestationEngine, AttestationError, AttestationProofToken, CircuitBreakerConfig,

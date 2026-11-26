@@ -1249,7 +1249,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c54e03a951783e8b327515db3f2a2fd0e3bed362a96b066f341ce66ed49b4ead"
 dependencies = [
  "data-encoding",
- "syn 3.0.6",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -1935,6 +1935,7 @@ dependencies = [
  "hex",
  "hgb-core",
  "hgb-wasm-kernel",
+ "libc",
  "quote",
  "regex",
  "serde",
@@ -2001,7 +2002,7 @@ dependencies = [
  "tokio",
  "tracing",
  "wasmtime",
- "wat 1.0.0",
+ "wat",
 ]
 
 [[package]]
@@ -2045,11 +2046,12 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "tokio-tungstenite 0.21.0",
+ "toml",
  "tracing",
  "tracing-subscriber",
  "uuid",
  "wasmtime",
- "wat 1.0.0",
+ "wat",
  "zeroize",
 ]
 
@@ -2089,7 +2091,7 @@ dependencies = [
  "unicode-width 0.2.0",
  "uuid",
  "wasmtime",
- "wat 1.0.0",
+ "wat",
 ]
 
 [[package]]
@@ -2201,7 +2203,7 @@ dependencies = [
  "tokio",
  "uuid",
  "wasmtime",
- "wat 1.0.0",
+ "wat",
  "zstd",
 ]
 
@@ -2216,7 +2218,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "wasmtime",
- "wat 1.261.0",
+ "wat",
 ]
 
 [[package]]
@@ -5878,7 +5880,7 @@ dependencies = [
  "wasmtime-jit-icache-coherence",
  "wasmtime-runtime",
  "wasmtime-winch",
- "wat 1.261.0",
+ "wat",
  "windows-sys 0.52.0",
 ]
 
@@ -6141,13 +6143,7 @@ dependencies = [
 
 [[package]]
 name = "wat"
-version = "1.0.0"
-
-[[package]]
-name = "wat"
 version = "1.261.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7b4d1a49ea73a8f3326e74e3a05db667001b16bd1035ed3356fc1a0ed05ca7f"
 dependencies = [
  "wast",
 ]

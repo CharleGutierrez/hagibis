@@ -76,11 +76,31 @@ pub struct FirecrackerMachineTomlConfig {
     pub track_dirty_pages: bool,
 }
 
+impl Default for FirecrackerMachineTomlConfig {
+    fn default() -> Self {
+        Self {
+            vcpu_count: 2,
+            mem_size_mib: 1024,
+            smt: false,
+            track_dirty_pages: false,
+        }
+    }
+}
+
 /// Boot source section of firecracker.toml
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FirecrackerBootSourceTomlConfig {
     pub kernel_image_path: String,
     pub boot_args: String,
+}
+
+impl Default for FirecrackerBootSourceTomlConfig {
+    fn default() -> Self {
+        Self {
+            kernel_image_path: "/var/lib/hgb/vmlinux".to_string(),
+            boot_args: "console=ttyS0 reboot=k panic=1 pci=off quiet".to_string(),
+        }
+    }
 }
 
 /// Snapshot cache section of firecracker.toml
@@ -96,6 +116,21 @@ pub struct FirecrackerSnapshotTomlConfig {
     pub instant_spinup_target_ms: u64,
 }
 
+impl Default for FirecrackerSnapshotTomlConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            cache_dir: "/dev/shm/hgb_microvm_snapshots".to_string(),
+            fallback_dir: ".hgb/microvm_snapshots".to_string(),
+            snapshot_path: None,
+            mem_file_path: None,
+            resume_engine: "snapshot_resume".to_string(),
+            enable_diff: true,
+            instant_spinup_target_ms: 10,
+        }
+    }
+}
+
 /// Landlock fallback section of firecracker.toml
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FirecrackerLandlockTomlConfig {
@@ -104,43 +139,57 @@ pub struct FirecrackerLandlockTomlConfig {
     pub isolation_level: String,
 }
 
+impl Default for FirecrackerLandlockTomlConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            ram_cow_base: "/dev/shm".to_string(),
+            isolation_level: "strict".to_string(),
+        }
+    }
+}
+
 /// Comprehensive parsed firecracker.toml configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct FirecrackerTomlConfig {
     pub machine: Option<FirecrackerMachineTomlConfig>,
+    #[serde(alias = "boot_source", rename = "boot-source")]
     pub boot_source: Option<FirecrackerBootSourceTomlConfig>,
     pub snapshot: Option<FirecrackerSnapshotTomlConfig>,
+    #[serde(alias = "landlock-fallback", rename = "landlock_fallback")]
     pub landlock_fallback: Option<FirecrackerLandlockTomlConfig>,
 }
 
 impl FirecrackerTomlConfig {
-    /// Parse TOML configuration without requiring external dependencies
+    /// Robust TOML parser supporting multi-level sections (`[machine]`, `[boot-source]`,
+    /// `[snapshot]`, `[landlock_fallback]`), inline/line comments `#`, quoted strings, booleans, and numbers.
     pub fn parse(content: &str) -> Self {
         let mut config = FirecrackerTomlConfig::default();
-        let mut current_section = String::new();
-        let mut kv_map: HashMap<String, HashMap<String, String>> = HashMap::new();
 
-        for line in content.lines() {
-            let trimmed = line.trim();
-            if trimmed.is_empty() || trimmed.starts_with('#') {
-                continue;
-            }
-            if trimmed.starts_with('[') && trimmed.ends_with(']') {
-                current_section = trimmed[1..trimmed.len() - 1].trim().to_string();
-                continue;
-            }
-            if let Some((k, v)) = trimmed.split_once('=') {
-                let key = k.trim().to_string();
-                let val = v.trim().trim_matches('"').trim_matches('\'').to_string();
-                kv_map.entry(current_section.clone()).or_default().insert(key, val);
-            }
-        }
+        let root: toml::Value = match toml::from_str(content) {
+            Ok(v) => v,
+            Err(_) => return config,
+        };
 
-        if let Some(m) = kv_map.get("machine") {
-            let vcpu = m.get("vcpu_count").and_then(|v| v.parse().ok()).unwrap_or(2);
-            let mem = m.get("mem_size_mib").and_then(|v| v.parse().ok()).unwrap_or(1024);
-            let smt = m.get("smt").map(|v| v == "true").unwrap_or(false);
-            let track = m.get("track_dirty_pages").map(|v| v == "true").unwrap_or(false);
+        let root_table = match root.as_table() {
+            Some(t) => t,
+            None => return config,
+        };
+
+        if let Some(m) = root_table.get("machine").and_then(|v| v.as_table()) {
+            let vcpu = m.get("vcpu_count")
+                .and_then(|v| v.as_integer().map(|i| i as u32).or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                .unwrap_or(2);
+            let mem = m.get("mem_size_mib")
+                .and_then(|v| v.as_integer().map(|i| i as u32).or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                .unwrap_or(1024);
+            let smt = m.get("smt")
+                .and_then(|v| v.as_bool().or_else(|| v.as_str().map(|s| s == "true")))
+                .unwrap_or(false);
+            let track = m.get("track_dirty_pages")
+                .and_then(|v| v.as_bool().or_else(|| v.as_str().map(|s| s == "true")))
+                .unwrap_or(false);
+
             config.machine = Some(FirecrackerMachineTomlConfig {
                 vcpu_count: vcpu,
                 mem_size_mib: mem,
@@ -149,24 +198,50 @@ impl FirecrackerTomlConfig {
             });
         }
 
-        if let Some(b) = kv_map.get("boot-source") {
-            let k_path = b.get("kernel_image_path").cloned().unwrap_or_else(|| "/var/lib/hgb/vmlinux".to_string());
-            let b_args = b.get("boot_args").cloned().unwrap_or_else(|| "console=ttyS0 reboot=k panic=1 pci=off quiet".to_string());
+        let boot_val = root_table.get("boot-source").or_else(|| root_table.get("boot_source"));
+        if let Some(b) = boot_val.and_then(|v| v.as_table()) {
+            let k_path = b.get("kernel_image_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("/var/lib/hgb/vmlinux")
+                .to_string();
+            let b_args = b.get("boot_args")
+                .and_then(|v| v.as_str())
+                .unwrap_or("console=ttyS0 reboot=k panic=1 pci=off quiet")
+                .to_string();
+
             config.boot_source = Some(FirecrackerBootSourceTomlConfig {
                 kernel_image_path: k_path,
                 boot_args: b_args,
             });
         }
 
-        if let Some(s) = kv_map.get("snapshot") {
-            let enabled = s.get("enabled").map(|v| v != "false").unwrap_or(true);
-            let cache_dir = s.get("cache_dir").cloned().unwrap_or_else(|| "/dev/shm/hgb_microvm_snapshots".to_string());
-            let fallback_dir = s.get("fallback_dir").cloned().unwrap_or_else(|| ".hgb/microvm_snapshots".to_string());
-            let snapshot_path = s.get("snapshot_path").cloned();
-            let mem_file_path = s.get("mem_file_path").cloned();
-            let resume_engine = s.get("resume_engine").cloned().unwrap_or_else(|| "snapshot_resume".to_string());
-            let enable_diff = s.get("enable_diff").map(|v| v != "false").unwrap_or(true);
-            let instant_spinup_target_ms = s.get("instant_spinup_target_ms").and_then(|v| v.parse().ok()).unwrap_or(10);
+        if let Some(s) = root_table.get("snapshot").and_then(|v| v.as_table()) {
+            let enabled = s.get("enabled")
+                .and_then(|v| v.as_bool().or_else(|| v.as_str().map(|s| s != "false")))
+                .unwrap_or(true);
+            let cache_dir = s.get("cache_dir")
+                .and_then(|v| v.as_str())
+                .unwrap_or("/dev/shm/hgb_microvm_snapshots")
+                .to_string();
+            let fallback_dir = s.get("fallback_dir")
+                .and_then(|v| v.as_str())
+                .unwrap_or(".hgb/microvm_snapshots")
+                .to_string();
+            let snapshot_path = s.get("snapshot_path")
+                .and_then(|v| v.as_str().map(|s| s.to_string()));
+            let mem_file_path = s.get("mem_file_path")
+                .and_then(|v| v.as_str().map(|s| s.to_string()));
+            let resume_engine = s.get("resume_engine")
+                .and_then(|v| v.as_str())
+                .unwrap_or("snapshot_resume")
+                .to_string();
+            let enable_diff = s.get("enable_diff")
+                .and_then(|v| v.as_bool().or_else(|| v.as_str().map(|s| s != "false")))
+                .unwrap_or(true);
+            let instant_spinup_target_ms = s.get("instant_spinup_target_ms")
+                .and_then(|v| v.as_integer().map(|i| i as u64).or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                .unwrap_or(10);
+
             config.snapshot = Some(FirecrackerSnapshotTomlConfig {
                 enabled,
                 cache_dir,
@@ -179,10 +254,20 @@ impl FirecrackerTomlConfig {
             });
         }
 
-        if let Some(l) = kv_map.get("landlock_fallback") {
-            let enabled = l.get("enabled").map(|v| v != "false").unwrap_or(true);
-            let ram_cow_base = l.get("ram_cow_base").cloned().unwrap_or_else(|| "/dev/shm".to_string());
-            let isolation_level = l.get("isolation_level").cloned().unwrap_or_else(|| "strict".to_string());
+        let landlock_val = root_table.get("landlock_fallback").or_else(|| root_table.get("landlock-fallback"));
+        if let Some(l) = landlock_val.and_then(|v| v.as_table()) {
+            let enabled = l.get("enabled")
+                .and_then(|v| v.as_bool().or_else(|| v.as_str().map(|s| s != "false")))
+                .unwrap_or(true);
+            let ram_cow_base = l.get("ram_cow_base")
+                .and_then(|v| v.as_str())
+                .unwrap_or("/dev/shm")
+                .to_string();
+            let isolation_level = l.get("isolation_level")
+                .and_then(|v| v.as_str())
+                .unwrap_or("strict")
+                .to_string();
+
             config.landlock_fallback = Some(FirecrackerLandlockTomlConfig {
                 enabled,
                 ram_cow_base,
@@ -1519,5 +1604,157 @@ mod tests {
         // 5. Cleanly destroy jail
         let destroy_res = sandbox.destroy_jail(&jail_info.jail_id).expect("destroy jail");
         assert_eq!(destroy_res.status, "destroyed");
+    }
+
+    #[test]
+    fn test_firecracker_toml_parsing_complex_fixture() {
+        let toml_fixture = r#"
+# Hagibis Firecracker MicroVM Configuration fixture
+[machine]
+vcpu_count = 4 # inline comment on vcpu
+mem_size_mib = 2048 # inline comment on memory
+smt = true # simultaneous multithreading enabled
+track_dirty_pages = false # no dirty page tracking
+
+[boot-source]
+kernel_image_path = "/var/lib/hgb/custom-vmlinux-6.6" # custom kernel image
+boot_args = "console=ttyS0 reboot=k panic=1 pci=off quiet ro" # kernel command line
+
+[snapshot]
+enabled = true # snapshot acceleration
+cache_dir = "/dev/shm/hgb_microvm_snapshots"
+fallback_dir = ".hgb/microvm_snapshots"
+snapshot_path = "/dev/shm/hgb_microvm_snapshots/base_template.snap"
+mem_file_path = "/dev/shm/hgb_microvm_snapshots/base_template.mem"
+resume_engine = "snapshot_resume"
+enable_diff = true
+instant_spinup_target_ms = 10 # sub-10ms requirement
+
+[landlock_fallback]
+enabled = true # zero-failure fallback
+ram_cow_base = "/dev/shm"
+isolation_level = "strict"
+"#;
+
+        let parsed = FirecrackerTomlConfig::parse(toml_fixture);
+
+        // Machine assertions
+        let machine = parsed.machine.expect("machine section parsed");
+        assert_eq!(machine.vcpu_count, 4);
+        assert_eq!(machine.mem_size_mib, 2048);
+        assert!(machine.smt);
+        assert!(!machine.track_dirty_pages);
+
+        // Boot source assertions
+        let boot = parsed.boot_source.expect("boot-source section parsed");
+        assert_eq!(boot.kernel_image_path, "/var/lib/hgb/custom-vmlinux-6.6");
+        assert_eq!(boot.boot_args, "console=ttyS0 reboot=k panic=1 pci=off quiet ro");
+
+        // Snapshot assertions
+        let snap = parsed.snapshot.expect("snapshot section parsed");
+        assert!(snap.enabled);
+        assert_eq!(snap.cache_dir, "/dev/shm/hgb_microvm_snapshots");
+        assert_eq!(snap.fallback_dir, ".hgb/microvm_snapshots");
+        assert_eq!(
+            snap.snapshot_path.as_deref(),
+            Some("/dev/shm/hgb_microvm_snapshots/base_template.snap")
+        );
+        assert_eq!(
+            snap.mem_file_path.as_deref(),
+            Some("/dev/shm/hgb_microvm_snapshots/base_template.mem")
+        );
+        assert_eq!(snap.resume_engine, "snapshot_resume");
+        assert!(snap.enable_diff);
+        assert_eq!(snap.instant_spinup_target_ms, 10);
+
+        // Landlock fallback assertions
+        let landlock = parsed.landlock_fallback.expect("landlock_fallback section parsed");
+        assert!(landlock.enabled);
+        assert_eq!(landlock.ram_cow_base, "/dev/shm");
+        assert_eq!(landlock.isolation_level, "strict");
+    }
+
+    #[test]
+    fn test_firecracker_toml_section_aliases_and_defaults() {
+        let alias_fixture = r#"
+# Test aliases: boot_source and landlock-fallback
+[machine]
+vcpu_count = 8
+mem_size_mib = 4096
+
+[boot_source]
+kernel_image_path = "/usr/lib/vmlinux"
+
+[snapshot]
+snapshot_path = "/tmp/test.snap"
+mem_file_path = "/tmp/test.mem"
+
+[landlock-fallback]
+isolation_level = "lenient"
+"#;
+
+        let parsed = FirecrackerTomlConfig::parse(alias_fixture);
+
+        let machine = parsed.machine.expect("machine present");
+        assert_eq!(machine.vcpu_count, 8);
+        assert_eq!(machine.mem_size_mib, 4096);
+        assert!(!machine.smt); // default
+
+        let boot = parsed.boot_source.expect("boot_source alias parsed");
+        assert_eq!(boot.kernel_image_path, "/usr/lib/vmlinux");
+        assert_eq!(boot.boot_args, "console=ttyS0 reboot=k panic=1 pci=off quiet"); // default
+
+        let snap = parsed.snapshot.expect("snapshot parsed");
+        assert!(snap.enabled); // default
+        assert_eq!(snap.cache_dir, "/dev/shm/hgb_microvm_snapshots"); // default
+        assert_eq!(snap.snapshot_path.as_deref(), Some("/tmp/test.snap"));
+        assert_eq!(snap.mem_file_path.as_deref(), Some("/tmp/test.mem"));
+
+        let landlock = parsed.landlock_fallback.expect("landlock-fallback alias parsed");
+        assert!(landlock.enabled); // default
+        assert_eq!(landlock.ram_cow_base, "/dev/shm"); // default
+        assert_eq!(landlock.isolation_level, "lenient");
+    }
+
+    #[test]
+    fn test_firecracker_toml_empty_and_comments_only() {
+        let empty_parsed = FirecrackerTomlConfig::parse("");
+        assert!(empty_parsed.machine.is_none());
+        assert!(empty_parsed.boot_source.is_none());
+        assert!(empty_parsed.snapshot.is_none());
+        assert!(empty_parsed.landlock_fallback.is_none());
+
+        let comments_only = r#"
+# Just comments
+# Another line comment
+# [machine]
+# vcpu_count = 99
+"#;
+        let comments_parsed = FirecrackerTomlConfig::parse(comments_only);
+        assert!(comments_parsed.machine.is_none());
+        assert!(comments_parsed.boot_source.is_none());
+    }
+
+    #[test]
+    fn test_firecracker_toml_workspace_root_file() {
+        let local_toml = Path::new("firecracker.toml");
+        if local_toml.exists() {
+            let parsed = FirecrackerTomlConfig::load_from_file(local_toml)
+                .expect("parse local firecracker.toml");
+            let machine = parsed.machine.expect("machine section present in local firecracker.toml");
+            assert_eq!(machine.vcpu_count, 2);
+            assert_eq!(machine.mem_size_mib, 1024);
+        }
+
+        let root_toml = Path::new("../../firecracker.toml");
+        if root_toml.exists() {
+            let parsed = FirecrackerTomlConfig::load_from_file(root_toml)
+                .expect("parse root firecracker.toml");
+            let machine = parsed.machine.expect("machine section present in root firecracker.toml");
+            assert_eq!(machine.vcpu_count, 2);
+            assert_eq!(machine.mem_size_mib, 1024);
+            assert!(parsed.snapshot.is_some());
+            assert!(parsed.landlock_fallback.is_some());
+        }
     }
 }

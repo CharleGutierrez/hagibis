@@ -760,12 +760,43 @@ impl EphemeralMicrovmJail {
         })
     }
 
+    /// Standard prefix for Hagibis microVM TAP interfaces
+    pub const TAP_PREFIX: &str = "tap_hgb_";
+    /// Maximum length of a Linux network interface name (IFNAMSIZ - 1)
+    pub const MAX_TAP_NAME_LEN: usize = 15;
+
+    /// Formats a compliant TAP device name for a given microVM or jail ID.
+    /// Truncates or sanitizes the suffix so the total length does not exceed `MAX_TAP_NAME_LEN` (15 chars).
+    pub fn format_tap_name(vm_id: &str) -> String {
+        let clean: String = vm_id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
+        let max_suffix_len = Self::MAX_TAP_NAME_LEN.saturating_sub(Self::TAP_PREFIX.len());
+        let suffix = if clean.len() > max_suffix_len {
+            &clean[..max_suffix_len]
+        } else {
+            &clean
+        };
+        format!("{}{}", Self::TAP_PREFIX, suffix)
+    }
+
+    /// Validates whether a device name adheres to Hagibis TAP device naming rules
+    pub fn is_hgb_tap_device(name: &str) -> bool {
+        (name.starts_with("tap_hgb_") || name.starts_with("hgb_tap_"))
+            && name.len() <= Self::MAX_TAP_NAME_LEN
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    }
+
     /// Creates and configures a TAP network interface (e.g. `tap_hgb_<id>`) for microVM networking
     pub fn create_tap_interface(&mut self, tap_name: &str) -> std::io::Result<String> {
         if tap_name.is_empty() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "TAP interface name cannot be empty",
+            ));
+        }
+        if tap_name.len() > Self::MAX_TAP_NAME_LEN {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("TAP interface name '{}' exceeds maximum length of 15 characters", tap_name),
             ));
         }
 
@@ -809,8 +840,12 @@ impl EphemeralMicrovmJail {
 
     /// Sweeps and unlinks all dangling `tap_hgb_*` or `hgb_tap_*` interfaces left from aborted processes
     pub fn sweep_dangling_tap_devices() -> usize {
+        Self::sweep_dangling_tap_devices_in(Path::new("/sys/class/net"))
+    }
+
+    /// Sweeps and unlinks dangling TAP interfaces inside a specified sysfs net directory
+    pub fn sweep_dangling_tap_devices_in(sys_net: &Path) -> usize {
         let mut swept = 0;
-        let sys_net = Path::new("/sys/class/net");
         if let Ok(entries) = fs::read_dir(sys_net) {
             for entry in entries.flatten() {
                 let name = entry.file_name().to_string_lossy().to_string();
@@ -1462,5 +1497,146 @@ impl Drop for FirecrackerHardwareRunner {
             }
         }
         let _ = EphemeralMicrovmJail::sweep_dangling_tap_devices();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_tap_device_naming_conventions() {
+        // Standard naming formatting
+        let tap1 = EphemeralMicrovmJail::format_tap_name("vm1");
+        assert_eq!(tap1, "tap_hgb_vm1");
+        assert!(EphemeralMicrovmJail::is_hgb_tap_device(&tap1));
+        assert!(tap1.len() <= EphemeralMicrovmJail::MAX_TAP_NAME_LEN);
+
+        // Long identifiers truncated to satisfy IFNAMSIZ (15 chars)
+        let tap_long = EphemeralMicrovmJail::format_tap_name("very_long_agent_job_identifier_12345");
+        assert!(tap_long.starts_with(EphemeralMicrovmJail::TAP_PREFIX));
+        assert_eq!(tap_long.len(), EphemeralMicrovmJail::MAX_TAP_NAME_LEN);
+        assert!(EphemeralMicrovmJail::is_hgb_tap_device(&tap_long));
+
+        // Sanitization of disallowed characters
+        let tap_special = EphemeralMicrovmJail::format_tap_name("vm:id/42#test");
+        assert_eq!(tap_special, "tap_hgb_vmid42t");
+        assert!(EphemeralMicrovmJail::is_hgb_tap_device(&tap_special));
+
+        // Validation helper
+        assert!(EphemeralMicrovmJail::is_hgb_tap_device("tap_hgb_abc"));
+        assert!(EphemeralMicrovmJail::is_hgb_tap_device("hgb_tap_xyz"));
+        assert!(!EphemeralMicrovmJail::is_hgb_tap_device("eth0"));
+        assert!(!EphemeralMicrovmJail::is_hgb_tap_device("lo"));
+        assert!(!EphemeralMicrovmJail::is_hgb_tap_device("docker0"));
+        assert!(!EphemeralMicrovmJail::is_hgb_tap_device("tap_hgb_longerthanfifteenchars"));
+    }
+
+    #[test]
+    fn test_sweep_dangling_tap_devices_mock() {
+        let temp_dir = tempdir().expect("tempdir");
+        let mock_sys_net = temp_dir.path().join("class_net");
+        fs::create_dir_all(&mock_sys_net).expect("create mock class/net");
+
+        // Create mock interface directories
+        fs::create_dir(mock_sys_net.join("tap_hgb_alpha")).unwrap();
+        fs::create_dir(mock_sys_net.join("tap_hgb_beta")).unwrap();
+        fs::create_dir(mock_sys_net.join("hgb_tap_gamma")).unwrap();
+        fs::create_dir(mock_sys_net.join("eth0")).unwrap();
+        fs::create_dir(mock_sys_net.join("lo")).unwrap();
+        fs::create_dir(mock_sys_net.join("wlan0")).unwrap();
+
+        let swept_count = EphemeralMicrovmJail::sweep_dangling_tap_devices_in(&mock_sys_net);
+        // Only tap_hgb_* and hgb_tap_* matched and attempted deletion
+        assert_eq!(swept_count, 3);
+    }
+
+    #[test]
+    fn test_configuration_invariants_machine_config() {
+        let def = MachineConfig::default();
+        assert_eq!(def.vcpu_count, 2);
+        assert_eq!(def.mem_size_mib, 256);
+        assert!(!def.smt);
+        assert!(!def.track_dirty_pages);
+
+        // Invariant checks
+        assert!(def.vcpu_count > 0, "vcpu_count must be positive");
+        assert!(def.mem_size_mib >= 64, "mem_size_mib must meet base microVM threshold");
+
+        let custom = MachineConfig {
+            vcpu_count: 8,
+            mem_size_mib: 4096,
+            smt: true,
+            track_dirty_pages: true,
+        };
+        assert_eq!(custom.vcpu_count, 8);
+        assert_eq!(custom.mem_size_mib, 4096);
+        assert!(custom.smt);
+        assert!(custom.track_dirty_pages);
+    }
+
+    #[test]
+    fn test_configuration_invariants_provision_spec() {
+        let spec = ProvisionSpec::default();
+        assert!(spec.vm_id.is_none());
+        assert_eq!(spec.timeout_secs, Some(60));
+        assert!(spec.machine.is_some());
+
+        let machine = spec.machine.unwrap();
+        assert!(machine.vcpu_count >= 1);
+        assert!(machine.mem_size_mib >= 128);
+    }
+
+    #[test]
+    fn test_jail_initialization_invariants() {
+        let temp_dir = tempdir().expect("tempdir");
+        let mut jail = EphemeralMicrovmJail::allocate(
+            "test_inv_vm",
+            IsolationBackend::LandlockRamCow,
+            temp_dir.path(),
+            1,
+            128,
+            Duration::from_secs(10),
+        ).expect("jail allocate");
+
+        assert_eq!(jail.id, "test_inv_vm");
+        assert_eq!(jail.status, JailStatus::Idle);
+        assert_eq!(jail.vcpu_count, 1);
+        assert_eq!(jail.mem_size_mib, 128);
+        assert_eq!(jail.generation, 1);
+        assert!(jail.symbol_table.is_empty());
+        assert!(jail.tap_device.is_none());
+        assert_eq!(jail.timeout, Duration::from_secs(10));
+
+        let teardown_res = jail.teardown();
+        assert!(teardown_res.is_ok());
+        assert_eq!(jail.status, JailStatus::Terminated);
+    }
+
+    #[test]
+    fn test_tap_interface_validation() {
+        let temp_dir = tempdir().expect("tempdir");
+        let mut jail = EphemeralMicrovmJail::allocate(
+            "test_tap_val",
+            IsolationBackend::LandlockRamCow,
+            temp_dir.path(),
+            2,
+            256,
+            Duration::from_secs(10),
+        ).expect("jail allocate");
+
+        // Empty TAP name must fail validation
+        let empty_err = jail.create_tap_interface("");
+        assert!(empty_err.is_err());
+        assert_eq!(empty_err.unwrap_err().kind(), std::io::ErrorKind::InvalidInput);
+
+        // Name exceeding MAX_TAP_NAME_LEN (15) must fail validation
+        let long_err = jail.create_tap_interface("tap_hgb_toolong123");
+        assert!(long_err.is_err());
+        assert_eq!(long_err.unwrap_err().kind(), std::io::ErrorKind::InvalidInput);
+
+        let _ = jail.teardown();
     }
 }

@@ -277,8 +277,12 @@ class TestCircuitBreakerHysteresisAndCryptoLockout(unittest.TestCase):
         self.assertIsNotNone(rec.lockout_id)
         self.assertIsNotNone(rec.lockout_receipt)
 
-        # Verify write permissions were stripped (0444)
-        self.assertFalse(os.access(source_file, os.W_OK), "Source file permissions must be stripped to 0444 read-only")
+        # Verify write permissions are preserved on active source file (developer editability preserved)
+        self.assertTrue(os.access(source_file, os.W_OK), "Source file write permissions must NOT be stripped")
+        # Verify failing patch was safely quarantined
+        self.assertTrue(rec.is_quarantined)
+        self.assertIsNotNone(rec.quarantine_path)
+        self.assertTrue(os.path.exists(rec.quarantine_path))
 
         # Verify mutation is permanently blocked
         allowed, reason = gov.can_mutate(skill)
@@ -344,7 +348,8 @@ class TestCircuitBreakerHysteresisAndCryptoLockout(unittest.TestCase):
         rec.lockout_id = receipt["lockout_id"]
         rec.lockout_receipt = receipt
 
-        self.assertFalse(os.access(source_file, os.W_OK))
+        # Source file remains writable by human developers
+        self.assertTrue(os.access(source_file, os.W_OK))
         self.assertEqual(rec.state, CircuitState.PERM_TRIPPED_CRYPTOLOCKED)
 
         # Authorized operator creates Ed25519 keypair

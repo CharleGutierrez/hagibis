@@ -256,8 +256,8 @@ class TestSkillQuarantiningAndWebhookAlerts(unittest.TestCase):
         self.assertIn(res3["state"], (CircuitState.OPEN.value, "QUARANTINED"))
         self.assertEqual(res3["action"], "BREAKER_TRIPPED_QUARANTINED")
 
-        # 1. Assert permissions revoked on active source
-        self.assertFalse(os.access(skill_file, os.W_OK), "Write permissions must be stripped from failing skill")
+        # 1. Assert permissions preserved on active source (developer editability preserved)
+        self.assertTrue(os.access(skill_file, os.W_OK), "Write permissions must be preserved on active source file")
 
         # 2. Assert can_mutate blocks subsequent mutations
         can_run, reason_msg = self.gov.can_mutate(skill_id)
@@ -434,8 +434,8 @@ class TestBashCircuitBreakerScript(unittest.TestCase):
         res_chk_blocked = subprocess.run(["bash", str(self.cb_script), "check", skill_id], env=env, capture_output=True, text=True)
         self.assertEqual(res_chk_blocked.returncode, 1)
 
-        # Check file write permissions locked
-        self.assertFalse(os.access(test_file, os.W_OK))
+        # Check file write permissions preserved
+        self.assertTrue(os.access(test_file, os.W_OK))
 
         # Check HITL reset CLI
         res_reset = subprocess.run(["bash", str(self.cb_script), "reset", skill_id, str(test_file)], env=env, capture_output=True, text=True)

@@ -1,8 +1,10 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+
+pub const DEFAULT_MAX_CHUNKS: usize = 50_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CodeChunk {
@@ -28,33 +30,65 @@ pub struct SemanticSearchResult {
 pub struct SemanticCodebaseIndex {
     workspace_root: PathBuf,
     chunks: Arc<RwLock<Vec<CodeChunk>>>,
+    max_chunks: usize,
 }
 
 impl SemanticCodebaseIndex {
     pub fn new(workspace_root: PathBuf) -> Self {
+        Self::with_max_chunks(workspace_root, DEFAULT_MAX_CHUNKS)
+    }
+
+    pub fn with_max_chunks(workspace_root: PathBuf, max_chunks: usize) -> Self {
         Self {
             workspace_root,
             chunks: Arc::new(RwLock::new(Vec::new())),
+            max_chunks,
         }
+    }
+
+    pub fn max_chunks(&self) -> usize {
+        self.max_chunks
     }
 
     /// Recursively indexes source code files in the workspace (lean-tuned for 8GB RAM / dual-core i3)
     pub async fn index_workspace(&self) -> usize {
         let mut all_chunks = Vec::new();
         let mut dirs = vec![self.workspace_root.clone()];
+        let mut visited_dirs: HashSet<PathBuf> = HashSet::new();
+
+        if let Ok(canon_root) = std::fs::canonicalize(&self.workspace_root) {
+            visited_dirs.insert(canon_root);
+        } else {
+            visited_dirs.insert(self.workspace_root.clone());
+        }
+
         let mut file_count = 0usize;
 
         while let Some(current_dir) = dirs.pop() {
-            if all_chunks.len() >= 4000 {
+            if all_chunks.len() >= self.max_chunks {
                 break;
             }
             if let Ok(entries) = std::fs::read_dir(&current_dir) {
                 for entry in entries.flatten() {
                     let path = entry.path();
+                    let file_type = match entry.file_type() {
+                        Ok(ft) => ft,
+                        Err(_) => continue,
+                    };
+
+                    // Prevent directory symlink loops and recursion cycles
+                    if file_type.is_symlink() && path.is_dir() {
+                        continue;
+                    }
+
                     if path.is_dir() {
                         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
                         if name != "target" && name != ".git" && name != "node_modules" && !name.starts_with('.') {
-                            dirs.push(path);
+                            if let Ok(canon_path) = std::fs::canonicalize(&path) {
+                                if visited_dirs.insert(canon_path) {
+                                    dirs.push(path);
+                                }
+                            }
                         }
                     } else if path.is_file() {
                         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
@@ -68,12 +102,15 @@ impl SemanticCodebaseIndex {
                             if let Ok(content) = std::fs::read_to_string(&path) {
                                 let rel = path.strip_prefix(&self.workspace_root).unwrap_or(&path);
                                 let file_chunks = chunk_file_content(&rel.to_string_lossy(), &content);
-                                all_chunks.extend(file_chunks);
+                                let remaining = self.max_chunks.saturating_sub(all_chunks.len());
+                                if remaining > 0 {
+                                    all_chunks.extend(file_chunks.into_iter().take(remaining));
+                                }
                                 file_count += 1;
                                 if file_count % 25 == 0 {
                                     tokio::task::yield_now().await;
                                 }
-                                if all_chunks.len() >= 4000 {
+                                if all_chunks.len() >= self.max_chunks {
                                     break;
                                 }
                             }
@@ -241,6 +278,42 @@ mod tests {
         assert!(!results.is_empty());
         assert_eq!(results[0].file_path, "calculator.rs");
         assert!(results[0].score > 0.0);
+    }
+
+    #[tokio::test]
+    async fn test_semantic_index_symlink_loop_protection() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let sub_dir = temp_dir.path().join("subdir");
+        std::fs::create_dir_all(&sub_dir).expect("create subdir");
+        std::fs::write(sub_dir.join("code.rs"), "pub fn hello() {}").expect("write code");
+
+        // Create circular symlink back to temp_dir
+        #[cfg(unix)]
+        {
+            let loop_symlink = sub_dir.join("loop_link");
+            let _ = std::os::unix::fs::symlink(temp_dir.path(), &loop_symlink);
+        }
+
+        let index = SemanticCodebaseIndex::new(temp_dir.path().to_path_buf());
+        // Must complete without infinite looping or stack overflow
+        let count = index.index_workspace().await;
+        assert!(count > 0);
+    }
+
+    #[tokio::test]
+    async fn test_semantic_index_custom_chunk_cap() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let mut large_content = String::new();
+        for i in 0..100 {
+            large_content.push_str(&format!("pub fn func_{}() -> i32 {{\n    {}\n}}\n\n", i, i));
+        }
+        std::fs::write(temp_dir.path().join("large.rs"), large_content).expect("write large");
+
+        // Cap at exactly 5 chunks
+        let index = SemanticCodebaseIndex::with_max_chunks(temp_dir.path().to_path_buf(), 5);
+        assert_eq!(index.max_chunks(), 5);
+        let count = index.index_workspace().await;
+        assert_eq!(count, 5);
     }
 }
 

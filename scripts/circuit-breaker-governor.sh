@@ -14,7 +14,7 @@
 #   3. Cryptographic State Signing & Proof Receipts:
 #      - Hashes error fingerprint and execution history with BLAKE3.
 #      - Signs lockout receipt with Ed25519 keypair.
-#      - Strips file permissions to read-only (0444).
+#      - Quarantines failing patches into quarantine directory without stripping workspace file permissions.
 #   4. Replay-Defended Signed MCP Operator Unlock:
 #      - PERM_TRIPPED_CRYPTOLOCKED state permanently locks out automated self-healing.
 #      - Only an authorized human operator can unlock the circuit breaker by issuing
@@ -27,7 +27,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HGB_BRAIN_DIR="${HGB_BRAIN_DIR:-/home/toshiba/.gemini/antigravity-cli/brain/567f5815-da08-438c-8b98-4a61b4c3ef0e}"
+HGB_BRAIN_DIR="${HGB_BRAIN_DIR:-${HOME}/.gemini/antigravity-cli/brain/567f5815-da08-438c-8b98-4a61b4c3ef0e}"
 PYTHON_GOVERNOR="${PYTHON_GOVERNOR:-${SCRIPT_DIR}/../skills/observability-otel/ch8_circuit_breaker_governor.py}"
 if [ ! -f "$PYTHON_GOVERNOR" ]; then
     PYTHON_GOVERNOR="${HGB_BRAIN_DIR}/skills/observability-otel/ch8_circuit_breaker_governor.py"
@@ -471,7 +471,7 @@ hgb_cb_record_failure() {
         if [ "$tag" = "PERM_CRYPTOLOCKED" ]; then
             log_cryptolock "⚡ [PERM_TRIPPED_CRYPTOLOCKED] Flapping detected for [${skill_id}]!"
             log_err "Lockout ID: ${detail} | Error Fingerprint: ${extra}"
-            log_err "Mutating permissions stripped (0444). Signed MCP operator unlock required to restore."
+            log_err "Failing patch quarantined. Signed MCP operator unlock required to restore."
             return 3
         elif [ "$tag" = "PERM_TRIP" ]; then
             log_trip "⚡ [PERM_TRIPPED] 3 consecutive identical AST errors detected for [${skill_id}]! Fingerprint: ${extra}"
@@ -780,11 +780,11 @@ assert 8.1 <= float('$b6') <= 8.5, f'b6={float(\"$b6\")}'
         exit 1
     fi
 
-    if [ -w "$flap_file" ]; then
-        log_err "File permissions were not stripped to 0444 on cryptolock!"
+    if [ ! -w "$flap_file" ]; then
+        log_err "Source file permissions were unexpectedly stripped! Developer editability must be preserved."
         exit 1
     fi
-    log_ok "Flapping oscillation detection & PERM_TRIPPED_CRYPTOLOCKED verified."
+    log_ok "Flapping oscillation detection & PERM_TRIPPED_CRYPTOLOCKED verified (file permissions preserved)."
 
     echo "5. Testing Cryptographic Rejection of Unsigned Administrative Reset..."
     set +e
