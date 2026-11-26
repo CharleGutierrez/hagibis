@@ -5,8 +5,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
+
+static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -53,7 +56,7 @@ impl PtyManager {
             .as_secs();
 
         let mut lock = self.sessions.write().await;
-        let next_idx = lock.len() + 1;
+        let next_idx = NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed);
         let id = format!("term-{}", next_idx);
         let session_title = title.unwrap_or_else(|| format!("Terminal {}", next_idx));
 
@@ -111,6 +114,7 @@ impl PtyManager {
             Err(e) => {
                 let (mut sender, _) = socket.split();
                 let _ = sender.send(Message::Text(format!("Failed to open PTY: {}", e))).await;
+                self.remove_session(&sid).await;
                 return;
             }
         };
@@ -127,6 +131,7 @@ impl PtyManager {
             Err(e) => {
                 let (mut sender, _) = socket.split();
                 let _ = sender.send(Message::Text(format!("Failed to spawn shell: {}", e))).await;
+                self.remove_session(&sid).await;
                 return;
             }
         };
@@ -138,6 +143,7 @@ impl PtyManager {
             Err(e) => {
                 let (mut sender, _) = socket.split();
                 let _ = sender.send(Message::Text(format!("Failed to take PTY writer: {}", e))).await;
+                self.remove_session(&sid).await;
                 return;
             }
         };
@@ -147,6 +153,7 @@ impl PtyManager {
             Err(e) => {
                 let (mut sender, _) = socket.split();
                 let _ = sender.send(Message::Text(format!("Failed to clone PTY reader: {}", e))).await;
+                self.remove_session(&sid).await;
                 return;
             }
         };
@@ -171,6 +178,16 @@ impl PtyManager {
             }
         });
 
+        // Dedicated background thread for asynchronous non-blocking PTY writes
+        let (tx_in, mut rx_in) = tokio::sync::mpsc::channel::<Vec<u8>>(128);
+        let write_handle = tokio::task::spawn_blocking(move || {
+            while let Some(data) = rx_in.blocking_recv() {
+                if writer.write_all(&data).is_err() || writer.flush().is_err() {
+                    break;
+                }
+            }
+        });
+
         // WebSocket transmitter task
         let forward_task = tokio::spawn(async move {
             while let Some(data) = rx_out.recv().await {
@@ -188,8 +205,9 @@ impl PtyManager {
                     if let Ok(ctrl) = serde_json::from_str::<PtyClientMessage>(&text) {
                         match ctrl {
                             PtyClientMessage::Input { data } => {
-                                let _ = writer.write_all(data.as_bytes());
-                                let _ = writer.flush();
+                                if tx_in.send(data.into_bytes()).await.is_err() {
+                                    break;
+                                }
                             }
                             PtyClientMessage::Resize { cols, rows } => {
                                 let m = master_resize.lock().await;
@@ -202,13 +220,15 @@ impl PtyManager {
                             }
                         }
                     } else {
-                        let _ = writer.write_all(text.as_bytes());
-                        let _ = writer.flush();
+                        if tx_in.send(text.into_bytes()).await.is_err() {
+                            break;
+                        }
                     }
                 }
                 Ok(Message::Binary(bin)) => {
-                    let _ = writer.write_all(&bin);
-                    let _ = writer.flush();
+                    if tx_in.send(bin).await.is_err() {
+                        break;
+                    }
                 }
                 Ok(Message::Close(_)) => break,
                 _ => {}
@@ -216,8 +236,13 @@ impl PtyManager {
         }
 
         let _ = child.kill();
-        let _ = read_handle.await;
+        drop(tx_in);
         forward_task.abort();
+        let _ = read_handle.await;
+        let _ = write_handle.await;
+
+        // Clean up session from self.sessions upon disconnect
+        self.remove_session(&sid).await;
     }
 }
 
@@ -262,5 +287,27 @@ mod tests {
         let list2 = mgr.list_sessions().await;
         assert_eq!(list2.len(), 1);
         assert_eq!(list2[0].id, s2.id);
+    }
+
+    #[tokio::test]
+    async fn test_pty_session_id_monotonic_no_collision() {
+        let mgr = PtyManager::new(PathBuf::from("."));
+        let s1 = mgr.create_session(None).await;
+        let s2 = mgr.create_session(None).await;
+        assert_ne!(s1.id, s2.id);
+
+        // Delete earlier session to simulate shrinking map
+        assert!(mgr.remove_session(&s1.id).await);
+
+        // Creating next session must not collide with s2
+        let s3 = mgr.create_session(None).await;
+        assert_ne!(s3.id, s2.id);
+        assert_ne!(s3.id, s1.id);
+
+        let list = mgr.list_sessions().await;
+        assert_eq!(list.len(), 2);
+        let ids: Vec<_> = list.into_iter().map(|s| s.id).collect();
+        assert!(ids.contains(&s2.id));
+        assert!(ids.contains(&s3.id));
     }
 }

@@ -29,6 +29,8 @@ pub struct SwarmTask {
     pub test_output: Option<String>,
 }
 
+pub type SwarmWorktreeTask = SwarmTask;
+
 pub struct WorktreeSwarmManager {
     workspace_root: PathBuf,
     tasks: Arc<Mutex<HashMap<String, SwarmTask>>>,
@@ -40,6 +42,11 @@ impl WorktreeSwarmManager {
             workspace_root,
             tasks: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Spawns an isolated parallel git worktree and kicks off autonomous worker agent (alias for spawn_worktree_task)
+    pub async fn spawn_task_in_worktree(&self, title: &str, prompt: &str) -> Result<SwarmTask, String> {
+        self.spawn_worktree_task(title, prompt).await
     }
 
     /// Spawns an isolated parallel git worktree and kicks off autonomous worker agent
@@ -93,7 +100,7 @@ impl WorktreeSwarmManager {
         let tasks_ref = self.tasks.clone();
         let task_id_clone = task_id.clone();
         let worktree_dir_clone = worktree_dir.clone();
-        let _prompt_clone = prompt.to_string();
+        let prompt_clone = prompt.to_string();
 
         tokio::spawn(async move {
             // Worker step 1: Execute test verification in isolated worktree
@@ -112,32 +119,102 @@ impl WorktreeSwarmManager {
 
             let (status, test_out) = match test_res {
                 Ok(out) if out.status.success() => {
-                    (SwarmTaskStatus::Passed, "✔ cargo check passed cleanly in isolated worktree".to_string())
+                    (
+                        SwarmTaskStatus::Passed,
+                        format!(
+                            "Prompt: \"{}\"\n✔ cargo check passed cleanly in isolated worktree",
+                            prompt_clone
+                        ),
+                    )
                 }
                 Ok(out) => {
                     let err = String::from_utf8_lossy(&out.stderr);
-                    (SwarmTaskStatus::Failed, format!("cargo check failed: {}", err))
+                    (
+                        SwarmTaskStatus::Failed,
+                        format!(
+                            "Prompt: \"{}\"\ncargo check failed: {}",
+                            prompt_clone,
+                            err.trim()
+                        ),
+                    )
                 }
-                Err(e) => (SwarmTaskStatus::Failed, format!("Execution error: {}", e)),
+                Err(e) => (
+                    SwarmTaskStatus::Failed,
+                    format!("Prompt: \"{}\"\nExecution error: {}", prompt_clone, e),
+                ),
             };
 
-            // Update diff summary
-            let diff_out = tokio::process::Command::new("git")
-                .arg("diff")
-                .arg("--stat")
-                .arg("HEAD~1")
+            // Worker step 2: Obtain real diff summary
+            // Attempt `git diff --stat HEAD~1`. If `HEAD~1` does not exist (e.g., initial or shallow commit),
+            // fall back to `git diff --stat` or `git status --short`. If no changes were produced, return "Zero modifications".
+            let head1_diff = tokio::process::Command::new("git")
+                .args(["diff", "--stat", "HEAD~1"])
                 .current_dir(&worktree_dir_clone)
                 .output()
-                .await
-                .ok()
-                .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-                .unwrap_or_else(|| "+12 -3 in 1 file".to_string());
+                .await;
+
+            let diff_candidate = match head1_diff {
+                Ok(out) if out.status.success() => {
+                    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                    if s.is_empty() {
+                        None
+                    } else {
+                        Some(s)
+                    }
+                }
+                _ => None,
+            };
+
+            let diff_candidate = match diff_candidate {
+                Some(s) => Some(s),
+                None => {
+                    let stat_diff = tokio::process::Command::new("git")
+                        .args(["diff", "--stat"])
+                        .current_dir(&worktree_dir_clone)
+                        .output()
+                        .await;
+                    match stat_diff {
+                        Ok(out) if out.status.success() => {
+                            let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                            if s.is_empty() {
+                                None
+                            } else {
+                                Some(s)
+                            }
+                        }
+                        _ => None,
+                    }
+                }
+            };
+
+            let final_diff = match diff_candidate {
+                Some(s) => s,
+                None => {
+                    let short_status = tokio::process::Command::new("git")
+                        .args(["status", "--short"])
+                        .current_dir(&worktree_dir_clone)
+                        .output()
+                        .await;
+                    match short_status {
+                        Ok(out) if out.status.success() => {
+                            let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                            if s.is_empty() {
+                                "Zero modifications".to_string()
+                            } else {
+                                s
+                            }
+                        }
+                        _ => "Zero modifications".to_string(),
+                    }
+                }
+            };
 
             let mut map = tasks_ref.lock().await;
             if let Some(t) = map.get_mut(&task_id_clone) {
                 t.status = status;
+                t.prompt = prompt_clone;
                 t.test_output = Some(test_out);
-                t.diff_summary = if diff_out.trim().is_empty() { "Zero modifications".to_string() } else { diff_out };
+                t.diff_summary = final_diff;
             }
         });
 
@@ -236,6 +313,26 @@ mod tests {
         assert_eq!(tasks2[0].branch, "worker-feature");
         assert_eq!(tasks2[0].status, SwarmTaskStatus::Passed);
         assert_eq!(tasks2[0].id, "task_1");
+        assert_eq!(tasks2[0].prompt, "Refactor engine");
+    }
+
+    #[test]
+    fn test_swarm_worktree_task_type_alias_and_prompt_field() {
+        let task: SwarmWorktreeTask = SwarmTask {
+            id: "task_alias_1".to_string(),
+            title: "Test Task".to_string(),
+            branch: "swarm/task_alias_1".to_string(),
+            worktree_path: "/tmp/worktree_alias".to_string(),
+            status: SwarmTaskStatus::Queued,
+            prompt: "Fix memory leak in buffer".to_string(),
+            created_at: "2026-11-25 12:00:00".to_string(),
+            diff_summary: "Zero modifications".to_string(),
+            test_output: Some("Prompt: \"Fix memory leak in buffer\"\n✔ cargo check passed cleanly in isolated worktree".to_string()),
+        };
+
+        assert_eq!(task.prompt, "Fix memory leak in buffer");
+        assert_eq!(task.diff_summary, "Zero modifications");
+        assert!(task.test_output.unwrap().contains("Fix memory leak in buffer"));
     }
 }
 

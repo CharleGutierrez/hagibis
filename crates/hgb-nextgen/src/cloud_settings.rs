@@ -107,14 +107,69 @@ impl CloudSettings {
             .map(|p| p.to_path_buf())
             .unwrap_or_else(Self::default_path);
 
+        // Ensure parent directory exists with restricted 0700 permissions on Unix
         if let Some(parent) = file_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+                let _ = std::fs::DirBuilder::new()
+                    .recursive(true)
+                    .mode(0o700)
+                    .create(parent);
+                let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = std::fs::create_dir_all(parent);
+            }
         }
 
         let json = serde_json::to_string_pretty(self)
             .map_err(|e| format!("Serialization error: {}", e))?;
-        std::fs::write(&file_path, json)
-            .map_err(|e| format!("Write error to {}: {}", file_path.display(), e))?;
+
+        // Determine parent directory and unique temporary file path in the same directory for atomic rename
+        let parent = file_path.parent().unwrap_or_else(|| Path::new("."));
+        let file_name = file_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("credentials.json");
+        let temp_file_path = parent.join(format!("{}.tmp.{}", file_name, uuid::Uuid::new_v4()));
+
+        let write_and_sync = || -> std::io::Result<()> {
+            use std::io::Write;
+            let mut open_options = std::fs::OpenOptions::new();
+            open_options.write(true).create(true).truncate(true);
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                open_options.mode(0o600);
+            }
+
+            let mut file = open_options.open(&temp_file_path)?;
+            file.write_all(json.as_bytes())?;
+            file.sync_all()?;
+            drop(file);
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&temp_file_path, std::fs::Permissions::from_mode(0o600));
+            }
+
+            std::fs::rename(&temp_file_path, &file_path)?;
+            Ok(())
+        };
+
+        if let Err(e) = write_and_sync() {
+            let _ = std::fs::remove_file(&temp_file_path);
+            return Err(format!(
+                "Failed to atomically save credentials to {}: {}",
+                file_path.display(),
+                e
+            ));
+        }
+
         Ok(())
     }
 
@@ -359,5 +414,44 @@ mod tests {
         let masked = loaded.to_masked();
         assert!(masked.anthropic_configured);
         assert!(masked.anthropic_api_key.unwrap().contains("..."));
+    }
+
+    #[test]
+    fn test_cloud_settings_crash_safe_permissions() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let nested_dir = temp_dir.path().join("subdir").join(".hgb");
+        let cred_file = nested_dir.join("credentials.json");
+
+        let mut settings = CloudSettings::default();
+        settings.openai_api_key = Some("sk-proj-test1234567890abcdef".to_string());
+        settings.active_provider = "openai".to_string();
+
+        assert!(settings.save_to_disk(Some(&cred_file)).is_ok());
+        assert!(cred_file.exists());
+
+        // Verify loaded content matches
+        let loaded = CloudSettings::load_from_disk(Some(&cred_file));
+        assert_eq!(loaded.active_provider, "openai");
+        assert_eq!(loaded.openai_api_key.as_deref(), Some("sk-proj-test1234567890abcdef"));
+
+        // Verify no leftover temporary files in the directory
+        let temp_files: Vec<_> = std::fs::read_dir(&nested_dir)
+            .expect("read_dir")
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp."))
+            .collect();
+        assert!(temp_files.is_empty(), "Temporary files must be cleaned up");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let dir_meta = std::fs::metadata(&nested_dir).expect("dir metadata");
+            let dir_mode = dir_meta.permissions().mode() & 0o777;
+            assert_eq!(dir_mode, 0o700, "Parent directory permissions must be 0700");
+
+            let file_meta = std::fs::metadata(&cred_file).expect("file metadata");
+            let file_mode = file_meta.permissions().mode() & 0o777;
+            assert_eq!(file_mode, 0o600, "Credentials file permissions must be 0600");
+        }
     }
 }

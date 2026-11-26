@@ -257,10 +257,16 @@ impl VaultGhostEnvs {
 
 impl Drop for VaultGhostEnvs {
     fn drop(&mut self) {
-        for (_k, v) in self.secrets.iter_mut() {
-            v.zeroize();
+        for (mut k, mut v) in self.secrets.drain() {
+            unsafe {
+                k.as_bytes_mut().zeroize();
+                v.as_bytes_mut().zeroize();
+                let k_vec = k.as_mut_vec();
+                std::ptr::write_bytes(k_vec.as_mut_ptr(), 0, k_vec.capacity());
+                let v_vec = v.as_mut_vec();
+                std::ptr::write_bytes(v_vec.as_mut_ptr(), 0, v_vec.capacity());
+            }
         }
-        self.secrets.clear();
     }
 }
 
@@ -364,5 +370,60 @@ mod tests {
         assert_ne!(seal1.nonce, seal2.nonce);
         assert_ne!(seal1.encrypted_payload, seal2.encrypted_payload);
         assert_ne!(seal1.auth_tag, seal2.auth_tag);
+    }
+
+    #[test]
+    fn test_vault_ghost_envs_zeroization_on_drop() {
+        let key_ptr: *const u8;
+        let key_len: usize;
+        let val_ptr: *const u8;
+        let val_len: usize;
+
+        {
+            let mut vault = VaultGhostEnvs::new();
+            vault.insert_secret(
+                "API_KEY_IDENTIFIER_SECRET",
+                "SUPER_SENSITIVE_API_TOKEN_VALUE_987654321",
+            );
+
+            let (k, v) = vault.secrets.iter().next().unwrap();
+            key_ptr = k.as_ptr();
+            key_len = k.len();
+            val_ptr = v.as_ptr();
+            val_len = v.len();
+
+            // Verify before drop that strings are present at these pointers
+            unsafe {
+                let k_slice = std::slice::from_raw_parts(key_ptr, key_len);
+                let v_slice = std::slice::from_raw_parts(val_ptr, val_len);
+                assert_eq!(k_slice, b"API_KEY_IDENTIFIER_SECRET");
+                assert_eq!(v_slice, b"SUPER_SENSITIVE_API_TOKEN_VALUE_987654321");
+            }
+
+            // `vault` is dropped at end of scope
+        }
+
+        // Verify that after drop, the plaintext secrets were wiped
+        unsafe {
+            let k_slice = std::slice::from_raw_parts(key_ptr, key_len);
+            let v_slice = std::slice::from_raw_parts(val_ptr, val_len);
+            assert!(
+                !k_slice.windows(8).any(|w| w == b"API_KEY_" || w == b"IDENTIFI"),
+                "Secret key plaintext must not linger in memory"
+            );
+            assert!(
+                !v_slice.windows(8).any(|w| w == b"SUPER_SE" || w == b"TOKEN_VA"),
+                "Secret value plaintext must not linger in memory"
+            );
+            // Bytes beyond glibc allocator heap header (16 bytes) must be all zeroes
+            assert!(
+                k_slice[16..].iter().all(|&b| b == 0),
+                "Secret key bytes beyond allocator header must be zeroed on drop"
+            );
+            assert!(
+                v_slice[16..].iter().all(|&b| b == 0),
+                "Secret value bytes beyond allocator header must be zeroed on drop"
+            );
+        }
     }
 }

@@ -839,6 +839,14 @@ pub struct RollbackReceipt {
     pub completed_at_secs: i64,
     pub restored_head_commit: String,
     pub clean_working_tree: bool,
+    #[serde(default = "default_true")]
+    pub success: bool,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 pub struct GitRollbackCircuitBreaker {
@@ -990,61 +998,146 @@ impl GitRollbackCircuitBreaker {
         let target = &incident.rollback_target_commit;
         let dir = &self.config.working_directory;
 
-        // Safeguard uncommitted changes via git stash before destructive rollback
-        let stash_commit = Command::new("git")
+        let mut stash_log = String::new();
+
+        // 1. Safeguard uncommitted changes via git stash before destructive rollback
+        let stash_create_res = Command::new("git")
             .args(["stash", "create"])
             .current_dir(dir)
-            .output()
-            .ok()
-            .and_then(|o| {
-                let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
-                if s.is_empty() { None } else { Some(s) }
-            });
+            .output();
 
-        let stash_msg = if let Some(ref commit_id) = stash_commit {
-            let _ = Command::new("git")
-                .args(["stash", "store", "-m", &format!("pre-rollback-backup-{}", incident.incident_id), commit_id])
-                .current_dir(dir)
-                .output();
-            format!("PRE-ROLLBACK BACKUP: Stashed uncommitted changes into commit {}\n", commit_id)
-        } else {
-            String::new()
+        let stash_commit = match stash_create_res {
+            Ok(ref o) => {
+                if !o.status.success() {
+                    let err = String::from_utf8_lossy(&o.stderr).trim().to_string();
+                    if !err.is_empty() {
+                        stash_log.push_str(&format!(
+                            "STASH CREATE WARNING (exit code {:?}): {}\n",
+                            o.status.code(),
+                            err
+                        ));
+                    }
+                    None
+                } else {
+                    let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                    if s.is_empty() {
+                        None
+                    } else {
+                        Some(s)
+                    }
+                }
+            }
+            Err(ref e) => {
+                stash_log.push_str(&format!(
+                    "STASH CREATE ERROR: Failed to spawn git stash create: {}\n",
+                    e
+                ));
+                None
+            }
         };
 
-        // Perform real git hard reset to rollback target commit
-        let output = Command::new("git")
+        if let Some(ref commit_id) = stash_commit {
+            let store_res = Command::new("git")
+                .args([
+                    "stash",
+                    "store",
+                    "-m",
+                    &format!("pre-rollback-backup-{}", incident.incident_id),
+                    commit_id,
+                ])
+                .current_dir(dir)
+                .output();
+
+            match store_res {
+                Ok(store_out) => {
+                    let stderr = String::from_utf8_lossy(&store_out.stderr).trim().to_string();
+                    if store_out.status.success() {
+                        stash_log.push_str(&format!(
+                            "PRE-ROLLBACK BACKUP: Stashed uncommitted changes into commit {}\n",
+                            commit_id
+                        ));
+                        if !stderr.is_empty() {
+                            stash_log.push_str(&format!("STASH STORE STDERR: {}\n", stderr));
+                        }
+                    } else {
+                        stash_log.push_str(&format!(
+                            "STASH STORE ERROR: Failed to store stash commit {} (exit code {:?}): {}\n",
+                            commit_id,
+                            store_out.status.code(),
+                            stderr
+                        ));
+                    }
+                }
+                Err(e) => {
+                    stash_log.push_str(&format!(
+                        "STASH STORE ERROR: Failed to spawn git stash store for {}: {}\n",
+                        commit_id, e
+                    ));
+                }
+            }
+        }
+
+        // 2. Perform real git hard reset to rollback target commit
+        let reset_output = Command::new("git")
             .arg("reset")
             .arg("--hard")
             .arg(target)
             .current_dir(dir)
             .output();
 
-        let (git_output_str, _success) = match output {
+        let (reset_success, reset_git_output, reset_err_msg) = match reset_output {
             Ok(out) => {
                 let stdout = String::from_utf8_lossy(&out.stdout).to_string();
                 let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-                let combined = format!("{}STDOUT:\n{}\nSTDERR:\n{}", stash_msg, stdout, stderr);
-                (combined, out.status.success())
+                if out.status.success() {
+                    let combined = format!("{}STDOUT:\n{}\nSTDERR:\n{}", stash_log, stdout, stderr);
+                    (true, combined, None)
+                } else {
+                    let err = format!(
+                        "git reset --hard {} failed with exit code {:?}: {}",
+                        target,
+                        out.status.code(),
+                        stderr.trim()
+                    );
+                    let combined = format!(
+                        "{}GIT RESET ERROR: {}\nSTDOUT:\n{}\nSTDERR:\n{}",
+                        stash_log, err, stdout, stderr
+                    );
+                    (false, combined, Some(err))
+                }
             }
-            Err(e) => (format!("{}Failed to spawn git: {}", stash_msg, e), false),
+            Err(e) => {
+                let err = format!("Failed to spawn git reset --hard {}: {}", target, e);
+                let combined = format!("{}CRITICAL SPAWN ERROR: {}\n", stash_log, err);
+                (false, combined, Some(err))
+            }
         };
 
-        // Query current HEAD
-        let head_commit = Command::new("git")
+        // 3. Query current HEAD commit
+        let head_commit_res = Command::new("git")
             .arg("rev-parse")
             .arg("HEAD")
             .current_dir(dir)
-            .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .unwrap_or_else(|_| target.clone());
+            .output();
 
-        // Check if working tree is clean
+        let head_commit = match head_commit_res {
+            Ok(out) if out.status.success() => {
+                String::from_utf8_lossy(&out.stdout).trim().to_string()
+            }
+            Ok(out) => {
+                let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                format!("UNKNOWN_HEAD (rev-parse error: {})", err)
+            }
+            Err(e) => format!("UNKNOWN_HEAD (spawn error: {})", e),
+        };
+
+        // 4. Check if working tree is clean
         let clean_working_tree = Command::new("git")
             .arg("status")
             .arg("--porcelain")
             .current_dir(dir)
             .output()
-            .map(|o| o.stdout.is_empty())
+            .map(|o| o.status.success() && o.stdout.is_empty())
             .unwrap_or(false);
 
         let completed_at_secs = SystemTime::now()
@@ -1052,13 +1145,18 @@ impl GitRollbackCircuitBreaker {
             .unwrap_or_default()
             .as_secs() as i64;
 
+        let overall_success = reset_success
+            && (head_commit == *target || head_commit.starts_with(target) || target.starts_with(&head_commit));
+
         let receipt = RollbackReceipt {
             receipt_id: format!("rollbk-{}", hex::encode(&incident.incident_audit_digest.as_bytes()[..8])),
             incident: incident.clone(),
-            git_output: git_output_str,
+            git_output: reset_git_output,
             completed_at_secs,
             restored_head_commit: head_commit,
             clean_working_tree,
+            success: overall_success,
+            error: reset_err_msg,
         };
 
         Ok(receipt)
@@ -1437,5 +1535,112 @@ mod tests {
         "#;
         let violations2 = analyzer.analyze_source(rng_code).unwrap();
         assert!(violations2.iter().any(|v| v.code == "SEC005_NON_DETERMINISTIC_PRIMITIVE"));
+    }
+
+    #[test]
+    fn test_execute_git_rollback_safeguards_uncommitted_changes_in_stash() {
+        let temp_dir = tempfile::tempdir().expect("Create temp dir");
+        let dir_path = temp_dir.path().to_path_buf();
+
+        // 1. Initialize git repo
+        Command::new("git").arg("init").current_dir(&dir_path).output().unwrap();
+        Command::new("git").args(["config", "user.name", "Test"]).current_dir(&dir_path).output().unwrap();
+        Command::new("git").args(["config", "user.email", "test@test.com"]).current_dir(&dir_path).output().unwrap();
+
+        // 2. Commit initial file
+        fs::write(dir_path.join("file.txt"), "Commit 1 content").unwrap();
+        Command::new("git").args(["add", "."]).current_dir(&dir_path).output().unwrap();
+        Command::new("git").args(["commit", "-m", "Commit 1"]).current_dir(&dir_path).output().unwrap();
+        let commit_1 = Command::new("git").args(["rev-parse", "HEAD"]).current_dir(&dir_path).output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap();
+
+        // 3. Commit broken file
+        fs::write(dir_path.join("file.txt"), "Commit 2 broken").unwrap();
+        Command::new("git").args(["commit", "-am", "Commit 2"]).current_dir(&dir_path).output().unwrap();
+        let commit_2 = Command::new("git").args(["rev-parse", "HEAD"]).current_dir(&dir_path).output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap();
+
+        // 4. Developer makes uncommitted changes in working tree
+        fs::write(dir_path.join("file.txt"), "Uncommitted edit to file.txt").unwrap();
+
+        let config = CircuitBreakerConfig {
+            failure_threshold: 1,
+            max_error_rate: 0.1,
+            half_open_success_target: 1,
+            working_directory: dir_path.clone(),
+            git_timeout_ms: 5000,
+        };
+
+        let breaker = GitRollbackCircuitBreaker::new(config, commit_1.clone());
+        let incident = RollbackIncidentEvent {
+            incident_id: "inc-stash-test-1".to_string(),
+            triggered_at_secs: 1000,
+            trigger_reason: "Testing stash safeguard".to_string(),
+            consecutive_failures: 1,
+            error_rate: 1.0,
+            bad_commit_hash: commit_2.clone(),
+            rollback_target_commit: commit_1.clone(),
+            incident_audit_digest: "testdigest".to_string(),
+        };
+
+        let receipt = breaker.execute_git_rollback(&incident).expect("Rollback execution should succeed");
+        assert!(receipt.success, "Rollback should report success");
+        assert_eq!(receipt.restored_head_commit, commit_1);
+        assert!(receipt.clean_working_tree);
+        assert!(receipt.git_output.contains("PRE-ROLLBACK BACKUP: Stashed uncommitted changes"));
+
+        // Verify working tree restored to Commit 1
+        let content = fs::read_to_string(dir_path.join("file.txt")).unwrap();
+        assert_eq!(content, "Commit 1 content");
+
+        // Verify git stash has the backed up changes
+        let stash_list_out = Command::new("git").args(["stash", "list"]).current_dir(&dir_path).output().unwrap();
+        let stash_list = String::from_utf8_lossy(&stash_list_out.stdout);
+        assert!(stash_list.contains("pre-rollback-backup-inc-stash-test-1"), "Stash list must contain the backup stash entry");
+
+        let stash_show_out = Command::new("git").args(["stash", "show", "-p"]).current_dir(&dir_path).output().unwrap();
+        let stash_show = String::from_utf8_lossy(&stash_show_out.stdout);
+        assert!(stash_show.contains("Uncommitted edit to file.txt"), "Stash diff must contain developer's uncommitted edits");
+    }
+
+    #[test]
+    fn test_execute_git_rollback_propagates_critical_git_errors() {
+        let temp_dir = tempfile::tempdir().expect("Create temp dir");
+        let dir_path = temp_dir.path().to_path_buf();
+
+        // Initialize git repo
+        Command::new("git").arg("init").current_dir(&dir_path).output().unwrap();
+        Command::new("git").args(["config", "user.name", "Test"]).current_dir(&dir_path).output().unwrap();
+        Command::new("git").args(["config", "user.email", "test@test.com"]).current_dir(&dir_path).output().unwrap();
+
+        fs::write(dir_path.join("file.txt"), "Initial").unwrap();
+        Command::new("git").args(["add", "."]).current_dir(&dir_path).output().unwrap();
+        Command::new("git").args(["commit", "-m", "Initial"]).current_dir(&dir_path).output().unwrap();
+
+        let config = CircuitBreakerConfig {
+            failure_threshold: 1,
+            max_error_rate: 0.1,
+            half_open_success_target: 1,
+            working_directory: dir_path.clone(),
+            git_timeout_ms: 5000,
+        };
+
+        let breaker = GitRollbackCircuitBreaker::new(config, "invalid_nonexistent_commit_hash".to_string());
+        let incident = RollbackIncidentEvent {
+            incident_id: "inc-err-test-1".to_string(),
+            triggered_at_secs: 1000,
+            trigger_reason: "Testing error propagation".to_string(),
+            consecutive_failures: 1,
+            error_rate: 1.0,
+            bad_commit_hash: "bad".to_string(),
+            rollback_target_commit: "invalid_nonexistent_commit_hash".to_string(),
+            incident_audit_digest: "testdigest".to_string(),
+        };
+
+        let receipt = breaker.execute_git_rollback(&incident).expect("Receipt generated with error details");
+        assert!(!receipt.success, "Should report success = false when git reset fails");
+        assert!(receipt.error.is_some(), "Should have error message");
+        assert!(receipt.git_output.contains("GIT RESET ERROR"));
+        assert_ne!(receipt.restored_head_commit, "invalid_nonexistent_commit_hash", "Should not claim nonexistent commit was restored");
     }
 }

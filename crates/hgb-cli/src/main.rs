@@ -585,7 +585,7 @@ enum Commands {
     #[command(alias = "studio-app")]
     DesktopIde {
         /// Local port for PWA Studio
-        #[arg(short, long, default_value_t = 38472)]
+        #[arg(short, long, default_value_t = 4173)]
         port: u16,
         /// Optional custom browser executable path
         #[arg(short, long)]

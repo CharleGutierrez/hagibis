@@ -23,7 +23,7 @@ pub struct DesktopLaunchConfig {
 impl Default for DesktopLaunchConfig {
     fn default() -> Self {
         Self {
-            port: 38472,
+            port: 4173,
             width: 1400,
             height: 900,
             custom_browser: None,
@@ -78,6 +78,11 @@ impl DesktopIdeLauncher {
             }
         }
         None
+    }
+
+    /// Launch standalone desktop IDE window (alias for `launch`)
+    pub fn launch_standalone_window(&self) -> std::io::Result<DesktopLaunchReport> {
+        self.launch()
     }
 
     /// Launch standalone desktop IDE window
@@ -138,14 +143,18 @@ impl DesktopIdeLauncher {
             "xdg-open"
         };
 
-        let _ = Command::new(launcher).arg(url).spawn();
-
-        Ok(DesktopLaunchReport {
-            url: url.to_string(),
-            browser_binary: launcher.to_string(),
-            is_app_mode: false,
-            profile_dir: None,
-        })
+        match Command::new(launcher).arg(url).spawn() {
+            Ok(_) => Ok(DesktopLaunchReport {
+                url: url.to_string(),
+                browser_binary: launcher.to_string(),
+                is_app_mode: false,
+                profile_dir: None,
+            }),
+            Err(e) => Err(std::io::Error::new(
+                e.kind(),
+                format!("Failed to spawn system browser handler '{}': {}", launcher, e),
+            )),
+        }
     }
 }
 
@@ -156,7 +165,7 @@ mod tests {
     #[test]
     fn test_desktop_config_default() {
         let cfg = DesktopLaunchConfig::default();
-        assert_eq!(cfg.port, 38472);
+        assert_eq!(cfg.port, 4173);
         assert_eq!(cfg.width, 1400);
         assert_eq!(cfg.height, 900);
         assert!(cfg.isolated_profile);
@@ -165,6 +174,6 @@ mod tests {
     #[test]
     fn test_launcher_instantiation() {
         let launcher = DesktopIdeLauncher::new(None);
-        assert_eq!(launcher.config.port, 38472);
+        assert_eq!(launcher.config.port, 4173);
     }
 }
