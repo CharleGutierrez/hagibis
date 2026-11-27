@@ -1926,7 +1926,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "hgb-autopoietic"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "async-trait",
  "blake3",
@@ -1951,7 +1951,7 @@ dependencies = [
 
 [[package]]
 name = "hgb-cli"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1986,7 +1986,7 @@ dependencies = [
 
 [[package]]
 name = "hgb-compiler"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2007,7 +2007,7 @@ dependencies = [
 
 [[package]]
 name = "hgb-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -2057,7 +2057,7 @@ dependencies = [
 
 [[package]]
 name = "hgb-daemon"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -2096,7 +2096,7 @@ dependencies = [
 
 [[package]]
 name = "hgb-mesh"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2118,7 +2118,7 @@ dependencies = [
 
 [[package]]
 name = "hgb-nextgen"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "arboard",
  "async-trait",
@@ -2157,7 +2157,7 @@ dependencies = [
 
 [[package]]
 name = "hgb-npu-router"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "async-trait",
  "blake3",
@@ -2181,7 +2181,7 @@ dependencies = [
 
 [[package]]
 name = "hgb-storage"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "blake3",
  "chrono",
@@ -2209,7 +2209,7 @@ dependencies = [
 
 [[package]]
 name = "hgb-wasm-kernel"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "blake3",
