@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
 use hgb_core::error::{HgbError, Result};
+use crate::provenance_merkle_ledger::{AuthorIdentity, PatchProvenanceRecord, ProvenanceMerkleLedger};
 
 pub const GENESIS_PARENT_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
@@ -64,11 +65,39 @@ impl EvolutionReceipt {
         hasher.update(&[self.hot_reloaded as u8]);
         hasher.finalize().to_hex().to_string()
     }
+
+    pub fn to_patch_provenance_record(
+        &self,
+        author: AuthorIdentity,
+    ) -> PatchProvenanceRecord {
+        let audit_context = format!(
+            "anomaly_kind={}, strategy={}, metric_before={:.2}, metric_after={:.2}, speedup={:.1}%, sandbox_exit={}",
+            self.anomaly_kind,
+            self.strategy,
+            self.observed_metric_before,
+            self.observed_metric_after,
+            self.speedup_percentage,
+            self.sandbox_exit_code,
+        );
+        PatchProvenanceRecord {
+            patch_id: self.receipt_id.clone(),
+            author_identity: author,
+            target_crate: self.target_crate.clone(),
+            target_file: self.target_file.clone(),
+            pre_patch_hash: self.pre_patch_ast_hash.clone(),
+            post_patch_hash: self.post_patch_ast_hash.clone(),
+            patch_diff: self.patch_diff.clone(),
+            patch_ast_fingerprint: self.blake3_provenance_hash.clone(),
+            audit_context,
+            ed25519_signature: String::new(),
+        }
+    }
 }
 
 pub struct EvolutionLedger {
     ledger_file_path: PathBuf,
     receipts: Arc<RwLock<Vec<EvolutionReceipt>>>,
+    provenance_ledger: Option<Arc<ProvenanceMerkleLedger>>,
 }
 
 impl EvolutionLedger {
@@ -76,7 +105,17 @@ impl EvolutionLedger {
         Self {
             ledger_file_path: ledger_path.into(),
             receipts: Arc::new(RwLock::new(Vec::new())),
+            provenance_ledger: None,
         }
+    }
+
+    pub fn with_provenance_ledger(mut self, provenance_ledger: Arc<ProvenanceMerkleLedger>) -> Self {
+        self.provenance_ledger = Some(provenance_ledger);
+        self
+    }
+
+    pub fn provenance_ledger(&self) -> Option<&Arc<ProvenanceMerkleLedger>> {
+        self.provenance_ledger.as_ref()
     }
 
     pub async fn append_receipt(&self, mut receipt: EvolutionReceipt) -> Result<String> {
@@ -88,6 +127,10 @@ impl EvolutionLedger {
 
         receipt.prev_receipt_hash = prev_hash;
         receipt.blake3_provenance_hash = receipt.compute_canonical_hash();
+
+        if let Some(prov_ledger) = &self.provenance_ledger {
+            let _ = prov_ledger.record_evolution_receipt(&receipt);
+        }
 
         if let Some(parent) = self.ledger_file_path.parent() {
             let _ = fs::create_dir_all(parent);

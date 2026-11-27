@@ -14,6 +14,7 @@ pub mod cryptographic_patch_attestation;
 pub mod patch_healer_integration;
 pub mod continuous_pgo_bolt_feedback_daemon;
 pub mod static_analysis_fuzzer_healer;
+pub mod provenance_merkle_ledger;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -56,6 +57,11 @@ pub use static_analysis_fuzzer_healer::{
     OtelSecurityAuditReporter, OtelSecuritySpan, SafetyInvariant,
     SecurityAuditLedgerEntry, SecurityPatchCandidate, StaticAnalysisAuditEngine,
     StaticAuditError, VulnerabilityDiagnostic, VulnerabilitySeverity,
+};
+pub use provenance_merkle_ledger::{
+    AuthorIdentity, MerkleProof, PatchProvenanceRecord, ProvenanceLedgerError,
+    ProvenanceMerkleLedger, ProvenanceMerkleTree, verify_merkle_proof,
+    DEFAULT_PROVENANCE_LEDGER_PATH,
 };
 
 /// Zero-Downtime Binary Hot-Swapper using atomic symlinks & connection draining
@@ -188,12 +194,16 @@ pub struct AutopoieticEngine {
     pub sandbox_verifier: Arc<SandboxVerifier>,
     pub hot_reloader: Arc<PgoHotReloadManager>,
     pub evolution_ledger: Arc<EvolutionLedger>,
+    pub provenance_merkle_ledger: Arc<ProvenanceMerkleLedger>,
 }
 
 impl AutopoieticEngine {
     pub fn new(workspace_root: impl Into<PathBuf>) -> Self {
         let ws = workspace_root.into();
         let ledger_path = ws.join(".hgb/evolution_ledger.jsonl");
+        let prov_ledger_path = ws.join(".hgb/provenance_ledger.jsonl");
+        let provenance_merkle_ledger = Arc::new(ProvenanceMerkleLedger::new(prov_ledger_path));
+        let evolution_ledger = Arc::new(EvolutionLedger::new(ledger_path).with_provenance_ledger(provenance_merkle_ledger.clone()));
 
         Self {
             anomaly_monitor: Arc::new(TelemetryAnomalyMonitor::new(&ws)),
@@ -201,7 +211,8 @@ impl AutopoieticEngine {
             slm_synthesizer: Arc::new(SlmPatchSynthesizer::new(&ws)),
             sandbox_verifier: Arc::new(SandboxVerifier::new(&ws)),
             hot_reloader: Arc::new(PgoHotReloadManager::new(&ws)),
-            evolution_ledger: Arc::new(EvolutionLedger::new(ledger_path)),
+            evolution_ledger,
+            provenance_merkle_ledger,
             workspace_root: ws,
         }
     }

@@ -496,6 +496,37 @@ interface io-uring-shm-bridge {
     }
 }
 
+/// Zero-Copy WASM-to-NPU Streaming Pipeline interface for hardware-accelerated
+/// GPU/NPU tensor buffers mapped directly into Wasm linear memory via shared memory handles.
+interface wasm-npu-streaming-pipeline {
+    use canonical-abi-types.{tensor-data-type, npu-device-target};
+
+    /// Hardware-accelerated zero-copy GPU/NPU tensor buffer shared memory descriptor
+    record npu-tensor-shm-descriptor {
+        handle-id: u64,
+        shm-name: string,
+        offset-bytes: u64,
+        size-bytes: u64,
+        alignment: u32,
+        data-type: tensor-data-type,
+        dimensions: list<u64>,
+        device-target: npu-device-target,
+        is-coherent: bool,
+    }
+
+    /// Allocate or register a zero-copy hardware NPU tensor buffer in shared memory
+    create-npu-tensor-buffer: func(desc: npu-tensor-shm-descriptor) -> result<u64, string>;
+
+    /// Map a host pinned shared memory tensor buffer directly into WASM linear memory
+    map-wasm-linear-memory: func(handle-id: u64, wasm-ptr: u64, size: u64) -> result<bool, string>;
+
+    /// Flush or invalidate DMA CPU/NPU caches across the shared memory range
+    flush-dma-cache: func(handle-id: u64, offset: u64, size: u64) -> result<bool, string>;
+
+    /// Dispatch a batched zero-copy tensor compute operation directly against the shared buffer
+    submit-zero-copy-batch: func(handle-id: u64, operation: string) -> result<u64, string>;
+}
+
 /// The Hagibis Canonical Interop World
 world canonical-interop {
     import canonical-abi-shm;
@@ -505,6 +536,7 @@ world canonical-interop {
     import spsc-ring-buffer;
     import cryptographic-wit-validator;
     import io-uring-shm-bridge;
+    import wasm-npu-streaming-pipeline;
     export canonical-abi-shm;
     export capability-checker;
     export dynamic-capability-manager;
@@ -512,4 +544,5 @@ world canonical-interop {
     export spsc-ring-buffer;
     export cryptographic-wit-validator;
     export io-uring-shm-bridge;
+    export wasm-npu-streaming-pipeline;
 }

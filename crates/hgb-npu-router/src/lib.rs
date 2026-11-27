@@ -19,10 +19,16 @@ pub mod perf_dynatune_kernel_autotuner;
 pub mod npu_dma_engine;
 pub mod zero_copy_tensor_bridge;
 pub mod hardware_auto_quantizer;
+pub mod zero_copy_wasm_npu_pipeline;
 
 pub use error::{NpuRouterError, Result};
 pub use zero_copy_tensor_bridge::*;
 pub use hardware_auto_quantizer::*;
+pub use zero_copy_wasm_npu_pipeline::{
+    NpuDeviceTarget, NpuTensorShmDescriptor, PinnedSharedMemoryRingBuffer,
+    StreamingBatchReceipt, StreamingRingHeader, TensorDataType, TensorMetric,
+    TensorTransform, WasmMemoryMapping, WasmNpuStreamingPipeline,
+};
 pub use npu_dma_engine::{
     DmaBufferAllocator, DmaBufferDescriptor, DmaPageAlignment, DmaPinnedBuffer,
     DmaTensorDispatcher, DmaTransferReceipt, VfioBarRegion, VfioIrqType,

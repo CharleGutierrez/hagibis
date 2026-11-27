@@ -23,7 +23,7 @@ ifneq ($(wildcard scripts/execve_shim.so),)
 export LD_PRELOAD := $(CURDIR)/scripts/execve_shim.so:$(LD_PRELOAD)
 endif
 
-.PHONY: all check test release release-fast pgo bolt pgo-bolt ci-pgo-bolt pgo-bolt-auto-ci regression-bench-check pgo-bench pgo-bolt-dynatune pgo-bolt-verify pgo-build pgo-train pgo-merge pgo-release pgo-dynatune hygiene clean-tiered clean-cache prune-targets clean help untangle skill\:lint skill\:test skill\:build skill-lint skill-test skill-build test-masterclass self-heal-build self-heal-bench
+.PHONY: all check test release release-fast pgo bolt pgo-bolt ci-pgo-bolt pgo-bolt-auto-ci regression-bench-check pgo-bench pgo-bolt-dynatune pgo-bolt-verify pgo-build pgo-train pgo-merge pgo-release pgo-dynatune hygiene clean-tiered clean-cache prune-targets clean help untangle skill\:lint skill\:test skill\:build skill-lint skill-test skill-build test-masterclass self-heal-build self-heal-bench chaos-ci
 
 all: check test
 
@@ -48,6 +48,9 @@ help:
 	@echo "   make pgo-bolt-dynatune      - Hardware governor ramping + thermal-aware PGO + BOLT pipeline"
 	@echo "   make pgo-dynatune           - Hardware-coordinated PGO + kernel-optimizer pipeline"
 	@echo "   make pgo-bench              - Run core execution microbenchmarks (pgo_workload.rs)"
+	@echo ""
+	@echo " Autonomous Chaos Engineering & Resilience (Pillar 3):"
+	@echo "   make chaos-ci               - Automated Chaos-Injected Regression Test Suite (<5s SLA, 100% heal)"
 	@echo ""
 	@echo " Autonomous Self-Healing Feedback Loops (Pillar 4):"
 	@echo "   make self-heal-build        - Autonomous build hygiene & closed-loop compiler error remediation"
@@ -433,6 +436,14 @@ test-masterclass:
 	@echo "======================================================================"
 	@echo " [Masterclass Test] Completed: All Chapters & Simulations In-Sync!"
 	@echo "======================================================================"
+
+# Automated Chaos-Injected Chaos Regression Test Suite (Pillar 3)
+chaos-ci:
+	@echo "======================================================================"
+	@echo " Running Hagibis v1.0 Production Chaos Regression Test Suite"
+	@echo "======================================================================"
+	@chmod +x scripts/chaos-ci-runner.sh 2>/dev/null || true
+	@bash scripts/chaos-ci-runner.sh
 
 # Run automated CI self-healing daemon loop against test/compiler failures
 self-heal-ci:

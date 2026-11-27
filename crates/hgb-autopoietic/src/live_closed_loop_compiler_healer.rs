@@ -27,7 +27,10 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
+
+use crate::provenance_merkle_ledger::ProvenanceMerkleLedger;
 
 #[cfg(unix)]
 use std::os::unix::io::AsRawFd;
@@ -1255,6 +1258,8 @@ pub struct RemediationCertificate {
     pub first_green_verified: bool,
     pub verification_duration_ms: u64,
     pub consensus_receipt_hash: String,
+    #[serde(default)]
+    pub provenance_patch_id: Option<String>,
 }
 
 impl RemediationCertificate {
@@ -1288,6 +1293,7 @@ impl RemediationCertificate {
             first_green_verified: report.first_green,
             verification_duration_ms: report.verification_ms,
             consensus_receipt_hash,
+            provenance_patch_id: None,
         }
     }
 }
@@ -1300,23 +1306,39 @@ pub struct ClosedLoopCompilerHealer {
     workspace_root: PathBuf,
     mcp_bridge_active: AtomicBool,
     lease_arbiter: CompilerLeaseArbiter,
+    provenance_ledger: Option<Arc<ProvenanceMerkleLedger>>,
 }
 
 impl ClosedLoopCompilerHealer {
     pub fn new(workspace_root: impl Into<PathBuf>) -> Self {
+        let ws = workspace_root.into();
+        let prov_path = ws.join(".hgb").join("provenance_ledger.jsonl");
         Self {
-            workspace_root: workspace_root.into(),
+            workspace_root: ws,
             mcp_bridge_active: AtomicBool::new(true),
             lease_arbiter: CompilerLeaseArbiter::default(),
+            provenance_ledger: Some(Arc::new(ProvenanceMerkleLedger::new(prov_path))),
         }
     }
 
     pub fn with_lease_arbiter(workspace_root: impl Into<PathBuf>, arbiter: CompilerLeaseArbiter) -> Self {
+        let ws = workspace_root.into();
+        let prov_path = ws.join(".hgb").join("provenance_ledger.jsonl");
         Self {
-            workspace_root: workspace_root.into(),
+            workspace_root: ws,
             mcp_bridge_active: AtomicBool::new(true),
             lease_arbiter: arbiter,
+            provenance_ledger: Some(Arc::new(ProvenanceMerkleLedger::new(prov_path))),
         }
+    }
+
+    pub fn with_provenance_ledger(mut self, ledger: Arc<ProvenanceMerkleLedger>) -> Self {
+        self.provenance_ledger = Some(ledger);
+        self
+    }
+
+    pub fn provenance_ledger(&self) -> Option<&Arc<ProvenanceMerkleLedger>> {
+        self.provenance_ledger.as_ref()
     }
 
     pub fn lease_arbiter(&self) -> &CompilerLeaseArbiter {
@@ -1397,13 +1419,24 @@ impl ClosedLoopCompilerHealer {
             Ok(rep) if rep.first_green => {
                 // First-Green verification passed! Commit atomic guard permanently.
                 rollback_guard.commit()?;
-                let cert = RemediationCertificate::mint(
+                let mut cert = RemediationCertificate::mint(
                     crate_name,
                     &full_path,
                     diagnostic,
                     &patch_result,
                     &rep,
                 );
+                if let Some(prov_ledger) = &self.provenance_ledger {
+                    if let Ok(rec) = prov_ledger.record_healer_remediation(
+                        crate_name,
+                        &full_path,
+                        diagnostic,
+                        &patch_result,
+                        &cert,
+                    ) {
+                        cert.provenance_patch_id = Some(rec.patch_id);
+                    }
+                }
                 Ok(cert)
             }
             Ok(rep) => {

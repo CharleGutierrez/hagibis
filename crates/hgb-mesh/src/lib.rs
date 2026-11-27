@@ -26,9 +26,11 @@ pub mod distributed_vector_fabric;
 pub mod quorum_circuit_breaker;
 pub mod pbft_consensus;
 pub mod multi_agent_mesh_orchestrator;
+pub mod distributed_raft_state_machine;
 
 // Public re-exports
 pub use error::{MeshError, Result};
+pub use distributed_raft_state_machine::*;
 pub use pbft_consensus::*;
 pub use multi_agent_mesh_orchestrator::{
     CodeAuditReport, CweFinding, DistributedAgentOrchestrator, GeneratedTestCase,
