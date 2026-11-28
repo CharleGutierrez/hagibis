@@ -140,7 +140,15 @@ impl DesktopCockpitLauncher {
     /// Initialize desktop cockpit launcher with workspace root and socket path
     pub fn new<P: AsRef<Path>>(workspace_root: P, socket_path: Option<PathBuf>) -> Self {
         let ws = workspace_root.as_ref().to_path_buf();
-        let sock = socket_path.unwrap_or_else(|| PathBuf::from(DEFAULT_DAEMON_SOCKET));
+        let sock = socket_path.unwrap_or_else(|| {
+            if let Ok(socket_env) = std::env::var("HGB_SOCKET") {
+                PathBuf::from(socket_env)
+            } else if let Ok(home) = std::env::var("HOME") {
+                PathBuf::from(home).join(".hgb").join("hgb.sock")
+            } else {
+                PathBuf::from(DEFAULT_DAEMON_SOCKET)
+            }
+        });
 
         Self {
             socket_path: sock,

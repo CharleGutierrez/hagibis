@@ -947,6 +947,18 @@ impl RealtimeTelemetryLoadBalancer {
     pub async fn execution_count(&self) -> usize {
         self.execution_history.read().await.len()
     }
+
+    /// Evaluates speculative thermal task routing using `SpeculativeExecutionRouter`
+    pub fn route_speculative_task(
+        &self,
+        router: &crate::speculative_thermal_router::SpeculativeExecutionRouter,
+        task: crate::speculative_thermal_router::SpeculativeTask,
+    ) -> (
+        crate::speculative_thermal_router::SpeculativeBackendTarget,
+        crate::speculative_thermal_router::TelemetryReceipt,
+    ) {
+        router.route_task(task)
+    }
 }
 
 // ==============================================================================

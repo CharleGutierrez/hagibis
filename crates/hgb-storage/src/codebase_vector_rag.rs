@@ -890,6 +890,18 @@ pub struct CodebaseVectorRagEngine {
 }
 
 impl CodebaseVectorRagEngine {
+    /// Default initialization locating codebase vectors under ~/.hgb/vector_db/ on native ext4
+    pub fn default_engine(dimension: usize) -> Result<Self> {
+        let dir = if let Ok(home) = std::env::var("HOME") {
+            let p = PathBuf::from(home).join(".hgb").join("vector_db");
+            let _ = fs::create_dir_all(&p);
+            p
+        } else {
+            PathBuf::from(".hgb").join("vector_db")
+        };
+        Self::open_or_create(dir, dimension)
+    }
+
     /// Initialize or open a Codebase Vector RAG engine at specified storage directory
     pub fn open_or_create<P: AsRef<Path>>(storage_dir: P, dimension: usize) -> Result<Self> {
         let dir = storage_dir.as_ref().to_path_buf();

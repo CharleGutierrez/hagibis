@@ -87,6 +87,7 @@ pub mod finops_arbitrage;
 pub mod airgap_cloak;
 pub mod sql_guard;
 pub mod execution_replay;
+pub mod deterministic_action_replay;
 pub mod visual_canvas;
 pub mod multi_repo_federator;
 pub mod time_warp_data;
@@ -112,6 +113,11 @@ pub mod spec_decomposer;
 pub mod dynamic_at_context;
 pub mod visual_regression_sentry;
 pub mod continuous_flaky_watchdog;
+pub mod posix_runtime;
+pub use posix_runtime::{
+    default_hgb_dir, default_shm_dir, default_socket_path, default_vector_db_dir,
+    is_posix_filesystem, resolve_runtime_db, resolve_vector_db,
+};
 pub mod ambient_predictor;
 pub mod cdp_tweak_mirror;
 pub mod prompt_mode_docs_harvester;
@@ -415,6 +421,11 @@ pub use finops_arbitrage::{ArbitrageRouteDecision, FinOpsArbitrageEngine, FinOps
 pub use airgap_cloak::{AirgapCloakEngine, CloakAuditReport, CloakedEntity};
 pub use sql_guard::{SafetyVerdict, SqlGuardEngine, SqlGuardReport};
 pub use execution_replay::{ExecutionReplayEngine, ExecutionTraceReport, ReplayFrame};
+pub use deterministic_action_replay::{
+    ActionStatus, ActionTraceJournal, AgentActionRecord, BisectionRegressionIsolator,
+    BisectionResult, DeterministicReplayEngine, OscillationLoopDetector, OscillationReport,
+    ReplayOutcome, SandboxedWasmKernel, StateSnapshot,
+};
 
 pub use shadow_synthesizer::{ShadowPrediction, ShadowSynthesisReport, ShadowSynthesizer};
 pub use api_mirage::{ApiMirageEngine, MirageEndpoint, MirageExecutionReport};
@@ -2289,7 +2300,7 @@ pub use hardened_sandbox_capabilities::{
     IpcEntryType, IpcFrameHeader, IpCidrRule, MicrovmShmChannel, NetCapability,
     ProcessCapability, SandboxError, SandboxTier as HardenedSandboxTier,
     ShmIpcConsumer, ShmIpcProducer, ShmIpcRingHeader, TokenIssuer,
-    ViolationSeverity as SandboxViolationSeverity, WorkloadSpec,
+    ViolationSeverity as SandboxViolationSeverity, WorkloadSpec as HardenedWorkloadSpec,
 };
 
 // Strategic Upgrade: Zero-Trust MCP Policy Enforcement Point (PEP) Gateway (Pillar 4)
@@ -2361,5 +2372,13 @@ pub use pgo_bolt_feedback_loop::{
 pub mod mcp_bridge_handlers;
 pub use mcp_bridge_handlers::{
     CodebaseRetrievalSchemas, OtelTelemetryMcpHandler, RigAgentOrchestratorMcpHandler, SqliteTransactionalMcpHandler,
+};
+
+// Strategic Upgrade: Pillar 2 Hybrid Sandbox Tiering (MicroVM + WASI Nano-Sandboxes)
+pub mod hybrid_sandbox_tier;
+pub use hybrid_sandbox_tier::{
+    HybridSandboxTierRouter, MicroVmSandboxExecutor, SandboxTier, SandboxTierError,
+    TierAuditRecord, TierExecutionResult, WasmtimeEngine, WorkloadClassification,
+    WorkloadSpec as HybridWorkloadSpec,
 };
 

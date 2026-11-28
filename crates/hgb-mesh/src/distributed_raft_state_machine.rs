@@ -68,6 +68,59 @@ pub struct ClusterNodeInfo {
     pub registered_at: u64,
 }
 
+/// Metadata and state of an autopoietic code or configuration patch
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AutopoieticPatchInfo {
+    /// Unique identifier for the autopoietic patch
+    pub patch_id: String,
+    /// Subsystem or target component being healed/patched
+    pub target_component: String,
+    /// Cryptographic SHA-256 digest of the patch content
+    pub patch_checksum: String,
+    /// Originating author node ID
+    pub author_node_id: String,
+    /// Timestamp when the patch was committed to quorum (ms since UNIX epoch)
+    pub committed_at: u64,
+}
+
+/// Agent memory update proposal payload
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentMemoryUpdate {
+    pub agent_id: String,
+    pub node_id: String,
+    pub key: String,
+    pub value: String,
+    pub timestamp: u64,
+}
+
+/// Vector shard index allocation proposal payload
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VectorShardAllocation {
+    pub shard_id: String,
+    pub collection: String,
+    pub vector_count: u64,
+    pub checksum: String,
+}
+
+/// Distributed circuit breaker transition proposal payload
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CircuitBreakerTransition {
+    pub breaker_id: String,
+    pub state: String,
+    pub reason: String,
+    pub timestamp: u64,
+}
+
+/// Autopoietic self-healing patch commit proposal payload
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AutopoieticPatchCommit {
+    pub patch_id: String,
+    pub target_component: String,
+    pub patch_checksum: String,
+    pub author_node_id: String,
+    pub timestamp: u64,
+}
+
 /// Strongly typed Raft command payloads applied to the replicated state machine
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum RaftCommand {
@@ -99,6 +152,60 @@ pub enum RaftCommand {
         endpoint: String,
         role: String,
     },
+    /// Autopoietic patch commit during self-healing loops
+    AutopoieticPatchCommit {
+        patch_id: String,
+        target_component: String,
+        patch_checksum: String,
+        author_node_id: String,
+        timestamp: u64,
+    },
+}
+
+impl From<AgentMemoryUpdate> for RaftCommand {
+    fn from(m: AgentMemoryUpdate) -> Self {
+        RaftCommand::UpdateMemoryGraph {
+            agent_id: m.agent_id,
+            node_id: m.node_id,
+            key: m.key,
+            value: m.value,
+            timestamp: m.timestamp,
+        }
+    }
+}
+
+impl From<VectorShardAllocation> for RaftCommand {
+    fn from(v: VectorShardAllocation) -> Self {
+        RaftCommand::SyncVectorEmbeddingShard {
+            shard_id: v.shard_id,
+            collection: v.collection,
+            vector_count: v.vector_count,
+            checksum: v.checksum,
+        }
+    }
+}
+
+impl From<CircuitBreakerTransition> for RaftCommand {
+    fn from(c: CircuitBreakerTransition) -> Self {
+        RaftCommand::SetCircuitBreakerState {
+            breaker_id: c.breaker_id,
+            state: c.state,
+            reason: c.reason,
+            timestamp: c.timestamp,
+        }
+    }
+}
+
+impl From<AutopoieticPatchCommit> for RaftCommand {
+    fn from(p: AutopoieticPatchCommit) -> Self {
+        RaftCommand::AutopoieticPatchCommit {
+            patch_id: p.patch_id,
+            target_component: p.target_component,
+            patch_checksum: p.patch_checksum,
+            author_node_id: p.author_node_id,
+            timestamp: p.timestamp,
+        }
+    }
 }
 
 /// An immutable, checksummed Raft consensus log entry
@@ -208,6 +315,8 @@ pub struct MeshConsensusState {
     pub circuit_breakers: HashMap<String, BreakerInfo>,
     /// Dynamic cluster node registry
     pub cluster_nodes: HashMap<String, ClusterNodeInfo>,
+    /// Autopoietic patches committed by consensus
+    pub autopoietic_patches: HashMap<String, AutopoieticPatchInfo>,
     /// Index of highest applied log entry
     pub last_applied_index: u64,
     /// Term of highest applied log entry
@@ -293,6 +402,24 @@ impl MeshConsensusState {
                     },
                 );
             }
+            RaftCommand::AutopoieticPatchCommit {
+                patch_id,
+                target_component,
+                patch_checksum,
+                author_node_id,
+                timestamp,
+            } => {
+                self.autopoietic_patches.insert(
+                    patch_id.clone(),
+                    AutopoieticPatchInfo {
+                        patch_id: patch_id.clone(),
+                        target_component: target_component.clone(),
+                        patch_checksum: patch_checksum.clone(),
+                        author_node_id: author_node_id.clone(),
+                        committed_at: *timestamp,
+                    },
+                );
+            }
         }
 
         self.last_applied_index = index;
@@ -329,6 +456,16 @@ impl MeshConsensusState {
     pub fn get_cluster_node(&self, node_id: &str) -> Option<&ClusterNodeInfo> {
         self.cluster_nodes.get(node_id)
     }
+
+    /// Gets autopoietic patch metadata
+    pub fn get_autopoietic_patch(&self, patch_id: &str) -> Option<&AutopoieticPatchInfo> {
+        self.autopoietic_patches.get(patch_id)
+    }
+
+    /// Gets all registered autopoietic patches
+    pub fn get_all_autopoietic_patches(&self) -> &HashMap<String, AutopoieticPatchInfo> {
+        &self.autopoietic_patches
+    }
 }
 
 /// Compact snapshot of the replicated state machine
@@ -344,6 +481,13 @@ pub struct StateSnapshot {
     pub snapshot_checksum: String,
     /// Creation timestamp (ms since UNIX epoch)
     pub created_at_ms: u64,
+}
+
+impl StateSnapshot {
+    /// Verifies cryptographic SHA-256 checksum integrity of the snapshot
+    pub fn verify_checksum(&self) -> bool {
+        self.state.compute_checksum() == self.snapshot_checksum
+    }
 }
 
 /// Outcome of advancing the Raft election timer
@@ -463,6 +607,17 @@ impl RaftNode {
     #[inline]
     pub fn cluster_size(&self) -> usize {
         self.peers.len() + 1
+    }
+
+    /// Immediately triggers an election cycle regardless of current timer tick
+    pub fn trigger_election(&mut self) -> ElectionStepResult {
+        self.election_timer_ticks = self.election_timeout_ticks;
+        self.step_election_timer()
+    }
+
+    /// Current leader known to this node, if any
+    pub fn current_leader(&self) -> Option<String> {
+        self.current_leader.clone()
     }
 
     /// Strict majority quorum required for consensus: `(cluster_size / 2) + 1`
@@ -1151,6 +1306,42 @@ impl DistributedRaftEngine {
     pub async fn install_snapshot(&self, snapshot: StateSnapshot) -> Result<()> {
         let mut node = self.node.write().await;
         node.install_snapshot(snapshot)
+    }
+
+    /// Immediately triggers an election cycle
+    pub async fn trigger_election(&self) -> ElectionStepResult {
+        let mut node = self.node.write().await;
+        node.trigger_election()
+    }
+
+    /// Returns current leader known to this node
+    pub async fn current_leader(&self) -> Option<String> {
+        let node = self.node.read().await;
+        node.current_leader()
+    }
+
+    /// Returns the node identifier
+    pub async fn node_id(&self) -> String {
+        let node = self.node.read().await;
+        node.node_id.clone()
+    }
+
+    /// Returns the peer node identifiers
+    pub async fn peers(&self) -> Vec<String> {
+        let node = self.node.read().await;
+        node.peers.iter().cloned().collect()
+    }
+
+    /// Returns the cluster size (peers + self)
+    pub async fn cluster_size(&self) -> usize {
+        let node = self.node.read().await;
+        node.cluster_size()
+    }
+
+    /// Returns strict majority quorum required for consensus
+    pub async fn quorum(&self) -> usize {
+        let node = self.node.read().await;
+        node.quorum()
     }
 }
 

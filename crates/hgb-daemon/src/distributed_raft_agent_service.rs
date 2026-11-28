@@ -12,6 +12,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use hgb_core::error::{HgbError, Result};
+use hgb_mesh::{
+    AgentMemoryUpdate, AutopoieticPatchCommit, CircuitBreakerTransition,
+    ConsensusCoordinatorConfig, ConsensusMediatedMeshCoordinator,
+    VectorShardAllocation,
+};
 use hgb_nextgen::p2p_raft_mesh_network::{
     DistributedWorkflowPlan, DistributedWorkflowStep, MeshPeerIdentity,
     P2pRaftMeshNetwork, PeerNodeTelemetry, RaftClusterCommand, RaftRole,
@@ -43,6 +48,7 @@ impl Default for DistributedRaftServiceConfig {
 pub struct DistributedRaftAgentService {
     config: DistributedRaftServiceConfig,
     mesh_network: Arc<P2pRaftMeshNetwork>,
+    consensus_coordinator: Arc<ConsensusMediatedMeshCoordinator>,
     is_running: Arc<RwLock<bool>>,
 }
 
@@ -54,9 +60,18 @@ impl DistributedRaftAgentService {
             config.listen_addr.clone(),
         ));
 
+        let coordinator_config = ConsensusCoordinatorConfig {
+            node_id: config.node_id.clone(),
+            cluster_peers: config.cluster_peers.clone(),
+            heartbeat_interval_ms: config.heartbeat_interval_ms,
+            ..Default::default()
+        };
+        let consensus_coordinator = Arc::new(ConsensusMediatedMeshCoordinator::new(coordinator_config));
+
         Self {
             config,
             mesh_network,
+            consensus_coordinator,
             is_running: Arc::new(RwLock::new(false)),
         }
     }
@@ -64,6 +79,35 @@ impl DistributedRaftAgentService {
     /// Retrieve reference to underlying mesh network
     pub fn mesh_network(&self) -> Arc<P2pRaftMeshNetwork> {
         self.mesh_network.clone()
+    }
+
+    /// Retrieve reference to the consensus-mediated mesh coordinator
+    pub fn consensus_coordinator(&self) -> Arc<ConsensusMediatedMeshCoordinator> {
+        self.consensus_coordinator.clone()
+    }
+
+    /// Replicate agent memory update through Raft consensus
+    pub async fn replicate_agent_memory(&self, update: AgentMemoryUpdate) -> Result<u64> {
+        self.consensus_coordinator
+            .propose_memory_update(update)
+            .await
+            .map_err(|e| HgbError::Execution(e.to_string()))
+    }
+
+    /// Replicate circuit breaker transition through Raft consensus
+    pub async fn replicate_circuit_breaker(&self, transition: CircuitBreakerTransition) -> Result<u64> {
+        self.consensus_coordinator
+            .propose_circuit_breaker_transition(transition)
+            .await
+            .map_err(|e| HgbError::Execution(e.to_string()))
+    }
+
+    /// Replicate autopoietic patch commit through Raft consensus
+    pub async fn replicate_autopoietic_patch(&self, patch: AutopoieticPatchCommit) -> Result<u64> {
+        self.consensus_coordinator
+            .propose_autopoietic_patch_commit(patch)
+            .await
+            .map_err(|e| HgbError::Execution(e.to_string()))
     }
 
     /// Start the agent service background loop
@@ -454,5 +498,73 @@ mod tests {
         assert_eq!(report.vm_id, "microvm-healer-01");
         assert_eq!(report.checkpoint_id, "clean_base");
         assert!(report.post_rollback_p99_ms < 50.0);
+    }
+
+    #[tokio::test]
+    async fn test_consensus_mediated_state_replication_lifecycle() {
+        let config = DistributedRaftServiceConfig {
+            node_id: "consensus-leader-1".into(),
+            listen_addr: "127.0.0.1:9052".into(),
+            cluster_peers: vec![],
+            heartbeat_interval_ms: 20,
+            vector_sync_interval_ms: 50,
+        };
+
+        let service = DistributedRaftAgentService::new(config);
+        let won = service.consensus_coordinator().trigger_election().await.unwrap();
+        assert!(won);
+
+        // 1. Replicate agent memory
+        let idx = service
+            .replicate_agent_memory(AgentMemoryUpdate {
+                agent_id: "agent-optimizer".into(),
+                node_id: "consensus-leader-1".into(),
+                key: "pgo_profile".into(),
+                value: "bolt_instrumented".into(),
+                timestamp: 100,
+            })
+            .await
+            .unwrap();
+        assert_eq!(idx, 1);
+
+        // 2. Replicate circuit breaker transition
+        let idx = service
+            .replicate_circuit_breaker(CircuitBreakerTransition {
+                breaker_id: "breaker-gpu-0".into(),
+                state: "Closed".into(),
+                reason: "Temperature normalized".into(),
+                timestamp: 101,
+            })
+            .await
+            .unwrap();
+        assert_eq!(idx, 2);
+
+        // 3. Replicate autopoietic patch commit
+        let idx = service
+            .replicate_autopoietic_patch(AutopoieticPatchCommit {
+                patch_id: "patch-llvm-19".into(),
+                target_component: "compiler".into(),
+                patch_checksum: "sha256-llvm-ok".into(),
+                author_node_id: "consensus-leader-1".into(),
+                timestamp: 102,
+            })
+            .await
+            .unwrap();
+        assert_eq!(idx, 3);
+
+        // Verify state
+        let state = service.consensus_coordinator().get_replicated_state().await;
+        assert_eq!(
+            state.get_memory("agent-optimizer", "pgo_profile").unwrap(),
+            "bolt_instrumented"
+        );
+        assert_eq!(
+            state.get_circuit_breaker("breaker-gpu-0").unwrap().state,
+            "Closed"
+        );
+        assert_eq!(
+            state.get_autopoietic_patch("patch-llvm-19").unwrap().target_component,
+            "compiler"
+        );
     }
 }

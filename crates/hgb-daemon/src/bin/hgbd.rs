@@ -120,8 +120,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .socket
         .or_else(|| std::env::var("HGB_SOCKET").ok().map(PathBuf::from))
         .unwrap_or_else(|| {
-            let runtime_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
-            PathBuf::from(runtime_dir).join("hgb.sock")
+            if let Ok(home) = std::env::var("HOME") {
+                let hgb_dir = PathBuf::from(home).join(".hgb");
+                let _ = std::fs::create_dir_all(&hgb_dir);
+                hgb_dir.join("hgb.sock")
+            } else {
+                let runtime_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
+                PathBuf::from(runtime_dir).join("hgb.sock")
+            }
         });
 
     if !cli.quiet {

@@ -58,7 +58,12 @@ fn create_sample_rfc() -> RfcSpecification {
 }
 
 fn create_sample_topology() -> CodebaseTopology {
-    CodebaseTopology::new("hagibis", "/media/toshiba/Lexar/hagibis")
+    let ws_path = if std::path::Path::new("/home/toshiba/hagibis").is_dir() {
+        "/home/toshiba/hagibis"
+    } else {
+        "/media/toshiba/Lexar/hagibis"
+    };
+    CodebaseTopology::new("hagibis", ws_path)
         .with_node("hgb-storage", "crates/hgb-storage/src/lib.rs", 12000, 4, 0.45)
         .with_node("hgb-mesh", "crates/hgb-mesh/src/lib.rs", 9500, 0, 0.15)
         .with_edge("hgb-mesh", "hgb-storage", "imports", 450)

@@ -75,8 +75,20 @@ pub struct EpisodicVectorMemoryEngine {
 impl EpisodicVectorMemoryEngine {
     /// Initialize episodic vector memory with SQLite WAL persistence
     pub fn new<P: AsRef<Path>>(workspace_root: P) -> Result<Self, String> {
-        let hgb_dir = workspace_root.as_ref().join(".hgb");
-        let _ = fs::create_dir_all(&hgb_dir);
+        let hgb_dir = if let Ok(home) = std::env::var("HOME") {
+            let home_hgb = Path::new(&home).join(".hgb");
+            if home_hgb.exists() {
+                home_hgb
+            } else {
+                let ws_hgb = workspace_root.as_ref().join(".hgb");
+                let _ = fs::create_dir_all(&ws_hgb);
+                ws_hgb
+            }
+        } else {
+            let ws_hgb = workspace_root.as_ref().join(".hgb");
+            let _ = fs::create_dir_all(&ws_hgb);
+            ws_hgb
+        };
         let db_path = hgb_dir.join("episodic_vector_memory.db");
 
         let conn = Connection::open_with_flags(

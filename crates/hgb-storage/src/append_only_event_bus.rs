@@ -251,6 +251,14 @@ impl EventBusStore {
             return Self::new(p);
         }
 
+        if let Ok(home) = std::env::var("HOME") {
+            let home_hgb = Path::new(&home).join(".hgb");
+            if home_hgb.exists() || std::fs::create_dir_all(&home_hgb).is_ok() {
+                let p = home_hgb.join("system_event_bus.db");
+                return Self::new(&p);
+            }
+        }
+
         let default_hgb = Path::new(".hgb");
         if default_hgb.exists() || std::fs::create_dir_all(default_hgb).is_ok() {
             let p = default_hgb.join("system_event_bus.db");

@@ -330,6 +330,13 @@ language-servers = [ "typescript-language-server", "hagibis-sidecar" ]
 }
 
 fn default_socket_path() -> String {
+    if let Ok(socket_env) = std::env::var("HGB_SOCKET") {
+        return socket_env;
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        let p = format!("{}/.hgb/hgb.sock", home);
+        return p;
+    }
     if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
         format!("{}/hgbd.sock", runtime_dir)
     } else {

@@ -338,7 +338,11 @@ pub struct PgoPipelineConfig {
 
 impl Default for PgoPipelineConfig {
     fn default() -> Self {
-        let root = PathBuf::from("/media/toshiba/Lexar/hagibis");
+        let root = if Path::new("/home/toshiba/hagibis").is_dir() {
+            PathBuf::from("/home/toshiba/hagibis")
+        } else {
+            PathBuf::from("/media/toshiba/Lexar/hagibis")
+        };
         Self {
             workspace_root: root.clone(),
             target_bin_name: "hgbd".to_string(),

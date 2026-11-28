@@ -285,6 +285,12 @@ impl VibePromptRunner {
         let socket_path = std::env::var("HGB_SOCKET")
             .map(PathBuf::from)
             .unwrap_or_else(|_| {
+                if let Ok(home) = std::env::var("HOME") {
+                    let hgb_sock = PathBuf::from(&home).join(".hgb").join("hgb.sock");
+                    if hgb_sock.exists() {
+                        return hgb_sock;
+                    }
+                }
                 let runtime = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
                 PathBuf::from(runtime).join("hgb.sock")
             });

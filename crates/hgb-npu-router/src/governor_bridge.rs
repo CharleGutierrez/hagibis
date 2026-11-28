@@ -63,8 +63,15 @@ pub struct GovernorBridge {
 
 impl Default for GovernorBridge {
     fn default() -> Self {
+        let script = if Path::new("/home/toshiba/hagibis/scripts/cpu-governor.sh").exists() {
+            PathBuf::from("/home/toshiba/hagibis/scripts/cpu-governor.sh")
+        } else if Path::new("/media/toshiba/Lexar/hagibis/scripts/cpu-governor.sh").exists() {
+            PathBuf::from("/media/toshiba/Lexar/hagibis/scripts/cpu-governor.sh")
+        } else {
+            PathBuf::from("scripts/cpu-governor.sh")
+        };
         Self::new(
-            PathBuf::from("/media/toshiba/Lexar/hagibis/scripts/cpu-governor.sh"),
+            script,
             PathBuf::from("/tmp/hgb_governor_state.json"),
             PathBuf::from("/sys"),
         )

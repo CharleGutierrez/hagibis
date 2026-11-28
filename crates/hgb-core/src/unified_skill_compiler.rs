@@ -987,9 +987,19 @@ world generic-world {
 mod tests {
     use super::*;
 
+    fn test_skills_dir() -> PathBuf {
+        if Path::new("/home/toshiba/hagibis/skills").exists() {
+            PathBuf::from("/home/toshiba/hagibis/skills")
+        } else if Path::new("/media/toshiba/Lexar/hagibis/skills").exists() {
+            PathBuf::from("/media/toshiba/Lexar/hagibis/skills")
+        } else {
+            PathBuf::from("skills")
+        }
+    }
+
     #[test]
     fn test_wit_discovery_and_cataloging() {
-        let compiler = UnifiedSkillCompiler::new("/media/toshiba/Lexar/hagibis/skills")
+        let compiler = UnifiedSkillCompiler::new(test_skills_dir())
             .expect("UnifiedSkillCompiler init");
         let skills = compiler.registry().list_skills();
 
@@ -1031,7 +1041,7 @@ mod tests {
 
     #[test]
     fn test_zero_copy_tensor_shm_handoff() {
-        let compiler = UnifiedSkillCompiler::new("/media/toshiba/Lexar/hagibis/skills")
+        let compiler = UnifiedSkillCompiler::new(test_skills_dir())
             .expect("UnifiedSkillCompiler init");
 
         let shm_id = "test_tensor_pipe_1";
@@ -1077,7 +1087,7 @@ mod tests {
 
     #[test]
     fn test_sandboxed_component_execution_wat_success() {
-        let compiler = UnifiedSkillCompiler::new("/media/toshiba/Lexar/hagibis/skills")
+        let compiler = UnifiedSkillCompiler::new(test_skills_dir())
             .expect("UnifiedSkillCompiler init");
 
         // WAT bytecode returning exit code 0 and consuming fuel
@@ -1107,7 +1117,7 @@ mod tests {
 
     #[test]
     fn test_sandboxed_component_fuel_metering_trap() {
-        let compiler = UnifiedSkillCompiler::new("/media/toshiba/Lexar/hagibis/skills")
+        let compiler = UnifiedSkillCompiler::new(test_skills_dir())
             .expect("UnifiedSkillCompiler init");
 
         // Infinite loop requiring unbounded fuel
@@ -1142,7 +1152,7 @@ mod tests {
 
     #[test]
     fn test_sandboxed_shm_host_binding_invocation() {
-        let compiler = UnifiedSkillCompiler::new("/media/toshiba/Lexar/hagibis/skills")
+        let compiler = UnifiedSkillCompiler::new(test_skills_dir())
             .expect("UnifiedSkillCompiler init");
 
         // WAT program calling host function hgb_shm::open_shm
@@ -1171,7 +1181,7 @@ mod tests {
 
     #[test]
     fn test_sandboxed_component_capability_denial() {
-        let compiler = UnifiedSkillCompiler::new("/media/toshiba/Lexar/hagibis/skills")
+        let compiler = UnifiedSkillCompiler::new(test_skills_dir())
             .expect("UnifiedSkillCompiler init");
 
         let shm_wat = r#"

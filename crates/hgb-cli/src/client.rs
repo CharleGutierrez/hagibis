@@ -33,8 +33,25 @@ impl HgbClient {
         let socket_path = std::env::var("HGB_SOCKET")
             .map(PathBuf::from)
             .unwrap_or_else(|_| {
-                let runtime_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
-                PathBuf::from(runtime_dir).join("hgb.sock")
+                if let Ok(home) = std::env::var("HOME") {
+                    let hgb_sock = PathBuf::from(&home).join(".hgb").join("hgb.sock");
+                    if hgb_sock.exists() {
+                        return hgb_sock;
+                    }
+                    if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
+                        let xdg_sock = PathBuf::from(runtime_dir).join("hgb.sock");
+                        if xdg_sock.exists() {
+                            return xdg_sock;
+                        }
+                    }
+                    if Path::new("/tmp/hgb.sock").exists() {
+                        return PathBuf::from("/tmp/hgb.sock");
+                    }
+                    hgb_sock
+                } else {
+                    let runtime_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
+                    PathBuf::from(runtime_dir).join("hgb.sock")
+                }
             });
         Self { socket_path }
     }

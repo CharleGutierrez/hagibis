@@ -1597,7 +1597,7 @@ error[E0596]: cannot borrow `buffer` as mutable, as it is not declared as mutabl
             receipt_id: "REC-001".to_string(),
             incident_id: "INC-001".to_string(),
             created_at_ms: 1700000000,
-            workspace_root: "/media/toshiba/Lexar/hagibis".to_string(),
+            workspace_root: "/home/toshiba/hagibis".to_string(),
             original_manifest_hash: orig_hash.to_string(),
             remediated_manifest_hash: remed_hash.to_string(),
             patches_applied_hash: patch_hash.to_string(),

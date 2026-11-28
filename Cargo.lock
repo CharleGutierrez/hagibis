@@ -2070,6 +2070,7 @@ dependencies = [
  "hex",
  "hgb-compiler",
  "hgb-core",
+ "hgb-mesh",
  "hgb-nextgen",
  "hgb-storage",
  "hgb-wasm-kernel",

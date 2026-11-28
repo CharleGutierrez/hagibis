@@ -69,7 +69,7 @@ if [ ! -f "${CHAOS_SCRIPT}" ]; then
 fi
 
 # 3. Execute masterclass chaos injector
-echo -e "${BLUE}⚡ Executing Masterclass Chaos Fault Injector Suite (6 Scenarios)...${NC}\n"
+echo -e "${BLUE}⚡ Executing Masterclass Chaos Fault Injector Suite (7 Scenarios)...${NC}\n"
 START_TIME_MS=$(python3 -c "import time; print(int(time.time() * 1000))")
 
 set +e
@@ -106,8 +106,8 @@ total = data.get("total_scenarios", 0)
 healed = data.get("healed_scenarios", 0)
 resilience_pct = data.get("resilience_score_pct", 0.0)
 
-print(" # | Scenario                     | Status   | Duration     | SLA (<${SLA_MAX_MS}ms) | Health Summary")
-print("---+------------------------------+----------+--------------+---------------+------------------------------------")
+print(" # | Scenario                               | Status   | Duration     | SLA (<${SLA_MAX_MS}ms) | Health Summary")
+print("---+----------------------------------------+----------+--------------+---------------+------------------------------------")
 
 sla_breaches = 0
 failed_scenarios = 0
@@ -144,16 +144,18 @@ for idx, r in enumerate(reports, 1):
         summary = f"Queue resized ({details.get('initial_queue_capacity')}->{details.get('adapted_queue_capacity')}), WAL verified"
     elif sc_name == "process_oom_recovery":
         summary = f"Reclaimed {details.get('heap_reclaimed_mb', 0)}MB, {details.get('rehydrated_record_count', 0)} state objs"
+    elif sc_name == "agent_infinite_mutation_loop_bisection":
+        summary = f"Oscillation isolated at step {details.get('culprit_step')}, rollback verified in {details.get('healing_duration_ms', 0)}ms"
 
-    print(f"{idx:>2} | {sc_name:<28} | {status_colored} | {duration:>8.2f} ms | {sla_str:<13} | {summary}")
+    print(f"{idx:>2} | {sc_name:<38} | {status_colored} | {duration:>8.2f} ms | {sla_str:<13} | {summary}")
 
-print("---+------------------------------+----------+--------------+---------------+------------------------------------")
+print("---+----------------------------------------+----------+--------------+---------------+------------------------------------")
 print(f" Total Scenarios: {total} | Healed: {healed} | Resilience Score: {resilience_pct:.1f}% | SLA Breaches: {sla_breaches}")
 print("===================================================================================================")
 
 # Validation rules:
 # 1. Injector exit code must be 0
-# 2. Total scenarios must be at least 6
+# 2. Total scenarios must be at least 7
 # 3. All scenarios must be HEALED (resilience_pct == 100.0)
 # 4. Zero SLA breaches (duration < sla_limit)
 regression_detected = False
@@ -162,8 +164,8 @@ if injector_rc != 0:
     print(f"\033[31m✖ REGRESSION: Chaos injector script exited with non-zero code {injector_rc}\033[0m")
     regression_detected = True
 
-if total < 6:
-    print(f"\033[31m✖ REGRESSION: Incomplete test suite execution (expected >=6 scenarios, ran {total})\033[0m")
+if total < 7:
+    print(f"\033[31m✖ REGRESSION: Incomplete test suite execution (expected >=7 scenarios, ran {total})\033[0m")
     regression_detected = True
 
 if failed_scenarios > 0 or healed != total or resilience_pct < 100.0:

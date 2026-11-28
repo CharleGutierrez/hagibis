@@ -877,8 +877,13 @@ impl AutonomousAstHealer {
         let start = Instant::now();
 
         // Check if repo autonomous-compiler-healer.sh exists
-        let script_path = Path::new("/media/toshiba/Lexar/hagibis/scripts/autonomous-compiler-healer.sh");
-        let patch_applied = if script_path.exists() {
+        let script_candidates = [
+            Path::new("/home/toshiba/hagibis/scripts/autonomous-compiler-healer.sh"),
+            Path::new("/media/toshiba/Lexar/hagibis/scripts/autonomous-compiler-healer.sh"),
+            Path::new("scripts/autonomous-compiler-healer.sh"),
+        ];
+        let script_path = script_candidates.iter().find(|p| p.exists()).copied();
+        let patch_applied = if script_path.is_some() {
             format!("Invoked autonomous-compiler-healer.sh for {}: clean AST invariant restored", component)
         } else {
             format!("Autonomous in-memory AST pattern rewrite applied for component {}: fixed '{}'", component, diagnostic)

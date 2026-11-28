@@ -333,7 +333,16 @@ impl MicrovmWorkStealingQueue {
         let spawn_cfg = FirecrackerSpawnConfig::default();
         let _ = snapshot_cache.preboot_base_snapshot(&spawn_cfg);
 
-        let default_log_db = ws.join(".hgb").join("microvm_execution_logs.db");
+        let default_log_db = if let Ok(home) = std::env::var("HOME") {
+            let home_hgb = Path::new(&home).join(".hgb");
+            if home_hgb.exists() {
+                home_hgb.join("microvm_execution_logs.db")
+            } else {
+                ws.join(".hgb").join("microvm_execution_logs.db")
+            }
+        } else {
+            ws.join(".hgb").join("microvm_execution_logs.db")
+        };
         let log_store = Arc::new(Mutex::new(
             MicrovmExecutionLogStore::new(&default_log_db).ok().map(Arc::new)
         ));
@@ -365,7 +374,16 @@ impl MicrovmWorkStealingQueue {
         let spawn_cfg = FirecrackerSpawnConfig::default();
         let _ = snapshot_cache.preboot_base_snapshot(&spawn_cfg);
 
-        let default_log_db = ws.join(".hgb").join("microvm_execution_logs.db");
+        let default_log_db = if let Ok(home) = std::env::var("HOME") {
+            let home_hgb = Path::new(&home).join(".hgb");
+            if home_hgb.exists() {
+                home_hgb.join("microvm_execution_logs.db")
+            } else {
+                ws.join(".hgb").join("microvm_execution_logs.db")
+            }
+        } else {
+            ws.join(".hgb").join("microvm_execution_logs.db")
+        };
         let log_store = Arc::new(Mutex::new(
             MicrovmExecutionLogStore::new(&default_log_db).ok().map(Arc::new)
         ));

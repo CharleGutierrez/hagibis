@@ -1491,6 +1491,49 @@ impl WasmNpuStreamingPipeline {
         })
     }
 
+    /// Speculatively execute an in-place batch transformation guarded by `SpeculativeExecutionRouter`
+    /// thermal telemetry. If thermals are throttling or on battery, the transformation is evaluated
+    /// and queued according to speculative offloading heuristics.
+    pub fn execute_speculative_transformation(
+        &self,
+        router: &crate::speculative_thermal_router::SpeculativeExecutionRouter,
+        handle_id: u64,
+        offset: usize,
+        count: usize,
+        transform: TensorTransform,
+    ) -> Result<(
+        crate::speculative_thermal_router::SpeculativeBackendTarget,
+        Option<StreamingBatchReceipt>,
+        crate::speculative_thermal_router::TelemetryReceipt,
+    )> {
+        use crate::speculative_thermal_router::{
+            SpeculativeBackendTarget, SpeculativeTask, SpeculativeTaskKind, SpeculativeTaskPriority,
+        };
+
+        let task_kind = if count <= 1024 {
+            SpeculativeTaskKind::SmallEmbeddingInference { dim: count, count: 1 }
+        } else {
+            SpeculativeTaskKind::TensorBatchTransform {
+                batch_size: count / 128,
+                shape: vec![128],
+            }
+        };
+
+        let task = SpeculativeTask::new(
+            format!("wasm_pipeline_tensor_transform_{}", handle_id),
+            task_kind,
+            SpeculativeTaskPriority::Interactive,
+        );
+
+        let (target, receipt) = router.route_task(task);
+        if target == SpeculativeBackendTarget::DeferredBatchQueue {
+            return Ok((target, None, receipt));
+        }
+
+        let streaming_receipt = self.execute_transformation(handle_id, offset, count, transform)?;
+        Ok((target, Some(streaming_receipt), receipt))
+    }
+
     /// Read data from guest WASM linear memory into the mapped host buffer
     pub fn sync_from_wasm(
         &self,

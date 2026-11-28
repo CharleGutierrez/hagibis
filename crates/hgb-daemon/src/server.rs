@@ -312,10 +312,14 @@ impl DaemonState {
 
 impl DaemonState {
     pub fn new(socket_path: PathBuf) -> Self {
-        let vault_path = socket_path
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .join("style_vault.db");
+        let runtime_hgb = if let Ok(home) = std::env::var("HOME") {
+            let p = PathBuf::from(home).join(".hgb");
+            let _ = std::fs::create_dir_all(&p);
+            p
+        } else {
+            socket_path.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| PathBuf::from("."))
+        };
+        let vault_path = runtime_hgb.join("style_vault.db");
         let style_vault = StyleMemoryVault::new(&vault_path)
             .unwrap_or_else(|_| StyleMemoryVault::in_memory().expect("in-memory style vault"));
 
@@ -334,10 +338,10 @@ impl DaemonState {
         let ws_dir = resolve_workspace();
         let mcp_orchestrator = Arc::new(hgb_core::McpHostOrchestrator::new(&ws_dir));
 
-        let skill_db_path = socket_path.parent().unwrap_or_else(|| Path::new(".")).join("skills.db");
+        let skill_db_path = runtime_hgb.join("skills.db");
         let skill_store = Arc::new(hgb_storage::SkillStore::new(&skill_db_path).unwrap_or_else(|_| hgb_storage::SkillStore::new(std::env::temp_dir().join("hgb_skills_fallback.db")).expect("fallback skill store")));
 
-        let cache_dir = socket_path.parent().unwrap_or_else(|| Path::new(".")).join("cache");
+        let cache_dir = runtime_hgb.join("cache");
         let _ = std::fs::create_dir_all(&cache_dir);
         let cache_path = cache_dir.join("semantic_cache.json");
         let semantic_cache = Arc::new(tokio::sync::RwLock::new(
@@ -357,7 +361,9 @@ impl DaemonState {
         let mcp_mesh = Arc::new(crate::mcp_mesh_network::McpMeshNetwork::new(&ws_dir));
         let self_patcher = Arc::new(hgb_core::AutonomousSelfPatcher::new(&ws_dir));
 
-        let vec_db_path = socket_path.parent().unwrap_or_else(|| Path::new(".")).join("vectors.db");
+        let vec_db_dir = runtime_hgb.join("vector_db");
+        let _ = std::fs::create_dir_all(&vec_db_dir);
+        let vec_db_path = vec_db_dir.join("vectors.db");
         let vector_engine = Arc::new(hgb_storage::DistributedVectorEngine::new(&vec_db_path)
             .unwrap_or_else(|_| hgb_storage::DistributedVectorEngine::in_memory().expect("in-memory vector engine fallback")));
         let jit_allocator = Arc::new(hgb_core::JitResourceAllocator::new());
@@ -435,7 +441,7 @@ impl DaemonState {
         ));
         let mcp_hot_reloader = Arc::new(crate::mcp_hot_reloader::McpHotReloader::new(&ws_dir, None));
         let ebpf_engine = Arc::new(hgb_core::ebpf_telemetry_probe::EbpfProbeEngine::new());
-        let raft_db_path = ws_dir.join(".hgb").join("raft_mesh.db");
+        let raft_db_path = runtime_hgb.join("raft_mesh.db");
         let raft_mesh = Arc::new(tokio::sync::RwLock::new(
             hgb_storage::raft_state_mesh::RaftStateMesh::new(1, &raft_db_path)
                 .expect("init raft state mesh")
@@ -533,7 +539,7 @@ impl DaemonState {
                 })
         );
 
-        let event_bus_path = ws_dir.join(".hgb").join("system_event_bus.db");
+        let event_bus_path = runtime_hgb.join("system_event_bus.db");
         let event_bus_store = Arc::new(
             hgb_storage::EventBusStore::new(&event_bus_path)
                 .unwrap_or_else(|_| hgb_storage::EventBusStore::in_memory().expect("fallback in-memory event bus store"))
@@ -550,7 +556,7 @@ impl DaemonState {
 
         let dynatune_ipc_governor = Arc::new(crate::dynatune_ipc_governor::DynatuneIpcGovernor::new());
 
-        let actor_checkpoint_db = ws_dir.join(".hgb").join("actor_checkpoints.db");
+        let actor_checkpoint_db = runtime_hgb.join("actor_checkpoints.db");
         let actor_checkpoint_store = Arc::new(
             hgb_storage::ActorCheckpointStore::new(&actor_checkpoint_db)
                 .unwrap_or_else(|_| hgb_storage::ActorCheckpointStore::in_memory().expect("fallback in-memory actor checkpoint store"))

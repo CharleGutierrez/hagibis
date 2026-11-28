@@ -536,6 +536,16 @@ pub fn resolve_mmap_vector_path(custom_path: Option<&Path>) -> PathBuf {
         }
     }
 
+    if let Ok(home) = std::env::var("HOME") {
+        let home_hgb = Path::new(&home).join(".hgb");
+        if home_hgb.exists() || std::fs::create_dir_all(&home_hgb).is_ok() {
+            let p = home_hgb.join("vector_storage.mmap");
+            if is_file_writable_or_creatable(&p) {
+                return p;
+            }
+        }
+    }
+
     let default_hgb = Path::new(".hgb");
     if default_hgb.exists() || std::fs::create_dir_all(default_hgb).is_ok() {
         let p = default_hgb.join("vector_storage.mmap");

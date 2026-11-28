@@ -339,10 +339,29 @@ impl VectorMcpMemoryMesh {
 
     /// Open or create the default workspace Vector MCP Memory Mesh (`.hgb/vector_memory.db`)
     pub fn open_workspace<P: AsRef<Path>>(workspace_root: P) -> Result<Self> {
-        let db_path = workspace_root
-            .as_ref()
-            .join(".hgb")
-            .join("vector_memory.db");
+        let ws = workspace_root.as_ref();
+        let db_path = if let Ok(home) = std::env::var("HOME") {
+            let home_hgb = Path::new(&home).join(".hgb");
+            if home_hgb.exists() {
+                home_hgb.join("vector_memory.db")
+            } else {
+                ws.join(".hgb").join("vector_memory.db")
+            }
+        } else {
+            ws.join(".hgb").join("vector_memory.db")
+        };
+        Self::open_or_create(db_path)
+    }
+
+    /// Open or create default vector memory mesh in ~/.hgb/vector_db/ or ~/.hgb/
+    pub fn open_default() -> Result<Self> {
+        let db_path = if let Ok(home) = std::env::var("HOME") {
+            let vec_dir = Path::new(&home).join(".hgb").join("vector_db");
+            let _ = std::fs::create_dir_all(&vec_dir);
+            vec_dir.join("vector_memory.db")
+        } else {
+            PathBuf::from(".hgb").join("vector_memory.db")
+        };
         Self::open_or_create(db_path)
     }
 

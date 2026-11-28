@@ -42,7 +42,11 @@ fn test_long_term_semantic_memory_lifecycle() {
         .expect("Failed to open semantic memory index");
 
     // 2. Ingest Architecture Documentation
-    let masterclass_path = PathBuf::from("/media/toshiba/Lexar/hagibis/docs/HAGIBIS_VIBE_CODING_MASTERCLASS.md");
+    let masterclass_path = if Path::new("/home/toshiba/hagibis/docs/HAGIBIS_VIBE_CODING_MASTERCLASS.md").exists() {
+        PathBuf::from("/home/toshiba/hagibis/docs/HAGIBIS_VIBE_CODING_MASTERCLASS.md")
+    } else {
+        PathBuf::from("/media/toshiba/Lexar/hagibis/docs/HAGIBIS_VIBE_CODING_MASTERCLASS.md")
+    };
     if masterclass_path.exists() {
         let doc_report = index
             .ingest_documentation(&masterclass_path, DocKnowledgeKind::MasterclassGuide)
@@ -52,7 +56,11 @@ fn test_long_term_semantic_memory_lifecycle() {
     }
 
     // 3. Ingest Codebase Symbols
-    let crate_src = PathBuf::from("/media/toshiba/Lexar/hagibis/crates/hgb-storage/src");
+    let crate_src = if Path::new("/home/toshiba/hagibis/crates/hgb-storage/src").exists() {
+        PathBuf::from("/home/toshiba/hagibis/crates/hgb-storage/src")
+    } else {
+        PathBuf::from("/media/toshiba/Lexar/hagibis/crates/hgb-storage/src")
+    };
     if crate_src.exists() {
         let code_report = index
             .ingest_codebase(&crate_src)

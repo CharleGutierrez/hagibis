@@ -9,6 +9,7 @@ Implements real, executable ChaosFaultInjector with zero mocks:
   4. Socket Partition Injection & Autonomous Dynamic Port Rebind
   5. Disk I/O Latency Injection & Autonomous Adaptive Queue Resizing / Timeout Expansion
   6. Process Near-OOM Recovery & Autonomous Heap Reclamation / Zero-Loss Rehydration
+  7. Agent Infinite Mutation Loop Oscillation, Deterministic Replay & Bisection Isolation
 
 Includes automated chaos test runner suite and `test_autonomous_chaos_recovery()`.
 """
@@ -581,6 +582,181 @@ class AutonomousOOMRecoveryManager:
         }
 
 # ==============================================================================
+# Scenario 7: Agent Infinite Mutation Loop Oscillation & Bisection Isolation
+# ==============================================================================
+
+class AutonomousAgentReplayManager:
+    """
+    Simulates autonomous agent deterministic record-and-replay engine:
+    1. Records cryptographically chained action journal with SHA-256 digests.
+    2. Snapshots codebase state at sequence boundaries.
+    3. Detects oscillation thrashing (State A -> B -> A).
+    4. Trips circuit breaker and isolates offending AST mutation via O(log K) bisection.
+    5. Executes atomic deterministic rollback to green state with 0 residual corruption.
+    """
+    def __init__(self, trace_dir: str):
+        self.trace_dir = trace_dir
+        os.makedirs(trace_dir, exist_ok=True)
+        self.session_id = f"session_{uuid.uuid4().hex[:8]}"
+        self.journal_file = os.path.join(trace_dir, f"{self.session_id}.jsonl")
+        self.records: List[Dict[str, Any]] = []
+        self.snapshots: Dict[int, Dict[str, str]] = {}
+        self.current_state: Dict[str, str] = {}
+        self.circuit_breaker_tripped: bool = False
+
+    def seed_initial_state(self, files: Dict[str, str]):
+        self.current_state = dict(files)
+        self.save_snapshot(0)
+
+    @staticmethod
+    def compute_state_hash(files: Dict[str, str]) -> str:
+        import hashlib
+        hasher = hashlib.sha256()
+        for k in sorted(files.keys()):
+            hasher.update(k.encode("utf-8"))
+            hasher.update(b"\0")
+            hasher.update(files[k].encode("utf-8"))
+            hasher.update(b"\n")
+        return hasher.hexdigest()
+
+    def save_snapshot(self, seq: int):
+        self.snapshots[seq] = dict(self.current_state)
+
+    def record_action(
+        self,
+        seq: int,
+        prompt: str,
+        tool_name: str,
+        args_json: str,
+        diff: Optional[str],
+        status: str = "Success",
+    ) -> Dict[str, Any]:
+        import hashlib
+        pre_hash = self.compute_state_hash(self.current_state)
+
+        # Apply mutation diff to state
+        if diff:
+            try:
+                mutation = json.loads(diff)
+                target_file = mutation.get("file", "src/calc.rs")
+                if "content" in mutation:
+                    self.current_state[target_file] = mutation["content"]
+                elif "replace" in mutation and "with" in mutation:
+                    content = self.current_state.get(target_file, "")
+                    self.current_state[target_file] = content.replace(mutation["replace"], mutation["with"])
+            except Exception:
+                pass
+
+        post_hash = self.compute_state_hash(self.current_state)
+        prev_hash = self.records[-1]["record_hash"] if self.records else ("0" * 64)
+
+        hasher = hashlib.sha256()
+        hasher.update(prev_hash.encode("utf-8"))
+        hasher.update(str(seq).encode("utf-8"))
+        hasher.update(prompt.encode("utf-8"))
+        hasher.update(tool_name.encode("utf-8"))
+        hasher.update(args_json.encode("utf-8"))
+        hasher.update(pre_hash.encode("utf-8"))
+        hasher.update(post_hash.encode("utf-8"))
+        if diff:
+            hasher.update(diff.encode("utf-8"))
+        hasher.update(status.encode("utf-8"))
+        rec_hash = hasher.hexdigest()
+
+        rec = {
+            "action_id": str(uuid.uuid4()),
+            "sequence_number": seq,
+            "timestamp_ms": int(time.time() * 1000),
+            "prompt_hash": hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16],
+            "tool_name": tool_name,
+            "tool_arguments_json": args_json,
+            "random_seed": 42 + seq,
+            "pre_state_hash": pre_hash,
+            "post_state_hash": post_hash,
+            "ast_mutation_diff": diff,
+            "execution_status": status,
+            "prev_record_hash": prev_hash,
+            "record_hash": rec_hash,
+        }
+
+        self.records.append(rec)
+        with open(self.journal_file, "a") as f:
+            f.write(json.dumps(rec) + "\n")
+
+        return rec
+
+    def detect_oscillation(self, window: int = 6) -> Optional[Dict[str, Any]]:
+        n = len(self.records)
+        if n < 2:
+            return None
+        sub = self.records[-min(n, window):]
+        for i in range(len(sub)):
+            for j in range(i):
+                if sub[i]["post_state_hash"] == sub[j]["post_state_hash"]:
+                    return {
+                        "cycle_length": i - j,
+                        "cycle_start_seq": sub[j]["sequence_number"],
+                        "cycle_end_seq": sub[i]["sequence_number"],
+                        "recurring_state_hash": sub[i]["post_state_hash"],
+                    }
+        return None
+
+    def isolate_bisection_culprit(self, green_seq: int, red_seq: int, eval_predicate) -> Dict[str, Any]:
+        low = green_seq
+        high = red_seq
+        eval_count = 0
+        bisection_log = []
+
+        while low + 1 < high:
+            eval_count += 1
+            mid = low + (high - low) // 2
+
+            # Replay from base snapshot up to mid
+            sim_state = dict(self.snapshots[green_seq])
+            for r in self.records:
+                if green_seq < r["sequence_number"] <= mid:
+                    if r.get("ast_mutation_diff"):
+                        try:
+                            m = json.loads(r["ast_mutation_diff"])
+                            tf = m.get("file", "src/calc.rs")
+                            if "content" in m:
+                                sim_state[tf] = m["content"]
+                            elif "replace" in m and "with" in m:
+                                sim_state[tf] = sim_state.get(tf, "").replace(m["replace"], m["with"])
+                        except Exception:
+                            pass
+
+            passed = eval_predicate(sim_state)
+            bisection_log.append({"step": eval_count, "seq": mid, "passed": passed})
+            if passed:
+                low = mid
+            else:
+                high = mid
+
+        culprit_rec = next((r for r in self.records if r["sequence_number"] == high), None)
+        return {
+            "culprit_seq": high,
+            "culprit_record": culprit_rec,
+            "eval_steps": eval_count,
+            "bisection_log": bisection_log,
+        }
+
+    def trip_circuit_breaker_and_rollback(self, target_seq: int) -> Dict[str, Any]:
+        self.circuit_breaker_tripped = True
+        rollback_state = self.snapshots.get(target_seq) or self.snapshots[0]
+        self.current_state = dict(rollback_state)
+        restored_hash = self.compute_state_hash(self.current_state)
+        initial_hash = self.compute_state_hash(self.snapshots[0])
+        zero_residual = (self.current_state == self.snapshots[target_seq])
+        return {
+            "circuit_breaker_tripped": True,
+            "rollback_target_seq": target_seq,
+            "restored_state_hash": restored_hash,
+            "zero_residual_corruption": zero_residual,
+            "matches_green_state": (restored_hash == initial_hash),
+        }
+
+# ==============================================================================
 # Master ChaosFaultInjector Class
 # ==============================================================================
 
@@ -874,6 +1050,144 @@ class ChaosFaultInjector:
                 except OSError:
                     pass
 
+    def inject_agent_infinite_mutation_loop_bisection(self) -> ChaosScenarioReport:
+        """
+        Scenario 7: Simulates an autonomous agent caught in an infinite oscillating
+        mutation loop (State A -> B -> A). Evaluates deterministic journal recording,
+        cyclic thrashing detection, circuit breaker tripping, O(log K) bisection
+        isolation of the offending mutation, and atomic rollback to restore green state
+        with 0 residual corruption.
+        """
+        start = time.time()
+        trace_dir = os.path.join(self.scratch_dir, f"trace_{uuid.uuid4().hex[:6]}")
+        mgr = AutonomousAgentReplayManager(trace_dir=trace_dir)
+
+        try:
+            # 1. Seed initial verified green state
+            initial_files = {
+                "src/calc.rs": "pub fn solve() -> i32 {\n    // Baseline verified\n    42\n}\n",
+                "src/lib.rs": "pub mod calc;\npub use calc::solve;\n",
+            }
+            mgr.seed_initial_state(initial_files)
+            green_state_hash = mgr.compute_state_hash(initial_files)
+
+            # 2. Simulate 4 initial progressive edits
+            for s in range(1, 5):
+                diff = json.dumps({
+                    "file": "src/lib.rs",
+                    "replace": "pub mod calc;",
+                    "with": f"// turn {s}\npub mod calc;",
+                })
+                mgr.record_action(
+                    seq=s,
+                    prompt=f"Optimize import comments step {s}",
+                    tool_name="ast_patch",
+                    args_json=json.dumps({"step": s}),
+                    diff=diff,
+                )
+
+            # Take a checkpoint at step 4
+            mgr.save_snapshot(4)
+
+            # Step 5: The offending regression patch that breaks behavior
+            culprit_patch = json.dumps({
+                "file": "src/calc.rs",
+                "replace": "42",
+                "with": "9999",
+            })
+            mgr.record_action(
+                seq=5,
+                prompt="Tweak calculation output to 9999",
+                tool_name="ast_patch",
+                args_json=json.dumps({"target": "calc.rs"}),
+                diff=culprit_patch,
+            )
+
+            # Steps 6-7: Agent oscillates back and forth trying to fix
+            # Step 6: Flips to alternate bad value
+            alt_patch = json.dumps({
+                "file": "src/calc.rs",
+                "replace": "9999",
+                "with": "8888",
+            })
+            mgr.record_action(
+                seq=6,
+                prompt="Attempt patch B: change 9999 to 8888",
+                tool_name="ast_patch",
+                args_json=json.dumps({"variant": "B"}),
+                diff=alt_patch,
+            )
+
+            # Step 7: Flips back from 8888 to 9999 (Oscillation starts: State at step 7 matches step 5!)
+            flip_patch = json.dumps({
+                "file": "src/calc.rs",
+                "replace": "8888",
+                "with": "9999",
+            })
+            mgr.record_action(
+                seq=7,
+                prompt="Attempt patch A revert: change 8888 back to 9999",
+                tool_name="ast_patch",
+                args_json=json.dumps({"variant": "A"}),
+                diff=flip_patch,
+            )
+
+            # 3. Detect oscillation loop
+            cycle_info = mgr.detect_oscillation(window=6)
+            oscillation_detected = cycle_info is not None
+
+            # 4. Perform bisection isolation between verified step 4 and failed step 7
+            def predicate(state: Dict[str, str]) -> bool:
+                content = state.get("src/calc.rs", "")
+                return ("9999" not in content) and ("8888" not in content)
+
+            bisection_res = mgr.isolate_bisection_culprit(
+                green_seq=4,
+                red_seq=7,
+                eval_predicate=predicate,
+            )
+            culprit_step = bisection_res["culprit_seq"]
+
+            # 5. Trip circuit breaker and execute atomic rollback to last verified green state (step 4)
+            rollback_res = mgr.trip_circuit_breaker_and_rollback(target_seq=4)
+            elapsed_ms = (time.time() - start) * 1000.0
+
+            # Verify integrity: 0 residual corruption, restored state matches step 4
+            current_calc = mgr.current_state.get("src/calc.rs", "")
+            has_no_corruption = ("9999" not in current_calc) and ("8888" not in current_calc) and ("42" in current_calc)
+
+            is_healed = (
+                oscillation_detected is True
+                and cycle_info["cycle_length"] == 2
+                and culprit_step == 5
+                and rollback_res["circuit_breaker_tripped"] is True
+                and rollback_res["zero_residual_corruption"] is True
+                and has_no_corruption is True
+                and elapsed_ms < 5000.0
+            )
+
+            status = "HEALED" if is_healed else "FAILED"
+
+            return ChaosScenarioReport(
+                scenario="agent_infinite_mutation_loop_bisection",
+                status=status,
+                duration_ms=elapsed_ms,
+                details={
+                    "oscillation_detected": oscillation_detected,
+                    "cycle_length": cycle_info["cycle_length"] if cycle_info else None,
+                    "culprit_step": culprit_step,
+                    "culprit_tool": bisection_res["culprit_record"]["tool_name"] if bisection_res.get("culprit_record") else None,
+                    "bisection_eval_steps": bisection_res["eval_steps"],
+                    "circuit_breaker_tripped": rollback_res["circuit_breaker_tripped"],
+                    "rollback_target_seq": rollback_res["rollback_target_seq"],
+                    "residual_corruption_count": 0 if has_no_corruption else 1,
+                    "healing_duration_ms": round(elapsed_ms, 2),
+                },
+            )
+        finally:
+            if os.path.exists(trace_dir):
+                shutil.rmtree(trace_dir, ignore_errors=True)
+
     def run_all_scenarios(self) -> ChaosRecoveryReport:
         """Executes the full suite of chaos fault injection scenarios."""
         reports = [
@@ -883,6 +1197,7 @@ class ChaosFaultInjector:
             self.inject_socket_heartbeat_partition(),
             self.inject_disk_io_latency(),
             self.inject_process_oom_recovery(),
+            self.inject_agent_infinite_mutation_loop_bisection(),
         ]
         healed = sum(1 for r in reports if r.status == "HEALED")
         total = len(reports)

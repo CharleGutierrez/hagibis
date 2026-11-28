@@ -2,7 +2,10 @@
 # Profile-Guided Optimization (PGO), Fat LTO, LLVM BOLT, Build, Hygiene & Test Automation
 
 SHELL := /usr/bin/env bash
-CARGO_TARGET_DIR ?= /media/toshiba/Lexar/cargo-target
+# Default CARGO_TARGET_DIR on native fast filesystem with fallback to /tmp/target
+ifeq ($(origin CARGO_TARGET_DIR), undefined)
+  CARGO_TARGET_DIR := $(shell if [ -n "$$HOME" ] && mkdir -p "$$HOME/.cargo-target-hagibis" 2>/dev/null; then echo "$$HOME/.cargo-target-hagibis"; else echo "/tmp/target"; fi)
+endif
 export CARGO_TARGET_DIR
 
 PGO_DATA_DIR ?= /tmp/pgo-data
@@ -18,12 +21,15 @@ ifneq ($(shell command -v sccache 2>/dev/null),)
 export RUSTC_WRAPPER ?= sccache
 endif
 
-# Preload execution shim if present to enable seamless execution across VFAT mounts
+# Preload execution shim only when running on non-POSIX/VFAT mounts (not needed on native POSIX filesystems)
+FS_TYPE := $(shell stat -f -c %T . 2>/dev/null || true)
+ifeq ($(filter ext% btrfs xfs tmpfs zfs,$(FS_TYPE)),)
 ifneq ($(wildcard scripts/execve_shim.so),)
 export LD_PRELOAD := $(CURDIR)/scripts/execve_shim.so:$(LD_PRELOAD)
 endif
+endif
 
-.PHONY: all check test release release-fast pgo bolt pgo-bolt ci-pgo-bolt pgo-bolt-auto-ci regression-bench-check pgo-bench pgo-bolt-dynatune pgo-bolt-verify pgo-build pgo-train pgo-merge pgo-release pgo-dynatune hygiene clean-tiered clean-cache prune-targets clean help untangle skill\:lint skill\:test skill\:build skill-lint skill-test skill-build test-masterclass self-heal-build self-heal-bench chaos-ci
+.PHONY: all check test check-posix sync-backup release release-fast pgo bolt pgo-bolt ci-pgo-bolt pgo-bolt-auto-ci regression-bench-check pgo-bench pgo-bolt-dynatune pgo-bolt-verify pgo-build pgo-train pgo-merge pgo-release pgo-dynatune hygiene clean-tiered clean-cache prune-targets clean help untangle skill\:lint skill\:test skill\:build skill-lint skill-test skill-build test-masterclass self-heal-build self-heal-bench chaos-ci
 
 all: check test
 
@@ -48,6 +54,10 @@ help:
 	@echo "   make pgo-bolt-dynatune      - Hardware governor ramping + thermal-aware PGO + BOLT pipeline"
 	@echo "   make pgo-dynatune           - Hardware-coordinated PGO + kernel-optimizer pipeline"
 	@echo "   make pgo-bench              - Run core execution microbenchmarks (pgo_workload.rs)"
+	@echo ""
+	@echo " Infrastructure & POSIX Filesystem Migration (Pillar 1):"
+	@echo "   make check-posix            - Verify native POSIX filesystem semantics, locks, sockets, and SHM"
+	@echo "   make sync-backup            - Mirror workspace to /media/toshiba/Lexar/hagibis cold backup"
 	@echo ""
 	@echo " Autonomous Chaos Engineering & Resilience (Pillar 3):"
 	@echo "   make chaos-ci               - Automated Chaos-Injected Regression Test Suite (<5s SLA, 100% heal)"
@@ -77,6 +87,34 @@ check:
 
 test:
 	cargo test --workspace
+
+# Pillar 1: POSIX Environment & Filesystem Compliance Check
+check-posix:
+	@echo "======================================================================"
+	@echo " Hagibis (hgb) POSIX Environment & Filesystem Compliance Check"
+	@echo " Target: Native Linux ext4/btrfs/xfs Filesystem Semantics"
+	@echo "======================================================================"
+	@bash scripts/check-posix-env.sh
+
+# Pillar 1: Workspace Mirroring & Cold USB Backup Sync
+sync-backup:
+	@echo "======================================================================"
+	@echo " Hagibis (hgb) Cold Backup Synchronization"
+	@echo " Source:      /home/toshiba/hagibis (Native ext4)"
+	@echo " Destination: /media/toshiba/Lexar/hagibis (Cold Backup USB Drive)"
+	@echo "======================================================================"
+	@if [ -d "/media/toshiba/Lexar/hagibis" ]; then \
+		rsync -rtv --modify-window=1 --delete \
+			--exclude '.git/' \
+			--exclude 'target/' \
+			--exclude '.cargo-target*/' \
+			--exclude '*.sock' \
+			--exclude '*.so' \
+			/home/toshiba/hagibis/ /media/toshiba/Lexar/hagibis/; \
+		echo " Cold backup sync completed successfully."; \
+	else \
+		echo "WARNING: /media/toshiba/Lexar/hagibis is not mounted or accessible; skipping backup." >&2; \
+	fi
 
 release: pgo-bolt
 

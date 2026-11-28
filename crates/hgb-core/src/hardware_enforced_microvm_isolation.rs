@@ -771,6 +771,7 @@ impl HardwareEnforcedMicrovmIsolationEngine {
 
         let seccomp_candidates = [
             PathBuf::from("firecracker_seccomp_profile.json"),
+            PathBuf::from("/home/toshiba/hagibis/firecracker_seccomp_profile.json"),
             PathBuf::from("/media/toshiba/Lexar/hagibis/firecracker_seccomp_profile.json"),
             PathBuf::from("/etc/firecracker/firecracker_seccomp_profile.json"),
         ];

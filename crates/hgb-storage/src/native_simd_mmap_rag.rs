@@ -586,6 +586,13 @@ pub fn resolve_rag_storage_path(custom_path: Option<&Path>) -> PathBuf {
         }
     }
 
+    if let Ok(home) = std::env::var("HOME") {
+        let home_hgb = Path::new(&home).join(".hgb");
+        if home_hgb.exists() || std::fs::create_dir_all(&home_hgb).is_ok() {
+            return home_hgb.join("simd_vector_rag.mmap");
+        }
+    }
+
     let default_dir = Path::new(".hgb");
     if default_dir.exists() || std::fs::create_dir_all(default_dir).is_ok() {
         return default_dir.join("simd_vector_rag.mmap");

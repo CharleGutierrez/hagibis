@@ -20,6 +20,7 @@ pub mod npu_dma_engine;
 pub mod zero_copy_tensor_bridge;
 pub mod hardware_auto_quantizer;
 pub mod zero_copy_wasm_npu_pipeline;
+pub mod speculative_thermal_router;
 
 pub use error::{NpuRouterError, Result};
 pub use zero_copy_tensor_bridge::*;
@@ -85,6 +86,7 @@ pub use realtime_telemetry_load_balancer::{
     PcieSaturationMetrics, RealtimeTelemetryLoadBalancer, ThermalTelemetry,
     VectorQueryJob, VramTelemetry,
 };
+pub use speculative_thermal_router::*;
 
 #[cfg(test)]
 mod integration_tests {
